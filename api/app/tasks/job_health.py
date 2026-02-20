@@ -727,7 +727,7 @@ async def check_stuck_locks():
             logger.error(f"Error in stuck lock check: {e}")
 
 
-async def check_stuck_stopping_nodes():
+def check_stuck_stopping_nodes():
     """Find and recover nodes stuck in "stopping" state.
 
     This function monitors NodeState records for nodes stuck in "stopping":
@@ -803,7 +803,7 @@ async def check_stuck_stopping_nodes():
             logger.error(f"Error in stuck stopping nodes check: {e}")
 
 
-async def check_stuck_starting_nodes():
+def check_stuck_starting_nodes():
     """Find and recover nodes stuck in "starting" state.
 
     This function monitors NodeState records for nodes stuck in "starting":
@@ -886,7 +886,7 @@ async def check_stuck_starting_nodes():
             logger.error(f"Error in stuck starting nodes check: {e}")
 
 
-async def check_stuck_agent_updates():
+def check_stuck_agent_updates():
     """Find and handle AgentUpdateJob records that are stuck.
 
     Detects agent update jobs stuck in active states (pending, downloading,
@@ -1086,9 +1086,9 @@ async def job_health_monitor():
             await check_jobs_on_offline_agents()
             await check_stuck_image_sync_jobs()
             await check_stuck_locks()
-            await check_stuck_stopping_nodes()
-            await check_stuck_starting_nodes()
-            await check_stuck_agent_updates()
+            await asyncio.to_thread(check_stuck_stopping_nodes)
+            await asyncio.to_thread(check_stuck_starting_nodes)
+            await asyncio.to_thread(check_stuck_agent_updates)
             await check_orphaned_image_sync_status()
 
         except asyncio.CancelledError:

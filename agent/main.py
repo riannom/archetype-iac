@@ -2801,7 +2801,6 @@ async def attach_container(request: AttachContainerRequest) -> AttachContainerRe
                 break
         if intftype == "eth" and interface_name.startswith("Ethernet"):
             # Convert Ethernet1 -> eth1, Ethernet2 -> eth2, etc.
-            import re
             match = re.match(r"Ethernet(\d+)", interface_name)
             if match:
                 interface_name = f"eth{match.group(1)}"
@@ -6282,7 +6281,6 @@ async def list_interfaces() -> dict:
             )
 
             if result.returncode == 0:
-                import json
                 link_data = json.loads(result.stdout)
 
                 for link in link_data:

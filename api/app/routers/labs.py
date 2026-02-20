@@ -1812,7 +1812,6 @@ async def poll_nodes_ready(
     Response Headers:
         X-Readiness-Status: "complete" if all ready, "timeout" if timed out
     """
-    import asyncio
     from fastapi.responses import JSONResponse
     from app.utils.lab import get_lab_provider, get_node_provider
 
@@ -2665,7 +2664,6 @@ async def extract_configs(
     lab_id: str,
     create_snapshot: bool = True,
     snapshot_type: str = "manual",
-    database: Session = Depends(db.get_db),
     current_user: models.User = Depends(get_current_user),
 ) -> dict:
     """Extract running configs from all cEOS nodes in a lab.
@@ -2684,117 +2682,155 @@ async def extract_configs(
     Returns:
         Dict with 'success', 'extracted_count', 'snapshots_created', and optionally 'error' keys
     """
-    lab = _require_lab_editor(lab_id, database, current_user)
-    lab_provider = get_lab_provider(lab)
+    # Phase 1: Gather agent info from DB
+    def _sync_prepare():
+        with db.get_session() as database:
+            lab = _require_lab_editor(lab_id, database, current_user)
+            lab_provider = get_lab_provider(lab)
 
-    # Get all agents that have nodes for this lab (multi-host support)
-    placements = (
-        database.query(models.NodePlacement.host_id)
-        .filter(models.NodePlacement.lab_id == lab.id)
-        .distinct()
-        .all()
-    )
-    host_ids = [p.host_id for p in placements]
+            placements = (
+                database.query(models.NodePlacement.host_id)
+                .filter(models.NodePlacement.lab_id == lab.id)
+                .distinct()
+                .all()
+            )
+            host_ids = [p.host_id for p in placements]
 
-    # If no placements exist, fall back to lab's default agent
-    if not host_ids:
-        agent = await get_online_agent_for_lab(database, lab, required_provider=lab_provider)
-        if agent:
-            host_ids = [agent.id]
+            # If no placements, fall back (inline get_online_agent_for_lab - pure DB)
+            if not host_ids:
+                from app.agent_client import _agent_online_cutoff, get_agent_providers
+                from sqlalchemy import func as sa_func
 
-    # Get all healthy agents for these host_ids
-    agents = []
-    for host_id in host_ids:
-        agent = database.get(models.Host, host_id)
-        if agent and agent_client.is_agent_online(agent):
-            agents.append(agent)
+                cutoff = _agent_online_cutoff()
+                pc = (
+                    database.query(models.NodePlacement.host_id, sa_func.count(models.NodePlacement.id))
+                    .filter(models.NodePlacement.lab_id == lab.id)
+                    .group_by(models.NodePlacement.host_id)
+                    .all()
+                )
+                anc = {h: c for h, c in pc}
+                preferred_id = max(anc, key=anc.get) if anc else lab.agent_id
 
-    if not agents:
-        raise_unavailable("No healthy agents available")
+                agents = (
+                    database.query(models.Host)
+                    .filter(models.Host.status == "online", models.Host.last_heartbeat >= cutoff)
+                    .all()
+                )
+                if lab_provider:
+                    agents = [a for a in agents if lab_provider in get_agent_providers(a)]
+                fallback = None
+                if preferred_id:
+                    fallback = next((a for a in agents if a.id == preferred_id), None)
+                if not fallback and agents:
+                    fallback = agents[0]
+                if fallback:
+                    host_ids = [fallback.id]
 
-    # Call all agents concurrently to extract configs
-    tasks = [agent_client.extract_configs_on_agent(agent, lab.id) for agent in agents]
-    results = await asyncio.gather(*tasks, return_exceptions=True)
+            # Get healthy agents
+            agent_infos = []
+            for host_id in host_ids:
+                agent = database.get(models.Host, host_id)
+                if agent and agent_client.is_agent_online(agent):
+                    agent_infos.append({"id": agent.id, "address": agent.address})
 
-    # Merge configs from all agents
+            if not agent_infos:
+                raise_unavailable("No healthy agents available")
+
+            # Build node -> agent address mapping for cross-agent sync
+            node_to_agent_address: dict[str, str] = {}
+            for placement in database.query(models.NodePlacement).filter(
+                models.NodePlacement.lab_id == lab.id
+            ).all():
+                node_def = database.get(models.Node, placement.node_definition_id)
+                agent = database.get(models.Host, placement.host_id)
+                if node_def and agent and agent_client.is_agent_online(agent):
+                    node_to_agent_address[node_def.container_name] = agent.address
+
+            return {
+                "lab_id": lab.id,
+                "agent_infos": agent_infos,
+                "node_to_agent_address": node_to_agent_address,
+            }
+
+    phase1 = await asyncio.to_thread(_sync_prepare)
+    real_lab_id = phase1["lab_id"]
+
+    # Phase 2: Async config extraction from all agents concurrently
+    from types import SimpleNamespace
+    agent_stubs = [SimpleNamespace(**info) for info in phase1["agent_infos"]]
+    extraction_tasks = [agent_client.extract_configs_on_agent(stub, real_lab_id) for stub in agent_stubs]
+    results = await asyncio.gather(*extraction_tasks, return_exceptions=True)
+
     configs = []
     extracted_count = 0
     errors = []
 
-    for agent, result in zip(agents, results):
+    for agent_info, result in zip(phase1["agent_infos"], results):
         if isinstance(result, Exception):
-            errors.append(f"Agent {agent.id}: {result}")
+            errors.append(f"Agent {agent_info['id']}: {result}")
             continue
         if not result.get("success"):
-            errors.append(f"Agent {agent.id}: {result.get('error', 'Unknown error')}")
+            errors.append(f"Agent {agent_info['id']}: {result.get('error', 'Unknown error')}")
             continue
         extracted_count += result.get("extracted_count", 0)
         configs.extend(result.get("configs", []))
 
-    # If all agents failed, raise error
     if not configs and errors:
         raise HTTPException(
             status_code=500,
             detail=f"Config extraction failed on all agents: {'; '.join(errors)}"
         )
+
+    # Phase 3: Save configs to DB in worker thread
     snapshots_created = 0
-
-    # Build node -> agent mapping from placements for cross-agent sync
-    node_to_agent: dict[str, models.Host] = {}
-    for placement in database.query(models.NodePlacement).filter(
-        models.NodePlacement.lab_id == lab.id
-    ).all():
-        node_def = database.get(models.Node, placement.node_definition_id)
-        agent = database.get(models.Host, placement.host_id)
-        if node_def and agent:
-            node_to_agent[node_def.container_name] = agent
-
-    # Save configs to API workspace and create snapshots via ConfigService
     if configs:
-        from app.services.config_service import ConfigService
-        config_svc = ConfigService(database)
+        def _sync_save_configs():
+            from app.services.config_service import ConfigService
 
-        # Build node_name -> device_kind lookup
-        lab_nodes = (
-            database.query(models.Node)
-            .filter(models.Node.lab_id == lab_id)
-            .all()
-        )
-        node_device_map = {n.container_name: n.device for n in lab_nodes}
+            nonlocal snapshots_created
+            with db.get_session() as database:
+                config_svc = ConfigService(database)
 
-        for config_data in configs:
-            node_name = config_data.get("node_name")
-            content = config_data.get("content")
-            if not node_name or not content:
-                continue
-
-            if create_snapshot:
-                device_kind = node_device_map.get(node_name)
-                snapshot = config_svc.save_extracted_config(
-                    lab_id=lab_id,
-                    node_name=node_name,
-                    content=content,
-                    snapshot_type=snapshot_type,
-                    device_kind=device_kind,
+                lab_nodes = (
+                    database.query(models.Node)
+                    .filter(models.Node.lab_id == lab_id)
+                    .all()
                 )
-                if snapshot:
-                    snapshots_created += 1
-            else:
-                # Even without snapshot, save to workspace and config_json
-                config_svc.save_extracted_config(
-                    lab_id=lab_id,
-                    node_name=node_name,
-                    content=content,
-                    snapshot_type=snapshot_type,
-                    device_kind=node_device_map.get(node_name),
-                    set_as_active=False,
-                )
+                node_device_map = {n.container_name: n.device for n in lab_nodes}
 
-        database.commit()
+                for config_data in configs:
+                    node_name = config_data.get("node_name")
+                    content = config_data.get("content")
+                    if not node_name or not content:
+                        continue
 
-    # Sync configs to all agents to ensure agent workspaces match API workspace
-    # This handles cases where configs are modified in API workspace or extracted
-    # from a different agent than where the node is currently placed
+                    if create_snapshot:
+                        device_kind = node_device_map.get(node_name)
+                        snapshot = config_svc.save_extracted_config(
+                            lab_id=lab_id,
+                            node_name=node_name,
+                            content=content,
+                            snapshot_type=snapshot_type,
+                            device_kind=device_kind,
+                        )
+                        if snapshot:
+                            snapshots_created += 1
+                    else:
+                        config_svc.save_extracted_config(
+                            lab_id=lab_id,
+                            node_name=node_name,
+                            content=content,
+                            snapshot_type=snapshot_type,
+                            device_kind=node_device_map.get(node_name),
+                            set_as_active=False,
+                        )
+
+                database.commit()
+
+        await asyncio.to_thread(_sync_save_configs)
+
+    # Phase 4: Async config sync to agents
+    node_to_agent_address = phase1["node_to_agent_address"]
     sync_errors = []
     for config_data in configs:
         node_name = config_data.get("node_name")
@@ -2802,13 +2838,21 @@ async def extract_configs(
         if not node_name or not content:
             continue
 
-        agent = node_to_agent.get(node_name)
-        if agent and agent_client.is_agent_online(agent):
-            result = await agent_client.update_config_on_agent(
-                agent, lab.id, node_name, content
-            )
-            if not result.get("success"):
-                sync_errors.append(f"{node_name}: {result.get('error', 'unknown')}")
+        agent_address = node_to_agent_address.get(node_name)
+        if agent_address:
+            try:
+                url = f"http://{agent_address}/labs/{real_lab_id}/nodes/{node_name}/config"
+                client = agent_client.get_http_client()
+                response = await client.put(
+                    url,
+                    json={"content": content},
+                    timeout=30.0,
+                    headers=agent_client._get_agent_auth_headers(),
+                )
+                if response.status_code != 200:
+                    sync_errors.append(f"{node_name}: HTTP {response.status_code}")
+            except Exception as e:
+                sync_errors.append(f"{node_name}: {e}")
 
     return {
         "success": True,
@@ -3251,7 +3295,6 @@ async def set_active_config(
     lab_id: str,
     node_name: str,
     payload: schemas.SetActiveConfigRequest,
-    database: Session = Depends(db.get_db),
     current_user: models.User = Depends(get_current_user),
 ) -> dict:
     """Set a specific config snapshot as the active startup-config for a node.
@@ -3259,51 +3302,78 @@ async def set_active_config(
     Updates the node's active_config_snapshot_id, syncs content to
     config_json["startup-config"], and pushes to the agent workspace.
     """
-    _require_lab_editor(lab_id, database, current_user)
+    snapshot_id = payload.snapshot_id
 
-    node = (
-        database.query(models.Node)
-        .filter(
-            models.Node.lab_id == lab_id,
-            models.Node.container_name == node_name,
-        )
-        .first()
-    )
-    if not node:
-        raise_not_found(f"Node '{node_name}' not found")
+    # Phase 1: All DB work in a worker thread
+    def _sync_set_config():
+        from app.services.config_service import ConfigService
 
-    from app.services.config_service import ConfigService
-    config_svc = ConfigService(database)
+        with db.get_session() as database:
+            _require_lab_editor(lab_id, database, current_user)
 
-    try:
-        config_svc.set_active_config(node.id, payload.snapshot_id)
-    except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
-
-    database.commit()
-
-    # Push to agent
-    placement = (
-        database.query(models.NodePlacement)
-        .filter(
-            models.NodePlacement.lab_id == lab_id,
-            models.NodePlacement.node_definition_id == node.id,
-        )
-        .first()
-    )
-    if placement:
-        agent = database.get(models.Host, placement.host_id)
-        if agent and agent_client.is_agent_online(agent):
-            snapshot = database.get(models.ConfigSnapshot, payload.snapshot_id)
-            if snapshot:
-                await agent_client.update_config_on_agent(
-                    agent, lab_id, node_name, snapshot.content
+            node = (
+                database.query(models.Node)
+                .filter(
+                    models.Node.lab_id == lab_id,
+                    models.Node.container_name == node_name,
                 )
+                .first()
+            )
+            if not node:
+                raise_not_found(f"Node '{node_name}' not found")
+
+            config_svc = ConfigService(database)
+            try:
+                config_svc.set_active_config(node.id, snapshot_id)
+            except ValueError as e:
+                raise HTTPException(status_code=404, detail=str(e))
+
+            database.commit()
+
+            # Gather agent push info before session closes
+            placement = (
+                database.query(models.NodePlacement)
+                .filter(
+                    models.NodePlacement.lab_id == lab_id,
+                    models.NodePlacement.node_definition_id == node.id,
+                )
+                .first()
+            )
+            if placement:
+                agent = database.get(models.Host, placement.host_id)
+                if agent and agent_client.is_agent_online(agent):
+                    snapshot = database.get(models.ConfigSnapshot, snapshot_id)
+                    if snapshot:
+                        return {
+                            "agent_address": agent.address,
+                            "agent_id": agent.id,
+                            "config_content": snapshot.content,
+                        }
+            return None
+
+    push_info = await asyncio.to_thread(_sync_set_config)
+
+    # Phase 2: Async agent push (no DB session held)
+    if push_info:
+        url = (
+            f"http://{push_info['agent_address']}"
+            f"/labs/{lab_id}/nodes/{node_name}/config"
+        )
+        client = agent_client.get_http_client()
+        try:
+            await client.put(
+                url,
+                json={"content": push_info["config_content"]},
+                timeout=30.0,
+                headers=agent_client._get_agent_auth_headers(),
+            )
+        except Exception:
+            pass  # Best-effort push, non-critical
 
     return {
         "success": True,
         "node_name": node_name,
-        "active_config_snapshot_id": payload.snapshot_id,
+        "active_config_snapshot_id": snapshot_id,
         "message": f"Active config set for '{node_name}'. Reload node to apply.",
     }
 

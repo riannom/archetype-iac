@@ -13,6 +13,7 @@ The workflow:
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import datetime, timezone
 
@@ -329,7 +330,6 @@ def job_heartbeat(
 @router.post("/carrier-state")
 async def carrier_state_changed(
     payload: schemas.CarrierStateChangeRequest,
-    database: Session = Depends(db.get_db),
     _auth: None = Depends(verify_agent_secret),
 ) -> dict:
     """Agent reports that a container interface's carrier state changed.
@@ -354,117 +354,169 @@ async def carrier_state_changed(
 
     normalized_interface = normalize_interface(interface) if interface else interface
 
-    # Find the LinkState where this node:interface is either source or target.
-    # Match on normalized interface names to handle vendor-form vs ethN drift.
-    candidates = (
-        database.query(models.LinkState)
-        .filter(
-            models.LinkState.lab_id == lab_id,
-            (
-                (models.LinkState.source_node == node)
-                | (models.LinkState.target_node == node)
-            ),
-        )
-        .all()
-    )
-    link_state = next(
-        (
-            ls for ls in candidates
-            if (
-                ls.source_node == node
-                and normalize_interface(ls.source_interface) == normalized_interface
-            ) or (
-                ls.target_node == node
-                and normalize_interface(ls.target_interface) == normalized_interface
-            )
-        ),
-        None,
-    )
+    # Phase 1: Read link state and determine peer info
+    def _sync_read_state():
+        from app.db import get_session
 
-    if not link_state:
+        with get_session() as database:
+            candidates = (
+                database.query(models.LinkState)
+                .filter(
+                    models.LinkState.lab_id == lab_id,
+                    (
+                        (models.LinkState.source_node == node)
+                        | (models.LinkState.target_node == node)
+                    ),
+                )
+                .all()
+            )
+            link_state = next(
+                (
+                    ls for ls in candidates
+                    if (
+                        ls.source_node == node
+                        and normalize_interface(ls.source_interface) == normalized_interface
+                    ) or (
+                        ls.target_node == node
+                        and normalize_interface(ls.target_interface) == normalized_interface
+                    )
+                ),
+                None,
+            )
+
+            if not link_state:
+                return None
+
+            is_source = (
+                link_state.source_node == node
+                and normalize_interface(link_state.source_interface) == normalized_interface
+            )
+
+            # Update local carrier_state
+            if is_source:
+                link_state.source_carrier_state = carrier
+                peer_node = link_state.target_node
+                peer_interface = link_state.target_interface
+                peer_host_id = link_state.target_host_id
+            else:
+                link_state.target_carrier_state = carrier
+                peer_node = link_state.source_node
+                peer_interface = link_state.source_interface
+                peer_host_id = link_state.source_host_id
+
+            database.commit()
+
+            # Get peer agent address for propagation
+            peer_agent_address = None
+            if peer_host_id and peer_node and peer_interface:
+                peer_agent = database.get(models.Host, peer_host_id)
+                if peer_agent and agent_client.is_agent_online(peer_agent):
+                    peer_agent_address = peer_agent.address
+
+            return {
+                "link_state_id": link_state.id,
+                "is_source": is_source,
+                "peer_node": peer_node,
+                "peer_interface": peer_interface,
+                "peer_host_id": peer_host_id,
+                "peer_agent_address": peer_agent_address,
+            }
+
+    phase1 = await asyncio.to_thread(_sync_read_state)
+
+    if phase1 is None:
         logger.warning(
             "No LinkState found for %s:%s in lab %s", node, interface, lab_id,
         )
         return {"success": False, "message": "Link not found"}
 
-    # Determine which side matched and update carrier_state
-    is_source = (
-        link_state.source_node == node
-        and normalize_interface(link_state.source_interface) == normalized_interface
-    )
+    # Phase 2: Async carrier propagation to peer agent
+    propagation_ok = False
+    peer_agent_address = phase1["peer_agent_address"]
+    peer_node = phase1["peer_node"]
+    peer_interface = phase1["peer_interface"]
 
-    if is_source:
-        link_state.source_carrier_state = carrier
-        peer_node = link_state.target_node
-        peer_interface = link_state.target_interface
-        peer_host_id = link_state.target_host_id
-    else:
-        link_state.target_carrier_state = carrier
-        peer_node = link_state.source_node
-        peer_interface = link_state.source_interface
-        peer_host_id = link_state.source_host_id
-
-    # Propagate carrier to the peer endpoint via its agent
-    if peer_host_id and peer_node and peer_interface:
-        peer_agent = database.get(models.Host, peer_host_id)
-        if peer_agent and agent_client.is_agent_online(peer_agent):
-            try:
-                url = (
-                    f"http://{peer_agent.address}/labs/{lab_id}"
-                    f"/interfaces/{peer_node}/{peer_interface}/carrier"
-                )
-                client = agent_client.get_http_client()
-                response = await client.post(
-                    url,
-                    json={"state": carrier},
-                    timeout=10.0,
-                )
-                if response.status_code == 200:
-                    # Update peer's carrier_state in DB too
-                    if is_source:
-                        link_state.target_carrier_state = carrier
-                    else:
-                        link_state.source_carrier_state = carrier
-                    logger.info(
-                        "Carrier %s propagated to peer %s:%s",
-                        carrier, peer_node, peer_interface,
-                    )
-                else:
-                    logger.warning(
-                        "Carrier propagation to peer %s:%s failed: HTTP %d",
-                        peer_node, peer_interface, response.status_code,
-                    )
-            except Exception as e:
-                logger.warning(
-                    "Carrier propagation to peer %s:%s failed: %s",
-                    peer_node, peer_interface, e,
-                )
-        else:
-            logger.warning(
-                "Peer agent %s offline, skipping carrier propagation", peer_host_id,
+    if peer_agent_address and peer_node and peer_interface:
+        try:
+            url = (
+                f"http://{peer_agent_address}/labs/{lab_id}"
+                f"/interfaces/{peer_node}/{peer_interface}/carrier"
             )
+            client = agent_client.get_http_client()
+            response = await client.post(
+                url,
+                json={"state": carrier},
+                timeout=10.0,
+                headers=agent_client._get_agent_auth_headers(),
+            )
+            if response.status_code == 200:
+                propagation_ok = True
+                logger.info(
+                    "Carrier %s propagated to peer %s:%s",
+                    carrier, peer_node, peer_interface,
+                )
+            else:
+                logger.warning(
+                    "Carrier propagation to peer %s:%s failed: HTTP %d",
+                    peer_node, peer_interface, response.status_code,
+                )
+        except Exception as e:
+            logger.warning(
+                "Carrier propagation to peer %s:%s failed: %s",
+                peer_node, peer_interface, e,
+            )
+    elif phase1["peer_host_id"]:
+        logger.warning(
+            "Peer agent %s offline, skipping carrier propagation", phase1["peer_host_id"],
+        )
 
-    # Recompute operational state
-    changed = recompute_link_oper_state(database, link_state)
+    # Phase 3: Update peer carrier state + recompute oper state
+    is_source = phase1["is_source"]
+    link_state_id = phase1["link_state_id"]
 
-    database.commit()
+    def _sync_update_state():
+        from app.db import get_session
 
-    # Broadcast via WebSocket if state changed
-    if changed:
+        with get_session() as database:
+            link_state = database.get(models.LinkState, link_state_id)
+            if not link_state:
+                return None
+
+            if propagation_ok:
+                if is_source:
+                    link_state.target_carrier_state = carrier
+                else:
+                    link_state.source_carrier_state = carrier
+
+            changed = recompute_link_oper_state(database, link_state)
+            database.commit()
+
+            if not changed:
+                return None
+
+            # Return broadcast data as plain dict
+            return {
+                "link_name": link_state.link_name,
+                "desired_state": link_state.desired_state,
+                "actual_state": link_state.actual_state,
+                "source_node": link_state.source_node,
+                "target_node": link_state.target_node,
+                "source_oper_state": link_state.source_oper_state,
+                "target_oper_state": link_state.target_oper_state,
+                "source_oper_reason": link_state.source_oper_reason,
+                "target_oper_reason": link_state.target_oper_reason,
+                "oper_epoch": link_state.oper_epoch,
+            }
+
+    broadcast_data = await asyncio.to_thread(_sync_update_state)
+
+    # Phase 4: Async broadcast
+    if broadcast_data:
         try:
             broadcaster = get_broadcaster()
             await broadcaster.publish_link_state(
                 lab_id=lab_id,
-                link_name=link_state.link_name,
-                desired_state=link_state.desired_state,
-                actual_state=link_state.actual_state,
-                source_node=link_state.source_node,
-                target_node=link_state.target_node,
-                source_oper_state=link_state.source_oper_state,
-                target_oper_state=link_state.target_oper_state,
-                source_oper_reason=link_state.source_oper_reason,
-                target_oper_reason=link_state.target_oper_reason,
-                oper_epoch=link_state.oper_epoch,
+                **broadcast_data,
             )
         except Exception as e:
             logger.warning("Failed to broadcast link state change: %s", e)

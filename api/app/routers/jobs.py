@@ -164,184 +164,237 @@ def _enrich_job_output(job: models.Job) -> schemas.JobOut:
 @router.post("/labs/{lab_id}/up")
 async def lab_up(
     lab_id: str,
-    database: Session = Depends(db.get_db),
     current_user: models.User = Depends(get_current_user),
 ) -> schemas.JobOut:
-    lab = require_lab_editor(lab_id, database, current_user)
+    # Phase 1: All DB validation in a worker thread
+    # Note: get_agent_for_lab/get_agent_by_name are async def but contain
+    # zero awaits (pure DB queries), so we inline the checks here.
+    def _sync_validate():
+        from app.agent_client import _agent_online_cutoff, get_agent_providers
+        from sqlalchemy import or_, func as sa_func
 
-    # Check for conflicting jobs before proceeding
-    has_conflict, conflicting_action = has_conflicting_job(lab_id, "up")
-    if has_conflict:
-        raise HTTPException(
-            status_code=409,
-            detail=f"Cannot start lab: '{conflicting_action}' operation already in progress"
-        )
+        with get_session() as database:
+            lab = require_lab_editor(lab_id, database, current_user)
 
-    # Use TopologyService for analysis (database is source of truth)
-    service = TopologyService(database)
-    is_multihost = False
-    graph = None
-    analysis = None
-    has_explicit_placements = False
-
-    if not service.has_nodes(lab.id):
-        raise HTTPException(status_code=400, detail="No topology defined for this lab")
-
-    try:
-        db_analysis = service.analyze_placements(lab.id)
-        has_explicit_placements = bool(db_analysis.placements)
-        is_multihost = not db_analysis.single_host or has_explicit_placements
-        graph = service.export_to_graph(lab.id)
-        # Convert to legacy analysis format for compatibility
-        analysis = analyze_topology(graph)
-        logger.info(
-            f"Lab {lab_id} topology analysis: "
-            f"single_host={db_analysis.single_host}, "
-            f"hosts={list(db_analysis.placements.keys())}, "
-            f"cross_host_links={len(db_analysis.cross_host_links)}, "
-            f"has_explicit_placements={has_explicit_placements}"
-        )
-    except Exception as e:
-        logger.warning(f"Failed to analyze topology for lab {lab_id}: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to analyze topology: {e}")
-
-    # Get the provider for this lab
-    lab_provider = get_lab_provider(lab)
-
-    if is_multihost and analysis and graph:
-        # Multi-host deployment: validate all required agents exist
-        missing_hosts = []
-        for host_name in analysis.placements:
-            agent = await agent_client.get_agent_by_name(
-                database, host_name, required_provider=lab_provider
-            )
-            if not agent:
-                missing_hosts.append(host_name)
-
-        if missing_hosts:
-            raise HTTPException(
-                status_code=503,
-                detail=f"Missing or unhealthy agents for hosts: {', '.join(missing_hosts)}"
-            )
-
-        # Check if there are nodes without explicit placement
-        placed_node_count = sum(len(p) for p in analysis.placements.values())
-        total_node_count = len(graph.nodes)
-
-        if placed_node_count < total_node_count:
-            # Some nodes don't have explicit host placement
-            # Find a default agent for them (lab's preferred agent or any healthy)
-            default_agent = await agent_client.get_agent_for_lab(
-                database, lab, required_provider=lab_provider
-            )
-            if not default_agent:
+            conflict, conflicting_action = has_conflicting_job(lab_id, "up")
+            if conflict:
                 raise HTTPException(
-                    status_code=503,
-                    detail="No healthy agent available for nodes without explicit host placement"
+                    status_code=409,
+                    detail=f"Cannot start lab: '{conflicting_action}' operation already in progress"
                 )
 
-            # Re-analyze topology with default host for unplaced nodes
-            analysis = analyze_topology(graph, default_host=default_agent.name)
-            logger.info(
-                f"Lab {lab_id} has {total_node_count - placed_node_count} nodes without "
-                f"explicit placement, using {default_agent.name} as default host"
-            )
-    else:
-        # Single-host deployment: check for any healthy agent
-        agent = await agent_client.get_agent_for_lab(database, lab, required_provider=lab_provider)
-        if not agent:
-            raise HTTPException(status_code=503, detail=f"No healthy agent available with {lab_provider} support")
+            service = TopologyService(database)
+            is_multihost = False
+            graph = None
+            analysis = None
 
-    # Pre-deploy image sync check (if enabled)
-    image_sync_log: list[str] = []
-    if settings.image_sync_enabled and settings.image_sync_pre_deploy_check:
-        from app.tasks.image_sync import ensure_images_for_deployment
+            if not service.has_nodes(lab.id):
+                raise HTTPException(status_code=400, detail="No topology defined for this lab")
 
-        # Get image references from database (uses same resolution as deployment)
-        image_refs = service.get_required_images(lab.id)
-        if image_refs:
-            # Get image-to-nodes mapping for status updates
-            image_to_nodes = service.get_image_to_nodes_map(lab.id)
-
-            # Determine target agent for single-host or first agent for multi-host
-            target_host_id = None
-            if is_multihost and analysis:
-                # For multi-host, check all agents have required images
-                # For now, we check the first placement's host
-                first_host = list(analysis.placements.keys())[0]
-                target_agent = await agent_client.get_agent_by_name(
-                    database, first_host, required_provider=lab_provider
+            try:
+                db_analysis = service.analyze_placements(lab.id)
+                has_explicit_placements = bool(db_analysis.placements)
+                is_multihost = not db_analysis.single_host or has_explicit_placements
+                graph = service.export_to_graph(lab.id)
+                analysis = analyze_topology(graph)
+                logger.info(
+                    f"Lab {lab_id} topology analysis: "
+                    f"single_host={db_analysis.single_host}, "
+                    f"hosts={list(db_analysis.placements.keys())}, "
+                    f"cross_host_links={len(db_analysis.cross_host_links)}, "
+                    f"has_explicit_placements={has_explicit_placements}"
                 )
-                if target_agent:
-                    target_host_id = target_agent.id
-            else:
-                # Single-host deployment uses the selected agent
-                target_host_id = agent.id if agent else None
+            except Exception as e:
+                logger.warning(f"Failed to analyze topology for lab {lab_id}: {e}")
+                raise HTTPException(status_code=500, detail=f"Failed to analyze topology: {e}")
 
-            if target_host_id:
-                all_ready, missing, image_sync_log = await ensure_images_for_deployment(
-                    target_host_id,
-                    image_refs,
-                    timeout=settings.image_sync_timeout,
-                    database=database,
-                    lab_id=lab.id,
-                    image_to_nodes=image_to_nodes,
-                )
-                if not all_ready and missing:
-                    # Images still missing after sync attempt
-                    missing_str = ", ".join(missing[:3])  # Show first 3
-                    if len(missing) > 3:
-                        missing_str += f" (+{len(missing) - 3} more)"
+            lab_provider = get_lab_provider(lab)
+            cutoff = _agent_online_cutoff()
+
+            # Inline agent availability checks (pure DB queries)
+            if is_multihost and analysis and graph:
+                missing_hosts = []
+                for host_name in analysis.placements:
+                    agent = (
+                        database.query(models.Host)
+                        .filter(
+                            or_(models.Host.name == host_name, models.Host.id == host_name),
+                            models.Host.status == "online",
+                            models.Host.last_heartbeat >= cutoff,
+                        )
+                        .first()
+                    )
+                    if not agent or (lab_provider and lab_provider not in get_agent_providers(agent)):
+                        missing_hosts.append(host_name)
+
+                if missing_hosts:
                     raise HTTPException(
                         status_code=503,
-                        detail=f"Required images not available on agent: {missing_str}. "
-                               f"Upload images or manually sync them to the agent."
+                        detail=f"Missing or unhealthy agents for hosts: {', '.join(missing_hosts)}"
                     )
 
-    # Create job record
-    job = models.Job(lab_id=lab.id, user_id=current_user.id, action="up", status="queued")
-    database.add(job)
-    database.commit()
-    database.refresh(job)
+                placed_node_count = sum(len(p) for p in analysis.placements.values())
+                total_node_count = len(graph.nodes)
 
-    # Set desired_state for ALL nodes so enforcement and NLM know
-    # these nodes should be running after deploy.
-    # Use SELECT FOR UPDATE to prevent races with concurrent state changes.
-    # Reset enforcement counters so stale circuit breakers don't block the new deploy.
-    node_states = (
-        database.query(models.NodeState)
-        .filter(models.NodeState.lab_id == lab.id)
-        .with_for_update()
-        .all()
-    )
-    for ns in node_states:
-        ns.desired_state = "running"
-        ns.reset_enforcement(clear_error=True)
-    database.commit()
+                if placed_node_count < total_node_count:
+                    # Find default agent for unplaced nodes (inline get_agent_for_lab)
+                    placement_counts = (
+                        database.query(models.NodePlacement.host_id, sa_func.count(models.NodePlacement.id))
+                        .filter(models.NodePlacement.lab_id == lab.id)
+                        .group_by(models.NodePlacement.host_id)
+                        .all()
+                    )
+                    agent_node_counts = {h: c for h, c in placement_counts}
+                    preferred_id = max(agent_node_counts, key=agent_node_counts.get) if agent_node_counts else lab.agent_id
 
-    # Clear enforcement cooldowns so enforcement picks up new desired state immediately
-    if node_states:
+                    agents = (
+                        database.query(models.Host)
+                        .filter(models.Host.status == "online", models.Host.last_heartbeat >= cutoff)
+                        .all()
+                    )
+                    if lab_provider:
+                        agents = [a for a in agents if lab_provider in get_agent_providers(a)]
+
+                    default_agent = None
+                    if preferred_id:
+                        default_agent = next((a for a in agents if a.id == preferred_id), None)
+                    if not default_agent and agents:
+                        default_agent = agents[0]
+
+                    if not default_agent:
+                        raise HTTPException(
+                            status_code=503,
+                            detail="No healthy agent available for nodes without explicit host placement"
+                        )
+
+                    analysis = analyze_topology(graph, default_host=default_agent.name)
+                    logger.info(
+                        f"Lab {lab_id} has {total_node_count - placed_node_count} nodes without "
+                        f"explicit placement, using {default_agent.name} as default host"
+                    )
+            else:
+                # Single-host: check for healthy agent
+                agents = (
+                    database.query(models.Host)
+                    .filter(models.Host.status == "online", models.Host.last_heartbeat >= cutoff)
+                    .all()
+                )
+                if lab_provider:
+                    agents = [a for a in agents if lab_provider in get_agent_providers(a)]
+                if not agents:
+                    raise HTTPException(status_code=503, detail=f"No healthy agent available with {lab_provider} support")
+
+            # Collect image sync info if needed
+            image_refs = []
+            image_to_nodes = {}
+            target_host_id = None
+            if settings.image_sync_enabled and settings.image_sync_pre_deploy_check:
+                image_refs = service.get_required_images(lab.id)
+                if image_refs:
+                    image_to_nodes = service.get_image_to_nodes_map(lab.id)
+                    if is_multihost and analysis:
+                        first_host = list(analysis.placements.keys())[0]
+                        target_agent = (
+                            database.query(models.Host)
+                            .filter(
+                                or_(models.Host.name == first_host, models.Host.id == first_host),
+                                models.Host.status == "online",
+                                models.Host.last_heartbeat >= cutoff,
+                            )
+                            .first()
+                        )
+                        if target_agent:
+                            target_host_id = target_agent.id
+                    else:
+                        # Single-host: use first available agent
+                        target_host_id = agents[0].id if agents else None
+
+            return {
+                "lab_id": lab.id,
+                "is_multihost": is_multihost,
+                "lab_provider": lab_provider,
+                "image_refs": image_refs,
+                "image_to_nodes": image_to_nodes,
+                "target_host_id": target_host_id,
+            }
+
+    phase1 = await asyncio.to_thread(_sync_validate)
+    real_lab_id = phase1["lab_id"]
+    is_multihost = phase1["is_multihost"]
+    lab_provider = phase1["lab_provider"]
+
+    # Phase 2: Async image sync (manages its own DB session)
+    image_sync_log: list[str] = []
+    if phase1["image_refs"] and phase1["target_host_id"]:
+        from app.tasks.image_sync import ensure_images_for_deployment
+
+        all_ready, missing, image_sync_log = await ensure_images_for_deployment(
+            phase1["target_host_id"],
+            phase1["image_refs"],
+            timeout=settings.image_sync_timeout,
+            database=None,  # Let it manage its own session
+            lab_id=real_lab_id,
+            image_to_nodes=phase1["image_to_nodes"],
+        )
+        if not all_ready and missing:
+            missing_str = ", ".join(missing[:3])
+            if len(missing) > 3:
+                missing_str += f" (+{len(missing) - 3} more)"
+            raise HTTPException(
+                status_code=503,
+                detail=f"Required images not available on agent: {missing_str}. "
+                       f"Upload images or manually sync them to the agent."
+            )
+
+    # Phase 3: Create job and set desired states in worker thread
+    def _sync_create_job():
+        with get_session() as database:
+            job = models.Job(lab_id=real_lab_id, user_id=current_user.id, action="up", status="queued")
+            database.add(job)
+            database.commit()
+            database.refresh(job)
+
+            # Set desired_state for ALL nodes so enforcement and NLM know
+            # these nodes should be running after deploy.
+            node_states = (
+                database.query(models.NodeState)
+                .filter(models.NodeState.lab_id == real_lab_id)
+                .with_for_update()
+                .all()
+            )
+            for ns in node_states:
+                ns.desired_state = "running"
+                ns.reset_enforcement(clear_error=True)
+            database.commit()
+
+            return {
+                "job": schemas.JobOut.model_validate(job),
+                "job_id": job.id,
+                "node_names": [ns.node_name for ns in node_states],
+            }
+
+    phase3 = await asyncio.to_thread(_sync_create_job)
+
+    # Phase 4: Fire-and-forget async tasks
+    if phase3["node_names"]:
         from app.tasks.state_enforcement import clear_cooldowns_for_lab
         safe_create_task(
-            clear_cooldowns_for_lab(lab.id, [ns.node_name for ns in node_states]),
-            name=f"clear_cooldowns:{lab.id}"
+            clear_cooldowns_for_lab(real_lab_id, phase3["node_names"]),
+            name=f"clear_cooldowns:{real_lab_id}"
         )
 
-    # Start background task - choose deployment method based on topology
-    # Deploy functions build topology from database (source of truth)
     if is_multihost:
         safe_create_task(
-            run_multihost_deploy(job.id, lab.id, provider=lab_provider),
-            name=f"deploy:multihost:{job.id}"
+            run_multihost_deploy(phase3["job_id"], real_lab_id, provider=lab_provider),
+            name=f"deploy:multihost:{phase3['job_id']}"
         )
     else:
         safe_create_task(
-            run_agent_job(job.id, lab.id, "up", provider=lab_provider),
-            name=f"deploy:single:{job.id}"
+            run_agent_job(phase3["job_id"], real_lab_id, "up", provider=lab_provider),
+            name=f"deploy:single:{phase3['job_id']}"
         )
 
-    # Build response with image sync events
-    job_out = schemas.JobOut.model_validate(job)
+    job_out = phase3["job"]
     if image_sync_log:
         job_out.image_sync_events = image_sync_log
     return job_out
@@ -350,136 +403,172 @@ async def lab_up(
 @router.post("/labs/{lab_id}/down")
 async def lab_down(
     lab_id: str,
-    database: Session = Depends(db.get_db),
     current_user: models.User = Depends(get_current_user),
 ) -> schemas.JobOut:
-    lab = require_lab_editor(lab_id, database, current_user)
+    # All DB work in a single worker thread
+    # Note: get_agent_for_lab is async def but contains zero awaits (pure DB),
+    # so we inline the health check as a simple existence query.
+    def _sync_down():
+        with get_session() as database:
+            lab = require_lab_editor(lab_id, database, current_user)
 
-    # Check for conflicting jobs before proceeding
-    has_conflict, conflicting_action = has_conflicting_job(lab_id, "down")
-    if has_conflict:
-        raise HTTPException(
-            status_code=409,
-            detail=f"Cannot stop lab: '{conflicting_action}' operation already in progress"
-        )
+            conflict, conflicting_action = has_conflicting_job(lab_id, "down")
+            if conflict:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"Cannot stop lab: '{conflicting_action}' operation already in progress"
+                )
 
-    # Use TopologyService for analysis (database is source of truth)
-    service = TopologyService(database)
-    is_multihost = service.is_multihost(lab.id) if service.has_nodes(lab.id) else False
+            service = TopologyService(database)
+            is_multihost = service.is_multihost(lab.id) if service.has_nodes(lab.id) else False
+            lab_provider = get_lab_provider(lab)
 
-    # Get the provider for this lab
-    lab_provider = get_lab_provider(lab)
+            if not is_multihost:
+                # Pre-check: at least one healthy agent with this provider exists
+                from app.agent_client import _agent_online_cutoff, get_agent_providers
+                cutoff = _agent_online_cutoff()
+                agents = (
+                    database.query(models.Host)
+                    .filter(models.Host.status == "online", models.Host.last_heartbeat >= cutoff)
+                    .all()
+                )
+                if lab_provider:
+                    agents = [a for a in agents if lab_provider in get_agent_providers(a)]
+                if not agents:
+                    raise HTTPException(status_code=503, detail=f"No healthy agent available with {lab_provider} support")
 
-    if not is_multihost:
-        # Single-host: check for healthy agent with required capability
-        agent = await agent_client.get_agent_for_lab(database, lab, required_provider=lab_provider)
-        if not agent:
-            raise HTTPException(status_code=503, detail=f"No healthy agent available with {lab_provider} support")
+            # Create job record
+            job = models.Job(lab_id=lab.id, user_id=current_user.id, action="down", status="queued")
+            database.add(job)
+            database.commit()
+            database.refresh(job)
 
-    # Create job record
-    job = models.Job(lab_id=lab.id, user_id=current_user.id, action="down", status="queued")
-    database.add(job)
-    database.commit()
-    database.refresh(job)
+            # Set desired_state so enforcement doesn't restart destroyed containers.
+            # Use SELECT FOR UPDATE to prevent races with concurrent state changes.
+            node_states = (
+                database.query(models.NodeState)
+                .filter(models.NodeState.lab_id == lab.id)
+                .with_for_update()
+                .all()
+            )
+            for ns in node_states:
+                ns.desired_state = "stopped"
+                ns.reset_enforcement()
+            database.commit()
 
-    # Set desired_state so enforcement doesn't restart destroyed containers.
-    # Use SELECT FOR UPDATE to prevent races with concurrent state changes.
-    # Reset enforcement counters so stale circuit breakers don't block future ops.
-    node_states = (
-        database.query(models.NodeState)
-        .filter(models.NodeState.lab_id == lab.id)
-        .with_for_update()
-        .all()
-    )
-    for ns in node_states:
-        ns.desired_state = "stopped"
-        ns.reset_enforcement()
-    database.commit()
+            return {
+                "job": schemas.JobOut.model_validate(job),
+                "job_id": job.id,
+                "lab_id": lab.id,
+                "is_multihost": is_multihost,
+                "lab_provider": lab_provider,
+                "node_names": [ns.node_name for ns in node_states],
+            }
 
-    # Clear enforcement cooldowns so enforcement picks up new desired state immediately
-    if node_states:
+    result = await asyncio.to_thread(_sync_down)
+
+    # Fire-and-forget async tasks (no DB session held)
+    if result["node_names"]:
         from app.tasks.state_enforcement import clear_cooldowns_for_lab
         safe_create_task(
-            clear_cooldowns_for_lab(lab.id, [ns.node_name for ns in node_states]),
-            name=f"clear_cooldowns:{lab.id}"
+            clear_cooldowns_for_lab(result["lab_id"], result["node_names"]),
+            name=f"clear_cooldowns:{result['lab_id']}"
         )
 
-    # Start background task - choose destroy method based on topology
-    # Destroy functions use database for host analysis (source of truth)
-    if is_multihost:
+    if result["is_multihost"]:
         safe_create_task(
-            run_multihost_destroy(job.id, lab.id, provider=lab_provider),
-            name=f"destroy:multihost:{job.id}"
+            run_multihost_destroy(result["job_id"], result["lab_id"], provider=result["lab_provider"]),
+            name=f"destroy:multihost:{result['job_id']}"
         )
     else:
         safe_create_task(
-            run_agent_job(job.id, lab.id, "down", provider=lab_provider),
-            name=f"destroy:single:{job.id}"
+            run_agent_job(result["job_id"], result["lab_id"], "down", provider=result["lab_provider"]),
+            name=f"destroy:single:{result['job_id']}"
         )
 
-    return schemas.JobOut.model_validate(job)
+    return result["job"]
 
 
 @router.post("/labs/{lab_id}/restart")
 async def lab_restart(
     lab_id: str,
-    database: Session = Depends(db.get_db),
     current_user: models.User = Depends(get_current_user),
 ) -> schemas.JobOut:
-    lab = require_lab_editor(lab_id, database, current_user)
+    # All DB work in a single worker thread
+    def _sync_restart():
+        with get_session() as database:
+            lab = require_lab_editor(lab_id, database, current_user)
 
-    # Check for conflicting jobs before proceeding (restart involves down + up)
-    has_conflict, conflicting_action = has_conflicting_job(lab_id, "down")
-    if has_conflict:
-        raise HTTPException(
-            status_code=409,
-            detail=f"Cannot restart lab: '{conflicting_action}' operation already in progress"
-        )
+            conflict, conflicting_action = has_conflicting_job(lab_id, "down")
+            if conflict:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"Cannot restart lab: '{conflicting_action}' operation already in progress"
+                )
 
-    # Get the provider for this lab
-    lab_provider = get_lab_provider(lab)
+            lab_provider = get_lab_provider(lab)
 
-    # Check for healthy agent with required capability, respecting affinity
-    agent = await agent_client.get_agent_for_lab(database, lab, required_provider=lab_provider)
-    if not agent:
-        raise HTTPException(status_code=503, detail=f"No healthy agent available with {lab_provider} support")
+            # Pre-check: at least one healthy agent with this provider
+            from app.agent_client import _agent_online_cutoff, get_agent_providers
+            cutoff = _agent_online_cutoff()
+            agents = (
+                database.query(models.Host)
+                .filter(models.Host.status == "online", models.Host.last_heartbeat >= cutoff)
+                .all()
+            )
+            if lab_provider:
+                agents = [a for a in agents if lab_provider in get_agent_providers(a)]
+            if not agents:
+                raise HTTPException(status_code=503, detail=f"No healthy agent available with {lab_provider} support")
 
-    # Validate topology exists in database (source of truth)
-    service = TopologyService(database)
-    if not service.has_nodes(lab.id):
-        raise HTTPException(status_code=400, detail="No topology defined for this lab")
+            service = TopologyService(database)
+            if not service.has_nodes(lab.id):
+                raise HTTPException(status_code=400, detail="No topology defined for this lab")
 
-    # Create separate jobs for down and up phases
-    down_job = models.Job(lab_id=lab.id, user_id=current_user.id, action="down", status="queued")
-    database.add(down_job)
-    database.commit()
-    database.refresh(down_job)
+            # Create separate jobs for down and up phases
+            down_job = models.Job(lab_id=lab.id, user_id=current_user.id, action="down", status="queued")
+            database.add(down_job)
+            database.commit()
+            database.refresh(down_job)
 
-    up_job = models.Job(lab_id=lab.id, user_id=current_user.id, action="up", status="queued")
-    database.add(up_job)
-    database.commit()
-    database.refresh(up_job)
+            up_job = models.Job(lab_id=lab.id, user_id=current_user.id, action="up", status="queued")
+            database.add(up_job)
+            database.commit()
+            database.refresh(up_job)
 
-    # For restart, we do down then up sequentially with separate jobs
+            return {
+                "down_job": schemas.JobOut.model_validate(down_job),
+                "down_job_id": down_job.id,
+                "up_job_id": up_job.id,
+                "lab_id": lab.id,
+                "lab_provider": lab_provider,
+            }
+
+    result = await asyncio.to_thread(_sync_restart)
+
+    # Fire-and-forget: restart_sequence already uses its own session internally
+    real_lab_id = result["lab_id"]
+    lab_provider = result["lab_provider"]
+    down_job_id = result["down_job_id"]
+    up_job_id = result["up_job_id"]
+
     async def restart_sequence():
-        await run_agent_job(down_job.id, lab.id, "down", provider=lab_provider)
+        await run_agent_job(down_job_id, real_lab_id, "down", provider=lab_provider)
         # Check if down succeeded before starting up
         with get_session() as session:
-            dj = session.get(models.Job, down_job.id)
-            uj = session.get(models.Job, up_job.id)
+            dj = session.get(models.Job, down_job_id)
+            uj = session.get(models.Job, up_job_id)
             if dj and dj.status == "failed":
-                # Mark up job as cancelled since down failed
                 if uj:
                     uj.status = "failed"
                     uj.log = "Cancelled: down phase failed"
                     session.commit()
                 return
-        # Proceed with up phase (topology is built from database)
-        await run_agent_job(up_job.id, lab.id, "up", provider=lab_provider)
+        await run_agent_job(up_job_id, real_lab_id, "up", provider=lab_provider)
 
-    safe_create_task(restart_sequence(), name=f"restart:{down_job.id}")
+    safe_create_task(restart_sequence(), name=f"restart:{down_job_id}")
 
-    return schemas.JobOut.model_validate(down_job)
+    return result["down_job"]
 
 
 @router.post("/labs/{lab_id}/nodes/{node}/{action}",

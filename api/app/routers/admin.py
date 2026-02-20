@@ -604,7 +604,6 @@ async def get_system_logs(
 
             # Parse the JSON log line
             try:
-                import json
                 log_data = json.loads(log_line)
                 entry = schemas.SystemLogEntry(
                     timestamp=log_data.get("timestamp", ""),

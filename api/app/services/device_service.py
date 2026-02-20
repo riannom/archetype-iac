@@ -597,7 +597,10 @@ class DeviceService:
                     break
 
         image_meta = get_image_runtime_metadata(metadata_image_reference)
+        vendor_probe_none = config and getattr(config, "readiness_probe", None) == "none"
         for key in ("memory", "cpu", "cpu_limit", "max_ports", "port_naming", "disk_driver", "nic_driver", "machine_type", "libvirt_driver", "readiness_timeout", "readiness_probe", "readiness_pattern", "efi_boot", "efi_vars", "data_volume_gb"):
+            if vendor_probe_none and key in ("readiness_probe", "readiness_pattern"):
+                continue
             val = image_meta.get(key)
             if val is not None:
                 specs[key] = val

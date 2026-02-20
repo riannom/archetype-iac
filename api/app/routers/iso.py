@@ -981,6 +981,11 @@ async def _import_single_image(
         )
         compat = shared_devices if shared_devices else [device_id]
 
+        # Check if vendor explicitly opts out of readiness probing
+        from agent.vendors import _get_config_by_kind
+        vendor_cfg = _get_config_by_kind(device_id)
+        vendor_probe_none = vendor_cfg and getattr(vendor_cfg, "readiness_probe", None) == "none"
+
         # Create manifest entry
         entry = create_image_entry(
             image_id=f"qcow2:{image.disk_image_filename}",
@@ -999,8 +1004,8 @@ async def _import_single_image(
             machine_type=node_def.machine_type if node_def else None,
             libvirt_driver=node_def.libvirt_driver if node_def else None,
             boot_timeout=node_def.boot_timeout if node_def else None,
-            readiness_probe=("log_pattern" if node_def and node_def.boot_completed_patterns else None),
-            readiness_pattern=("|".join(node_def.boot_completed_patterns) if node_def and node_def.boot_completed_patterns else None),
+            readiness_probe=(None if vendor_probe_none else ("log_pattern" if node_def and node_def.boot_completed_patterns else None)),
+            readiness_pattern=(None if vendor_probe_none else ("|".join(node_def.boot_completed_patterns) if node_def and node_def.boot_completed_patterns else None)),
             efi_boot=node_def.efi_boot if node_def else None,
             efi_vars=node_def.efi_vars if node_def else None,
             max_ports=((len(node_def.interfaces) or node_def.interface_count_default) if node_def else None),

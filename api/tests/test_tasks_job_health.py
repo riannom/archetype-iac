@@ -593,8 +593,8 @@ class TestJobHealthMonitor:
                 with patch("app.tasks.job_health.check_jobs_on_offline_agents", new_callable=AsyncMock) as mock_offline:
                     with patch("app.tasks.job_health.check_stuck_image_sync_jobs", new_callable=AsyncMock) as mock_sync:
                         with patch("app.tasks.job_health.check_stuck_locks", new_callable=AsyncMock) as mock_locks:
-                            with patch("app.tasks.job_health.check_stuck_stopping_nodes", new_callable=AsyncMock) as mock_stopping:
-                                with patch("app.tasks.job_health.check_stuck_starting_nodes", new_callable=AsyncMock) as mock_starting:
+                            with patch("app.tasks.job_health.check_stuck_stopping_nodes") as mock_stopping:
+                                with patch("app.tasks.job_health.check_stuck_starting_nodes") as mock_starting:
                                     with patch("app.tasks.job_health.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
                                         call_count = 0
                                         async def sleep_and_cancel(seconds):
@@ -642,8 +642,8 @@ class TestJobHealthMonitor:
                 with patch("app.tasks.job_health.check_jobs_on_offline_agents", new_callable=AsyncMock):
                     with patch("app.tasks.job_health.check_stuck_image_sync_jobs", new_callable=AsyncMock):
                         with patch("app.tasks.job_health.check_stuck_locks", new_callable=AsyncMock):
-                            with patch("app.tasks.job_health.check_stuck_stopping_nodes", new_callable=AsyncMock):
-                                with patch("app.tasks.job_health.check_stuck_starting_nodes", new_callable=AsyncMock):
+                            with patch("app.tasks.job_health.check_stuck_stopping_nodes"):
+                                with patch("app.tasks.job_health.check_stuck_starting_nodes"):
                                     with patch("app.tasks.job_health.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
                                         sleep_count = 0
                                         async def sleep_and_cancel(seconds):

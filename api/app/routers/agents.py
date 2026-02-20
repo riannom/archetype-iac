@@ -122,7 +122,6 @@ class DashboardMetrics(BaseModel):
 @router.post("/register", response_model=RegistrationResponse)
 async def register_agent(
     request: RegistrationRequest,
-    database: Session = Depends(db.get_db),
     _auth: None = Depends(verify_agent_secret),
 ) -> RegistrationResponse:
     """Register a new agent or update existing registration.
@@ -139,125 +138,128 @@ async def register_agent(
     to sync ImageHost records with actual agent inventory.
     """
     agent = request.agent
-    host_id = None
-    is_new_registration = False
-    is_restart = False
 
-    # First check if agent already exists by ID
-    existing = database.get(models.Host, agent.agent_id)
+    # Phase 1: All DB registration + cleanup in a worker thread
+    def _sync_register():
+        from app.db import get_session
 
-    if existing:
-        # Detect restart: if started_at is newer than what we have on record
-        if existing.started_at and agent.started_at:
-            if agent.started_at > existing.started_at:
-                is_restart = True
+        with get_session() as database:
+            host_id = None
+            is_new_registration = False
+            is_restart = False
 
-        # Update existing registration (same agent reconnecting)
-        existing.name = agent.name
-        existing.address = agent.address
-        existing.status = "online"
-        existing.capabilities = json.dumps(agent.capabilities.model_dump())
-        existing.version = agent.version
-        existing.git_sha = agent.commit or existing.git_sha
-        existing.started_at = agent.started_at
-        existing.is_local = agent.is_local
-        existing.deployment_mode = agent.deployment_mode or existing.deployment_mode
-        existing.last_heartbeat = datetime.now(timezone.utc)
-        existing.data_plane_address = getattr(agent, "data_plane_ip", None)
-        database.commit()
-        host_id = agent.agent_id
+            existing = database.get(models.Host, agent.agent_id)
 
-        response = RegistrationResponse(
-            success=True,
-            message="Agent re-registered",
-            assigned_id=agent.agent_id,
-        )
-    else:
-        # Check for existing agent with same name or address (agent restarted with new ID)
-        existing_by_name = (
-            database.query(models.Host)
-            .filter(models.Host.name == agent.name)
-            .first()
-        )
-        existing_by_address = (
-            database.query(models.Host)
-            .filter(models.Host.address == agent.address)
-            .first()
-        )
+            if existing:
+                if existing.started_at and agent.started_at:
+                    if agent.started_at > existing.started_at:
+                        is_restart = True
 
-        # Prefer matching by name, fall back to address
-        existing_duplicate = existing_by_name or existing_by_address
+                existing.name = agent.name
+                existing.address = agent.address
+                existing.status = "online"
+                existing.capabilities = json.dumps(agent.capabilities.model_dump())
+                existing.version = agent.version
+                existing.git_sha = agent.commit or existing.git_sha
+                existing.started_at = agent.started_at
+                existing.is_local = agent.is_local
+                existing.deployment_mode = agent.deployment_mode or existing.deployment_mode
+                existing.last_heartbeat = datetime.now(timezone.utc)
+                existing.data_plane_address = getattr(agent, "data_plane_ip", None)
+                database.commit()
+                host_id = agent.agent_id
 
-        if existing_duplicate:
-            # Update existing record in place to preserve foreign key references
-            # (labs and jobs may reference this agent)
-            existing_duplicate.name = agent.name
-            existing_duplicate.address = agent.address
-            existing_duplicate.status = "online"
-            existing_duplicate.capabilities = json.dumps(agent.capabilities.model_dump())
-            existing_duplicate.version = agent.version
-            existing_duplicate.git_sha = agent.commit or existing_duplicate.git_sha
-            existing_duplicate.started_at = agent.started_at
-            existing_duplicate.is_local = agent.is_local
-            existing_duplicate.deployment_mode = agent.deployment_mode or existing_duplicate.deployment_mode
-            existing_duplicate.last_heartbeat = datetime.now(timezone.utc)
-            existing_duplicate.data_plane_address = getattr(agent, "data_plane_ip", None)
-            database.commit()
-            host_id = existing_duplicate.id
+                response = RegistrationResponse(
+                    success=True,
+                    message="Agent re-registered",
+                    assigned_id=agent.agent_id,
+                )
+            else:
+                existing_by_name = (
+                    database.query(models.Host)
+                    .filter(models.Host.name == agent.name)
+                    .first()
+                )
+                existing_by_address = (
+                    database.query(models.Host)
+                    .filter(models.Host.address == agent.address)
+                    .first()
+                )
+                existing_duplicate = existing_by_name or existing_by_address
 
-            # Return the existing ID so agent can use it for heartbeats
-            response = RegistrationResponse(
-                success=True,
-                message="Agent re-registered (updated existing record)",
-                assigned_id=existing_duplicate.id,
-            )
-        else:
-            # Create new agent (first time registration)
-            host = models.Host(
-                id=agent.agent_id,
-                name=agent.name,
-                address=agent.address,
-                status="online",
-                capabilities=json.dumps(agent.capabilities.model_dump()),
-                version=agent.version,
-                git_sha=agent.commit or None,
-                started_at=agent.started_at,
-                is_local=agent.is_local,
-                deployment_mode=agent.deployment_mode or "unknown",
-                last_heartbeat=datetime.now(timezone.utc),
-                data_plane_address=getattr(agent, "data_plane_ip", None),
-            )
-            database.add(host)
-            database.commit()
-            host_id = agent.agent_id
-            is_new_registration = True
+                if existing_duplicate:
+                    existing_duplicate.name = agent.name
+                    existing_duplicate.address = agent.address
+                    existing_duplicate.status = "online"
+                    existing_duplicate.capabilities = json.dumps(agent.capabilities.model_dump())
+                    existing_duplicate.version = agent.version
+                    existing_duplicate.git_sha = agent.commit or existing_duplicate.git_sha
+                    existing_duplicate.started_at = agent.started_at
+                    existing_duplicate.is_local = agent.is_local
+                    existing_duplicate.deployment_mode = agent.deployment_mode or existing_duplicate.deployment_mode
+                    existing_duplicate.last_heartbeat = datetime.now(timezone.utc)
+                    existing_duplicate.data_plane_address = getattr(agent, "data_plane_ip", None)
+                    database.commit()
+                    host_id = existing_duplicate.id
 
-            response = RegistrationResponse(
-                success=True,
-                message="Agent registered",
-                assigned_id=agent.agent_id,
-            )
+                    response = RegistrationResponse(
+                        success=True,
+                        message="Agent re-registered (updated existing record)",
+                        assigned_id=existing_duplicate.id,
+                    )
+                else:
+                    host = models.Host(
+                        id=agent.agent_id,
+                        name=agent.name,
+                        address=agent.address,
+                        status="online",
+                        capabilities=json.dumps(agent.capabilities.model_dump()),
+                        version=agent.version,
+                        git_sha=agent.commit or None,
+                        started_at=agent.started_at,
+                        is_local=agent.is_local,
+                        deployment_mode=agent.deployment_mode or "unknown",
+                        last_heartbeat=datetime.now(timezone.utc),
+                        data_plane_address=getattr(agent, "data_plane_ip", None),
+                    )
+                    database.add(host)
+                    database.commit()
+                    host_id = agent.agent_id
+                    is_new_registration = True
 
-    # Handle agent restart: mark stale jobs as failed
-    if is_restart and host_id:
-        await _handle_agent_restart_cleanup(database, host_id)
+                    response = RegistrationResponse(
+                        success=True,
+                        message="Agent registered",
+                        assigned_id=agent.agent_id,
+                    )
 
-    # Check if re-registration completes an in-progress update job
-    if host_id:
-        _check_update_completion(database, host_id, agent.version, agent.commit)
+            # Handle restart cleanup in same session (pure DB)
+            if is_restart and host_id:
+                _handle_agent_restart_cleanup_sync(database, host_id)
 
-    # Trigger image reconciliation in background
+            # Check update completion in same session (pure DB)
+            if host_id:
+                _check_update_completion(database, host_id, agent.version, agent.commit)
+
+            return {
+                "response": response,
+                "host_id": host_id,
+                "is_new_registration": is_new_registration,
+            }
+
+    result = await asyncio.to_thread(_sync_register)
+    host_id = result["host_id"]
+
+    # Phase 2: Fire-and-forget async tasks (no DB session held)
     if host_id and settings.image_sync_enabled:
         from app.tasks.image_sync import reconcile_agent_images, pull_images_on_registration
 
-        # Reconcile image inventory
         asyncio.create_task(reconcile_agent_images(host_id))
 
-        # If pull strategy, trigger image sync
-        if is_new_registration:
+        if result["is_new_registration"]:
             asyncio.create_task(pull_images_on_registration(host_id))
 
-    # Trigger overlay convergence to restore cross-host links immediately
+    # Trigger overlay convergence (already uses its own session)
     if host_id:
         import logging
         _logger = logging.getLogger(__name__)
@@ -271,9 +273,9 @@ async def register_agent(
                     run_same_host_convergence,
                 )
                 with get_session() as sess:
-                    agent = sess.get(models.Host, host_id)
-                    if agent and agent.status == "online":
-                        host_map = {agent.id: agent}
+                    ag = sess.get(models.Host, host_id)
+                    if ag and ag.status == "online":
+                        host_map = {ag.id: ag}
                         await run_overlay_convergence(sess, host_map)
                         await refresh_interface_mappings(sess, host_map)
                         await run_same_host_convergence(sess, host_map)
@@ -283,27 +285,26 @@ async def register_agent(
 
         asyncio.create_task(_converge_agent())
 
-    return response
+    return result["response"]
 
 
-async def _handle_agent_restart_cleanup(database: Session, agent_id: str) -> None:
-    """Handle cleanup when an agent restarts.
+def _handle_agent_restart_cleanup_sync(database: Session, agent_id: str) -> None:
+    """Handle cleanup when an agent restarts (synchronous, uses caller's session).
 
     When an agent restarts, any jobs that were running on it are now
     orphaned since the agent lost its execution context. This function:
     1. Finds all running jobs assigned to this agent
     2. Marks them as failed with appropriate error message
     3. Updates associated lab state if needed
-    4. Triggers link reconciliation for labs with nodes on this agent
+    4. Marks cross-host links for recovery
 
     Args:
-        database: Database session
+        database: Database session (caller manages lifecycle)
         agent_id: ID of the restarted agent
     """
     import logging
     logger = logging.getLogger(__name__)
 
-    # Find all running jobs on this agent
     stale_jobs = (
         database.query(models.Job)
         .filter(
@@ -313,7 +314,6 @@ async def _handle_agent_restart_cleanup(database: Session, agent_id: str) -> Non
         .all()
     )
 
-    # Handle stale jobs
     if stale_jobs:
         logger.warning(
             f"Agent {agent_id} restarted - marking {len(stale_jobs)} running jobs as failed"
@@ -327,7 +327,6 @@ async def _handle_agent_restart_cleanup(database: Session, agent_id: str) -> Non
 
             logger.info(f"Marked job {job.id} (action={job.action}) as failed due to agent restart")
 
-            # Update lab state to error if this was a deploy/destroy job
             if job.lab_id and job.action in ("up", "down"):
                 lab = database.get(models.Lab, job.lab_id)
                 if lab:
@@ -338,13 +337,11 @@ async def _handle_agent_restart_cleanup(database: Session, agent_id: str) -> Non
 
         database.commit()
 
-    # Mark cross-host links for recovery
-    # This sets the appropriate attachment flags so link reconciliation
-    # knows which side needs to be re-attached
-    await _mark_links_for_recovery(database, agent_id)
+    # Mark cross-host links for recovery (pure DB)
+    _mark_links_for_recovery_sync(database, agent_id)
 
 
-async def _mark_links_for_recovery(database: Session, agent_id: str) -> None:
+def _mark_links_for_recovery_sync(database: Session, agent_id: str) -> None:
     """Mark cross-host links as needing recovery after agent restart.
 
     When an agent restarts, its VXLAN overlay state is lost. This function:
@@ -356,13 +353,12 @@ async def _mark_links_for_recovery(database: Session, agent_id: str) -> None:
     re-establish connectivity by re-attaching the affected endpoints.
 
     Args:
-        database: Database session
+        database: Database session (caller manages lifecycle)
         agent_id: ID of the restarted agent
     """
     import logging
     logger = logging.getLogger(__name__)
 
-    # Find all cross-host links involving this agent where actual_state is "up"
     links = (
         database.query(models.LinkState)
         .filter(
@@ -384,7 +380,6 @@ async def _mark_links_for_recovery(database: Session, agent_id: str) -> None:
         link.actual_state = "error"
         link.error_message = "Agent restarted, pending recovery"
 
-        # Clear the attachment flag for the restarted agent's side
         if link.source_host_id == agent_id:
             link.source_vxlan_attached = False
         if link.target_host_id == agent_id:
