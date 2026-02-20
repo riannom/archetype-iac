@@ -391,6 +391,21 @@ if [ -f /etc/systemd/logind.conf ]; then
 fi
 log_info "System suspend disabled"
 
+# Configure OOM safety — prevent full system crash on memory exhaustion
+# panic_on_oom=1 causes a kernel panic instead of letting the OOM killer terminate
+# a single process. Combined with kernel.panic=0 (no auto-reboot), this hangs the
+# server until manual power cycle.
+log_info "Configuring OOM safety and panic recovery..."
+cat > /etc/sysctl.d/99-archetype-oom.conf << 'SYSCTL'
+# Archetype: prevent full system crash on memory exhaustion
+# Let OOM killer terminate a process instead of kernel panic
+vm.panic_on_oom=0
+# Auto-reboot 10s after kernel panic (if one still occurs)
+kernel.panic=10
+SYSCTL
+sysctl -p /etc/sysctl.d/99-archetype-oom.conf >/dev/null 2>&1
+log_info "OOM safety configured (panic_on_oom=0, kernel.panic=10)"
+
 # Prevent NBD/LVM crash cascade
 # When qemu-nbd connects a VM disk image (e.g. N9Kv qcow2), udev triggers LVM to
 # auto-activate internal logical volumes. If NBD disconnects, dangling dm devices

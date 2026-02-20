@@ -485,10 +485,30 @@ prevent_nbd_lvm_crash() {
     fi
 }
 
+configure_oom_safety() {
+    # When memory is exhausted, panic_on_oom=1 causes a kernel panic instead of
+    # letting the OOM killer terminate a single process. Combined with kernel.panic=0
+    # (no auto-reboot), this hangs the server until manual power cycle.
+    log_info "Configuring OOM safety and panic recovery..."
+
+    local SYSCTL_FILE="/etc/sysctl.d/99-archetype-oom.conf"
+    cat > "$SYSCTL_FILE" << 'SYSCTL'
+# Archetype: prevent full system crash on memory exhaustion
+# Let OOM killer terminate a process instead of kernel panic
+vm.panic_on_oom=0
+# Auto-reboot 10s after kernel panic (if one still occurs)
+kernel.panic=10
+SYSCTL
+
+    sysctl -p "$SYSCTL_FILE" >/dev/null 2>&1
+    log_info "OOM safety configured (panic_on_oom=0, kernel.panic=10)"
+}
+
 install_base_deps
 install_docker
 disable_auto_suspend
 prevent_nbd_lvm_crash
+configure_oom_safety
 
 # Clone vrnetlab for VM image building (needed by worker container)
 VRNETLAB_DIR="/opt/vrnetlab"
