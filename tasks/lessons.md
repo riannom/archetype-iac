@@ -150,6 +150,16 @@
 
 **Rule**: When wrapping Docker SDK calls in `asyncio.to_thread()`, include `docker.from_env()` inside the sync closure. Every Docker SDK call is blocking — client creation, container.get(), container.start(), network.create() — they all need thread isolation.
 
+## 2026-02-19: Image metadata can override vendor readiness_probe="none" opt-out
+
+**Bug**: The hw_specs merge chain (vendor → image → device overrides → per-node) allowed ISO-imported image metadata containing `readiness_probe="log_pattern"` to override the vendor config's intentional `readiness_probe="none"` for N9Kv. The "none" probe means "VM runtime state is sufficient — don't probe logs."
+
+**Impact**: N9Kv VMs used `LibvirtLogPatternProbe` watching for serial console patterns that never appear after POAP configures the device. `is_ready` stayed false permanently — VMs ran fine but were never marked ready.
+
+**Fix**: In Layer 1c (image metadata merge in `device_service.py`), skip `readiness_probe` and `readiness_pattern` keys when vendor config explicitly sets `readiness_probe="none"`. Defense-in-depth: `iso.py` also skips writing these fields to the manifest during import.
+
+**Rule**: When a vendor config explicitly opts out of a feature (`readiness_probe="none"`), lower-priority layers (image metadata) must not override that opt-out. Only higher-priority layers (device overrides, per-node config) should be able to re-enable it, as those represent explicit user intent.
+
 ## 2026-02-19: Conditional `import` inside function shadows module-level import
 
 **Bug**: `jobs.py:lab_status()` had `import asyncio` inside an `if not agents:` branch (line 627). Python's compiler saw this and marked `asyncio` as a local variable for the entire function. When agents existed (the normal path), the branch was skipped, leaving `asyncio` unbound. Line 653's `asyncio.gather()` raised `UnboundLocalError`.
@@ -169,3 +179,13 @@
 **Fix**: Wrapped the user lookup in `asyncio.to_thread()`. The sync session + DB query now runs in a worker thread.
 
 **Rule**: Middleware in async web frameworks runs on EVERY request — it's the highest-impact location for blocking calls. Always audit middleware for sync I/O first when investigating event loop stalls.
+
+## 2026-02-19: async def functions with zero await calls are effectively sync
+
+**Bug**: `get_agent_for_lab()`, `get_healthy_agent()`, `get_agent_by_name()`, `_handle_agent_restart_cleanup()`, `_mark_links_for_recovery()` were all `async def` but contained zero `await` calls — pure synchronous DB operations.
+
+**Impact**: When refactoring handlers that call these functions, they can't be called from sync closures (they return coroutines, not values). But wrapping them in `await` defeats the purpose of the `asyncio.to_thread()` pattern since the async call puts you back on the event loop.
+
+**Fix**: For handler refactoring, inline the pure-DB logic directly in the sync closure. For standalone helper functions, convert from `async def` to plain `def` (renamed with `_sync` suffix).
+
+**Rule**: Before wrapping an `async def` function in `asyncio.to_thread()`, check if it actually uses `await`. If it has zero `await` calls, it's effectively sync — either inline its logic in the sync closure or convert it to a plain `def`.

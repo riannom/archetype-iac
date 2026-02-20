@@ -199,3 +199,140 @@ class TestResolveHardwareSpecs:
         assert specs["memory"] == 24576
         assert specs["cpu"] == 4
         assert specs["cpu_limit"] == 70
+
+    @patch("app.services.device_service.get_image_runtime_metadata")
+    @patch("app.services.device_service.get_device_override", return_value=None)
+    @patch("app.services.device_service.find_custom_device", return_value=None)
+    @patch("app.services.device_service.get_kind_for_device", return_value="cisco_n9kv")
+    @patch("app.services.device_service._get_config_by_kind")
+    def test_vendor_probe_none_blocks_image_readiness_override(
+        self,
+        mock_config,
+        mock_kind,
+        mock_custom,
+        mock_override,
+        mock_image_meta,
+    ):
+        """When vendor sets readiness_probe='none', image metadata must not override it."""
+        mock_config.return_value = MockVendorConfig(
+            kind="cisco_n9kv",
+            memory=12288,
+            cpu=2,
+            readiness_probe="none",
+            readiness_pattern=None,
+            readiness_timeout=600,
+        )
+        mock_image_meta.return_value = {
+            "memory": 16384,
+            "readiness_probe": "log_pattern",
+            "readiness_pattern": "There is no admin password|User Access Verification",
+            "readiness_timeout": 480,
+        }
+        specs = self.service.resolve_hardware_specs(
+            "cisco_n9kv",
+            None,
+            "/var/lib/archetype/images/n9kv.qcow2",
+        )
+        # Memory should be overridden by image metadata
+        assert specs["memory"] == 16384
+        # Readiness probe/pattern must stay as vendor "none" — not overridden
+        assert specs["readiness_probe"] == "none"
+        assert specs["readiness_pattern"] is None
+        # Readiness timeout is NOT protected (only probe + pattern are)
+        assert specs["readiness_timeout"] == 480
+
+    @patch("app.services.device_service.get_image_runtime_metadata")
+    @patch("app.services.device_service.get_device_override", return_value=None)
+    @patch("app.services.device_service.find_custom_device", return_value=None)
+    @patch("app.services.device_service.get_kind_for_device", return_value="cisco_iosv")
+    @patch("app.services.device_service._get_config_by_kind")
+    def test_vendor_probe_non_none_allows_image_readiness_override(
+        self,
+        mock_config,
+        mock_kind,
+        mock_custom,
+        mock_override,
+        mock_image_meta,
+    ):
+        """When vendor has readiness_probe != 'none', image metadata can override it."""
+        mock_config.return_value = MockVendorConfig(
+            readiness_probe="log_pattern",
+            readiness_pattern="original_pattern",
+            readiness_timeout=300,
+        )
+        mock_image_meta.return_value = {
+            "readiness_probe": "log_pattern",
+            "readiness_pattern": "new_pattern_from_image",
+            "readiness_timeout": 600,
+        }
+        specs = self.service.resolve_hardware_specs(
+            "cisco_iosv",
+            None,
+            "/var/lib/archetype/images/iosv.qcow2",
+        )
+        assert specs["readiness_probe"] == "log_pattern"
+        assert specs["readiness_pattern"] == "new_pattern_from_image"
+        assert specs["readiness_timeout"] == 600
+
+    @patch("app.services.device_service.get_image_runtime_metadata")
+    @patch("app.services.device_service.get_device_override", return_value=None)
+    @patch("app.services.device_service.find_custom_device", return_value=None)
+    @patch("app.services.device_service.get_kind_for_device", return_value="unknown")
+    @patch("app.services.device_service._get_config_by_kind", return_value=None)
+    def test_custom_device_allows_image_readiness_fields(
+        self,
+        mock_config,
+        mock_kind,
+        mock_custom,
+        mock_override,
+        mock_image_meta,
+    ):
+        """Custom devices (no vendor config) should still get image readiness metadata."""
+        mock_custom.return_value = {"id": "custom_device", "memory": 4096, "cpu": 2}
+        mock_image_meta.return_value = {
+            "readiness_probe": "log_pattern",
+            "readiness_pattern": "custom_boot_done",
+        }
+        specs = self.service.resolve_hardware_specs(
+            "custom_device",
+            None,
+            "/var/lib/archetype/images/custom.qcow2",
+        )
+        assert specs["readiness_probe"] == "log_pattern"
+        assert specs["readiness_pattern"] == "custom_boot_done"
+
+    @patch("app.services.device_service.get_image_runtime_metadata")
+    @patch("app.services.device_service.get_device_override", return_value=None)
+    @patch("app.services.device_service.find_custom_device", return_value=None)
+    @patch("app.services.device_service.get_kind_for_device", return_value="cisco_n9kv")
+    @patch("app.services.device_service._get_config_by_kind")
+    def test_per_node_override_can_still_set_readiness_on_probe_none_vendor(
+        self,
+        mock_config,
+        mock_kind,
+        mock_custom,
+        mock_override,
+        mock_image_meta,
+    ):
+        """Per-node config can override readiness even when vendor is 'none' (explicit user intent)."""
+        mock_config.return_value = MockVendorConfig(
+            kind="cisco_n9kv",
+            readiness_probe="none",
+            readiness_pattern=None,
+        )
+        mock_image_meta.return_value = {
+            "readiness_probe": "log_pattern",
+            "readiness_pattern": "stale_pattern",
+        }
+        node_config = {
+            "readiness_probe": "log_pattern",
+            "readiness_pattern": "user_chosen_pattern",
+        }
+        specs = self.service.resolve_hardware_specs(
+            "cisco_n9kv",
+            node_config,
+            "/var/lib/archetype/images/n9kv.qcow2",
+        )
+        # Per-node override (Layer 3) should win — explicit user intent
+        assert specs["readiness_probe"] == "log_pattern"
+        assert specs["readiness_pattern"] == "user_chosen_pattern"
