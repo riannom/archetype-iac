@@ -237,6 +237,37 @@ class LibvirtProvider(Provider):
                 raise RuntimeError(f"Failed to connect to libvirt at {self._uri}")
         return self._conn
 
+    def get_vm_stats_sync(self) -> list[dict]:
+        """Collect VM stats for resource reporting (must run on libvirt thread).
+
+        Returns a list of dicts with name, status, lab_prefix, node_name
+        for all Archetype-managed domains.
+        """
+        import libvirt as _libvirt
+
+        results = []
+        try:
+            all_domains = self.conn.listAllDomains(0)
+            for domain in all_domains:
+                name = domain.name()
+                if not name.startswith("arch-"):
+                    continue
+                state, _ = domain.state()
+                is_running = state == _libvirt.VIR_DOMAIN_RUNNING
+                parts = name.split("-", 2)
+                lab_prefix = parts[1] if len(parts) >= 2 else ""
+                node_name = parts[2] if len(parts) >= 3 else name
+                results.append({
+                    "name": name,
+                    "status": "running" if is_running else "stopped",
+                    "lab_prefix": lab_prefix,
+                    "node_name": node_name,
+                    "is_vm": True,
+                })
+        except Exception as e:
+            logger.warning(f"get_vm_stats_sync failed: {type(e).__name__}: {e}")
+        return results
+
     def _domain_name(self, lab_id: str, node_name: str) -> str:
         """Generate libvirt domain name for a node."""
         return _libvirt_name(lab_id, node_name)

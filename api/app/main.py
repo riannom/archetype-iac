@@ -122,8 +122,10 @@ async def healthz(request: StarletteRequest) -> StarletteJSONResponse:
     """Lightweight health probe that bypasses all middleware.
 
     Always returns 200 to prove the event loop is alive.
-    DB and Redis status are informational only.
+    DB and Redis status are informational only — probes run in
+    background threads so a slow DB/Redis never stalls the event loop.
     """
+    import asyncio
     import time
 
     result: dict = {
@@ -131,27 +133,32 @@ async def healthz(request: StarletteRequest) -> StarletteJSONResponse:
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
 
-    # Non-blocking DB check (informational)
-    try:
+    def _check_db() -> tuple[str, float | None]:
         start = time.monotonic()
         with db.get_session() as session:
             session.execute(sa_text("SELECT 1"))
-        result["db"] = "ok"
-        result["db_ms"] = round((time.monotonic() - start) * 1000, 1)
-    except Exception as e:
-        result["db"] = f"error: {type(e).__name__}"
+        return "ok", round((time.monotonic() - start) * 1000, 1)
 
-    # Non-blocking Redis check (informational)
-    try:
+    def _check_redis() -> tuple[str, float | None]:
         start = time.monotonic()
         r = db.get_redis()
         r.ping()
-        result["redis"] = "ok"
-        result["redis_ms"] = round((time.monotonic() - start) * 1000, 1)
-    except Exception as e:
-        result["redis"] = f"error: {type(e).__name__}"
+        return "ok", round((time.monotonic() - start) * 1000, 1)
 
-    # Pool stats (informational)
+    # Run blocking probes in threads with a timeout
+    for label, probe in [("db", _check_db), ("redis", _check_redis)]:
+        try:
+            status, ms = await asyncio.wait_for(
+                asyncio.to_thread(probe), timeout=2.0
+            )
+            result[label] = status
+            result[f"{label}_ms"] = ms
+        except asyncio.TimeoutError:
+            result[label] = "error: timeout"
+        except Exception as e:
+            result[label] = f"error: {type(e).__name__}"
+
+    # Pool stats (informational, non-blocking)
     try:
         pool = db.engine.pool
         result["db_pool"] = {
@@ -163,7 +170,7 @@ async def healthz(request: StarletteRequest) -> StarletteJSONResponse:
     except Exception:
         pass
 
-    # Process memory (informational)
+    # Process memory (informational, single syscall)
     try:
         import resource as res_mod
         rusage = res_mod.getrusage(res_mod.RUSAGE_SELF)

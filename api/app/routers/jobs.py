@@ -624,7 +624,10 @@ async def lab_status(
 
     if not agents:
         # Fallback to old netlab command if no agents
-        code, stdout, stderr = run_netlab_command(["netlab", "status"], lab_workspace(lab.id))
+        import asyncio
+        code, stdout, stderr = await asyncio.to_thread(
+            run_netlab_command, ["netlab", "status"], lab_workspace(lab.id)
+        )
         if code != 0:
             return {"raw": "", "error": stderr or "netlab status failed"}
         return {"raw": stdout}

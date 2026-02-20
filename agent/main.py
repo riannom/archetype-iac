@@ -546,44 +546,6 @@ def _sync_get_resource_usage() -> dict:
         except Exception as e:
             logger.warning(f"Docker container collection failed: {type(e).__name__}: {e}")
 
-        # VM counts and details (libvirt)
-        vms_running = 0
-        vms_total = 0
-        vm_details = []
-        try:
-            from agent.providers.registry import get_provider
-
-            if settings.enable_libvirt:
-                libvirt_provider = get_provider("libvirt")
-                if libvirt_provider and libvirt_provider.conn:
-                    import libvirt
-                    all_domains = libvirt_provider.conn.listAllDomains(0)
-                    for domain in all_domains:
-                        name = domain.name()
-                        if not name.startswith("arch-"):
-                            continue  # Only Archetype-managed VMs
-
-                        vms_total += 1
-                        state, _ = domain.state()
-                        is_running = state == libvirt.VIR_DOMAIN_RUNNING
-                        if is_running:
-                            vms_running += 1
-
-                        # Parse: arch-{lab_id}-{node_name}
-                        parts = name.split("-", 2)
-                        lab_prefix = parts[1] if len(parts) >= 2 else ""
-                        node_name = parts[2] if len(parts) >= 3 else name
-
-                        vm_details.append({
-                            "name": name,
-                            "status": "running" if is_running else "stopped",
-                            "lab_prefix": lab_prefix,
-                            "node_name": node_name,
-                            "is_vm": True,
-                        })
-        except Exception as e:
-            logger.warning(f"Libvirt VM collection failed: {type(e).__name__}: {e}")
-
         return {
             "cpu_percent": cpu_percent,
             "cpu_count": cpu_count,
@@ -596,9 +558,6 @@ def _sync_get_resource_usage() -> dict:
             "containers_running": containers_running,
             "containers_total": containers_total,
             "container_details": container_details,
-            "vms_running": vms_running,
-            "vms_total": vms_total,
-            "vm_details": vm_details,
         }
     except Exception as e:
         logger.warning(f"Failed to gather resource usage: {e}")
@@ -606,8 +565,41 @@ def _sync_get_resource_usage() -> dict:
 
 
 async def get_resource_usage() -> dict:
-    """Gather system resource metrics for heartbeat (async wrapper)."""
-    return await asyncio.to_thread(_sync_get_resource_usage)
+    """Gather system resource metrics for heartbeat (async wrapper).
+
+    Docker stats run in asyncio.to_thread (thread-safe).
+    Libvirt stats run through the provider's single-thread executor
+    to avoid thread-safety violations.
+    """
+    from agent.providers.registry import get_provider
+
+    # Gather system + Docker stats in default thread pool
+    result = await asyncio.to_thread(_sync_get_resource_usage)
+    if not result:
+        return result
+
+    # Gather libvirt stats via the provider's dedicated thread
+    vms_running = 0
+    vms_total = 0
+    vm_details: list[dict] = []
+    if settings.enable_libvirt:
+        try:
+            libvirt_provider = get_provider("libvirt")
+            if libvirt_provider:
+                vm_details = await libvirt_provider._run_libvirt(
+                    libvirt_provider.get_vm_stats_sync
+                )
+                for vm in vm_details:
+                    vms_total += 1
+                    if vm.get("status") == "running":
+                        vms_running += 1
+        except Exception as e:
+            logger.warning(f"Libvirt VM collection failed: {type(e).__name__}: {e}")
+
+    result["vms_running"] = vms_running
+    result["vms_total"] = vms_total
+    result["vm_details"] = vm_details
+    return result
 
 
 _cached_local_ip: str | None = None
@@ -2457,33 +2449,34 @@ async def cleanup_lab_orphans(request: CleanupLabOrphansRequest) -> CleanupLabOr
 
     # Clean up Docker containers
     try:
-        client = docker.from_env()
+        def _sync_cleanup_docker_orphans(lab_id, keep):
+            _removed, _kept, _errors = [], [], []
+            client = docker.from_env()
+            containers = client.containers.list(all=True, filters={
+                "label": f"archetype.lab_id={lab_id}"
+            })
+            for container in containers:
+                node_name = container.labels.get("archetype.node_name")
+                if not node_name:
+                    continue
+                if node_name in keep:
+                    _kept.append(container.name)
+                    logger.debug(f"Keeping container {container.name} (node {node_name} in topology)")
+                else:
+                    try:
+                        logger.info(f"Removing orphan container {container.name} (node {node_name} deleted from topology)")
+                        container.remove(force=True)
+                        _removed.append(container.name)
+                    except APIError as e:
+                        error_msg = f"Failed to remove {container.name}: {e}"
+                        logger.warning(error_msg)
+                        _errors.append(error_msg)
+            return _removed, _kept, _errors
 
-        # Find all containers for this lab
-        containers = client.containers.list(all=True, filters={
-            "label": f"archetype.lab_id={request.lab_id}"
-        })
-
-        for container in containers:
-            labels = container.labels
-            node_name = labels.get("archetype.node_name")
-
-            if not node_name:
-                continue
-
-            if node_name in keep_set:
-                kept.append(container.name)
-                logger.debug(f"Keeping container {container.name} (node {node_name} in topology)")
-            else:
-                # This container is for a node not in topology - remove it
-                try:
-                    logger.info(f"Removing orphan container {container.name} (node {node_name} deleted from topology)")
-                    container.remove(force=True)
-                    removed.append(container.name)
-                except APIError as e:
-                    error_msg = f"Failed to remove {container.name}: {e}"
-                    logger.warning(error_msg)
-                    errors.append(error_msg)
+        d_removed, d_kept, d_errors = await asyncio.to_thread(_sync_cleanup_docker_orphans, request.lab_id, keep_set)
+        removed.extend(d_removed)
+        kept.extend(d_kept)
+        errors.extend(d_errors)
 
     except Exception as e:
         error_msg = f"Error during Docker orphan cleanup: {e}"
@@ -5920,15 +5913,24 @@ async def check_node_ready(
 
         # Get the node kind to determine appropriate probe
         try:
-            import docker
-            client = docker.from_env()
-            container = client.containers.get(container_name)
-            detected_kind = container.labels.get("archetype.node_kind", "")
+            def _sync_get_container_labels(name):
+                import docker
+                client = docker.from_env()
+                c = client.containers.get(name)
+                return {
+                    "kind": c.labels.get("archetype.node_kind", ""),
+                    "readiness_probe": c.labels.get("archetype.readiness_probe"),
+                    "readiness_pattern": c.labels.get("archetype.readiness_pattern"),
+                    "readiness_timeout": c.labels.get("archetype.readiness_timeout"),
+                }
+
+            info = await asyncio.to_thread(_sync_get_container_labels, container_name)
+            detected_kind = info["kind"]
             kind = kind or detected_kind
-            readiness_probe = container.labels.get("archetype.readiness_probe")
-            readiness_pattern = container.labels.get("archetype.readiness_pattern")
+            readiness_probe = info["readiness_probe"]
+            readiness_pattern = info["readiness_pattern"]
             timeout_override = None
-            timeout_raw = container.labels.get("archetype.readiness_timeout")
+            timeout_raw = info["readiness_timeout"]
             if timeout_raw:
                 try:
                     parsed_timeout = int(timeout_raw)
@@ -5988,10 +5990,13 @@ async def run_node_post_boot(lab_id: str, node_name: str) -> dict:
     container_name = docker_provider.get_container_name(lab_id, node_name)
 
     try:
-        import docker as docker_lib
-        client = docker_lib.from_env()
-        container = client.containers.get(container_name)
-        kind = container.labels.get("archetype.node_kind", "")
+        def _sync_get_node_kind(name):
+            import docker as docker_lib
+            client = docker_lib.from_env()
+            c = client.containers.get(name)
+            return c.labels.get("archetype.node_kind", "")
+
+        kind = await asyncio.to_thread(_sync_get_node_kind, container_name)
     except Exception:
         raise HTTPException(status_code=404, detail=f"Container {node_name} not found")
 
@@ -6182,10 +6187,6 @@ async def get_node_runtime_profile(
 
     if provider_type == "docker":
         try:
-            import docker
-            from docker.errors import NotFound
-            client = docker.from_env()
-
             candidate_names = [node_name]
             docker_provider = get_provider("docker")
             if docker_provider and hasattr(docker_provider, "get_container_name"):
@@ -6196,37 +6197,42 @@ async def get_node_runtime_profile(
                 except Exception:
                     pass
 
-            container = None
-            for candidate in candidate_names:
-                try:
-                    container = await asyncio.to_thread(client.containers.get, candidate)
-                    break
-                except NotFound:
-                    continue
+            def _sync_get_runtime_profile(candidates):
+                import docker
+                from docker.errors import NotFound
+                client = docker.from_env()
+                for candidate in candidates:
+                    try:
+                        c = client.containers.get(candidate)
+                        host_cfg = c.attrs.get("HostConfig", {})
+                        memory_bytes = int(host_cfg.get("Memory") or 0)
+                        memory_mb = int(memory_bytes / (1024 * 1024)) if memory_bytes > 0 else None
+                        cpu_quota = int(host_cfg.get("CpuQuota") or 0)
+                        cpu_period = int(host_cfg.get("CpuPeriod") or 0)
+                        cpu = None
+                        if cpu_quota > 0 and cpu_period > 0:
+                            cpu = round(cpu_quota / cpu_period, 2)
+                        return {
+                            "provider": "docker",
+                            "node_name": node_name,
+                            "runtime_name": c.name,
+                            "state": c.status,
+                            "runtime": {
+                                "image": (c.image.tags[0] if c.image and c.image.tags else None),
+                                "memory": memory_mb,
+                                "cpu": cpu,
+                            },
+                        }
+                    except NotFound:
+                        continue
+                return None
 
-            if container is None:
+            result = await asyncio.to_thread(_sync_get_runtime_profile, candidate_names)
+            if result is None:
                 raise HTTPException(status_code=404, detail=f"Docker node not found: {node_name}")
-
-            host_cfg = container.attrs.get("HostConfig", {})
-            memory_bytes = int(host_cfg.get("Memory") or 0)
-            memory_mb = int(memory_bytes / (1024 * 1024)) if memory_bytes > 0 else None
-            cpu_quota = int(host_cfg.get("CpuQuota") or 0)
-            cpu_period = int(host_cfg.get("CpuPeriod") or 0)
-            cpu = None
-            if cpu_quota > 0 and cpu_period > 0:
-                cpu = round(cpu_quota / cpu_period, 2)
-
-            return {
-                "provider": "docker",
-                "node_name": node_name,
-                "runtime_name": container.name,
-                "state": container.status,
-                "runtime": {
-                    "image": (container.image.tags[0] if container.image and container.image.tags else None),
-                    "memory": memory_mb,
-                    "cpu": cpu,
-                },
-            }
+            return result
+        except HTTPException:
+            raise
         except Exception as e:
             raise HTTPException(status_code=404, detail=f"Docker node not found: {e}") from e
 
@@ -6416,8 +6422,17 @@ async def set_interface_mtu(interface_name: str, request: SetMtuRequest) -> SetM
         set_mtu_runtime,
     )
 
-    # Validate interface exists
-    previous_mtu = get_interface_mtu(interface_name)
+    # Validate interface and detect network manager in a thread
+    # (get_interface_mtu/is_physical_interface are sysfs reads,
+    #  detect_network_manager uses subprocess.run — all blocking)
+    def _sync_validate():
+        mtu = get_interface_mtu(interface_name)
+        is_physical = is_physical_interface(interface_name)
+        net_mgr = detect_network_manager()
+        return mtu, is_physical, net_mgr
+
+    previous_mtu, is_physical, network_mgr = await asyncio.to_thread(_sync_validate)
+
     if previous_mtu is None:
         return SetMtuResponse(
             success=False,
@@ -6427,11 +6442,8 @@ async def set_interface_mtu(interface_name: str, request: SetMtuRequest) -> SetM
             error=f"Interface {interface_name} not found",
         )
 
-    # Warn if not a physical interface
-    if not is_physical_interface(interface_name):
+    if not is_physical:
         logger.warning(f"Setting MTU on non-physical interface {interface_name}")
-
-    network_mgr = detect_network_manager()
 
     # Apply runtime MTU first
     success, error = await set_mtu_runtime(interface_name, request.mtu)
@@ -6457,8 +6469,8 @@ async def set_interface_mtu(interface_name: str, request: SetMtuRequest) -> SetM
             if not persisted:
                 logger.warning(f"MTU set on {interface_name} but persistence failed: {persist_error}")
 
-    # Verify the MTU was applied
-    new_mtu = get_interface_mtu(interface_name) or request.mtu
+    # Verify the MTU was applied (sysfs read, fast but keep consistent)
+    new_mtu = await asyncio.to_thread(get_interface_mtu, interface_name) or request.mtu
 
     return SetMtuResponse(
         success=True,
