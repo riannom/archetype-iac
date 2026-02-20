@@ -20,7 +20,11 @@ Example:
 """
 from __future__ import annotations
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.db import get_async_db
 
 # Create main v1 router
 router = APIRouter(tags=["v1"])
@@ -44,3 +48,10 @@ def get_api_version() -> dict:
         "status": "current",
         "deprecated": False,
     }
+
+
+@router.get("/health/db-async")
+async def check_async_db(session: AsyncSession = Depends(get_async_db)):
+    """Validate async database engine connectivity."""
+    result = await session.execute(text("SELECT 1"))
+    return {"status": "ok", "async_db": result.scalar_one() == 1}

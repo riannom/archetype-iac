@@ -653,3 +653,222 @@ class TestLabStatus:
         assert response.status_code == 200
         data = response.json()
         assert "raw" in data
+
+    def test_lab_status_multi_agent_gather(
+        self,
+        test_client: TestClient,
+        test_db: Session,
+        sample_lab: models.Lab,
+        sample_host: models.Host,
+        auth_headers: dict,
+    ):
+        """Lab status gathers from multiple agents via NodePlacement."""
+        import json
+
+        # Create second agent
+        agent2 = models.Host(
+            id="test-agent-2",
+            name="Agent 2",
+            address="localhost:8082",
+            status="online",
+            capabilities=json.dumps({"providers": ["docker"]}),
+            version="1.0.0",
+            last_heartbeat=datetime.now(timezone.utc),
+            resource_usage=json.dumps({}),
+        )
+        test_db.add(agent2)
+
+        # Place nodes on different agents
+        p1 = models.NodePlacement(lab_id=sample_lab.id, node_name="r1", host_id=sample_host.id)
+        p2 = models.NodePlacement(lab_id=sample_lab.id, node_name="r2", host_id=agent2.id)
+        test_db.add_all([p1, p2])
+        test_db.commit()
+
+        async def mock_get_status(agent, lab_id):
+            if agent.id == sample_host.id:
+                return {"nodes": [{"name": "r1", "status": "running"}]}
+            return {"nodes": [{"name": "r2", "status": "running"}]}
+
+        with patch("app.routers.jobs.agent_client.get_lab_status_from_agent", side_effect=mock_get_status):
+            response = test_client.get(
+                f"/labs/{sample_lab.id}/status",
+                headers=auth_headers
+            )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert len(data["nodes"]) == 2
+        assert data["is_multi_host"] is True
+        node_names = {n["name"] for n in data["nodes"]}
+        assert node_names == {"r1", "r2"}
+
+    def test_lab_status_deduplicates_nodes(
+        self,
+        test_client: TestClient,
+        test_db: Session,
+        sample_lab: models.Lab,
+        sample_host: models.Host,
+        auth_headers: dict,
+    ):
+        """Lab status deduplicates when multiple agents report the same node."""
+        import json
+
+        agent2 = models.Host(
+            id="test-agent-2",
+            name="Agent 2",
+            address="localhost:8082",
+            status="online",
+            capabilities=json.dumps({"providers": ["docker"]}),
+            version="1.0.0",
+            last_heartbeat=datetime.now(timezone.utc),
+            resource_usage=json.dumps({}),
+        )
+        test_db.add(agent2)
+        p1 = models.NodePlacement(lab_id=sample_lab.id, node_name="r1", host_id=sample_host.id)
+        p2 = models.NodePlacement(lab_id=sample_lab.id, node_name="r1", host_id=agent2.id)
+        test_db.add_all([p1, p2])
+        test_db.commit()
+
+        with patch("app.routers.jobs.agent_client.get_lab_status_from_agent", new_callable=AsyncMock) as mock_status:
+            mock_status.return_value = {"nodes": [{"name": "r1", "status": "running"}]}
+            response = test_client.get(
+                f"/labs/{sample_lab.id}/status",
+                headers=auth_headers
+            )
+
+        assert response.status_code == 200
+        data = response.json()
+        # Same node from both agents should be deduplicated
+        assert len(data["nodes"]) == 1
+        assert data["nodes"][0]["name"] == "r1"
+
+    def test_lab_status_partial_agent_failure(
+        self,
+        test_client: TestClient,
+        test_db: Session,
+        sample_lab: models.Lab,
+        sample_host: models.Host,
+        auth_headers: dict,
+    ):
+        """Lab status returns partial results when one agent fails."""
+        import json
+
+        agent2 = models.Host(
+            id="test-agent-2",
+            name="Agent 2",
+            address="localhost:8082",
+            status="online",
+            capabilities=json.dumps({"providers": ["docker"]}),
+            version="1.0.0",
+            last_heartbeat=datetime.now(timezone.utc),
+            resource_usage=json.dumps({}),
+        )
+        test_db.add(agent2)
+        p1 = models.NodePlacement(lab_id=sample_lab.id, node_name="r1", host_id=sample_host.id)
+        p2 = models.NodePlacement(lab_id=sample_lab.id, node_name="r2", host_id=agent2.id)
+        test_db.add_all([p1, p2])
+        test_db.commit()
+
+        call_count = 0
+        async def mock_get_status(agent, lab_id):
+            nonlocal call_count
+            call_count += 1
+            if agent.id == agent2.id:
+                raise ConnectionError("Agent 2 unreachable")
+            return {"nodes": [{"name": "r1", "status": "running"}]}
+
+        with patch("app.routers.jobs.agent_client.get_lab_status_from_agent", side_effect=mock_get_status):
+            response = test_client.get(
+                f"/labs/{sample_lab.id}/status",
+                headers=auth_headers
+            )
+
+        assert response.status_code == 200
+        data = response.json()
+        # Agent 1's nodes still returned
+        assert len(data["nodes"]) == 1
+        assert data["nodes"][0]["name"] == "r1"
+        # Error from agent 2 reported
+        assert data["error"] is not None
+        assert "Agent 2" in data["error"]
+
+
+class TestLabUpConflict:
+    """Tests for lab_up conflict and agent availability edge cases."""
+
+    def test_lab_up_conflict_returns_409(
+        self,
+        test_client: TestClient,
+        test_db: Session,
+        sample_lab: models.Lab,
+        auth_headers: dict,
+    ):
+        """Lab up returns 409 when a conflicting job is in progress."""
+        # Add a node so topology check passes
+        node = models.Node(
+            lab_id=sample_lab.id,
+            gui_id="n1",
+            display_name="r1",
+            container_name="archetype-test-r1",
+            device="linux",
+        )
+        test_db.add(node)
+        test_db.commit()
+
+        with patch("app.routers.jobs.has_conflicting_job", return_value=(True, "up")):
+            response = test_client.post(
+                f"/labs/{sample_lab.id}/up",
+                headers=auth_headers
+            )
+
+        assert response.status_code == 409
+        assert "already in progress" in response.json()["detail"]
+
+    def test_lab_down_conflict_returns_409(
+        self,
+        test_client: TestClient,
+        test_db: Session,
+        sample_lab: models.Lab,
+        auth_headers: dict,
+    ):
+        """Lab down returns 409 when a conflicting job is in progress."""
+        with patch("app.routers.jobs.has_conflicting_job", return_value=(True, "down")):
+            response = test_client.post(
+                f"/labs/{sample_lab.id}/down",
+                headers=auth_headers
+            )
+
+        assert response.status_code == 409
+        assert "already in progress" in response.json()["detail"]
+
+    def test_lab_up_no_healthy_agent_returns_503(
+        self,
+        test_client: TestClient,
+        test_db: Session,
+        sample_lab: models.Lab,
+        auth_headers: dict,
+        monkeypatch,
+    ):
+        """Lab up returns 503 when no healthy agent with required provider."""
+        from app.config import settings
+        monkeypatch.setattr(settings, "image_sync_enabled", False)
+
+        node = models.Node(
+            lab_id=sample_lab.id,
+            gui_id="n1",
+            display_name="r1",
+            container_name="archetype-test-r1",
+            device="linux",
+        )
+        test_db.add(node)
+        test_db.commit()
+
+        # No agents in DB at all → 503
+        with patch("app.routers.jobs.has_conflicting_job", return_value=(False, None)):
+            response = test_client.post(
+                f"/labs/{sample_lab.id}/up",
+                headers=auth_headers
+            )
+
+        assert response.status_code == 503
+        assert "No healthy agent" in response.json()["detail"]

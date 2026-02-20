@@ -257,12 +257,16 @@ class LibvirtProvider(Provider):
                 parts = name.split("-", 2)
                 lab_prefix = parts[1] if len(parts) >= 2 else ""
                 node_name = parts[2] if len(parts) >= 3 else name
+                # domain.info() -> [state, maxMem_kb, mem_kb, nrVirtCpu, cpuTime]
+                info = domain.info()
                 results.append({
                     "name": name,
                     "status": "running" if is_running else "stopped",
                     "lab_prefix": lab_prefix,
                     "node_name": node_name,
                     "is_vm": True,
+                    "vcpus": info[3],
+                    "memory_mb": info[1] // 1024,  # maxMem (allocated ceiling)
                 })
         except Exception as e:
             logger.warning(f"get_vm_stats_sync failed: {type(e).__name__}: {e}")

@@ -180,6 +180,36 @@
 
 **Rule**: Middleware in async web frameworks runs on EVERY request — it's the highest-impact location for blocking calls. Always audit middleware for sync I/O first when investigating event loop stalls.
 
+## 2026-02-20: Libvirt domain.info() indices — maxMem vs current memory
+
+**Bug**: `get_vm_stats_sync()` used `domain.info()[2]` (current memory, affected by balloon driver) for capacity tracking. This underreports allocated memory when the balloon driver reclaims unused guest RAM.
+
+**Impact**: Bin-packing placement would overcommit hosts — if a VM allocated 8GB but the balloon reduced usage to 4GB, only 4GB would be counted against capacity. Other VMs could be placed assuming 4GB was free when it wasn't.
+
+**Fix**: Changed to `info[1]` (maxMem = allocated ceiling) which reflects the true resource commitment regardless of balloon state.
+
+**Rule**: For capacity/placement calculations, always use `domain.info()[1]` (maxMem_kb) — the allocated ceiling. Use `info[2]` (mem_kb) only for monitoring actual guest memory consumption. Index reference: `[state, maxMem_kb, mem_kb, nrVirtCpu, cpuTime]`.
+
+## 2026-02-20: Agent error responses are truthy dicts — explicit field checks needed
+
+**Bug**: `query_agent_capacity()` could return `{"error": "Failed to gather resource usage"}`. The `not cap` check in the NLM only catches falsy values (None, {}, 0). A dict with an `"error"` key is truthy and passes through, causing `KeyError` when accessing `cap["memory_total_gb"]`.
+
+**Impact**: One failing agent could crash the entire placement pipeline instead of being gracefully excluded.
+
+**Fix**: Added explicit checks: `"error" in cap` and `not cap.get("memory_total_gb")` to filter invalid responses before building agent buckets.
+
+**Rule**: When consuming HTTP responses from internal services, never rely solely on truthiness. Check for error indicator fields explicitly (`"error" in response`, `"status" != "ok"`, etc.) before accessing expected data fields.
+
+## 2026-02-20: Sticky placements need capacity gating to prevent silent overcommit
+
+**Bug**: The NLM honored sticky placements (from NodePlacement records) without checking if the target agent had sufficient capacity. Nodes were assigned to their previous agent even when that agent was already at capacity from other deployments.
+
+**Impact**: Labs that previously fit on an agent could fail to deploy after other labs consumed capacity on the same agent. The bin-packer had no opportunity to redistribute because sticky nodes were pre-assigned.
+
+**Fix**: Added step 5.5 in `_resolve_agents()`: pre-subtract sticky node requirements from agent buckets. If a sticky agent can't fit, remove the sticky assignment and add the node to the bin-packer pool for redistribution.
+
+**Rule**: Affinity/sticky placement must always be capacity-gated. Treat sticky placement as a preference, not a hard constraint. When the preferred agent lacks capacity, fail over to the general placement algorithm rather than forcing an overcommit.
+
 ## 2026-02-19: async def functions with zero await calls are effectively sync
 
 **Bug**: `get_agent_for_lab()`, `get_healthy_agent()`, `get_agent_by_name()`, `_handle_agent_restart_cleanup()`, `_mark_links_for_recovery()` were all `async def` but contained zero `await` calls — pure synchronous DB operations.

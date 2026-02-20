@@ -842,7 +842,16 @@ def download_lab_bundle(
     database: Session = Depends(db.get_db),
     current_user: models.User = Depends(get_current_user),
 ):
-    """Download a full lab bundle zip with topology, layout, and configs."""
+    """Download a full lab bundle zip with topology, layout, and configs.
+
+    Includes:
+    - Topology definition (YAML + JSON graph)
+    - Canvas layout
+    - Current active startup-config for every node (from config_json,
+      active snapshot, workspace filesystem, or auto-generated)
+    - All historical config snapshots
+    - Orphaned configs (from deleted nodes)
+    """
     lab = get_lab_or_404(lab_id, database, current_user)
 
     service = TopologyService(database)
@@ -862,7 +871,61 @@ def download_lab_bundle(
     config_svc = ConfigService(database)
     snapshots = config_svc.list_configs_with_orphan_status(lab_id=lab_id)
 
+    # Resolve current active startup-config for every node.
+    # Reuse already-loaded snapshots to avoid N+1 DB queries.
+    nodes = (
+        database.query(models.Node)
+        .filter(models.Node.lab_id == lab.id)
+        .all()
+    )
+    snapshots_by_id = {s["id"]: s for s in snapshots}
+    # Build latest-snapshot-per-node index (snapshots ordered by created_at desc)
+    latest_snap_by_node: dict[str, dict] = {}
+    for s in snapshots:
+        nn = s.get("node_name")
+        if nn and nn not in latest_snap_by_node:
+            latest_snap_by_node[nn] = s
+
+    active_configs: dict[str, str] = {}  # container_name -> config content
+    workspace = lab_workspace(lab.id)
+    for node in nodes:
+        config_content = None
+
+        # Priority 1: Explicit active snapshot
+        if node.active_config_snapshot_id:
+            snap = snapshots_by_id.get(node.active_config_snapshot_id)
+            if snap:
+                config_content = snap.get("content")
+
+        # Priority 2: config_json["startup-config"]
+        if not config_content and node.config_json:
+            try:
+                parsed = json.loads(node.config_json)
+                config_content = parsed.get("startup-config")
+            except (json.JSONDecodeError, TypeError):
+                pass
+
+        # Priority 3: Latest snapshot for this node
+        if not config_content:
+            latest = latest_snap_by_node.get(node.container_name)
+            if latest:
+                config_content = latest.get("content")
+
+        # Priority 4: Workspace filesystem
+        if not config_content:
+            config_path = workspace / "configs" / node.container_name / "startup-config"
+            if config_path.exists():
+                try:
+                    config_content = config_path.read_text(encoding="utf-8")
+                except OSError:
+                    pass
+
+        if config_content:
+            active_configs[node.container_name] = config_content
+
+    # Size check: snapshots + active configs
     total_config_size = sum(len((s.get("content") or "").encode()) for s in snapshots)
+    total_config_size += sum(len(c.encode()) for c in active_configs.values())
     if total_config_size > MAX_ZIP_SIZE_BYTES:
         raise HTTPException(
             status_code=413,
@@ -884,6 +947,13 @@ def download_lab_bundle(
         zf.writestr("topology/topology.json", json.dumps(topology_graph, indent=2))
         zf.writestr("topology/layout.json", json.dumps(layout_json, indent=2))
 
+        # Write current active startup-config for each node
+        for container_name, content in active_configs.items():
+            safe_name = _zip_safe_name(container_name)
+            zf.writestr(f"configs/{safe_name}/startup-config", content)
+
+        # Write all historical config snapshots
+        seen_paths: set[str] = set()
         for snap in snapshots:
             node_name = _zip_safe_name(str(snap.get("node_name") or "unknown"))
             bucket = "orphaned configs" if snap.get("is_orphaned") else "configs"
@@ -891,10 +961,16 @@ def download_lab_bundle(
             ts = created_at.strftime("%Y%m%d_%H%M%S") if created_at else "unknown"
             snapshot_type = _zip_safe_name(str(snap.get("snapshot_type") or "snapshot"))
 
-            zf.writestr(
-                f"{bucket}/{node_name}/{ts}_{snapshot_type}_startup-config",
-                str(snap.get("content") or ""),
-            )
+            # Deduplicate paths (same-second snapshots of same type)
+            base_path = f"{bucket}/{node_name}/{ts}_{snapshot_type}_startup-config"
+            path = base_path
+            counter = 1
+            while path in seen_paths:
+                counter += 1
+                path = f"{bucket}/{node_name}/{ts}_{snapshot_type}_{counter}_startup-config"
+            seen_paths.add(path)
+
+            zf.writestr(path, str(snap.get("content") or ""))
 
             metadata_by_bucket[bucket].setdefault(node_name, []).append(
                 {
@@ -924,6 +1000,7 @@ def download_lab_bundle(
                     "exported_at": datetime.now(timezone.utc).isoformat(),
                     "topology_included": True,
                     "layout_included": True,
+                    "active_configs_count": len(active_configs),
                     "snapshot_count": len(snapshots),
                     "configs_count": sum(
                         len(entries) for entries in metadata_by_bucket["configs"].values()

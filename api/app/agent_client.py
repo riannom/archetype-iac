@@ -1117,6 +1117,22 @@ async def ping_agent(agent: models.Host, timeout: float = 5.0) -> bool:
         ) from e
 
 
+async def query_agent_capacity(agent: models.Host, timeout: float = 5.0) -> dict:
+    """Query real-time capacity from an agent's /capacity endpoint.
+
+    Returns dict with memory_total_gb, cpu_count, allocated_vcpus,
+    allocated_memory_mb, etc. Falls back to empty dict on failure.
+    """
+    url = f"{get_agent_url(agent)}/capacity"
+    try:
+        return await _agent_request("GET", url, timeout=timeout, max_retries=0)
+    except Exception as e:
+        logger.warning(
+            f"Capacity query failed for agent {agent.name or agent.id}: {e}"
+        )
+        return {}
+
+
 # --- Reconciliation Functions ---
 
 async def discover_labs_on_agent(agent: models.Host) -> dict:

@@ -267,6 +267,10 @@ class Settings(BaseSettings):
     db_max_overflow: int = 20
     db_pool_timeout: int = 30
 
+    # Async database pool (for new async endpoints/tasks)
+    db_async_pool_size: int = 5
+    db_async_max_overflow: int = 10
+
     # Version checking
     github_repo: str = "riannom/archetype-iac"
     version_check_cache_ttl: int = 3600  # 1 hour cache

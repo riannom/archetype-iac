@@ -17,10 +17,14 @@ from sqlalchemy.orm import Session
 from app import models
 from app.config import settings
 from app.services.resource_capacity import (
+    AgentBucket,
     AgentScore,
     CapacityCheckResult,
     DEFAULT_CPU_CORES,
     DEFAULT_MEMORY_MB,
+    NodeRequirement,
+    PlacementPlan,
+    build_node_requirements,
     calculate_node_requirements,
     check_capacity,
     check_multihost_capacity,
@@ -28,6 +32,7 @@ from app.services.resource_capacity import (
     format_capacity_error,
     format_capacity_warnings,
     get_agent_capacity,
+    plan_placement,
     score_agent,
 )
 
@@ -1132,3 +1137,278 @@ class TestDistributeNodesByScore:
         nodes = [f"n{i}" for i in range(5)]
         result = distribute_nodes_by_score(nodes, scores)
         assert set(result.keys()) == set(nodes)
+
+
+# ---------------------------------------------------------------------------
+# 10. TestBuildNodeRequirements
+# ---------------------------------------------------------------------------
+
+
+class TestBuildNodeRequirements:
+    def test_known_device(self, monkeypatch):
+        cfg = SimpleNamespace(memory=4096, cpu=2)
+        monkeypatch.setattr(
+            "app.services.resource_capacity._get_vendor_configs",
+            _mock_vendor_configs({"xrv9k": cfg}),
+        )
+        monkeypatch.setattr(
+            "app.services.resource_capacity._get_device_overrides",
+            lambda: {},
+        )
+        reqs = build_node_requirements([("r1", "xrv9k")])
+        assert len(reqs) == 1
+        assert reqs[0].node_name == "r1"
+        assert reqs[0].device_type == "xrv9k"
+        assert reqs[0].memory_mb == 4096
+        assert reqs[0].cpu_cores == 2
+
+    def test_unknown_device_defaults(self, monkeypatch):
+        monkeypatch.setattr(
+            "app.services.resource_capacity._get_vendor_configs",
+            _mock_vendor_configs({}),
+        )
+        monkeypatch.setattr(
+            "app.services.resource_capacity._get_device_overrides",
+            lambda: {},
+        )
+        reqs = build_node_requirements([("s1", "mystery")])
+        assert reqs[0].memory_mb == DEFAULT_MEMORY_MB
+        assert reqs[0].cpu_cores == DEFAULT_CPU_CORES
+
+    def test_multiple_mixed(self, monkeypatch):
+        cfg = SimpleNamespace(memory=2048, cpu=2)
+        monkeypatch.setattr(
+            "app.services.resource_capacity._get_vendor_configs",
+            _mock_vendor_configs({"ceos": cfg}),
+        )
+        monkeypatch.setattr(
+            "app.services.resource_capacity._get_device_overrides",
+            lambda: {},
+        )
+        reqs = build_node_requirements([("r1", "ceos"), ("r2", "unknown")])
+        assert reqs[0].memory_mb == 2048
+        assert reqs[1].memory_mb == DEFAULT_MEMORY_MB
+
+
+# ---------------------------------------------------------------------------
+# 11. TestPlanPlacement (Bin-Packing)
+# ---------------------------------------------------------------------------
+
+
+def _bucket(
+    agent_id: str,
+    name: str,
+    mem_avail: float,
+    cpu_avail: float,
+    mem_total: float = 0,
+    cpu_total: float = 0,
+) -> AgentBucket:
+    """Helper to create an AgentBucket."""
+    return AgentBucket(
+        agent_id=agent_id,
+        agent_name=name,
+        memory_available_mb=mem_avail,
+        cpu_available_cores=cpu_avail,
+        memory_total_mb=mem_total or mem_avail,
+        cpu_total_cores=cpu_total or cpu_avail,
+    )
+
+
+def _node(name: str, mem: int = 2048, cpu: int = 1, device: str = "ceos") -> NodeRequirement:
+    """Helper to create a NodeRequirement."""
+    return NodeRequirement(node_name=name, device_type=device, memory_mb=mem, cpu_cores=cpu)
+
+
+class TestPlanPlacement:
+    """Tests for plan_placement() bin-packing algorithm."""
+
+    def test_two_agents_balanced(self):
+        """10 identical nodes across 2 equal agents → ~5 each."""
+        agents = [
+            _bucket("a1", "Agent-1", 20480, 10, 20480, 10),
+            _bucket("a2", "Agent-2", 20480, 10, 20480, 10),
+        ]
+        nodes = [_node(f"n{i}") for i in range(10)]
+        plan = plan_placement(nodes, agents)
+        assert not plan.unplaceable
+        assert not plan.errors
+        assert len(plan.assignments) == 10
+        counts = {}
+        for aid in plan.assignments.values():
+            counts[aid] = counts.get(aid, 0) + 1
+        assert counts["a1"] == 5
+        assert counts["a2"] == 5
+
+    def test_heterogeneous_devices(self):
+        """3 XRv9k (20GB) + 10 cEOS (2GB) across 2 agents (64GB + 32GB)."""
+        agents = [
+            _bucket("a1", "Agent-1", 65536, 32, 65536, 32),
+            _bucket("a2", "Agent-2", 32768, 16, 32768, 16),
+        ]
+        # 3 * 20480 = 61440 MB, 10 * 2048 = 20480 MB. Total = 81920 < 98304
+        heavy = [_node(f"xr{i}", mem=20480, cpu=4, device="xrv9k") for i in range(3)]
+        light = [_node(f"ce{i}", mem=2048, cpu=1, device="ceos") for i in range(10)]
+        plan = plan_placement(heavy + light, agents)
+        assert not plan.unplaceable
+        assert len(plan.assignments) == 13
+
+    def test_overflow_to_second_agent(self):
+        """First agent fills up, remaining nodes overflow to second."""
+        # a1 has 6144 MB (fits 3 nodes), a2 has 6144 MB (fits 3 nodes)
+        # 5 nodes x 2048 = 10240. After 3 on each, one agent overflows.
+        agents = [
+            _bucket("a1", "Agent-1", 6144, 8, 32768, 16),
+            _bucket("a2", "Agent-2", 6144, 8, 32768, 16),
+        ]
+        nodes = [_node(f"n{i}") for i in range(5)]  # 5 x 2GB = 10GB needed
+        plan = plan_placement(nodes, agents)
+        assert not plan.unplaceable
+        assert len(plan.assignments) == 5
+        # Equal capacity → alternating: a1 gets placed first (or a2),
+        # then they alternate as capacity decreases equally
+        a1_count = sum(1 for a in plan.assignments.values() if a == "a1")
+        a2_count = sum(1 for a in plan.assignments.values() if a == "a2")
+        # Both should get nodes, with at most 1 difference
+        assert abs(a1_count - a2_count) <= 1
+        assert a1_count + a2_count == 5
+
+    def test_node_too_large_for_any_agent(self):
+        """Single node (20GB) with all agents < 20GB → clear error."""
+        agents = [
+            _bucket("a1", "Agent-1", 16384, 8),
+            _bucket("a2", "Agent-2", 16384, 8),
+        ]
+        nodes = [_node("big-vm", mem=20480, cpu=4)]
+        plan = plan_placement(nodes, agents)
+        # Total cluster = 32768 > 20480, so cluster pre-check passes
+        # But no single agent fits → unplaceable
+        assert plan.unplaceable == ["big-vm"]
+        assert len(plan.errors) == 1
+        assert "no single agent" in plan.errors[0]
+
+    def test_cluster_exhaustion(self):
+        """Total nodes > total cluster → cluster-level error message."""
+        agents = [
+            _bucket("a1", "Agent-1", 8192, 4),
+            _bucket("a2", "Agent-2", 8192, 4),
+        ]
+        # 10 nodes x 2048 = 20480 needed > 16384 available
+        nodes = [_node(f"n{i}") for i in range(10)]
+        plan = plan_placement(nodes, agents)
+        assert len(plan.unplaceable) == 10
+        assert len(plan.errors) == 1
+        assert "insufficient cluster resources" in plan.errors[0]
+        assert "Deficit" in plan.errors[0]
+
+    def test_exact_fit(self):
+        """Nodes exactly fill available capacity → succeeds."""
+        agents = [_bucket("a1", "Agent-1", 4096, 4)]
+        nodes = [_node("n1", mem=2048, cpu=2), _node("n2", mem=2048, cpu=2)]
+        plan = plan_placement(nodes, agents)
+        assert not plan.unplaceable
+        assert len(plan.assignments) == 2
+        assert all(a == "a1" for a in plan.assignments.values())
+
+    def test_empty_nodes(self):
+        """Empty node list → empty assignments."""
+        agents = [_bucket("a1", "Agent-1", 8192, 4)]
+        plan = plan_placement([], agents)
+        assert plan.assignments == {}
+        assert not plan.unplaceable
+        assert not plan.errors
+
+    def test_no_agents(self):
+        """No agents available → all nodes unplaceable."""
+        nodes = [_node("n1")]
+        plan = plan_placement(nodes, [])
+        assert plan.unplaceable == ["n1"]
+        assert len(plan.errors) == 1
+        assert "No agents" in plan.errors[0]
+
+    def test_single_agent(self):
+        """All nodes to single agent → works."""
+        agents = [_bucket("a1", "Agent-1", 65536, 32)]
+        nodes = [_node(f"n{i}") for i in range(20)]
+        plan = plan_placement(nodes, agents)
+        assert not plan.unplaceable
+        assert all(a == "a1" for a in plan.assignments.values())
+
+    def test_deterministic(self):
+        """Same input always produces same output."""
+        agents = [
+            _bucket("a1", "Agent-1", 32768, 16, 32768, 16),
+            _bucket("a2", "Agent-2", 32768, 16, 32768, 16),
+        ]
+        nodes = [_node(f"n{i}") for i in range(10)]
+
+        plan1 = plan_placement(nodes, agents)
+        plan2 = plan_placement(nodes, agents)
+        assert plan1.assignments == plan2.assignments
+
+    def test_controller_reserve(self):
+        """Local agent has memory reserved → fewer nodes placed there."""
+        agents = [
+            _bucket("local", "Local-Agent", 16384, 8, 16384, 8),
+            _bucket("remote", "Remote-Agent", 16384, 8, 16384, 8),
+        ]
+        nodes = [_node(f"n{i}") for i in range(8)]  # 8 x 2048 = 16384
+        # With 4096 reserve on local: local has 12288 avail = 6 nodes
+        # remote has 16384 avail = 8 nodes. Total needed = 16384.
+        plan = plan_placement(
+            nodes, agents,
+            controller_reserve_mb=4096,
+            local_agent_id="local",
+        )
+        assert not plan.unplaceable
+        local_count = sum(1 for a in plan.assignments.values() if a == "local")
+        remote_count = sum(1 for a in plan.assignments.values() if a == "remote")
+        # Remote has more available memory, so it gets more nodes
+        assert remote_count > local_count
+
+    def test_per_agent_summary(self):
+        """per_agent dict correctly groups node names by agent."""
+        agents = [
+            _bucket("a1", "Agent-1", 16384, 8),
+            _bucket("a2", "Agent-2", 16384, 8),
+        ]
+        nodes = [_node(f"n{i}") for i in range(4)]
+        plan = plan_placement(nodes, agents)
+        assert "a1" in plan.per_agent or "a2" in plan.per_agent
+        total_in_per_agent = sum(len(v) for v in plan.per_agent.values())
+        assert total_in_per_agent == 4
+
+    def test_warnings_on_tight_fit(self):
+        """Agent with < 20% remaining memory after placement gets a warning."""
+        agents = [_bucket("a1", "Agent-1", 2200, 4, 10000, 4)]
+        nodes = [_node("n1", mem=2048, cpu=1)]
+        plan = plan_placement(nodes, agents)
+        assert not plan.unplaceable
+        # After placing: 2200 - 2048 = 152 remaining = 1.5% of 10000
+        assert len(plan.warnings) >= 1
+        assert "remaining" in plan.warnings[0]
+
+    def test_cpu_constraint(self):
+        """Agent with enough memory but not enough CPU → node placed elsewhere."""
+        agents = [
+            _bucket("a1", "Agent-1", 65536, 2, 65536, 2),   # Lots of mem, 2 CPU
+            _bucket("a2", "Agent-2", 65536, 8, 65536, 8),   # Lots of mem, 8 CPU
+        ]
+        nodes = [_node("n1", mem=4096, cpu=4)]  # Needs 4 CPUs
+        plan = plan_placement(nodes, agents)
+        assert not plan.unplaceable
+        # a1 only has 2 CPUs, n1 needs 4 → must go to a2
+        assert plan.assignments["n1"] == "a2"
+
+    def test_largest_first_ordering(self):
+        """Heavy nodes placed first ensure they get hosts with most capacity."""
+        agents = [
+            _bucket("a1", "Agent-1", 24576, 8, 24576, 8),  # 24 GB
+            _bucket("a2", "Agent-2", 24576, 8, 24576, 8),  # 24 GB
+        ]
+        # 1 heavy (20 GB) + 4 light (2 GB each = 8 GB)
+        heavy = [_node("heavy", mem=20480, cpu=4)]
+        light = [_node(f"light{i}", mem=2048, cpu=1) for i in range(4)]
+        plan = plan_placement(heavy + light, agents)
+        assert not plan.unplaceable
+        # Heavy gets placed first on one agent, light fills remaining
+        assert len(plan.assignments) == 5

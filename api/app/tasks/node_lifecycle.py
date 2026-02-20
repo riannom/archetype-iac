@@ -670,49 +670,186 @@ class NodeLifecycleManager:
                     f"sticky placement: {sticky_nodes}"
                 )
 
-            # Distribute truly new nodes
+            # Distribute truly new nodes via bin-packing
             if new_nodes and settings.placement_scoring_enabled:
                 from app.services.resource_capacity import (
-                    distribute_nodes_by_score,
-                    score_agent,
+                    build_node_requirements,
+                    plan_placement,
+                    AgentBucket,
                 )
 
-                # Find all online agents with the required provider
+                # 1. Find all online agents with the required provider
                 candidates = await self._get_candidate_agents()
-                # Verify candidate agents are actually reachable
-                reachable_candidates = []
-                for cand in candidates:
-                    try:
-                        await agent_client.ping_agent(cand)
-                        reachable_candidates.append(cand)
-                    except AgentUnavailableError:
+
+                # 2. Parallel-ping all candidate agents
+                ping_tasks = [
+                    agent_client.ping_agent(cand) for cand in candidates
+                ]
+                ping_results = await asyncio.gather(
+                    *ping_tasks, return_exceptions=True
+                )
+                reachable = [
+                    c for c, r in zip(candidates, ping_results)
+                    if not isinstance(r, Exception)
+                ]
+                for c, r in zip(candidates, ping_results):
+                    if isinstance(r, Exception):
                         logger.warning(
-                            f"Agent {cand.name} heartbeat fresh but unreachable, "
-                            f"skipping for placement"
-                        )
-                candidates = reachable_candidates
-                if candidates:
-                    agent_scores = {}
-                    for agent in candidates:
-                        agent_scores[agent.id] = score_agent(agent)
-                        logger.debug(
-                            f"Job {self.job.id}: Agent {agent.id} ({agent.name}) "
-                            f"score={agent_scores[agent.id].score:.3f} "
-                            f"({agent_scores[agent.id].reason})"
+                            f"Agent {c.name} heartbeat fresh but "
+                            f"unreachable, skipping for placement"
                         )
 
-                    spread = distribute_nodes_by_score(
-                        [ns.node_name for ns in new_nodes], agent_scores
+                # 3. Query real-time capacity from each agent (parallel)
+                cap_tasks = [
+                    agent_client.query_agent_capacity(c) for c in reachable
+                ]
+                cap_results = await asyncio.gather(
+                    *cap_tasks, return_exceptions=True
+                )
+
+                # 4. Build agent buckets from real-time data
+                agent_buckets: list[AgentBucket] = []
+                for agent, cap in zip(reachable, cap_results):
+                    if (
+                        isinstance(cap, Exception)
+                        or not cap
+                        or "error" in cap
+                        or not cap.get("memory_total_gb")
+                    ):
+                        logger.warning(
+                            f"Capacity query failed for {agent.name}: {cap}"
+                        )
+                        continue
+                    mem_total = cap.get("memory_total_gb", 0) * 1024
+                    allocated_mem = cap.get("allocated_memory_mb", 0)
+                    cpu_total = cap.get("cpu_count", 0)
+                    allocated_cpu = cap.get("allocated_vcpus", 0)
+                    bucket = AgentBucket(
+                        agent_id=agent.id,
+                        agent_name=agent.name or agent.id,
+                        memory_available_mb=max(0, mem_total - allocated_mem),
+                        cpu_available_cores=max(0, cpu_total - allocated_cpu),
+                        memory_total_mb=mem_total,
+                        cpu_total_cores=cpu_total,
                     )
-                    for node_name, agent_id in spread.items():
+                    agent_buckets.append(bucket)
+                    logger.debug(
+                        f"Job {self.job.id}: Agent {agent.id} ({agent.name}) "
+                        f"capacity: {bucket.memory_available_mb:.0f}MB / "
+                        f"{bucket.cpu_available_cores:.0f} vCPUs available"
+                    )
+
+                if agent_buckets:
+                    # 5. Build node requirements
+                    _DUMMY_NODE = type("_D", (), {"device": "linux"})()
+                    node_reqs = build_node_requirements([
+                        (
+                            ns.node_name,
+                            (
+                                self.db_nodes_map.get(ns.node_name)
+                                or _DUMMY_NODE
+                            ).device or "linux",
+                        )
+                        for ns in new_nodes
+                    ])
+
+                    # 5.5 Pre-subtract sticky node requirements from buckets
+                    # so bin-packer sees accurate remaining capacity.
+                    # If a sticky agent is overloaded, move those nodes
+                    # into the new_nodes pool for bin-packing.
+                    if sticky_nodes:
+                        sticky_reqs = build_node_requirements([
+                            (
+                                name,
+                                (
+                                    self.db_nodes_map.get(name)
+                                    or _DUMMY_NODE
+                                ).device or "linux",
+                            )
+                            for name in sticky_nodes
+                        ])
+                        bucket_map = {
+                            b.agent_id: b for b in agent_buckets
+                        }
+                        overflow_names = []
+                        for sreq in sticky_reqs:
+                            agent_id = all_node_agents.get(sreq.node_name)
+                            bucket = bucket_map.get(agent_id) if agent_id else None
+                            if bucket and (
+                                bucket.memory_available_mb >= sreq.memory_mb
+                                and bucket.cpu_available_cores >= sreq.cpu_cores
+                            ):
+                                # Fits — subtract from bucket
+                                bucket.memory_available_mb -= sreq.memory_mb
+                                bucket.cpu_available_cores -= sreq.cpu_cores
+                            else:
+                                # Doesn't fit — move to bin-packer pool
+                                overflow_names.append(sreq.node_name)
+                                node_reqs.append(sreq)
+                        if overflow_names:
+                            for name in overflow_names:
+                                all_node_agents.pop(name, None)
+                            logger.info(
+                                f"Job {self.job.id}: {len(overflow_names)} "
+                                f"sticky node(s) overflowed to bin-packer: "
+                                f"{overflow_names}"
+                            )
+
+                    # 6. Determine local agent for controller reserve
+                    local_id = None
+                    for b in agent_buckets:
+                        agent_obj = next(
+                            (a for a in reachable if a.id == b.agent_id),
+                            None,
+                        )
+                        if agent_obj and agent_obj.is_local:
+                            local_id = b.agent_id
+                            break
+
+                    # 7. Run bin-packer
+                    placement = plan_placement(
+                        node_reqs,
+                        agent_buckets,
+                        controller_reserve_mb=settings.placement_controller_reserve_mb,
+                        local_agent_id=local_id,
+                    )
+
+                    if placement.unplaceable:
+                        error_msg = "\n".join(placement.errors)
+                        logger.error(
+                            f"Job {self.job.id}: Bin-packing failed: "
+                            f"{error_msg}"
+                        )
+                        self.job.status = JobStatus.FAILED.value
+                        self.job.completed_at = datetime.now(timezone.utc)
+                        self.job.log_path = f"ERROR: {error_msg}"
+                        for ns in self.node_states:
+                            if ns.node_name in placement.unplaceable:
+                                ns.actual_state = NodeActualState.ERROR.value
+                                ns.error_message = (
+                                    "Insufficient cluster resources"
+                                )
+                                self._broadcast_state(
+                                    ns, name_suffix="placement_error"
+                                )
+                        self.session.commit()
+                        return False
+
+                    for node_name, agent_id in placement.assignments.items():
                         all_node_agents[node_name] = agent_id
+
+                    for w in placement.warnings:
+                        logger.warning(
+                            f"Job {self.job.id}: Placement warning: {w}"
+                        )
+                        self.log_parts.append(f"WARNING: {w}")
 
                     # Log spread summary
                     counts: dict[str, int] = {}
-                    for aid in spread.values():
+                    for aid in placement.assignments.values():
                         counts[aid] = counts.get(aid, 0) + 1
                     logger.info(
-                        f"Job {self.job.id}: Resource-aware spread for "
+                        f"Job {self.job.id}: Bin-pack placement for "
                         f"{len(new_nodes)} new node(s): {counts}"
                     )
 
@@ -918,10 +1055,12 @@ class NodeLifecycleManager:
         return True
 
     async def _check_resources(self) -> bool:
-        """Pre-deploy resource validation.
+        """Pre-deploy resource validation (safety net).
 
         MUST run BEFORE _handle_migration (Phase 2.2).
-        If insufficient: set error state, do NOT touch old container.
+        Now acts as a safety net — the bin-packer already validated
+        placement, so this only hard-fails on catastrophic mismatches
+        (available < 50% of required) that indicate stale data.
         Returns True if resources are OK, False if job should abort.
         """
         if not settings.resource_validation_enabled:
@@ -949,19 +1088,42 @@ class NodeLifecycleManager:
 
         cap_result = check_capacity(self.agent, device_types)
         if not cap_result.fits:
-            error_msg = format_capacity_error({self.agent.id: cap_result})
-            logger.warning(
-                f"Job {self.job.id}: Resource check failed: {error_msg}"
+            # Check if this is a catastrophic mismatch (< 50% of needed)
+            # or just stale data from between placement and deploy
+            is_catastrophic = (
+                cap_result.required_memory_mb > 0
+                and cap_result.available_memory_mb
+                < cap_result.required_memory_mb * 0.5
             )
-            self.job.status = JobStatus.FAILED.value
-            self.job.completed_at = datetime.now(timezone.utc)
-            self.job.log_path = f"ERROR: {error_msg}"
-            for ns in deploy_candidates:
-                ns.actual_state = NodeActualState.ERROR.value
-                ns.error_message = "Insufficient resources on target agent"
-                self._broadcast_state(ns, name_suffix="resource_error")
-            self.session.commit()
-            return False
+            if is_catastrophic:
+                error_msg = format_capacity_error({self.agent.id: cap_result})
+                logger.warning(
+                    f"Job {self.job.id}: Resource check failed "
+                    f"(catastrophic): {error_msg}"
+                )
+                self.job.status = JobStatus.FAILED.value
+                self.job.completed_at = datetime.now(timezone.utc)
+                self.job.log_path = f"ERROR: {error_msg}"
+                for ns in deploy_candidates:
+                    ns.actual_state = NodeActualState.ERROR.value
+                    ns.error_message = (
+                        "Insufficient resources on target agent"
+                    )
+                    self._broadcast_state(ns, name_suffix="resource_error")
+                self.session.commit()
+                return False
+            else:
+                # Stale data — log warning but proceed (bin-packer validated)
+                warning_msg = format_capacity_error({self.agent.id: cap_result})
+                logger.warning(
+                    f"Job {self.job.id}: Resource check soft-fail "
+                    f"(stale data likely, bin-packer approved): "
+                    f"{warning_msg}"
+                )
+                self.log_parts.append(
+                    f"WARNING: Stale capacity data detected — "
+                    f"proceeding with bin-packer-approved placement"
+                )
 
         if cap_result.has_warnings:
             for w in cap_result.warnings:

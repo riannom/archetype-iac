@@ -534,6 +534,13 @@ def _sync_get_resource_usage() -> dict:
                 except Exception:
                     image_name = "unknown"
 
+                # Extract resource allocations for capacity tracking
+                host_config = c.attrs.get("HostConfig", {})
+                nano_cpus = host_config.get("NanoCpus") or 0
+                container_vcpus = nano_cpus / 1e9 if nano_cpus else 1
+                mem_limit = host_config.get("Memory") or 0
+                container_memory_mb = mem_limit // (1024 * 1024) if mem_limit else 0
+
                 container_details.append({
                     "name": c.name,
                     "status": c.status,
@@ -542,6 +549,8 @@ def _sync_get_resource_usage() -> dict:
                     "node_kind": node_kind,
                     "image": image_name,
                     "is_system": is_archetype_system,
+                    "vcpus": container_vcpus,
+                    "memory_mb": container_memory_mb,
                 })
         except Exception as e:
             logger.warning(f"Docker container collection failed: {type(e).__name__}: {e}")
@@ -1191,6 +1200,51 @@ async def disk_usage():
             "percent": memory.percent,
         },
     }
+
+
+# Default memory for containers without explicit memory limits
+DEFAULT_CONTAINER_MEMORY_MB = 1024
+
+
+@app.get("/capacity")
+async def get_capacity():
+    """Real-time capacity snapshot for placement decisions.
+
+    Returns system resource stats plus allocated resources (sum of
+    CPU/memory committed to running containers and VMs). Queried by
+    the API during placement — fresher than heartbeat data.
+    """
+    usage = await get_resource_usage()
+    if not usage:
+        return {"error": "Failed to gather resource usage"}
+    allocated = _get_allocated_resources(usage)
+    return {
+        **usage,
+        "allocated_vcpus": allocated["vcpus"],
+        "allocated_memory_mb": allocated["memory_mb"],
+    }
+
+
+def _get_allocated_resources(usage: dict) -> dict:
+    """Sum CPU and memory allocations from running Docker containers + libvirt VMs."""
+    total_vcpus = 0
+    total_memory_mb = 0
+
+    # Docker allocations: iterate container_details from resource usage
+    for c in usage.get("container_details", []):
+        if c.get("status") != "running" or c.get("is_system"):
+            continue
+        total_vcpus += c.get("vcpus", 1)
+        total_memory_mb += c.get("memory_mb", DEFAULT_CONTAINER_MEMORY_MB)
+
+    # Libvirt VM allocations: vm_details now includes vcpus/memory_mb
+    for vm in usage.get("vm_details", []):
+        if vm.get("status") != "running":
+            continue
+        total_vcpus += vm.get("vcpus", 1)
+        total_memory_mb += vm.get("memory_mb", 0)
+
+    return {"vcpus": total_vcpus, "memory_mb": total_memory_mb}
 
 
 @app.get("/metrics")

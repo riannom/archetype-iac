@@ -196,9 +196,10 @@ const Dashboard: React.FC<DashboardProps> = ({
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
             {labs.length > 0 ? labs.map((lab) => {
               const agentStatus = labStatuses?.[lab.id];
-              // Prefer agent-polled status when available, fall back to DB counts from /labs
+              // Use agent-polled running count when available, DB total always
+              // (agents only report deployed nodes, not the full topology)
               const running = agentStatus ? agentStatus.running : (lab.running_count ?? 0);
-              const total = agentStatus ? agentStatus.total : (lab.node_count ?? 0);
+              const total = lab.node_count ?? 0;
               const isRunning = running > 0;
               const isAllRunning = running === total && total > 0;
               const statusDotColor = isAllRunning ? 'bg-green-500' : isRunning ? 'bg-amber-500' : 'bg-stone-400 dark:bg-stone-600';

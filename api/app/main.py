@@ -115,6 +115,8 @@ async def lifespan(app: FastAPI):
 
     # Shutdown
     logger.info("Shutting down Archetype API controller")
+    from app.db import async_engine
+    await async_engine.dispose()
     await close_publisher()
 
 

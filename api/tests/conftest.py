@@ -7,8 +7,10 @@ from pathlib import Path
 import sys
 
 import pytest
+import pytest_asyncio
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
@@ -114,12 +116,45 @@ def test_client(test_db: Session, test_engine, monkeypatch, tmp_path):
     import app.routers.console as _console_mod
     monkeypatch.setattr(_console_mod, "get_session", override_get_session)
 
+    # Patch jobs router which imports get_session at module level
+    import app.routers.jobs as _jobs_mod
+    monkeypatch.setattr(_jobs_mod, "get_session", override_get_session)
+
+    # Create async test DB for v1 async endpoints (separate from sync test_db
+    # because async endpoints use `await session.execute()` which requires a
+    # real AsyncSession — a sync Session would raise TypeError).
+    import asyncio
+
+    _async_test_engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+
+    async def _init_async_tables():
+        async with _async_test_engine.begin() as conn:
+            await conn.run_sync(models.Base.metadata.create_all)
+
+    asyncio.run(_init_async_tables())
+
+    _async_session_factory = async_sessionmaker(
+        bind=_async_test_engine, class_=AsyncSession, expire_on_commit=False
+    )
+
+    async def override_get_async_db():
+        async with _async_session_factory() as session:
+            try:
+                yield session
+            finally:
+                try:
+                    await session.rollback()
+                except Exception:
+                    pass
+
     app.dependency_overrides[db.get_db] = override_get_db
+    app.dependency_overrides[db.get_async_db] = override_get_async_db
     try:
         with TestClient(app) as client:
             yield client
     finally:
         app.dependency_overrides.clear()
+        asyncio.run(_async_test_engine.dispose())
         # Restore settings
         for key, val in _originals.items():
             object.__setattr__(settings, key, val)
@@ -710,3 +745,20 @@ def undeployed_node_state(test_db: Session, running_lab: models.Lab) -> models.N
     test_db.commit()
     test_db.refresh(node)
     return node
+
+
+# --- Async database fixtures ---
+
+
+@pytest_asyncio.fixture
+async def async_test_db():
+    """Create an async in-memory SQLite session for testing async DB infrastructure."""
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as conn:
+        await conn.run_sync(models.Base.metadata.create_all)
+    session_factory = async_sessionmaker(
+        bind=engine, class_=AsyncSession, expire_on_commit=False
+    )
+    async with session_factory() as session:
+        yield session
+    await engine.dispose()

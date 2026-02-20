@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-from contextlib import contextmanager
+from contextlib import asynccontextmanager, contextmanager
 
 import redis
 import redis.asyncio as aioredis
 from sqlalchemy import create_engine
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.config import settings
@@ -110,3 +111,90 @@ def get_session():
         except Exception:
             pass  # Ignore rollback errors
         session.close()
+
+
+# ---------------------------------------------------------------------------
+# Async SQLAlchemy infrastructure (for new async endpoints/tasks)
+# ---------------------------------------------------------------------------
+
+
+def _make_async_url(url: str) -> str:
+    """Convert a sync database URL to its async equivalent.
+
+    Handles psycopg3 (``+psycopg://`` → ``+psycopg_async://``),
+    bare ``postgresql://`` (→ ``+psycopg_async://``), and passes
+    SQLite URLs through unchanged.
+    """
+    if url.startswith("sqlite"):
+        return url
+    if "+psycopg://" in url:
+        return url.replace("+psycopg://", "+psycopg_async://", 1)
+    if url.startswith("postgresql://"):
+        return url.replace("postgresql://", "postgresql+psycopg_async://", 1)
+    return url
+
+
+_async_engine_kwargs: dict = dict(pool_pre_ping=True)
+
+if settings.database_url.startswith("sqlite"):
+    # SQLite doesn't support pool_size / max_overflow / connect_args options
+    pass
+else:
+    _async_engine_kwargs.update(
+        pool_size=settings.db_async_pool_size,
+        max_overflow=settings.db_async_max_overflow,
+        pool_recycle=300,
+        pool_timeout=settings.db_pool_timeout,
+        connect_args={"options": "-c statement_timeout=30000"},
+    )
+
+async_engine = create_async_engine(
+    _make_async_url(settings.database_url),
+    **_async_engine_kwargs,
+)
+
+AsyncSessionLocal = async_sessionmaker(
+    bind=async_engine,
+    class_=AsyncSession,
+    expire_on_commit=False,
+)
+
+
+async def get_async_db():
+    """FastAPI dependency for async database sessions.
+
+    Usage::
+
+        @router.get("/example")
+        async def example(session: AsyncSession = Depends(get_async_db)):
+            result = await session.execute(select(Model))
+            ...
+    """
+    async with AsyncSessionLocal() as session:
+        try:
+            yield session
+        finally:
+            try:
+                await session.rollback()
+            except Exception:
+                pass
+
+
+@asynccontextmanager
+async def get_async_session():
+    """Async context manager for background tasks.
+
+    Usage::
+
+        async with get_async_session() as session:
+            result = await session.execute(select(Model))
+            await session.commit()
+    """
+    async with AsyncSessionLocal() as session:
+        try:
+            yield session
+        finally:
+            try:
+                await session.rollback()
+            except Exception:
+                pass
