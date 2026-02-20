@@ -2388,15 +2388,27 @@ async def remove_container_for_lab(
 
 @app.get("/discover-labs")
 async def discover_labs() -> DiscoverLabsResponse:
-    """Discover all running labs by inspecting containers.
+    """Discover all running labs by inspecting all available providers.
 
     Used by controller to reconcile state after restart.
+    Queries both Docker and libvirt providers (if enabled) and merges results.
     """
     logger.info("Discovering running labs...")
 
-    # Use default provider for discovery
-    provider = get_provider_for_request()
-    discovered = await provider.discover_labs()
+    # Query all available providers and merge results by lab_id
+    merged: dict[str, list] = {}
+    for provider_name in list_providers():
+        provider = get_provider(provider_name)
+        if provider is None:
+            continue
+        try:
+            discovered = await provider.discover_labs()
+            for lab_id, nodes in discovered.items():
+                if lab_id not in merged:
+                    merged[lab_id] = []
+                merged[lab_id].extend(nodes)
+        except Exception as e:
+            logger.warning(f"discover_labs failed for provider {provider_name}: {e}")
 
     labs = [
         DiscoveredLab(
@@ -2412,7 +2424,7 @@ async def discover_labs() -> DiscoverLabsResponse:
                 for node in nodes
             ],
         )
-        for lab_id, nodes in discovered.items()
+        for lab_id, nodes in merged.items()
     ]
 
     return DiscoverLabsResponse(labs=labs)
@@ -2420,24 +2432,35 @@ async def discover_labs() -> DiscoverLabsResponse:
 
 @app.post("/cleanup-orphans")
 async def cleanup_orphans(request: CleanupOrphansRequest) -> CleanupOrphansResponse:
-    """Remove containers for labs that no longer exist.
+    """Remove orphan resources across all available providers.
 
     Args:
         request: Contains list of valid lab IDs to keep
 
     Returns:
-        List of removed container names
+        List of removed container/VM names
     """
-    logger.info(f"Cleaning up orphan containers, keeping {len(request.valid_lab_ids)} valid labs")
+    logger.info(f"Cleaning up orphan resources, keeping {len(request.valid_lab_ids)} valid labs")
 
-    # Use default provider for cleanup
-    provider = get_provider_for_request()
     valid_ids = set(request.valid_lab_ids)
-    removed = await provider.cleanup_orphan_containers(valid_ids)
+    all_removed: list[str] = []
+    errors: list[str] = []
+
+    for provider_name in list_providers():
+        provider = get_provider(provider_name)
+        if provider is None:
+            continue
+        try:
+            removed = await provider.cleanup_orphan_containers(valid_ids)
+            all_removed.extend(removed)
+        except Exception as e:
+            msg = f"cleanup_orphans failed for provider {provider_name}: {e}"
+            logger.warning(msg)
+            errors.append(msg)
 
     return CleanupOrphansResponse(
-        removed_containers=removed,
-        errors=[],
+        removed_containers=all_removed,
+        errors=errors,
     )
 
 

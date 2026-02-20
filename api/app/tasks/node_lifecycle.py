@@ -1050,17 +1050,36 @@ class NodeLifecycleManager:
                     continue
 
                 self.log_parts.append(
-                    f"  Destroying {len(node_names)} container(s) on "
+                    f"  Destroying {len(node_names)} node(s) on "
                     f"{old_agent.name}..."
                 )
 
                 for node_name in node_names:
                     try:
+                        # Resolve per-node provider from image type
+                        node_provider = self.provider  # fallback
+                        db_node = self.db_nodes_map.get(node_name)
+                        if db_node:
+                            kind = db_node.device or "linux"
+                            image = resolve_node_image(
+                                db_node.device, kind,
+                                db_node.image, db_node.version,
+                            )
+                            if image:
+                                node_provider = get_image_provider(image)
+                            else:
+                                logger.warning(
+                                    f"Migration cleanup: cannot resolve "
+                                    f"image for {node_name} "
+                                    f"(device={db_node.device}), "
+                                    f"using lab provider '{self.provider}'"
+                                )
+
                         result = await agent_client.destroy_node_on_agent(
                             old_agent,
                             self.lab.id,
                             node_name,
-                            provider=self.provider,
+                            provider=node_provider,
                         )
                         if result.get("success"):
                             self.log_parts.append(
