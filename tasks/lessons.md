@@ -119,3 +119,13 @@
 **Fix**: Compare each readiness value against vendor defaults from `get_vendor_config(kind)` before storing in domain XML. Only true user/image overrides are persisted.
 
 **Rule**: When baking configuration into persistent storage (domain XML, config files), only store overrides that differ from defaults. Storing defaults locks them in and prevents the default source from being updated independently.
+
+## 2026-02-19: Test helper kwargs routing must distinguish method params from config dict keys
+
+**Bug**: `_gen_xml()` helper in `test_libvirt_domain_xml.py` checked `if key in node_config` to decide whether to pop overrides into `node_config`. But the initial dict only had 10 keys, so `reserved_nics`, `serial_type`, `nographic`, `cpu_limit`, `cpu_sockets`, `smbios_product`, `readiness_probe` etc. stayed as overrides and were passed as direct kwargs to `_generate_domain_xml()`, which doesn't accept them.
+
+**Impact**: 17 out of 56 domain XML tests failed with `TypeError: got an unexpected keyword argument`.
+
+**Fix**: Changed routing logic to use an explicit `_method_kwargs` set listing `_generate_domain_xml()`'s actual parameters. Any override NOT in this set goes to `node_config`.
+
+**Rule**: When a test helper forwards kwargs to a method that also takes a config dict, use an explicit allowlist of the method's params to route correctly. Don't rely on `if key in defaults_dict` — it misses any config key without a pre-populated default.

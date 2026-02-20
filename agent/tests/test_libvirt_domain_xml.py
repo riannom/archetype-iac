@@ -249,9 +249,18 @@ def _gen_xml(provider=None, **overrides):
         "interface_count": 2,
         "_display_name": "test",
     }
-    # Allow overriding node_config keys
+
+    # _generate_domain_xml direct keyword arguments
+    _method_kwargs = {
+        "name", "node_config", "overlay_path", "data_volume_path",
+        "interface_count", "vlan_tags", "kind",
+        "include_management_interface", "management_network",
+        "config_iso_path",
+    }
+
+    # Route overrides: method params stay as kwargs, everything else → node_config
     for key in list(overrides.keys()):
-        if key in node_config:
+        if key not in _method_kwargs:
             node_config[key] = overrides.pop(key)
 
     # Defaults for _generate_domain_xml kwargs
