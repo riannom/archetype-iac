@@ -534,10 +534,14 @@ async def upload_chunk(
         )
 
     temp_path = Path(session["temp_path"])
-    try:
+
+    def _sync_write_chunk():
         with open(temp_path, "r+b") as handle:
             handle.seek(offset)
             handle.write(chunk_data)
+
+    try:
+        await asyncio.to_thread(_sync_write_chunk)
     except OSError as exc:
         raise HTTPException(status_code=500, detail=f"Failed to write chunk: {exc}") from exc
 

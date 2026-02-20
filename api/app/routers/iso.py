@@ -368,12 +368,16 @@ async def upload_chunk(
             detail=f"Chunk size mismatch. Expected {expected_size}, got {actual_size}"
         )
 
-    # Write chunk to file at correct offset
+    # Write chunk to file at correct offset (in thread to avoid blocking event loop)
     temp_path = Path(session["temp_path"])
-    try:
+
+    def _sync_write_chunk():
         with open(temp_path, "r+b") as f:
             f.seek(offset)
             f.write(chunk_data)
+
+    try:
+        await asyncio.to_thread(_sync_write_chunk)
     except IOError as e:
         logger.error(f"Failed to write chunk {index} for upload {upload_id}: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to write chunk: {e}")

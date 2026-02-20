@@ -535,16 +535,15 @@ async def delete_lab(
     database.query(models.LinkState).filter(models.LinkState.lab_id == lab_id).delete()
     database.query(models.ConfigSnapshot).filter(models.ConfigSnapshot.lab_id == lab_id).delete()
 
-    # Delete workspace files
+    # Delete workspace files (blocking filesystem walk in thread)
     workspace = lab_workspace(lab.id)
-    if workspace.exists():
-        for path in workspace.glob("**/*"):
-            if path.is_file():
-                path.unlink()
-        for path in sorted(workspace.glob("**/*"), reverse=True):
-            if path.is_dir():
-                path.rmdir()
-        workspace.rmdir()
+
+    def _sync_delete_workspace():
+        import shutil
+        if workspace.exists():
+            shutil.rmtree(workspace, ignore_errors=True)
+
+    await asyncio.to_thread(_sync_delete_workspace)
 
     database.delete(lab)
     database.commit()
@@ -588,7 +587,7 @@ async def update_topology_from_yaml(
 ) -> schemas.LabOut:
     lab = _require_lab_editor(lab_id, database, current_user)
     workspace = lab_workspace(lab.id)
-    workspace.mkdir(parents=True, exist_ok=True)
+    await asyncio.to_thread(workspace.mkdir, parents=True, exist_ok=True)
 
     # Store topology in database (source of truth)
     service = TopologyService(database)
@@ -649,7 +648,7 @@ async def update_topology(
 ) -> schemas.LabOut:
     lab = _require_lab_editor(lab_id, database, current_user)
     workspace = lab_workspace(lab.id)
-    workspace.mkdir(parents=True, exist_ok=True)
+    await asyncio.to_thread(workspace.mkdir, parents=True, exist_ok=True)
 
     # Store topology in database (source of truth)
     service = TopologyService(database)

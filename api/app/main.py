@@ -306,10 +306,11 @@ def health(request: Request) -> dict[str, str]:
 @app.get("/disk-usage")
 async def disk_usage(current_user: models.User = Depends(get_current_user)):
     """Resource pressure status (admin only)."""
+    import asyncio
     from app.utils.http import require_admin
     require_admin(current_user)
     from app.services.resource_monitor import ResourceMonitor
-    return ResourceMonitor.get_status()
+    return await asyncio.to_thread(ResourceMonitor.get_status)
 
 
 _metrics_last_update: float = 0.0

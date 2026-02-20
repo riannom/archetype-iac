@@ -2149,12 +2149,15 @@ async def extract_node_config(
         # Then try libvirt VM node.
         if settings.enable_libvirt:
             try:
-                from agent.providers.libvirt import LibvirtProvider, LIBVIRT_AVAILABLE
-                if LIBVIRT_AVAILABLE:
-                    libvirt_provider = LibvirtProvider()
+                libvirt_provider = get_provider("libvirt")
+                if libvirt_provider:
                     domain_name = libvirt_provider._domain_name(lab_id, node_name)
-                    domain = libvirt_provider.conn.lookupByName(domain_name)
-                    kind = libvirt_provider._get_domain_kind(domain)
+
+                    def _sync_lookup_kind():
+                        domain = libvirt_provider.conn.lookupByName(domain_name)
+                        return libvirt_provider._get_domain_kind(domain)
+
+                    kind = await libvirt_provider._run_libvirt(_sync_lookup_kind)
                     if kind:
                         result = await libvirt_provider._extract_config(lab_id, node_name, kind)
                         if result:
