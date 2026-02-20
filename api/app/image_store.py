@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import functools
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 import json
@@ -16,55 +18,34 @@ logger = logging.getLogger(__name__)
 # QCOW2 DEVICE DETECTION FOR VRNETLAB BUILDS
 # =============================================================================
 
-# Mapping of filename patterns to (device_id, vrnetlab_subdir)
-# Used to detect device type from qcow2 filename and determine vrnetlab build path
-QCOW2_DEVICE_PATTERNS: dict[str, tuple[str, str]] = {
-    # Cisco IOS-XE / Catalyst
-    r"c8000v[_-]?[\d\.]+.*\.qcow2": ("c8000v", "cisco/c8000v"),
-    r"cat9kv[_-]?[\d\.]+.*\.qcow2": ("cat9kv", "cisco/cat9kv"),
-    r"cat8000v[_-]?[\d\.]+.*\.qcow2": ("c8000v", "cisco/c8000v"),
-    r"csr1000v[_-]?[\d\.]+.*\.qcow2": ("csr1000v", "cisco/csr"),
-    # Cisco Firewall / FTD
-    r"ftdv[_-]?[\d\.]+.*\.qcow2": ("ftdv", "cisco/ftdv"),
-    r"cisco[_-]?secure[_-]?firewall[_-]?threat[_-]?defense.*\.qcow2": ("ftdv", "cisco/ftdv"),
-    r"asav[_-]?[\d\.]+.*\.qcow2": ("asav", "cisco/asav"),
-    # Cisco IOS-XR
-    r"xrv9k[_-]?[\d\.]+.*\.qcow2": ("xrv9k", "cisco/xrv9k"),
-    r"iosxrv9000[_-]?[\d\.]+.*\.qcow2": ("xrv9k", "cisco/xrv9k"),
-    r"xrd[_-]?[\d\.]+.*\.qcow2": ("xrd", "cisco/xrd"),
-    # Cisco NX-OS
-    r"n9kv[_-]?[\d\.]+.*\.qcow2": ("n9kv", "cisco/n9kv"),
-    r"nexus9[_-]?[\d\.]+.*\.qcow2": ("n9kv", "cisco/n9kv"),
-    r"nxosv[_-]?[\d\.]+.*\.qcow2": ("n9kv", "cisco/n9kv"),
-    # Cisco IOSv / IOS
-    r"vios[_-]?[\d\.]+.*\.qcow2": ("iosv", "cisco/iosv"),
-    r"iosv[_-]?[\d\.]+.*\.qcow2": ("iosv", "cisco/iosv"),
-    r"iosvl2[_-]?[\d\.]+.*\.qcow2": ("iosvl2", "cisco/iosvl2"),
-    # Cisco SD-WAN components
-    r"viptela[_-]?smart.*\.qcow2": ("cat-sdwan-controller", "cisco/sdwan"),
-    r"viptela[_-]?vmanage.*\.qcow2": ("cat-sdwan-manager", "cisco/sdwan"),
-    r"viptela[_-]?bond.*\.qcow2": ("cat-sdwan-validator", "cisco/sdwan"),
-    r"viptela[_-]?edge.*\.qcow2": ("cat-sdwan-vedge", "cisco/sdwan"),
-    r"vedge[_-]?[\d\.]+.*\.qcow2": ("cat-sdwan-vedge", "cisco/sdwan"),
-    r"c8000v[_-]?sdwan.*\.qcow2": ("cat-sdwan-cedge", "cisco/sdwan"),
-    # Juniper
-    r"vjunos[_-]?router.*\.qcow2": ("juniper_vjunosrouter", "juniper/vjunos-router"),
-    r"vjunos[_-]?evolved.*\.qcow2": ("juniper_vjunosevolved", "juniper/vjunos-router"),
-    r"vjunos[_-]?switch.*\.qcow2": ("juniper_vjunosswitch", "juniper/vjunos-switch"),
-    # Keep plain "vjunos-<version>" as switch for backward compatibility.
-    r"vjunos.*\.qcow2": ("juniper_vjunosswitch", "juniper/vjunos-switch"),
-    r"vsrx.*\.qcow2": ("juniper_vsrx3", "juniper/vsrx"),
-    r"vmx.*\.qcow2": ("vmx", "juniper/vmx"),
-    r"vqfx.*\.qcow2": ("juniper_vqfx", "juniper/vqfx"),
-    # Arista
-    r"veos[_-]?[\d\.]+.*\.qcow2": ("veos", "arista/veos"),
-    # Nokia
-    r"sros[_-]?[\d\.]+.*\.qcow2": ("sros", "nokia/sros"),
-    # Palo Alto
-    r"pa[_-]?vm[_-]?[\d\.]+.*\.qcow2": ("panos", "paloalto/panos"),
-    # Generic / Catch-all for common formats
-    r".*\.qcow2": (None, None),  # Unknown device
-}
+# Derived from VENDOR_CONFIGS — single source of truth.
+# Additional legacy patterns for devices not yet in VENDOR_CONFIGS are kept below.
+def _build_qcow2_device_patterns() -> dict[str, tuple[str, str]]:
+    """Build qcow2 detection patterns from VENDOR_CONFIGS + legacy entries."""
+    try:
+        from agent.vendors import _DERIVED_QCOW2_DEVICE_PATTERNS
+        patterns = dict(_DERIVED_QCOW2_DEVICE_PATTERNS)
+    except ImportError:
+        patterns = {}
+
+    # Legacy patterns for devices without VENDOR_CONFIGS entries.
+    # These will be removed once corresponding entries are added.
+    _LEGACY_QCOW2_PATTERNS: dict[str, tuple[str, str]] = {
+        r"cat9kv[_-]?[\d\.]+.*\.qcow2": ("cat9kv", "cisco/cat9kv"),
+        r"c8000v[_-]?sdwan.*\.qcow2": ("cat-sdwan-cedge", "cisco/sdwan"),
+        r"vmx.*\.qcow2": ("vmx", "juniper/vmx"),
+        r"vqfx.*\.qcow2": ("juniper_vqfx", "juniper/vqfx"),
+        r"veos[_-]?[\d\.]+.*\.qcow2": ("veos", "arista/veos"),
+        r"sros[_-]?[\d\.]+.*\.qcow2": ("sros", "nokia/sros"),
+    }
+    for pattern, value in _LEGACY_QCOW2_PATTERNS.items():
+        if pattern not in patterns:
+            patterns[pattern] = value
+
+    return patterns
+
+
+QCOW2_DEVICE_PATTERNS: dict[str, tuple[str, str]] = _build_qcow2_device_patterns()
 
 
 def detect_iol_device_type(filename: str) -> str | None:
@@ -104,59 +85,44 @@ def detect_qcow2_device_type(filename: str) -> tuple[str | None, str | None]:
     return None, None
 
 
-# Vendor mapping for detected devices
-DEVICE_VENDOR_MAP = {
-    "eos": "Arista",
-    "ceos": "Arista",
-    "arista_ceos": "Arista",
-    "arista_eos": "Arista",
-    "iosv": "Cisco",
-    "iosxr": "Cisco",
-    "csr": "Cisco",
-    "nxos": "Cisco",
-    "iosvl2": "Cisco",
-    "xrd": "Cisco",
-    "vsrx": "Juniper",
-    "juniper_vsrx3": "Juniper",
-    "crpd": "Juniper",
-    "vjunos": "Juniper",
-    "juniper_vjunosrouter": "Juniper",
-    "juniper_vjunosevolved": "Juniper",
-    "juniper_vjunosswitch": "Juniper",
-    "vqfx": "Juniper",
-    "juniper_vqfx": "Juniper",
-    "srlinux": "Nokia",
-    "cumulus": "NVIDIA",
-    "sonic": "SONiC",
-    "vyos": "VyOS",
-    "frr": "Open Source",
-    "linux": "Open Source",
-    "alpine": "Open Source",
-    "tcl": "Open Source",
-}
+# Vendor mapping derived from VENDOR_CONFIGS. Legacy fallbacks included for
+# identifiers that VENDOR_CONFIGS doesn't cover yet.
+def _build_device_vendor_map() -> dict[str, str]:
+    """Build device-to-vendor mapping from VENDOR_CONFIGS + legacy entries."""
+    try:
+        from agent.vendors import _DERIVED_DEVICE_VENDOR_MAP
+        vendor_map = dict(_DERIVED_DEVICE_VENDOR_MAP)
+    except ImportError:
+        vendor_map = {}
 
-# Legacy/simplified IDs seen in filenames/manifests that should map to canonical
-# vendor IDs returned by /vendors and used by the UI catalog.
-DEVICE_ID_ALIASES = {
-    "iosv": "cisco_iosv",
-    "ceos": "eos",
-    "csr": "cisco_csr1000v",
-    "csr1000v": "cisco_csr1000v",
-    "iosxr": "cisco_iosxr",
-    "xrv9k": "cisco_iosxr",
-    "nxos": "cisco_n9kv",
-    "nxosv9000": "cisco_n9kv",
-    "n9kv": "cisco_n9kv",
-    "vjunos-router": "juniper_vjunosrouter",
-    "vjunosrouter": "juniper_vjunosrouter",
-    "vjunos-evolved": "juniper_vjunosevolved",
-    "vjunos_evolved": "juniper_vjunosevolved",
-    "vjunosevolved": "juniper_vjunosevolved",
-    "vjunos-switch": "juniper_vjunosswitch",
-    "vjunosswitch": "juniper_vjunosswitch",
-    # Historical shorthand mapped plain "vjunos" uploads to switch artifacts.
-    "vjunos": "juniper_vjunosswitch",
-}
+    _LEGACY_VENDOR_MAP = {
+        "crpd": "Juniper",
+        "vqfx": "Juniper",
+        "juniper_vqfx": "Juniper",
+        "srlinux": "Nokia",
+        "cumulus": "NVIDIA",
+        "sonic": "SONiC",
+    }
+    for k, v in _LEGACY_VENDOR_MAP.items():
+        vendor_map.setdefault(k, v)
+
+    return vendor_map
+
+
+DEVICE_VENDOR_MAP: dict[str, str] = _build_device_vendor_map()
+
+# Device ID aliases derived from VENDOR_CONFIGS (keys, kinds, and explicit aliases).
+# Maps any known identifier to its canonical VENDOR_CONFIGS key.
+def _build_device_id_aliases() -> dict[str, str]:
+    """Build device-id alias map from VENDOR_CONFIGS."""
+    try:
+        from agent.vendors import _DERIVED_DEVICE_ID_ALIASES
+        return dict(_DERIVED_DEVICE_ID_ALIASES)
+    except ImportError:
+        return {}
+
+
+DEVICE_ID_ALIASES: dict[str, str] = _build_device_id_aliases()
 
 # Explicit compatibility aliases for device types that intentionally share
 # image artifacts while remaining separate draggable device IDs.
@@ -196,19 +162,26 @@ def normalize_default_device_scope_ids(device_ids: list[str] | None) -> list[str
     return result
 
 
+@functools.lru_cache(maxsize=256)
 def canonicalize_device_id(device_id: str | None) -> str | None:
     """Normalize an image device ID to a canonical draggable device key.
 
     Image assignment should align with UI device IDs (same IDs used in the
     draggable device catalog), not broad runtime kinds.
+
+    Results are cached — the function is pure for a given module load.
     """
     if not device_id:
         return None
 
     normalized = device_id.strip().lower()
-    normalized = DEVICE_ID_ALIASES.get(normalized, normalized)
 
-    # Prefer exact vendor keys first (these are the UI/draggable IDs).
+    # Fast path: the derived alias map covers keys, kinds, and aliases.
+    resolved = DEVICE_ID_ALIASES.get(normalized)
+    if resolved:
+        return resolved
+
+    # Fallback: try VENDOR_CONFIGS directly for any edge cases.
     try:
         from agent.vendors import VENDOR_CONFIGS
 
@@ -230,8 +203,14 @@ def canonicalize_device_id(device_id: str | None) -> str | None:
         ]
         if len(kind_matches) == 1:
             return kind_matches[0]
-    except Exception:
+    except ImportError:
         pass
+    except Exception:
+        logger.warning(
+            "Unexpected error during device ID canonicalization for '%s'",
+            device_id,
+            exc_info=True,
+        )
 
     return normalized
 
@@ -712,7 +691,14 @@ def ensure_custom_device_exists(
     if not device_id:
         return None
 
-    # Check if it already exists as a vendor config
+    # Resolve the full alias chain to a canonical VENDOR_CONFIGS key.
+    canonical_key = canonicalize_device_id(device_id)
+
+    # If the canonical ID maps to a built-in vendor config, no custom device needed.
+    if canonical_key and canonical_key in VENDOR_CONFIGS:
+        return None
+
+    # Check if it already exists as a vendor config by key
     if device_id in VENDOR_CONFIGS:
         return None  # Built-in, no custom device needed
 
@@ -863,6 +849,15 @@ def get_device_image_count(device_id: str) -> int:
                if image_matches_device(img, device_id))
 
 
+def _get_filename_keyword_map() -> dict[str, str]:
+    """Get the filename keyword map, derived from VENDOR_CONFIGS."""
+    try:
+        from agent.vendors import _DERIVED_FILENAME_KEYWORD_MAP
+        return _DERIVED_FILENAME_KEYWORD_MAP
+    except ImportError:
+        return {}
+
+
 def detect_device_from_filename(filename: str) -> tuple[str | None, str | None]:
     name = filename.lower()
     for rule in load_rules():
@@ -872,36 +867,7 @@ def detect_device_from_filename(filename: str) -> tuple[str | None, str | None]:
             continue
         if re.search(pattern, name):
             return device_id, _extract_version(filename)
-    keyword_map = {
-        "ceos": "ceos",
-        "eos": "ceos",
-        "iosv": "iosv",
-        "csr": "csr",
-        "nxos": "nxos",
-        "vjunos-router": "juniper_vjunosrouter",
-        "vjunos_router": "juniper_vjunosrouter",
-        "vjunosrouter": "juniper_vjunosrouter",
-        "vjunos-evolved": "juniper_vjunosevolved",
-        "vjunos_evolved": "juniper_vjunosevolved",
-        "vjunosevolved": "juniper_vjunosevolved",
-        "vjunos-switch": "juniper_vjunosswitch",
-        "vjunos_switch": "juniper_vjunosswitch",
-        "vjunosswitch": "juniper_vjunosswitch",
-        "vjunos": "juniper_vjunosswitch",
-        "frr": "frr",
-        "haproxy": "haproxy",
-        "alpine": "alpine",
-        "tcl": "tcl",
-        "viosl2": "iosvl2",
-        "iosvl2": "iosvl2",
-        "iosxr": "iosxr",
-        "ioll2": "iol-l2",
-        "iol_l2": "iol-l2",
-        "l2-adventerprise": "iol-l2",
-        "l2-ipbasek9": "iol-l2",
-        "l3-adventerprise": "iol-xe",
-        "iol": "iol-xe",
-    }
+    keyword_map = _get_filename_keyword_map()
     for keyword, device_id in keyword_map.items():
         if keyword in name:
             return device_id, _extract_version(filename)
@@ -914,11 +880,100 @@ def _extract_version(filename: str) -> str | None:
 
 
 def get_vendor_for_device(device_id: str) -> Optional[str]:
-    """Get the vendor name for a device ID."""
+    """Get the vendor name for a device ID.
+
+    Deprecated: prefer DeviceResolver.resolve(device_id).vendor
+    """
     if not device_id:
         return None
     device_lower = device_id.lower()
-    return DEVICE_VENDOR_MAP.get(device_lower)
+    result = DEVICE_VENDOR_MAP.get(device_lower)
+    if result:
+        return result
+    # Fallback to DeviceResolver for full alias chain resolution.
+    try:
+        from app.services.device_resolver import get_resolver
+        resolved = get_resolver().resolve(device_id)
+        return resolved.vendor
+    except Exception:
+        return None
+
+
+@dataclass
+class ImageMetadata:
+    """Structured metadata for an image library entry.
+
+    Replaces the 23+ parameter signature of create_image_entry with a
+    single typed dataclass.
+    """
+    image_id: str
+    kind: str  # "docker", "qcow2", "iol"
+    reference: str  # Docker tag or file path
+    filename: str
+
+    # Core metadata
+    device_id: Optional[str] = None
+    version: Optional[str] = None
+    size_bytes: Optional[int] = None
+    sha256: Optional[str] = None
+    notes: str = ""
+    compatible_devices: Optional[list[str]] = None
+    source: Optional[str] = None
+
+    # VM runtime hints (from VIRL2 node-definitions or user overrides)
+    memory_mb: Optional[int] = None
+    cpu_count: Optional[int] = None
+    disk_driver: Optional[str] = None
+    nic_driver: Optional[str] = None
+    machine_type: Optional[str] = None
+    libvirt_driver: Optional[str] = None
+    boot_timeout: Optional[int] = None
+    readiness_probe: Optional[str] = None
+    readiness_pattern: Optional[str] = None
+    efi_boot: Optional[bool] = None
+    efi_vars: Optional[str] = None
+    max_ports: Optional[int] = None
+    port_naming: Optional[str] = None
+    cpu_limit: Optional[int] = None
+    has_loopback: Optional[bool] = None
+    provisioning_driver: Optional[str] = None
+    provisioning_media_type: Optional[str] = None
+
+    def to_entry(self) -> dict:
+        """Convert to a manifest image entry dict.
+
+        Handles canonicalization, vendor resolution, and custom device creation.
+        """
+        return create_image_entry(
+            image_id=self.image_id,
+            kind=self.kind,
+            reference=self.reference,
+            filename=self.filename,
+            device_id=self.device_id,
+            version=self.version,
+            size_bytes=self.size_bytes,
+            notes=self.notes,
+            compatible_devices=self.compatible_devices,
+            source=self.source,
+            memory_mb=self.memory_mb,
+            cpu_count=self.cpu_count,
+            disk_driver=self.disk_driver,
+            nic_driver=self.nic_driver,
+            machine_type=self.machine_type,
+            libvirt_driver=self.libvirt_driver,
+            boot_timeout=self.boot_timeout,
+            readiness_probe=self.readiness_probe,
+            readiness_pattern=self.readiness_pattern,
+            efi_boot=self.efi_boot,
+            efi_vars=self.efi_vars,
+            max_ports=self.max_ports,
+            port_naming=self.port_naming,
+            cpu_limit=self.cpu_limit,
+            has_loopback=self.has_loopback,
+            provisioning_driver=self.provisioning_driver,
+            provisioning_media_type=self.provisioning_media_type,
+            sha256=self.sha256,
+        )
 
 
 def create_image_entry(
@@ -1197,6 +1252,37 @@ def delete_device_override(device_id: str) -> bool:
     del overrides[device_id]
     save_device_overrides(overrides)
     return True
+
+
+def cleanup_orphaned_custom_devices() -> list[str]:
+    """Remove custom devices that no image references.
+
+    Scans custom devices marked isCustom=True and removes any that have no
+    matching images in the manifest. Returns list of removed device IDs.
+    """
+    manifest = load_manifest()
+    devices = load_custom_devices()
+    removed: list[str] = []
+
+    for device in devices:
+        device_id = device.get("id")
+        if not device.get("isCustom"):
+            continue
+        if not device_id:
+            continue
+        # Check if any image references this device.
+        has_image = any(
+            image_matches_device(img, device_id)
+            for img in manifest.get("images", [])
+            if isinstance(img, dict)
+        )
+        if not has_image:
+            deleted = delete_custom_device(device_id)
+            if deleted:
+                removed.append(device_id)
+                logger.info("Removed orphaned custom device: %s", device_id)
+
+    return removed
 
 
 def find_image_reference(device_id: str, version: str | None = None) -> str | None:

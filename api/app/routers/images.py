@@ -175,6 +175,7 @@ class ImageChunkUploadInitRequest(BaseModel):
     total_size: int = Field(..., gt=0, description="Total file size in bytes")
     chunk_size: int = Field(default=DEFAULT_CHUNK_SIZE, gt=0, description="Chunk size in bytes")
     auto_build: bool = Field(default=True, description="Auto-build Docker image for qcow2 uploads")
+    auto_confirm: bool = Field(default=True, description="Auto-confirm qcow2 uploads (skip two-phase)")
 
 
 class ImageChunkUploadInitResponse(BaseModel):
@@ -222,6 +223,70 @@ class ImageChunkUploadCompleteResponse(BaseModel):
     filename: str
     status: str
     result: dict[str, object] | None = None
+
+
+class Qcow2DetectionResult(BaseModel):
+    """Detection results returned after qcow2 upload (two-phase mode)."""
+
+    upload_id: str
+    filename: str
+    detected_device_id: str | None = None
+    detected_version: str | None = None
+    confidence: str = "none"  # "high", "medium", "low", "none"
+    size_bytes: int | None = None
+    sha256: str | None = None
+    suggested_metadata: dict[str, object] = Field(default_factory=dict)
+    status: str = "awaiting_confirmation"
+
+
+class Qcow2ConfirmRequest(BaseModel):
+    """Request to confirm a staged qcow2 upload with optional overrides."""
+
+    device_id: str | None = None
+    version: str | None = None
+    auto_build: bool = True
+    metadata: dict[str, object] | None = None
+    sidecar_yaml: str | None = Field(
+        default=None,
+        description="Optional VIRL2 node-definition YAML content for metadata extraction",
+    )
+
+
+def _parse_sidecar_metadata(yaml_content: str) -> dict[str, object]:
+    """Parse a VIRL2 node-definition YAML sidecar and extract image metadata."""
+    from app.iso.virl2_parser import VIRL2Parser
+
+    parser = VIRL2Parser()
+    node_def = parser._parse_node_definition(yaml_content, "<sidecar>")
+    if not node_def:
+        return {}
+
+    metadata: dict[str, object] = {}
+    if node_def.ram_mb:
+        metadata["memory_mb"] = node_def.ram_mb
+    if node_def.cpus:
+        metadata["cpu_count"] = node_def.cpus
+    if node_def.disk_driver:
+        metadata["disk_driver"] = node_def.disk_driver
+    if node_def.nic_driver:
+        metadata["nic_driver"] = node_def.nic_driver
+    if node_def.machine_type:
+        metadata["machine_type"] = node_def.machine_type
+    if node_def.efi_boot:
+        metadata["efi_boot"] = node_def.efi_boot
+    if node_def.efi_vars:
+        metadata["efi_vars"] = node_def.efi_vars
+    if node_def.boot_timeout:
+        metadata["boot_timeout"] = node_def.boot_timeout
+    if node_def.boot_completed_patterns:
+        metadata["readiness_probe"] = "log_pattern"
+        metadata["readiness_pattern"] = "|".join(node_def.boot_completed_patterns)
+    if node_def.interfaces:
+        metadata["max_ports"] = len(node_def.interfaces) or node_def.interface_count_default
+        metadata["port_naming"] = node_def.interface_naming_pattern
+    if node_def.libvirt_driver:
+        metadata["libvirt_driver"] = node_def.libvirt_driver
+    return metadata
 
 
 def _sanitize_upload_filename(filename: str) -> str:
@@ -419,6 +484,7 @@ def init_chunk_upload(
             "status": "uploading",
             "error_message": None,
             "auto_build": bool(request.auto_build),
+            "auto_confirm": bool(request.auto_confirm),
             "user_id": str(current_user.id),
             "created_at": datetime.now(timezone.utc),
         }
@@ -574,6 +640,34 @@ def complete_chunk_upload(
             if upload_id in _chunk_upload_sessions:
                 _chunk_upload_sessions[upload_id]["status"] = "processing"
 
+        auto_confirm = session.get("auto_confirm", True)
+
+        if not auto_confirm:
+            # Two-phase mode: detect only, store results, await confirmation.
+            try:
+                detection = _detect_qcow2(final_path)
+            except Exception as exc:
+                with _chunk_upload_lock:
+                    if upload_id in _chunk_upload_sessions:
+                        _chunk_upload_sessions[upload_id]["status"] = "failed"
+                        _chunk_upload_sessions[upload_id]["error_message"] = str(exc)
+                raise
+
+            with _chunk_upload_lock:
+                if upload_id in _chunk_upload_sessions:
+                    _chunk_upload_sessions[upload_id]["status"] = "awaiting_confirmation"
+                    _chunk_upload_sessions[upload_id]["final_path"] = str(final_path)
+                    _chunk_upload_sessions[upload_id]["detection"] = detection
+
+            return ImageChunkUploadCompleteResponse(
+                upload_id=upload_id,
+                kind=kind,
+                filename=session["filename"],
+                status="awaiting_confirmation",
+                result=detection,
+            )
+
+        # Auto-confirm mode: detect + register in one shot (legacy behavior).
         try:
             result = _finalize_qcow2_upload(
                 final_path,
@@ -636,6 +730,83 @@ def cancel_chunk_upload(
     session["status"] = "cancelled"
     _cleanup_chunk_upload_session_files(session)
     return {"message": "Upload cancelled"}
+
+
+@router.post("/upload/{upload_id}/confirm")
+def confirm_qcow2_upload(
+    upload_id: str,
+    body: Qcow2ConfirmRequest,
+    current_user: models.User = Depends(get_current_admin),
+):
+    """Confirm a staged qcow2 upload with optional overrides.
+
+    Only valid for sessions in ``awaiting_confirmation`` status (two-phase mode).
+    The user can override the detected device_id, version, and pass additional
+    metadata that will be stored on the manifest image entry.
+    """
+    with _chunk_upload_lock:
+        session = _chunk_upload_sessions.get(upload_id)
+        if not session:
+            raise HTTPException(status_code=404, detail="Upload session not found")
+        if session["status"] != "awaiting_confirmation":
+            raise HTTPException(
+                status_code=400,
+                detail=f"Upload is '{session['status']}', expected 'awaiting_confirmation'",
+            )
+        session_copy = dict(session)
+
+    detection = session_copy.get("detection", {})
+    final_path = Path(session_copy["final_path"])
+    if not final_path.exists():
+        with _chunk_upload_lock:
+            if upload_id in _chunk_upload_sessions:
+                _chunk_upload_sessions[upload_id]["status"] = "failed"
+                _chunk_upload_sessions[upload_id]["error_message"] = "File no longer exists"
+        raise HTTPException(status_code=410, detail="Uploaded file no longer exists")
+
+    # Apply overrides: user values take precedence over detection.
+    device_id = body.device_id or detection.get("detected_device_id")
+    version = body.version or detection.get("detected_version")
+
+    # Merge metadata: sidecar YAML (lowest) → vendor defaults → explicit metadata (highest).
+    merged_metadata: dict[str, object] = {}
+    if body.sidecar_yaml:
+        merged_metadata.update(_parse_sidecar_metadata(body.sidecar_yaml))
+    if body.metadata:
+        merged_metadata.update(body.metadata)
+
+    with _chunk_upload_lock:
+        if upload_id in _chunk_upload_sessions:
+            _chunk_upload_sessions[upload_id]["status"] = "processing"
+
+    try:
+        result = _register_qcow2(
+            final_path,
+            device_id=device_id,
+            version=version,
+            sha256=detection.get("sha256"),
+            size_bytes=detection.get("size_bytes"),
+            auto_build=body.auto_build,
+            metadata=merged_metadata or None,
+        )
+    except Exception as exc:
+        with _chunk_upload_lock:
+            if upload_id in _chunk_upload_sessions:
+                _chunk_upload_sessions[upload_id]["status"] = "failed"
+                _chunk_upload_sessions[upload_id]["error_message"] = str(exc)
+        raise
+
+    with _chunk_upload_lock:
+        if upload_id in _chunk_upload_sessions:
+            _chunk_upload_sessions[upload_id]["status"] = "completed"
+
+    return ImageChunkUploadCompleteResponse(
+        upload_id=upload_id,
+        kind="qcow2",
+        filename=session_copy["filename"],
+        status="completed",
+        result=result,
+    )
 
 
 def _send_sse_event(event_type: str, data: dict) -> str:
@@ -1407,8 +1578,12 @@ def _load_image_sync(file: UploadFile) -> dict:
             os.unlink(temp_path)
 
 
-def _finalize_qcow2_upload(destination: Path, *, auto_build: bool = True) -> dict[str, object]:
-    """Validate, register, and optionally build from a saved qcow2 image."""
+def _detect_qcow2(destination: Path) -> dict[str, object]:
+    """Validate a qcow2 file and return detection results without registering.
+
+    Used in two-phase upload mode to present detection results for user
+    confirmation before committing to the manifest.
+    """
     from app.utils.image_integrity import compute_sha256, validate_qcow2
 
     manifest = load_manifest()
@@ -1428,7 +1603,77 @@ def _finalize_qcow2_upload(destination: Path, *, auto_build: bool = True) -> dic
 
     file_sha256 = compute_sha256(destination)
     device_id, version = detect_device_from_filename(destination.name)
+
+    # Determine detection confidence.
+    if device_id and version:
+        confidence = "high"
+    elif device_id:
+        confidence = "medium"
+    else:
+        confidence = "none"
+
+    # Build suggested metadata from vendor defaults.
+    suggested: dict[str, object] = {}
+    if device_id:
+        try:
+            from app.services.device_resolver import get_resolver
+            resolved = get_resolver().resolve_config(device_id)
+            if resolved:
+                suggested["memory_mb"] = resolved.memory
+                suggested["cpu"] = resolved.cpu
+                suggested["disk_driver"] = resolved.disk_driver
+                suggested["nic_driver"] = resolved.nic_driver
+                suggested["machine_type"] = resolved.machine_type
+                suggested["efi_boot"] = resolved.efi_boot
+                suggested["max_ports"] = resolved.max_ports
+                suggested["vendor"] = resolved.vendor
+        except Exception:
+            pass
+
+    return {
+        "detected_device_id": device_id,
+        "detected_version": version,
+        "confidence": confidence,
+        "size_bytes": file_size,
+        "sha256": file_sha256,
+        "suggested_metadata": suggested,
+    }
+
+
+def _register_qcow2(
+    destination: Path,
+    *,
+    device_id: str | None = None,
+    version: str | None = None,
+    sha256: str | None = None,
+    size_bytes: int | None = None,
+    auto_build: bool = True,
+    metadata: dict[str, object] | None = None,
+) -> dict[str, object]:
+    """Register a validated qcow2 in the manifest and optionally trigger build."""
+    manifest = load_manifest()
     image_id = f"qcow2:{destination.name}"
+
+    if find_image_by_id(manifest, image_id):
+        raise HTTPException(
+            status_code=409,
+            detail=f"Image '{destination.name}' already exists in the library",
+        )
+
+    if size_bytes is None:
+        size_bytes = destination.stat().st_size if destination.exists() else None
+
+    # Merge user metadata overrides into create_image_entry kwargs.
+    extra_kwargs: dict[str, object] = {}
+    if metadata:
+        for key in (
+            "memory_mb", "cpu_count", "disk_driver", "nic_driver",
+            "machine_type", "efi_boot", "efi_vars", "max_ports",
+            "port_naming", "readiness_probe", "readiness_pattern",
+            "boot_timeout", "libvirt_driver",
+        ):
+            if key in metadata:
+                extra_kwargs[key] = metadata[key]
 
     entry = create_image_entry(
         image_id=image_id,
@@ -1437,8 +1682,9 @@ def _finalize_qcow2_upload(destination: Path, *, auto_build: bool = True) -> dic
         filename=destination.name,
         device_id=device_id,
         version=version,
-        size_bytes=file_size,
-        sha256=file_sha256,
+        size_bytes=size_bytes,
+        sha256=sha256,
+        **extra_kwargs,
     )
     manifest["images"].append(entry)
     save_manifest(manifest)
@@ -1465,6 +1711,42 @@ def _finalize_qcow2_upload(destination: Path, *, auto_build: bool = True) -> dic
             result["message"] = f"Building Docker image for {vrnetlab_device_id or device_id}"
 
     return result
+
+
+def _finalize_qcow2_upload(destination: Path, *, auto_build: bool = True) -> dict[str, object]:
+    """Validate, register, and optionally build from a saved qcow2 image.
+
+    One-shot convenience that runs detection + registration in sequence.
+    Used by auto_confirm=True (default) and the legacy single-file upload.
+    """
+    from app.utils.image_integrity import compute_sha256, validate_qcow2
+
+    manifest = load_manifest()
+    potential_id = f"qcow2:{destination.name}"
+    if find_image_by_id(manifest, potential_id):
+        destination.unlink(missing_ok=True)
+        raise HTTPException(
+            status_code=409,
+            detail=f"Image '{destination.name}' already exists in the library",
+        )
+
+    file_size = destination.stat().st_size if destination.exists() else None
+    valid, error_msg = validate_qcow2(destination)
+    if not valid:
+        destination.unlink(missing_ok=True)
+        raise HTTPException(status_code=400, detail=f"Invalid qcow2 image: {error_msg}")
+
+    file_sha256 = compute_sha256(destination)
+    device_id, version = detect_device_from_filename(destination.name)
+
+    return _register_qcow2(
+        destination,
+        device_id=device_id,
+        version=version,
+        sha256=file_sha256,
+        size_bytes=file_size,
+        auto_build=auto_build,
+    )
 
 
 @router.post("/qcow2")

@@ -31,6 +31,119 @@ class DeviceType(str, Enum):
     EXTERNAL = "external"
 
 
+# =============================================================================
+# COMPOSED SUB-CONFIGURATIONS
+# =============================================================================
+# These dataclasses group related VendorConfig fields into logical units.
+# Access via VendorConfig properties: config.interfaces, config.vm, etc.
+# =============================================================================
+
+@dataclass(frozen=True)
+class InterfaceConfig:
+    """Interface/port configuration for a device."""
+    port_naming: str
+    port_start_index: int
+    max_ports: int
+    management_interface: Optional[str]
+
+
+@dataclass(frozen=True)
+class ResourceConfig:
+    """Resource requirements."""
+    memory: int  # MB
+    cpu: int  # cores
+
+
+@dataclass(frozen=True)
+class VMConfig:
+    """Libvirt/QEMU VM settings."""
+    disk_driver: str
+    nic_driver: str
+    machine_type: str
+    data_volume_gb: int
+    efi_boot: bool
+    efi_vars: str
+    serial_type: str
+    nographic: bool
+    serial_port_count: int
+    smbios_product: str
+    force_stop: bool
+    reserved_nics: int
+    cpu_sockets: int
+    needs_nested_vmx: bool
+
+
+@dataclass(frozen=True)
+class ConsoleConfig:
+    """Console access configuration."""
+    console_method: str
+    console_shell: str
+    console_user: str
+    console_password: str
+    default_credentials: str
+
+
+@dataclass(frozen=True)
+class ReadinessConfig:
+    """Boot readiness detection configuration."""
+    readiness_probe: str
+    readiness_pattern: Optional[str]
+    readiness_timeout: int
+
+
+@dataclass(frozen=True)
+class ConfigExtractionConfig:
+    """Configuration extraction settings."""
+    config_extract_method: str
+    config_extract_command: str
+    config_extract_user: str
+    config_extract_password: str
+    config_extract_enable_password: str
+    config_extract_timeout: int
+    config_extract_prompt_pattern: str
+    config_extract_paging_disable: str
+
+
+@dataclass(frozen=True)
+class ConfigInjectionConfig:
+    """Configuration injection settings."""
+    config_inject_method: str
+    config_inject_partition: int
+    config_inject_fs_type: str
+    config_inject_path: str
+    config_inject_iso_volume_label: str
+    config_inject_iso_filename: str
+
+
+@dataclass(frozen=True)
+class ContainerConfig:
+    """Container runtime configuration."""
+    environment: dict
+    capabilities: list
+    privileged: bool
+    binds: list
+    entrypoint: Optional[str]
+    cmd: Optional[list]
+    network_mode: str
+    sysctls: dict
+    runtime: str
+    hostname_template: str
+    post_boot_commands: list
+
+
+@dataclass(frozen=True)
+class UIConfig:
+    """Frontend UI display configuration."""
+    icon: str
+    versions: list
+    is_active: bool
+    requires_image: bool
+    supported_image_kinds: list
+    documentation_url: Optional[str]
+    license_required: bool
+    tags: list
+
+
 @dataclass
 class VendorConfig:
     """Configuration for a vendor's network device kind.
@@ -68,6 +181,10 @@ class VendorConfig:
 
     # Alias resolution (used by topology.py)
     aliases: list[str] = field(default_factory=list)
+
+    # Platform grouping (e.g., "cisco_cat9kv" for Cat9800/Cat9000v variants)
+    # Used to group related devices that share image artifacts.
+    platform: str = ""
 
     # UI metadata (used by frontend)
     device_type: DeviceType = DeviceType.CONTAINER
@@ -116,6 +233,14 @@ class VendorConfig:
 
     # Searchable tags
     tags: list[str] = field(default_factory=list)
+
+    # Image detection fields (used to derive detection maps from VENDOR_CONFIGS)
+    # filename_patterns: regex patterns for qcow2 filename detection
+    filename_patterns: list[str] = field(default_factory=list)
+    # filename_keywords: substring keywords for Docker tar filename detection
+    filename_keywords: list[str] = field(default_factory=list)
+    # vrnetlab_subdir: vrnetlab build subdirectory (e.g., "cisco/c8000v")
+    vrnetlab_subdir: str = ""
 
     # Boot readiness detection
     # - "none": No probe, always considered ready when container is running
@@ -222,6 +347,114 @@ class VendorConfig:
     # Use for vendor-specific workarounds (e.g., removing iptables rules)
     post_boot_commands: list[str] = field(default_factory=list)
 
+    # -------------------------------------------------------------------------
+    # Composed sub-configuration property accessors
+    # These return frozen dataclass views grouping related fields.
+    # -------------------------------------------------------------------------
+
+    @property
+    def interfaces(self) -> InterfaceConfig:
+        return InterfaceConfig(
+            port_naming=self.port_naming,
+            port_start_index=self.port_start_index,
+            max_ports=self.max_ports,
+            management_interface=self.management_interface,
+        )
+
+    @property
+    def resources(self) -> ResourceConfig:
+        return ResourceConfig(memory=self.memory, cpu=self.cpu)
+
+    @property
+    def vm(self) -> VMConfig:
+        return VMConfig(
+            disk_driver=self.disk_driver,
+            nic_driver=self.nic_driver,
+            machine_type=self.machine_type,
+            data_volume_gb=self.data_volume_gb,
+            efi_boot=self.efi_boot,
+            efi_vars=self.efi_vars,
+            serial_type=self.serial_type,
+            nographic=self.nographic,
+            serial_port_count=self.serial_port_count,
+            smbios_product=self.smbios_product,
+            force_stop=self.force_stop,
+            reserved_nics=self.reserved_nics,
+            cpu_sockets=self.cpu_sockets,
+            needs_nested_vmx=self.needs_nested_vmx,
+        )
+
+    @property
+    def console(self) -> ConsoleConfig:
+        return ConsoleConfig(
+            console_method=self.console_method,
+            console_shell=self.console_shell,
+            console_user=self.console_user,
+            console_password=self.console_password,
+            default_credentials=self.default_credentials,
+        )
+
+    @property
+    def readiness(self) -> ReadinessConfig:
+        return ReadinessConfig(
+            readiness_probe=self.readiness_probe,
+            readiness_pattern=self.readiness_pattern,
+            readiness_timeout=self.readiness_timeout,
+        )
+
+    @property
+    def config_extraction(self) -> ConfigExtractionConfig:
+        return ConfigExtractionConfig(
+            config_extract_method=self.config_extract_method,
+            config_extract_command=self.config_extract_command,
+            config_extract_user=self.config_extract_user,
+            config_extract_password=self.config_extract_password,
+            config_extract_enable_password=self.config_extract_enable_password,
+            config_extract_timeout=self.config_extract_timeout,
+            config_extract_prompt_pattern=self.config_extract_prompt_pattern,
+            config_extract_paging_disable=self.config_extract_paging_disable,
+        )
+
+    @property
+    def config_injection(self) -> ConfigInjectionConfig:
+        return ConfigInjectionConfig(
+            config_inject_method=self.config_inject_method,
+            config_inject_partition=self.config_inject_partition,
+            config_inject_fs_type=self.config_inject_fs_type,
+            config_inject_path=self.config_inject_path,
+            config_inject_iso_volume_label=self.config_inject_iso_volume_label,
+            config_inject_iso_filename=self.config_inject_iso_filename,
+        )
+
+    @property
+    def container(self) -> ContainerConfig:
+        return ContainerConfig(
+            environment=self.environment,
+            capabilities=self.capabilities,
+            privileged=self.privileged,
+            binds=self.binds,
+            entrypoint=self.entrypoint,
+            cmd=self.cmd,
+            network_mode=self.network_mode,
+            sysctls=self.sysctls,
+            runtime=self.runtime,
+            hostname_template=self.hostname_template,
+            post_boot_commands=self.post_boot_commands,
+        )
+
+    @property
+    def ui(self) -> UIConfig:
+        return UIConfig(
+            icon=self.icon,
+            versions=self.versions,
+            is_active=self.is_active,
+            requires_image=self.requires_image,
+            supported_image_kinds=self.supported_image_kinds,
+            documentation_url=self.documentation_url,
+            license_required=self.license_required,
+            tags=self.tags,
+        )
+
 
 # =============================================================================
 # VENDOR CONFIGURATIONS - Single Source of Truth
@@ -230,6 +463,12 @@ class VendorConfig:
 # - Console access (agent uses console_shell)
 # - Topology generation (API uses aliases and default_image)
 # - UI device palette (frontend uses category, label, icon, versions)
+#
+# KEY NAMING CONVENTION:
+#   - Industry shorthand for well-known: ceos, vyos, frr, linux, alpine, tcl
+#   - vendor_device for vendor-specific: cisco_iosv, cisco_n9kv, juniper_vjunosrouter
+#   - Hyphenated for sub-models: cat9000v-q200, cat9000v-uadp, iol-xe, iol-l2
+#   - All keys are lowercase; underscores separate vendor from device
 # =============================================================================
 
 VENDOR_CONFIGS: dict[str, VendorConfig] = {
@@ -274,7 +513,7 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         vendor="Cisco",
         console_shell="/bin/bash",
         default_image="ios-xr:latest",
-        aliases=["iosxrv9000"],
+        aliases=["iosxrv9000", "iosxr", "xrv9k"],
         device_type=DeviceType.ROUTER,
         category="Network",
         subcategory="Routers",
@@ -319,6 +558,8 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         documentation_url="https://www.cisco.com/c/en/us/td/docs/iosxr/",
         license_required=True,
         tags=["routing", "bgp", "mpls", "segment-routing", "netconf"],
+        filename_patterns=[r"xrv9k[_-]?[\d\.]+.*\.qcow2", r"iosxrv9000[_-]?[\d\.]+.*\.qcow2"],
+        vrnetlab_subdir="cisco/xrv9k",
         # Config injection: IOS-XR CVAC reads config from CD-ROM with label "config-1"
         config_inject_method="iso",
         config_inject_iso_volume_label="config-1",
@@ -347,6 +588,8 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         documentation_url="https://www.cisco.com/c/en/us/td/docs/iosxr/cisco8000/xrd/",
         license_required=True,
         tags=["routing", "bgp", "mpls", "segment-routing", "container"],
+        filename_patterns=[r"xrd[_-]?[\d\.]+.*\.qcow2"],
+        vrnetlab_subdir="cisco/xrd",
         default_credentials="cisco / cisco",
     ),
     "cisco_iosv": VendorConfig(
@@ -376,6 +619,9 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         documentation_url="https://www.cisco.com/c/en/us/td/docs/ios/",
         license_required=True,
         tags=["routing", "bgp", "ospf", "eigrp", "legacy", "vm"],
+        filename_patterns=[r"vios[_-]?[\d\.]+.*\.qcow2", r"iosv[_-]?[\d\.]+.*\.qcow2"],
+        filename_keywords=["iosv"],
+        vrnetlab_subdir="cisco/iosv",
         readiness_probe="log_pattern",
         readiness_pattern=r"Press RETURN to get started|[\w.-]+[>#]",
         readiness_timeout=180,
@@ -438,6 +684,9 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         documentation_url="https://developer.cisco.com/docs/modeling-labs/#!iosvl2",
         license_required=True,
         tags=["switch", "ios", "l2", "stp", "vm"],
+        filename_patterns=[r"iosvl2[_-]?[\d\.]+.*\.qcow2"],
+        filename_keywords=["viosl2", "iosvl2"],
+        vrnetlab_subdir="cisco/iosvl2",
         readiness_probe="log_pattern",
         readiness_pattern=r"Would you like to enter the initial configuration dialog?",
         readiness_timeout=300,
@@ -467,6 +716,7 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         documentation_url="https://developer.cisco.com/docs/modeling-labs/#!iol",
         license_required=True,
         tags=["router", "ios", "iol", "container"],
+        filename_keywords=["l3-adventerprise", "iol"],
         readiness_probe="log_pattern",
         readiness_pattern=r"Press RETURN to get started!",
         readiness_timeout=120,
@@ -506,6 +756,7 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         documentation_url="https://developer.cisco.com/docs/modeling-labs/#!iol",
         license_required=True,
         tags=["switch", "ios", "iol", "l2", "container"],
+        filename_keywords=["ioll2", "iol_l2", "l2-adventerprise", "l2-ipbasek9"],
         readiness_probe="log_pattern",
         readiness_pattern=r"Press RETURN to get started!",
         readiness_timeout=120,
@@ -525,7 +776,7 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         vendor="Cisco",
         console_shell="/bin/sh",  # Fallback, not used with SSH method
         default_image=None,  # Requires user-provided image
-        aliases=[],
+        aliases=["csr", "csr1000v"],
         device_type=DeviceType.ROUTER,
         category="Network",
         subcategory="Routers",
@@ -544,6 +795,9 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         documentation_url="https://www.cisco.com/c/en/us/td/docs/routers/csr1000/",
         license_required=True,
         tags=["routing", "bgp", "sd-wan", "ipsec", "cloud", "vm"],
+        filename_patterns=[r"csr1000v[_-]?[\d\.]+.*\.qcow2"],
+        filename_keywords=["csr"],
+        vrnetlab_subdir="cisco/csr",
         readiness_probe="log_pattern",
         readiness_pattern=r"Press RETURN to get started|[\w.-]+[>#]",
         readiness_timeout=300,
@@ -606,6 +860,8 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         documentation_url="https://www.juniper.net/documentation/product/us/en/vsrx/",
         license_required=True,
         tags=["routing", "firewall", "security", "ipsec", "nat", "vm"],
+        filename_patterns=[r"vsrx.*\.qcow2"],
+        vrnetlab_subdir="juniper/vsrx",
         readiness_probe="log_pattern",
         readiness_pattern=r"login:",
         readiness_timeout=300,
@@ -616,7 +872,7 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         vendor="Juniper",
         console_shell="cli",
         default_image="vrnetlab/vr-vjunosrouter:latest",
-        aliases=["vjunos-router", "vjunosrouter"],
+        aliases=["vjunos-router", "vjunosrouter", "vjunos_router"],
         device_type=DeviceType.ROUTER,
         category="Network",
         subcategory="Routers",
@@ -637,6 +893,9 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         documentation_url="https://www.juniper.net/documentation/product/us/en/vjunos-router/",
         license_required=True,
         tags=["routing", "bgp", "mpls", "evpn", "vm"],
+        filename_patterns=[r"vjunos[_-]?router.*\.qcow2"],
+        filename_keywords=["vjunos-router", "vjunos_router", "vjunosrouter"],
+        vrnetlab_subdir="juniper/vjunos-router",
         readiness_probe="log_pattern",
         readiness_pattern=r"login:",
         readiness_timeout=300,
@@ -669,6 +928,9 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         documentation_url="https://www.juniper.net/documentation/product/us/en/vjunos-evolved/",
         license_required=True,
         tags=["routing", "bgp", "mpls", "evpn", "vm", "evolved"],
+        filename_patterns=[r"vjunos[_-]?evolved.*\.qcow2"],
+        filename_keywords=["vjunos-evolved", "vjunos_evolved", "vjunosevolved"],
+        vrnetlab_subdir="juniper/vjunos-router",
         readiness_probe="log_pattern",
         readiness_pattern=r"login:",
         readiness_timeout=300,
@@ -796,6 +1058,7 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         documentation_url="https://www.arista.com/en/support/product-documentation",
         license_required=True,
         tags=["switching", "bgp", "evpn", "vxlan", "datacenter"],
+        filename_keywords=["ceos", "eos"],
         # Boot readiness detection via log patterns
         readiness_probe="log_pattern",
         readiness_pattern=r"%SYS-5-CONFIG_I|%SYS-5-SYSTEM_INITIALIZED|%SYS-5-SYSTEM_RESTARTED|%ZTP-6-CANCEL|Startup complete|System ready",
@@ -938,7 +1201,7 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         vendor="Juniper",
         console_shell="cli",
         default_image="vrnetlab/vr-vjunosswitch:latest",
-        aliases=["vjunos-switch", "vjunosswitch"],
+        aliases=["vjunos-switch", "vjunosswitch", "vjunos"],
         device_type=DeviceType.SWITCH,
         category="Network",
         subcategory="Switches",
@@ -959,6 +1222,9 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         documentation_url="https://www.juniper.net/documentation/product/us/en/vjunos-switch/",
         license_required=True,
         tags=["switching", "evpn", "vxlan", "datacenter", "vm"],
+        filename_patterns=[r"vjunos[_-]?switch.*\.qcow2", r"vjunos.*\.qcow2"],
+        filename_keywords=["vjunos-switch", "vjunos_switch", "vjunosswitch"],
+        vrnetlab_subdir="juniper/vjunos-switch",
         readiness_probe="log_pattern",
         readiness_pattern=r"login:",
         readiness_timeout=300,
@@ -969,7 +1235,7 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         vendor="Cisco",
         console_shell="/bin/bash",
         default_image="vrnetlab/vr-n9kv:latest",
-        aliases=["nxos", "nxosv9000"],
+        aliases=["nxos", "nxosv9000", "n9kv"],
         device_type=DeviceType.SWITCH,
         category="Network",
         subcategory="Switches",
@@ -994,6 +1260,9 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         documentation_url="https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/",
         license_required=True,
         tags=["switching", "vxlan", "evpn", "datacenter", "aci", "vm"],
+        filename_patterns=[r"n9kv[_-]?[\d\.]+.*\.qcow2", r"nexus9[_-]?[\d\.]+.*\.qcow2", r"nxosv[_-]?[\d\.]+.*\.qcow2"],
+        filename_keywords=["nxos"],
+        vrnetlab_subdir="cisco/n9kv",
         # NX-OSv commonly provides no usable serial output in this topology.
         # Treat VM runtime state as readiness signal to avoid permanent booting.
         readiness_probe="none",
@@ -1081,6 +1350,7 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         requires_image=False,
         documentation_url="https://www.haproxy.org/#docs",
         tags=["load-balancer", "proxy", "open-source"],
+        filename_keywords=["haproxy"],
     ),
     "citrix_adc": VendorConfig(
         kind="citrix_adc",
@@ -1140,6 +1410,8 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         documentation_url="https://www.cisco.com/c/en/us/td/docs/security/asa/",
         license_required=True,
         tags=["firewall", "vpn", "ipsec", "nat", "security", "vm"],
+        filename_patterns=[r"asav[_-]?[\d\.]+.*\.qcow2"],
+        vrnetlab_subdir="cisco/asav",
         readiness_probe="log_pattern",
         readiness_pattern=r"ciscoasa>|ciscoasa#",
         readiness_timeout=180,
@@ -1206,6 +1478,8 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         documentation_url="https://docs.paloaltonetworks.com/vm-series",
         license_required=True,
         tags=["firewall", "ngfw", "security", "threat-prevention", "vm"],
+        filename_patterns=[r"pa[_-]?vm[_-]?[\d\.]+.*\.qcow2"],
+        vrnetlab_subdir="paloalto/panos",
         readiness_probe="log_pattern",
         readiness_pattern=r"login:",
         readiness_timeout=600,  # PA VMs take a long time to boot
@@ -1262,6 +1536,7 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         supported_image_kinds=["docker", "qcow2"],
         documentation_url="https://www.alpinelinux.org/",
         tags=["host", "linux", "alpine", "lightweight", "open-source"],
+        filename_keywords=["alpine"],
         readiness_probe="log_pattern",
         readiness_pattern=r"Welcome to Alpine Linux",
         readiness_timeout=120,
@@ -1289,6 +1564,7 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         supported_image_kinds=["qcow2"],
         documentation_url="http://www.tinycorelinux.net/",
         tags=["host", "linux", "tinycore", "tcl", "lightweight", "open-source"],
+        filename_keywords=["tcl"],
         readiness_probe="log_pattern",
         readiness_pattern=r"###### BOOT CONFIG DONE ######",
         readiness_timeout=60,
@@ -1313,6 +1589,7 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         requires_image=False,
         documentation_url="https://docs.frrouting.org/",
         tags=["routing", "bgp", "ospf", "open-source", "container"],
+        filename_keywords=["frr"],
         # Config extraction via docker exec
         config_extract_method="docker",
         config_extract_command="vtysh -c 'show running-config'",
@@ -1380,6 +1657,8 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         documentation_url="https://www.cisco.com/c/en/us/td/docs/routers/sdwan/",
         license_required=True,
         tags=["sd-wan", "routing", "vpn", "ipsec", "vm"],
+        filename_patterns=[r"c8000v[_-]?[\d\.]+.*\.qcow2", r"cat8000v[_-]?[\d\.]+.*\.qcow2"],
+        vrnetlab_subdir="cisco/c8000v",
         readiness_probe="log_pattern",
         readiness_pattern=r"Press RETURN to get started!",
         readiness_timeout=250,
@@ -1419,6 +1698,8 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         documentation_url="https://www.cisco.com/c/en/us/td/docs/routers/sdwan/",
         license_required=True,
         tags=["sd-wan", "controller", "vm"],
+        filename_patterns=[r"viptela[_-]?smart.*\.qcow2"],
+        vrnetlab_subdir="cisco/sdwan",
         readiness_probe="log_pattern",
         readiness_pattern=r"login:",
         readiness_timeout=180,
@@ -1448,6 +1729,8 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         documentation_url="https://www.cisco.com/c/en/us/td/docs/routers/sdwan/",
         license_required=True,
         tags=["sd-wan", "manager", "nms", "vm"],
+        filename_patterns=[r"viptela[_-]?vmanage.*\.qcow2"],
+        vrnetlab_subdir="cisco/sdwan",
         readiness_probe="log_pattern",
         readiness_pattern=r"login:",
         readiness_timeout=600,  # vManage takes longer to boot
@@ -1476,6 +1759,8 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         documentation_url="https://www.cisco.com/c/en/us/td/docs/routers/sdwan/",
         license_required=True,
         tags=["sd-wan", "validator", "vm"],
+        filename_patterns=[r"viptela[_-]?bond.*\.qcow2"],
+        vrnetlab_subdir="cisco/sdwan",
         readiness_probe="log_pattern",
         readiness_pattern=r"login:",
         readiness_timeout=180,
@@ -1504,6 +1789,8 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         documentation_url="https://www.cisco.com/c/en/us/td/docs/routers/sdwan/",
         license_required=True,
         tags=["sd-wan", "vedge", "vm"],
+        filename_patterns=[r"viptela[_-]?edge.*\.qcow2", r"vedge[_-]?[\d\.]+.*\.qcow2"],
+        vrnetlab_subdir="cisco/sdwan",
         readiness_probe="log_pattern",
         readiness_pattern=r"login:",
         readiness_timeout=180,
@@ -1537,6 +1824,8 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         documentation_url="https://www.cisco.com/c/en/us/td/docs/security/firepower/quick_start/kvm/ftdv-kvm-gsg.html",
         license_required=True,
         tags=["firewall", "ngfw", "security", "threat-defense", "vm"],
+        filename_patterns=[r"ftdv[_-]?[\d\.]+.*\.qcow2", r"cisco[_-]?secure[_-]?firewall[_-]?threat[_-]?defense.*\.qcow2"],
+        vrnetlab_subdir="cisco/ftdv",
         readiness_probe="log_pattern",
         readiness_pattern=r"login:",
         readiness_timeout=300,
@@ -1578,11 +1867,12 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
     # CISCO WIRELESS (VM-based)
     # =========================================================================
     "cat9800": VendorConfig(
-        kind="cisco_cat9kv",
+        kind="cisco_cat9800",
         vendor="Cisco",
         console_shell="/bin/sh",
         default_image=None,
-        aliases=["cat9kv"],
+        aliases=["cat9kv", "cisco_cat9kv"],
+        platform="cisco_cat9kv",
         device_type=DeviceType.ROUTER,
         category="Network",
         subcategory="Wireless",
@@ -1611,11 +1901,12 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         readiness_timeout=300,
     ),
     "cat9000v-q200": VendorConfig(
-        kind="cisco_cat9kv",
+        kind="cisco_cat9000v_q200",
         vendor="Cisco",
         console_shell="/bin/sh",
         default_image=None,
         aliases=["cat9000v_q200"],
+        platform="cisco_cat9kv",
         device_type=DeviceType.SWITCH,
         category="Network",
         subcategory="Switches",
@@ -1653,11 +1944,12 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         config_extract_paging_disable="terminal length 0",
     ),
     "cat9000v-uadp": VendorConfig(
-        kind="cisco_cat9kv",
+        kind="cisco_cat9000v_uadp",
         vendor="Cisco",
         console_shell="/bin/sh",
         default_image=None,
         aliases=["cat9000v_uadp"],
+        platform="cisco_cat9kv",
         device_type=DeviceType.SWITCH,
         category="Network",
         subcategory="Switches",
@@ -1719,6 +2011,89 @@ for _key, config in VENDOR_CONFIGS.items():
     _KIND_TO_CONFIG[config.kind] = config
     # Also map the config key itself
     _KIND_TO_CONFIG[_key] = config
+
+
+# =============================================================================
+# DERIVED MAPS (built from VENDOR_CONFIGS — single source of truth)
+# =============================================================================
+
+def build_device_id_aliases() -> dict[str, str]:
+    """Build a mapping from all known identifiers to their canonical VENDOR_CONFIGS key.
+
+    Merges keys, kinds, and aliases into a single lookup table.
+    Priority: VENDOR_CONFIGS keys > explicit aliases > kind mappings.
+    """
+    aliases: dict[str, str] = {}
+
+    # Pass 1: kind mappings (lowest priority — can be overwritten).
+    for key, cfg in VENDOR_CONFIGS.items():
+        if cfg.kind:
+            aliases[cfg.kind.lower()] = key
+
+    # Pass 2: explicit aliases (medium priority).
+    for key, cfg in VENDOR_CONFIGS.items():
+        for alias in (cfg.aliases or []):
+            aliases[alias.lower()] = key
+
+    # Pass 3: VENDOR_CONFIGS keys (highest priority — never overwritten).
+    for key in VENDOR_CONFIGS:
+        aliases[key.lower()] = key
+
+    return aliases
+
+
+def build_device_vendor_map() -> dict[str, str]:
+    """Build a mapping from device identifiers to vendor names.
+
+    Maps keys, kinds, and aliases to their vendor string.
+    """
+    vendor_map: dict[str, str] = {}
+    for key, cfg in VENDOR_CONFIGS.items():
+        vendor_map[key.lower()] = cfg.vendor
+        if cfg.kind:
+            vendor_map[cfg.kind.lower()] = cfg.vendor
+        for alias in (cfg.aliases or []):
+            vendor_map[alias.lower()] = cfg.vendor
+    return vendor_map
+
+
+def build_filename_keyword_map() -> dict[str, str]:
+    """Build a mapping from filename keywords to VENDOR_CONFIGS keys.
+
+    Used for Docker tar filename detection. Keywords are ordered with
+    longer/more-specific first to avoid ambiguous matches.
+    """
+    keyword_map: dict[str, str] = {}
+    pairs: list[tuple[str, str]] = []
+    for key, cfg in VENDOR_CONFIGS.items():
+        for kw in (cfg.filename_keywords or []):
+            pairs.append((kw.lower(), key))
+    # Sort by keyword length descending so specific matches win over substrings.
+    pairs.sort(key=lambda p: len(p[0]), reverse=True)
+    for kw, key in pairs:
+        keyword_map[kw] = key
+    return keyword_map
+
+
+def build_qcow2_device_patterns() -> dict[str, tuple[str, str]]:
+    """Build a mapping from filename regex patterns to (device_key, vrnetlab_subdir).
+
+    Used for qcow2 filename detection and vrnetlab build path resolution.
+    """
+    patterns: dict[str, tuple[str, str]] = {}
+    for key, cfg in VENDOR_CONFIGS.items():
+        if not cfg.filename_patterns or not cfg.vrnetlab_subdir:
+            continue
+        for pattern in cfg.filename_patterns:
+            patterns[pattern] = (key, cfg.vrnetlab_subdir)
+    return patterns
+
+
+# Pre-built derived maps (module-level for performance)
+_DERIVED_DEVICE_ID_ALIASES = build_device_id_aliases()
+_DERIVED_DEVICE_VENDOR_MAP = build_device_vendor_map()
+_DERIVED_FILENAME_KEYWORD_MAP = build_filename_keyword_map()
+_DERIVED_QCOW2_DEVICE_PATTERNS = build_qcow2_device_patterns()
 
 
 def _get_config_by_kind(kind: str) -> VendorConfig | None:

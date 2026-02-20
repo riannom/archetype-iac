@@ -78,15 +78,24 @@ interface ImageChunkUploadCompleteResponse {
   upload_id: string;
   kind: ChunkUploadKind;
   filename: string;
-  status: 'completed' | 'processing' | 'failed';
+  status: 'completed' | 'processing' | 'failed' | 'awaiting_confirmation';
   result?: Record<string, unknown> | null;
+}
+
+interface Qcow2DetectionResult {
+  detected_device_id: string | null;
+  detected_version: string | null;
+  confidence: 'high' | 'medium' | 'low' | 'none';
+  size_bytes: number | null;
+  sha256: string | null;
+  suggested_metadata: Record<string, unknown>;
 }
 
 interface PendingQcow2Upload {
   tempId: string;
   filename: string;
   progress: number;
-  phase: 'uploading' | 'processing';
+  phase: 'uploading' | 'processing' | 'awaiting_confirmation';
   createdAt: number;
 }
 
@@ -216,6 +225,15 @@ const DeviceManagerInner: React.FC<DeviceManagerProps> = ({
     'archetype:iol-build:auto-refresh',
     true
   );
+  // Two-phase qcow2 upload confirmation state
+  const [qcow2Confirm, setQcow2Confirm] = useState<{
+    uploadId: string;
+    filename: string;
+    detection: Qcow2DetectionResult;
+    deviceIdOverride: string;
+    versionOverride: string;
+    autoBuild: boolean;
+  } | null>(null);
 
   // Device filters (persisted to localStorage)
   const [deviceSearch, setDeviceSearch] = useState('');
@@ -647,7 +665,7 @@ const DeviceManagerInner: React.FC<DeviceManagerProps> = ({
     kind: ChunkUploadKind,
     file: File,
     onProgress: (percent: number, message: string) => void,
-    options?: { autoBuild?: boolean }
+    options?: { autoBuild?: boolean; autoConfirm?: boolean }
   ): Promise<ImageChunkUploadCompleteResponse> {
     const headers = getAuthHeaders();
 
@@ -664,6 +682,7 @@ const DeviceManagerInner: React.FC<DeviceManagerProps> = ({
         total_size: file.size,
         chunk_size: IMAGE_UPLOAD_CHUNK_SIZE,
         auto_build: options?.autoBuild ?? true,
+        auto_confirm: options?.autoConfirm ?? true,
       }),
     });
 
@@ -901,7 +920,31 @@ const DeviceManagerInner: React.FC<DeviceManagerProps> = ({
               : item
           )
         );
-      });
+      }, { autoConfirm: false });
+
+      // Two-phase: show confirmation dialog with detection results.
+      if (completeData.status === 'awaiting_confirmation') {
+        const detection = completeData.result as unknown as Qcow2DetectionResult;
+        setPendingQcow2Uploads((prev) =>
+          prev.map((item) =>
+            item.tempId === pendingId
+              ? { ...item, progress: 100, phase: 'awaiting_confirmation' }
+              : item
+          )
+        );
+        setQcow2Confirm({
+          uploadId: completeData.upload_id,
+          filename: completeData.filename,
+          detection,
+          deviceIdOverride: detection.detected_device_id || '',
+          versionOverride: detection.detected_version || '',
+          autoBuild: true,
+        });
+        setIsQcow2PostProcessing(false);
+        setQcow2Progress(null);
+        setUploadStatus(null);
+        return;
+      }
 
       if (completeData.status !== 'completed') {
         throw new Error('QCOW2 upload did not complete');
@@ -947,6 +990,78 @@ const DeviceManagerInner: React.FC<DeviceManagerProps> = ({
       setIsQcow2PostProcessing(false);
       setQcow2Progress(null);
     }
+  }
+
+  async function confirmQcow2Upload() {
+    if (!qcow2Confirm) return;
+    const { uploadId, filename, deviceIdOverride, versionOverride, autoBuild } = qcow2Confirm;
+    setQcow2Confirm(null);
+    setUploadStatus(`Confirming ${filename}...`);
+
+    // Remove from pending list
+    setPendingQcow2Uploads((prev) =>
+      prev.filter((item) => item.phase !== 'awaiting_confirmation')
+    );
+
+    try {
+      const response = await apiRequest<ImageChunkUploadCompleteResponse>(
+        `/images/upload/${uploadId}/confirm`,
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            device_id: deviceIdOverride || null,
+            version: versionOverride || null,
+            auto_build: autoBuild,
+          }),
+        }
+      );
+      if (response.status !== 'completed') {
+        throw new Error(`Confirmation failed: ${response.status}`);
+      }
+      await Promise.resolve(onUploadQcow2());
+      await Promise.resolve(onRefresh());
+      setUploadStatus('QCOW2 uploaded.');
+      addImageManagementLog({
+        level: 'info',
+        category: 'qcow2',
+        phase: 'complete',
+        message: `QCOW2 confirmed as ${deviceIdOverride || 'auto-detected'}`,
+        filename,
+      });
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Confirmation failed';
+      setUploadStatus(errorMessage);
+      addImageManagementLog({
+        level: 'error',
+        category: 'qcow2',
+        phase: 'confirm',
+        message: errorMessage,
+        filename,
+        details: error instanceof Error ? error.stack || error.message : String(error),
+      });
+    }
+  }
+
+  function cancelQcow2Confirm() {
+    if (!qcow2Confirm) return;
+    const { uploadId, filename } = qcow2Confirm;
+    setQcow2Confirm(null);
+    setPendingQcow2Uploads((prev) =>
+      prev.filter((item) => item.phase !== 'awaiting_confirmation')
+    );
+    // Cancel the upload session on the server
+    fetch(`${API_BASE_URL}/images/upload/${uploadId}`, {
+      method: 'DELETE',
+      headers: getAuthHeaders(),
+    }).catch(() => {});
+    setUploadStatus(null);
+    addImageManagementLog({
+      level: 'info',
+      category: 'qcow2',
+      phase: 'cancelled',
+      message: 'QCOW2 upload cancelled by user',
+      filename,
+    });
   }
 
   const refreshIolBuildStatuses = useCallback(async () => {
@@ -1783,6 +1898,104 @@ const DeviceManagerInner: React.FC<DeviceManagerProps> = ({
           <i className="fa-solid fa-hand-pointer mr-2" />
           Drop on a device to assign
         </div>
+      )}
+
+      {/* QCOW2 Confirmation Modal */}
+      {qcow2Confirm && (
+        <Modal
+          isOpen={true}
+          onClose={cancelQcow2Confirm}
+          title="Confirm QCOW2 Image"
+          size="md"
+        >
+          <div className="space-y-4">
+            <div className="text-sm text-stone-600 dark:text-stone-300">
+              <span className="font-medium">{qcow2Confirm.filename}</span>
+              {qcow2Confirm.detection.size_bytes != null && (
+                <span className="ml-2 text-stone-400">
+                  ({(qcow2Confirm.detection.size_bytes / (1024 * 1024 * 1024)).toFixed(1)} GB)
+                </span>
+              )}
+            </div>
+
+            {qcow2Confirm.detection.confidence !== 'none' && (
+              <div className={`text-xs px-2 py-1 rounded inline-block ${
+                qcow2Confirm.detection.confidence === 'high'
+                  ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400'
+                  : 'bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400'
+              }`}>
+                Detection confidence: {qcow2Confirm.detection.confidence}
+              </div>
+            )}
+
+            <div>
+              <label className="block text-xs font-medium text-stone-500 dark:text-stone-400 mb-1">
+                Device Type
+              </label>
+              <input
+                type="text"
+                value={qcow2Confirm.deviceIdOverride}
+                onChange={(e) => setQcow2Confirm((prev) => prev ? { ...prev, deviceIdOverride: e.target.value } : null)}
+                placeholder="e.g. cisco_n9kv"
+                className="w-full px-3 py-1.5 text-sm bg-stone-50 dark:bg-stone-800 border border-stone-300 dark:border-stone-600 rounded-md"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-medium text-stone-500 dark:text-stone-400 mb-1">
+                Version
+              </label>
+              <input
+                type="text"
+                value={qcow2Confirm.versionOverride}
+                onChange={(e) => setQcow2Confirm((prev) => prev ? { ...prev, versionOverride: e.target.value } : null)}
+                placeholder="e.g. 10.3.1"
+                className="w-full px-3 py-1.5 text-sm bg-stone-50 dark:bg-stone-800 border border-stone-300 dark:border-stone-600 rounded-md"
+              />
+            </div>
+
+            {Object.keys(qcow2Confirm.detection.suggested_metadata).length > 0 && (
+              <div>
+                <div className="text-xs font-medium text-stone-500 dark:text-stone-400 mb-1">
+                  Vendor Defaults
+                </div>
+                <div className="grid grid-cols-2 gap-1 text-xs text-stone-500 dark:text-stone-400 bg-stone-50 dark:bg-stone-800 rounded-md p-2">
+                  {Object.entries(qcow2Confirm.detection.suggested_metadata).map(([key, value]) => (
+                    <React.Fragment key={key}>
+                      <span className="font-mono">{key}</span>
+                      <span>{String(value)}</span>
+                    </React.Fragment>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            <label className="flex items-center gap-2 text-sm text-stone-600 dark:text-stone-300">
+              <input
+                type="checkbox"
+                checked={qcow2Confirm.autoBuild}
+                onChange={(e) => setQcow2Confirm((prev) => prev ? { ...prev, autoBuild: e.target.checked } : null)}
+                className="rounded"
+              />
+              Auto-build Docker image (vrnetlab)
+            </label>
+
+            <div className="flex justify-end gap-2 pt-2 border-t border-stone-200 dark:border-stone-700">
+              <button
+                onClick={cancelQcow2Confirm}
+                className="px-3 py-1.5 text-sm text-stone-600 dark:text-stone-300 hover:bg-stone-100 dark:hover:bg-stone-700 rounded-md"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={confirmQcow2Upload}
+                className="px-3 py-1.5 text-sm bg-indigo-600 text-white hover:bg-indigo-700 rounded-md"
+              >
+                Confirm Import
+              </button>
+            </div>
+          </div>
+        </Modal>
       )}
 
       {/* ISO Import Modal */}

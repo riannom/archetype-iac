@@ -91,25 +91,22 @@ def map_node_definition_to_device(node_def: ParsedNodeDefinition) -> str | None:
     Returns:
         Device ID from vendor registry, or None if no match
     """
-    # Try direct mapping first
+    # Try direct mapping first (VIRL2 node-definition IDs).
     if node_def.id in VIRL2_TO_VENDOR_MAP:
         return VIRL2_TO_VENDOR_MAP[node_def.id]
 
-    # Try normalized ID (lowercase, hyphen-separated)
+    # Try normalized ID (lowercase, hyphen-separated).
     normalized = node_def.id.lower().replace("_", "-")
     if normalized in VIRL2_TO_VENDOR_MAP:
         return VIRL2_TO_VENDOR_MAP[normalized]
 
-    # Try vendor registry lookup
+    # Fall back to DeviceResolver for alias chain resolution.
     try:
-        from agent.vendors import VENDOR_CONFIGS, _ALIAS_TO_KIND
-
-        # Check if ID matches a vendor config key or alias
-        if node_def.id in VENDOR_CONFIGS:
-            return node_def.id
-        if node_def.id.lower() in _ALIAS_TO_KIND:
-            return _ALIAS_TO_KIND[node_def.id.lower()]
-    except ImportError:
+        from app.services.device_resolver import get_resolver
+        resolved = get_resolver().resolve(node_def.id)
+        if resolved.vendor_config_key:
+            return resolved.vendor_config_key
+    except Exception:
         pass
 
     return None
