@@ -53,7 +53,7 @@ def get_or_create_settings(database: Session) -> models.InfraSettings:
 
 
 @router.get("/settings", response_model=InfraSettingsOut)
-async def get_infrastructure_settings(
+def get_infrastructure_settings(
     database: Session = Depends(db.get_db),
     current_user: models.User = Depends(get_current_user),
 ) -> InfraSettingsOut:
@@ -66,7 +66,7 @@ async def get_infrastructure_settings(
 
 
 @router.patch("/settings", response_model=InfraSettingsOut)
-async def update_infrastructure_settings(
+def update_infrastructure_settings(
     update: InfraSettingsUpdate,
     database: Session = Depends(db.get_db),
     current_user: models.User = Depends(get_current_admin),
@@ -119,7 +119,7 @@ async def update_infrastructure_settings(
 
 
 @router.get("/mesh", response_model=AgentMeshResponse)
-async def get_agent_mesh(
+def get_agent_mesh(
     database: Session = Depends(db.get_db),
     current_user: models.User = Depends(get_current_user),
 ) -> AgentMeshResponse:
@@ -629,7 +629,7 @@ async def set_agent_interface_mtu(
 
 
 @router.get("/agents/{agent_id}/network-config", response_model=AgentNetworkConfigOut)
-async def get_agent_network_config(
+def get_agent_network_config(
     agent_id: str,
     database: Session = Depends(db.get_db),
     current_user: models.User = Depends(get_current_user),
@@ -849,7 +849,7 @@ async def update_agent_network_config(
 
 
 @router.get("/network-configs", response_model=list[AgentNetworkConfigOut])
-async def list_agent_network_configs(
+def list_agent_network_configs(
     database: Session = Depends(db.get_db),
     current_user: models.User = Depends(get_current_user),
 ) -> list[AgentNetworkConfigOut]:
@@ -907,7 +907,7 @@ async def list_agent_network_configs(
 
 
 @router.get("/agents/{agent_id}/transport-config")
-async def get_transport_config(
+def get_transport_config(
     agent_id: str,
     database: Session = Depends(db.get_db),
     current_user: models.User = Depends(get_current_admin),
@@ -1010,7 +1010,7 @@ async def apply_transport_config(
 
 
 @router.get("/interfaces", response_model=AgentManagedInterfacesResponse)
-async def list_managed_interfaces(
+def list_managed_interfaces(
     host_id: str | None = None,
     interface_type: str | None = None,
     database: Session = Depends(db.get_db),
@@ -1040,7 +1040,7 @@ async def list_managed_interfaces(
 
 
 @router.get("/agents/{agent_id}/managed-interfaces", response_model=AgentManagedInterfacesResponse)
-async def list_agent_managed_interfaces(
+def list_agent_managed_interfaces(
     agent_id: str,
     database: Session = Depends(db.get_db),
     current_user: models.User = Depends(get_current_user),
@@ -1273,7 +1273,7 @@ async def delete_managed_interface(
 
 
 @router.get("/nic-groups", response_model=HostNicGroupsResponse)
-async def list_nic_groups(
+def list_nic_groups(
     host_id: str | None = None,
     database: Session = Depends(db.get_db),
     current_user: models.User = Depends(get_current_user),
@@ -1325,7 +1325,7 @@ async def list_nic_groups(
 
 
 @router.post("/hosts/{host_id}/nic-groups", response_model=HostNicGroupOut)
-async def create_nic_group(
+def create_nic_group(
     host_id: str,
     request: HostNicGroupCreate,
     database: Session = Depends(db.get_db),
@@ -1361,7 +1361,7 @@ async def create_nic_group(
 
 
 @router.post("/nic-groups/{group_id}/members", response_model=HostNicGroupMemberOut)
-async def add_nic_group_member(
+def add_nic_group_member(
     group_id: str,
     request: HostNicGroupMemberCreate,
     database: Session = Depends(db.get_db),
@@ -1407,7 +1407,7 @@ async def add_nic_group_member(
 
 
 @router.delete("/nic-groups/{group_id}/members/{member_id}")
-async def delete_nic_group_member(
+def delete_nic_group_member(
     group_id: str,
     member_id: str,
     database: Session = Depends(db.get_db),
@@ -1426,7 +1426,7 @@ async def delete_nic_group_member(
 
 
 @router.delete("/nic-groups/{group_id}")
-async def delete_nic_group(
+def delete_nic_group(
     group_id: str,
     database: Session = Depends(db.get_db),
     current_user: models.User = Depends(get_current_admin),

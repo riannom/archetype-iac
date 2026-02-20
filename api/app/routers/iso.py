@@ -193,7 +193,7 @@ class UploadCompleteResponse(BaseModel):
 
 
 @router.get("/browse", response_model=BrowseResponse)
-async def browse_iso_files(
+def browse_iso_files(
     current_user: models.User = Depends(get_current_user),
 ):
     """List ISO files in the upload directory.
@@ -240,7 +240,7 @@ async def browse_iso_files(
 
 
 @router.post("/upload/init", response_model=UploadInitResponse)
-async def init_upload(
+def init_upload(
     request: UploadInitRequest,
     current_user: models.User = Depends(get_current_user),
 ):
@@ -410,7 +410,7 @@ async def upload_chunk(
 
 
 @router.get("/upload/{upload_id}", response_model=UploadStatusResponse)
-async def get_upload_status(
+def get_upload_status(
     upload_id: str,
     current_user: models.User = Depends(get_current_user),
 ):
@@ -439,7 +439,7 @@ async def get_upload_status(
 
 
 @router.post("/upload/{upload_id}/complete", response_model=UploadCompleteResponse)
-async def complete_upload(
+def complete_upload(
     upload_id: str,
     current_user: models.User = Depends(get_current_user),
 ):
@@ -512,7 +512,7 @@ async def complete_upload(
 
 
 @router.delete("/upload/{upload_id}")
-async def cancel_upload(
+def cancel_upload(
     upload_id: str,
     current_user: models.User = Depends(get_current_user),
 ):
@@ -629,7 +629,7 @@ async def scan_iso(
 
 
 @router.get("/{session_id}/manifest")
-async def get_manifest(
+def get_manifest(
     session_id: str,
     current_user: models.User = Depends(get_current_user),
 ):
@@ -698,7 +698,7 @@ async def start_import(
 
 
 @router.get("/{session_id}/progress", response_model=ImportProgressResponse)
-async def get_import_progress(
+def get_import_progress(
     session_id: str,
     current_user: models.User = Depends(get_current_user),
 ):
@@ -781,7 +781,7 @@ async def stream_import_progress(
 
 
 @router.delete("/{session_id}")
-async def delete_session(
+def delete_session(
     session_id: str,
     current_user: models.User = Depends(get_current_user),
 ):
@@ -799,7 +799,7 @@ async def delete_session(
 
 
 @router.get("/{session_id}")
-async def get_session_info(
+def get_session_info(
     session_id: str,
     current_user: models.User = Depends(get_current_user),
 ) -> SessionInfoResponse:

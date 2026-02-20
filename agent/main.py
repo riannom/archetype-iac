@@ -1873,10 +1873,12 @@ async def _reconcile_single_node(
     # Try Docker first
     try:
         import docker
-        client = docker.from_env()
-        container = await asyncio.to_thread(
-            lambda cn=container_name: client.containers.get(cn)
-        )
+
+        def _sync_get_container(cn):
+            client = docker.from_env()
+            return client.containers.get(cn)
+
+        container = await asyncio.to_thread(_sync_get_container, container_name)
         current_status = container.status
 
         if desired == "running":
@@ -2235,14 +2237,16 @@ async def start_container(container_name: str) -> dict:
 
     try:
         import docker
-        client = docker.from_env()
-        container = await asyncio.to_thread(client.containers.get, container_name)
 
-        if container.status == "running":
-            return {"success": True, "message": "Container already running"}
+        def _sync_start():
+            client = docker.from_env()
+            container = client.containers.get(container_name)
+            if container.status == "running":
+                return {"success": True, "message": "Container already running"}
+            container.start()
+            return {"success": True, "message": "Container started"}
 
-        await asyncio.to_thread(container.start)
-        return {"success": True, "message": "Container started"}
+        return await asyncio.to_thread(_sync_start)
 
     except docker.errors.NotFound:
         raise HTTPException(status_code=404, detail=f"Container '{container_name}' not found")
@@ -2267,14 +2271,17 @@ async def stop_container(container_name: str) -> dict:
 
     try:
         import docker
-        client = docker.from_env()
-        container = await asyncio.to_thread(client.containers.get, container_name)
+        stop_timeout = settings.container_stop_timeout
 
-        if container.status != "running":
-            return {"success": True, "message": "Container already stopped"}
+        def _sync_stop():
+            client = docker.from_env()
+            container = client.containers.get(container_name)
+            if container.status != "running":
+                return {"success": True, "message": "Container already stopped"}
+            container.stop(timeout=stop_timeout)
+            return {"success": True, "message": "Container stopped"}
 
-        await asyncio.to_thread(container.stop, timeout=settings.container_stop_timeout)
-        return {"success": True, "message": "Container stopped"}
+        return await asyncio.to_thread(_sync_stop)
 
     except docker.errors.NotFound:
         raise HTTPException(status_code=404, detail=f"Container '{container_name}' not found")
@@ -2299,11 +2306,14 @@ async def remove_container(container_name: str, force: bool = False) -> dict:
 
     try:
         import docker
-        client = docker.from_env()
-        container = await asyncio.to_thread(client.containers.get, container_name)
 
-        await asyncio.to_thread(container.remove, force=force)
-        return {"success": True, "message": "Container removed"}
+        def _sync_remove():
+            client = docker.from_env()
+            container = client.containers.get(container_name)
+            container.remove(force=force)
+            return {"success": True, "message": "Container removed"}
+
+        return await asyncio.to_thread(_sync_remove)
 
     except docker.errors.NotFound:
         raise HTTPException(status_code=404, detail=f"Container '{container_name}' not found")
@@ -2339,24 +2349,27 @@ async def remove_container_for_lab(
     try:
         import docker
 
-        client = docker.from_env()
-        container = await asyncio.to_thread(client.containers.get, container_name)
+        def _sync_remove_for_lab():
+            client = docker.from_env()
+            container = client.containers.get(container_name)
 
-        # Validate container belongs to the lab (optional safety check)
-        labels = container.labels or {}
-        container_lab_id = labels.get("archetype.lab_id")
-        if container_lab_id and container_lab_id != lab_id:
-            logger.warning(
-                f"Container {container_name} belongs to lab {container_lab_id}, "
-                f"not {lab_id} - proceeding anyway"
-            )
+            # Validate container belongs to the lab (optional safety check)
+            labels = container.labels or {}
+            container_lab_id = labels.get("archetype.lab_id")
+            if container_lab_id and container_lab_id != lab_id:
+                logger.warning(
+                    f"Container {container_name} belongs to lab {container_lab_id}, "
+                    f"not {lab_id} - proceeding anyway"
+                )
 
-        # Stop first if running, then remove
-        if container.status == "running":
-            logger.info(f"Stopping running container {container_name} before removal")
-            await asyncio.to_thread(container.stop, timeout=10)
+            # Stop first if running, then remove
+            if container.status == "running":
+                logger.info(f"Stopping running container {container_name} before removal")
+                container.stop(timeout=10)
 
-        await asyncio.to_thread(container.remove, force=force)
+            container.remove(force=force)
+
+        await asyncio.to_thread(_sync_remove_for_lab)
         logger.info(f"Successfully removed container {container_name} for lab {lab_id}")
         return {"success": True, "message": "Container removed"}
 

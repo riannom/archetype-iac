@@ -21,6 +21,7 @@ import asyncio
 import json
 import logging
 from datetime import datetime, timezone
+from typing import Any
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
@@ -114,22 +115,26 @@ async def _subscribe_and_forward(websocket: WebSocket, lab_id: str) -> None:
 async def _send_initial_state(websocket: WebSocket, lab_id: str) -> None:
     """Send initial state snapshot when client connects.
 
-    Queries all data from the database, releases the session, then sends
-    messages over WebSocket. This prevents holding a DB connection during I/O.
+    Queries all data from the database in a worker thread, then sends
+    messages over WebSocket. This prevents blocking the event loop during
+    DB queries and holding a DB connection during I/O.
     """
     try:
-        # Phase 1: Query all data and build messages (session held briefly)
-        messages = []
-        with db.get_session() as database:
-            lab = database.get(models.Lab, lab_id)
-            if not lab:
-                messages.append({
-                    "type": "error",
-                    "timestamp": datetime.now(timezone.utc).isoformat(),
-                    "data": {"message": f"Lab {lab_id} not found"},
-                })
-                # Release session, then send error
-            else:
+        # Phase 1: Query all data and build messages in worker thread
+        max_retries = settings.state_enforcement_max_retries
+
+        def _sync_build_messages() -> list[dict[str, Any]]:
+            messages: list[dict[str, Any]] = []
+            with db.get_session() as database:
+                lab = database.get(models.Lab, lab_id)
+                if not lab:
+                    messages.append({
+                        "type": "error",
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                        "data": {"message": f"Lab {lab_id} not found"},
+                    })
+                    return messages
+
                 messages.append({
                     "type": "lab_state",
                     "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -159,7 +164,7 @@ async def _send_initial_state(websocket: WebSocket, lab_id: str) -> None:
                     will_retry = (
                         ns.actual_state == "error"
                         and ns.desired_state == "running"
-                        and ns.enforcement_attempts < settings.state_enforcement_max_retries
+                        and ns.enforcement_attempts < max_retries
                         and ns.enforcement_failed_at is None
                     )
                     nodes_data.append({
@@ -178,7 +183,7 @@ async def _send_initial_state(websocket: WebSocket, lab_id: str) -> None:
                             ns.actual_state, ns.desired_state
                         ),
                         "enforcement_attempts": ns.enforcement_attempts,
-                        "max_enforcement_attempts": settings.state_enforcement_max_retries,
+                        "max_enforcement_attempts": max_retries,
                         "starting_started_at": ns.starting_started_at.isoformat() if ns.starting_started_at else None,
                     })
 
@@ -217,6 +222,10 @@ async def _send_initial_state(websocket: WebSocket, lab_id: str) -> None:
                         "timestamp": datetime.now(timezone.utc).isoformat(),
                         "data": {"links": links_data},
                     })
+
+            return messages
+
+        messages = await asyncio.to_thread(_sync_build_messages)
 
         # Phase 2: Send all messages (session already released)
         for message in messages:

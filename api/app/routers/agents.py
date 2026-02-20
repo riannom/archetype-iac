@@ -893,7 +893,7 @@ def update_sync_strategy(
 
 
 @router.get("/{agent_id}/images")
-async def list_agent_images(
+def list_agent_images(
     agent_id: str,
     database: Session = Depends(db.get_db),
     current_user: models.User = Depends(get_current_user),

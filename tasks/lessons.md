@@ -120,6 +120,16 @@
 
 **Rule**: When baking configuration into persistent storage (domain XML, config files), only store overrides that differ from defaults. Storing defaults locks them in and prevents the default source from being updated independently.
 
+## 2026-02-19: Readiness probe aborts POAP before provisioning completes
+
+**Bug**: The readiness probe's `_run_n9kv_poap_skip()` fires on the `poap_abort_prompt` marker — the same prompt that appears during both normal POAP execution AND POAP failure. When POAP preboot provisioning was enabled (DHCP + TFTP + HTTP pipeline configured), the probe sent "yes" to abort POAP before the script could download and apply the startup-config.
+
+**Impact**: N9Kv VMs with POAP preboot enabled never received their startup-config despite the entire POAP infrastructure being correctly configured and functional.
+
+**Fix**: Check `settings.n9kv_poap_preboot_enabled` before firing the POAP skip. When preboot is enabled, only skip on explicit `poap_failure` marker. Let normal POAP proceed.
+
+**Rule**: When the same interactive prompt appears in both "success in progress" and "failure" paths, the automation handler must distinguish the two contexts. Don't fire a "skip/abort" action on a prompt that also appears during the desired workflow.
+
 ## 2026-02-19: Test helper kwargs routing must distinguish method params from config dict keys
 
 **Bug**: `_gen_xml()` helper in `test_libvirt_domain_xml.py` checked `if key in node_config` to decide whether to pop overrides into `node_config`. But the initial dict only had 10 keys, so `reserved_nics`, `serial_type`, `nographic`, `cpu_limit`, `cpu_sockets`, `smbios_product`, `readiness_probe` etc. stayed as overrides and were passed as direct kwargs to `_generate_domain_xml()`, which doesn't accept them.
@@ -129,3 +139,33 @@
 **Fix**: Changed routing logic to use an explicit `_method_kwargs` set listing `_generate_domain_xml()`'s actual parameters. Any override NOT in this set goes to `node_config`.
 
 **Rule**: When a test helper forwards kwargs to a method that also takes a config dict, use an explicit allowlist of the method's params to route correctly. Don't rely on `if key in defaults_dict` — it misses any config key without a pre-populated default.
+
+## 2026-02-19: docker.from_env() is itself a blocking call
+
+**Bug**: Agent async endpoints wrapped Docker container operations in `asyncio.to_thread()` but called `docker.from_env()` directly on the event loop before wrapping. This socket connection to the Docker daemon is blocking I/O.
+
+**Impact**: Brief event loop stalls on every container start/stop/remove/reconcile call. Compounded when multiple operations run concurrently.
+
+**Fix**: Bundle `docker.from_env()` inside the same `_sync_*` closure as subsequent Docker operations. One thread transition instead of leaving the client creation on the event loop.
+
+**Rule**: When wrapping Docker SDK calls in `asyncio.to_thread()`, include `docker.from_env()` inside the sync closure. Every Docker SDK call is blocking — client creation, container.get(), container.start(), network.create() — they all need thread isolation.
+
+## 2026-02-19: Conditional `import` inside function shadows module-level import
+
+**Bug**: `jobs.py:lab_status()` had `import asyncio` inside an `if not agents:` branch (line 627). Python's compiler saw this and marked `asyncio` as a local variable for the entire function. When agents existed (the normal path), the branch was skipped, leaving `asyncio` unbound. Line 653's `asyncio.gather()` raised `UnboundLocalError`.
+
+**Impact**: `/labs/{id}/status` returned HTTP 500 for ALL labs with agents. The frontend polled this every 10 seconds, generating continuous silent 500 errors. Lab node counts displayed incorrectly or stale. API logging was broken (no handlers on root logger), so errors were invisible in `docker logs`.
+
+**Fix**: Removed the redundant `import asyncio` from the conditional branch. The module-level import on line 4 is sufficient.
+
+**Rule**: Never use `import X` inside a function body when `X` is already imported at module level. Python treats any `import` (or assignment) to a name inside a function as a local variable declaration for the ENTIRE function scope — not just the branch where it appears. Use the module-level import.
+
+## 2026-02-19: API middleware sync DB blocks every HTTP request
+
+**Bug**: `CurrentUserMiddleware.dispatch()` used `get_session()` (sync SQLAlchemy) directly in the async `dispatch()` method. This ran a DB query to resolve the current user on every single HTTP request, blocking the event loop each time.
+
+**Impact**: Every API request (REST, WebSocket upgrade, health check) blocked the event loop for the duration of a DB query. Under concurrent load, requests queue behind each other.
+
+**Fix**: Wrapped the user lookup in `asyncio.to_thread()`. The sync session + DB query now runs in a worker thread.
+
+**Rule**: Middleware in async web frameworks runs on EVERY request — it's the highest-impact location for blocking calls. Always audit middleware for sync I/O first when investigating event loop stalls.

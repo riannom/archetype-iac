@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 
 from fastapi import Request
@@ -13,8 +14,11 @@ logger = logging.getLogger(__name__)
 
 class CurrentUserMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
-        with get_session() as database:
-            request.state.user = get_current_user_optional(request, database)
+        def _sync_get_user():
+            with get_session() as database:
+                return get_current_user_optional(request, database)
+
+        request.state.user = await asyncio.to_thread(_sync_get_user)
         return await call_next(request)
 
 

@@ -315,34 +315,42 @@ class LocalNetworkManager:
             True if deleted successfully
         """
         if lab_id not in self._networks:
-            # Try to find and delete by name
             network_name = f"{MGMT_NETWORK_PREFIX}-{lab_id[:20]}"
-            try:
-                networks = self.docker.networks.list(names=[network_name])
-                for network in networks:
-                    try:
-                        network.remove()
-                        logger.info(f"Deleted management network: {network_name}")
-                    except Exception as e:
-                        logger.warning(f"Failed to delete network {network_name}: {e}")
-                return True
-            except Exception as e:
-                logger.warning(f"Error finding network {network_name}: {e}")
-                return False
+
+            def _sync_delete_by_name():
+                try:
+                    networks = self.docker.networks.list(names=[network_name])
+                    for network in networks:
+                        try:
+                            network.remove()
+                            logger.info(f"Deleted management network: {network_name}")
+                        except Exception as e:
+                            logger.warning(f"Failed to delete network {network_name}: {e}")
+                    return True
+                except Exception as e:
+                    logger.warning(f"Error finding network {network_name}: {e}")
+                    return False
+
+            return await asyncio.to_thread(_sync_delete_by_name)
 
         managed = self._networks[lab_id]
-        try:
-            network = self.docker.networks.get(managed.network_id)
-            network.remove()
+
+        def _sync_delete_managed():
+            try:
+                network = self.docker.networks.get(managed.network_id)
+                network.remove()
+                logger.info(f"Deleted management network: {managed.network_name}")
+                return True, False  # success, not_found
+            except NotFound:
+                return True, True
+            except Exception as e:
+                logger.error(f"Failed to delete management network: {e}")
+                return False, False
+
+        success, not_found = await asyncio.to_thread(_sync_delete_managed)
+        if success:
             del self._networks[lab_id]
-            logger.info(f"Deleted management network: {managed.network_name}")
-            return True
-        except NotFound:
-            del self._networks[lab_id]
-            return True
-        except Exception as e:
-            logger.error(f"Failed to delete management network: {e}")
-            return False
+        return success
 
     async def create_link(
         self,

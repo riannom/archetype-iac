@@ -79,8 +79,8 @@ class DockerEventListener(NodeEventListener):
 
         while self._running and self._stop_event is not None and not self._stop_event.is_set():
             try:
-                # Connect to Docker
-                self._client = docker.from_env()
+                # Connect to Docker (in thread to avoid blocking event loop)
+                self._client = await asyncio.to_thread(docker.from_env)
                 logger.info("Docker event listener connected")
                 self._reconnect_delay = 1.0  # Reset on successful connection
 

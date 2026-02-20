@@ -484,7 +484,7 @@ async def lab_restart(
 
 @router.post("/labs/{lab_id}/nodes/{node}/{action}",
               deprecated=True)
-async def node_action(
+def node_action(
     lab_id: str,
     node: str,
     action: str,
@@ -624,7 +624,6 @@ async def lab_status(
 
     if not agents:
         # Fallback to old netlab command if no agents
-        import asyncio
         code, stdout, stderr = await asyncio.to_thread(
             run_netlab_command, ["netlab", "status"], lab_workspace(lab.id)
         )
@@ -747,7 +746,7 @@ def audit_log(
 
 
 @router.post("/labs/{lab_id}/jobs/{job_id}/cancel")
-async def cancel_job(
+def cancel_job(
     lab_id: str,
     job_id: str,
     database: Session = Depends(db.get_db),

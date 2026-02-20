@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from dataclasses import dataclass, field
+from typing import Any
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
@@ -17,6 +19,21 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["console"])
 
 
+@dataclass
+class _ConsoleDBResult:
+    """Result from sync DB lookup for console connection."""
+    error: str | None = None
+    agent: Any = None
+    agent_ws_url: str | None = None
+    node_name: str = ""
+    lab_provider: str = "docker"
+    lab_agent_id: str | None = None
+    # For readiness check
+    node_actual_state: str | None = None
+    node_is_ready: bool = True
+    node_def: Any = None
+
+
 @router.websocket("/labs/{lab_id}/nodes/{node}/console")
 async def console_ws(websocket: WebSocket, lab_id: str, node: str, token: str | None = None) -> None:
     """Proxy console WebSocket to agent."""
@@ -29,89 +46,113 @@ async def console_ws(websocket: WebSocket, lab_id: str, node: str, token: str | 
 
     await websocket.accept()
 
-    with get_session() as database:
-        lab = database.get(models.Lab, lab_id)
-        if not lab:
-            await websocket.send_text("Lab not found\r\n")
-            await websocket.close(code=1008)
-            return
+    def _sync_db_lookup() -> _ConsoleDBResult:
+        """Run all DB queries in a worker thread."""
+        result = _ConsoleDBResult()
+        with get_session() as database:
+            lab = database.get(models.Lab, lab_id)
+            if not lab:
+                result.error = "lab_not_found"
+                return result
 
-        # For multi-host labs, find which agent has the specific node
-        agent = None
-        node_name = node  # May be GUI ID or actual name
+            result.node_name = node  # May be GUI ID or actual name
+            result.lab_provider = lab.provider if lab.provider else "docker"
+            result.lab_agent_id = lab.agent_id
 
-        # Use TopologyService to look up node and its host from database
-        topology_service = TopologyService(database)
+            # Use TopologyService to look up node and its host from database
+            topology_service = TopologyService(database)
 
-        # Use database as source of truth for node lookup
-        node_def = topology_service.get_node_by_any_id(lab.id, node)
-        if node_def:
-            node_name = node_def.container_name
-            logger.debug(f"Console: resolved {node} to container name {node_name} from DB")
+            node_def = topology_service.get_node_by_any_id(lab.id, node)
+            if node_def:
+                result.node_name = node_def.container_name
+                result.node_def = node_def
+                logger.debug(f"Console: resolved {node} to container name {result.node_name} from DB")
 
-        agent = topology_service.get_node_host(lab.id, node_name)
-        if agent and not agent_client.is_agent_online(agent):
-            agent = None  # Agent offline, will fall back below
-        # Get the provider for this lab (outside try block for fallback)
-        lab_provider = lab.provider if lab.provider else "docker"
+            agent = topology_service.get_node_host(lab.id, result.node_name)
+            if agent and not agent_client.is_agent_online(agent):
+                agent = None
 
-        # If not found via topology (single-host or node not found), use lab's agent
-        if not agent:
-            agent = await get_online_agent_for_lab(database, lab, required_provider=lab_provider)
+            if agent:
+                result.agent = agent
+                result.agent_ws_url = agent_client.get_agent_console_url(agent, lab_id, result.node_name)
 
-        if not agent:
-            await websocket.send_text("No healthy agent available\r\n")
-            await websocket.close(code=1011)
-            return
-
-        # Get agent WebSocket URL (use resolved node_name, not raw GUI ID)
-        agent_ws_url = agent_client.get_agent_console_url(agent, lab_id, node_name)
-
-        # Check if node is ready for console access
-        # Look up NodeState to check is_ready flag
-        node_state = (
-            database.query(models.NodeState)
-            .filter(
-                models.NodeState.lab_id == lab_id,
-                models.NodeState.node_name == node_name,
-            )
-            .first()
-        )
-
-        # Also check by node_id in case the raw GUI ID was passed
-        if not node_state:
+            # Check node readiness
             node_state = (
                 database.query(models.NodeState)
                 .filter(
                     models.NodeState.lab_id == lab_id,
-                    models.NodeState.node_id == node,
+                    models.NodeState.node_name == result.node_name,
                 )
                 .first()
             )
 
-        boot_warning = None
-        if node_state and node_state.actual_state == "running" and not node_state.is_ready:
-            # Node is running but not ready - check readiness from agent
-            try:
-                provider_type = get_node_provider(node_def) if node_def is not None else None
-                device_kind = node_def.device if node_def is not None else None
-                readiness = await agent_client.check_node_readiness(
-                    agent,
-                    lab_id,
-                    node_name,
-                    kind=device_kind,
-                    provider_type=provider_type,
-                )
-                if not readiness.get("is_ready", False):
-                    progress = readiness.get("progress_percent")
-                    progress_str = f" ({progress}%)" if progress is not None else ""
-                    detail = readiness.get("message") or "Console may be unresponsive"
-                    boot_warning = (
-                        f"\r\n[Boot in progress{progress_str}: {detail}]\r\n"
-                        "[For SSH-console VMs, no CLI appears until management IP/SSH is available.]\r\n\r\n"
+            if not node_state:
+                node_state = (
+                    database.query(models.NodeState)
+                    .filter(
+                        models.NodeState.lab_id == lab_id,
+                        models.NodeState.node_id == node,
                     )
-            except Exception as e:
-                logger.debug(f"Readiness check failed for {node_name}: {e}")
+                    .first()
+                )
+
+            if node_state:
+                result.node_actual_state = node_state.actual_state
+                result.node_is_ready = node_state.is_ready
+
+        return result
+
+    db_result = await asyncio.to_thread(_sync_db_lookup)
+
+    if db_result.error == "lab_not_found":
+        await websocket.send_text("Lab not found\r\n")
+        await websocket.close(code=1008)
+        return
+
+    # Handle async agent lookup if topology-based lookup didn't find one
+    if not db_result.agent:
+        # get_online_agent_for_lab is async and needs a DB session; open a
+        # fresh session for the brief placement/host queries it runs.
+        with get_session() as database:
+            lab = database.get(models.Lab, lab_id)
+            if lab:
+                agent = await get_online_agent_for_lab(database, lab, required_provider=db_result.lab_provider)
+                if agent:
+                    db_result.agent = agent
+                    db_result.agent_ws_url = agent_client.get_agent_console_url(agent, lab_id, db_result.node_name)
+
+    if not db_result.agent:
+        await websocket.send_text("No healthy agent available\r\n")
+        await websocket.close(code=1011)
+        return
+
+    agent = db_result.agent
+    agent_ws_url = db_result.agent_ws_url
+    node_name = db_result.node_name
+
+    boot_warning = None
+    if db_result.node_actual_state == "running" and not db_result.node_is_ready:
+        # Node is running but not ready - check readiness from agent
+        try:
+            provider_type = get_node_provider(db_result.node_def) if db_result.node_def is not None else None
+            device_kind = db_result.node_def.device if db_result.node_def is not None else None
+            readiness = await agent_client.check_node_readiness(
+                agent,
+                lab_id,
+                node_name,
+                kind=device_kind,
+                provider_type=provider_type,
+            )
+            if not readiness.get("is_ready", False):
+                progress = readiness.get("progress_percent")
+                progress_str = f" ({progress}%)" if progress is not None else ""
+                detail = readiness.get("message") or "Console may be unresponsive"
+                boot_warning = (
+                    f"\r\n[Boot in progress{progress_str}: {detail}]\r\n"
+                    "[For SSH-console VMs, no CLI appears until management IP/SSH is available.]\r\n\r\n"
+                )
+        except Exception as e:
+            logger.debug(f"Readiness check failed for {node_name}: {e}")
 
     # Connect to agent WebSocket and proxy
     import websockets

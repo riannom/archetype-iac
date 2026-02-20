@@ -1104,7 +1104,7 @@ def get_node_state(
 
 
 @router.put("/labs/{lab_id}/nodes/{node_id}/desired-state")
-async def set_node_desired_state(
+def set_node_desired_state(
     lab_id: str,
     node_id: str,
     payload: schemas.NodeStateUpdate,
@@ -1985,7 +1985,7 @@ async def poll_nodes_ready(
 
 
 @router.get("/labs/{lab_id}/inventory")
-async def export_inventory(
+def export_inventory(
     lab_id: str,
     format: Literal["json", "ansible", "terraform"] = "json",
     database: Session = Depends(db.get_db),
@@ -3055,7 +3055,7 @@ def list_node_config_snapshots(
 
 
 @router.post("/labs/{lab_id}/config-snapshots")
-async def create_config_snapshot(
+def create_config_snapshot(
     lab_id: str,
     payload: schemas.ConfigSnapshotCreate | None = None,
     database: Session = Depends(db.get_db),
@@ -4083,7 +4083,7 @@ async def cleanup_lab_orphans(
 
 
 @router.get("/labs/{lab_id}/interface-mappings")
-async def get_lab_interface_mappings(
+def get_lab_interface_mappings(
     lab_id: str,
     database: Session = Depends(db.get_db),
     current_user: models.User = Depends(get_current_user),
@@ -4108,7 +4108,7 @@ async def get_lab_interface_mappings(
 
 
 @router.get("/labs/{lab_id}/nodes/{node_id}/interfaces")
-async def get_node_interfaces(
+def get_node_interfaces(
     lab_id: str,
     node_id: str,
     database: Session = Depends(db.get_db),

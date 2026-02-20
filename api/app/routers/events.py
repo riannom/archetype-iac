@@ -229,7 +229,7 @@ async def receive_node_event(
 
 
 @router.post("/batch", response_model=schemas.NodeEventResponse)
-async def receive_batch_events(
+def receive_batch_events(
     events: list[schemas.NodeEventPayload],
     database: Session = Depends(db.get_db),
     _auth: None = Depends(verify_agent_secret),

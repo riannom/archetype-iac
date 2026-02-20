@@ -299,7 +299,7 @@ async def _auto_reattach_overlay_endpoints(
 
 
 @router.post("/job/{job_id}/heartbeat")
-async def job_heartbeat(
+def job_heartbeat(
     job_id: str,
     database: Session = Depends(db.get_db),
     _auth: None = Depends(verify_agent_secret),
@@ -473,7 +473,7 @@ async def carrier_state_changed(
 
 
 @router.post("/dead-letter/{job_id}")
-async def dead_letter_callback(
+def dead_letter_callback(
     job_id: str,
     payload: schemas.JobCallbackPayload,
     database: Session = Depends(db.get_db),
@@ -540,7 +540,7 @@ class UpdateProgressPayload(schemas.BaseModel):
 
 
 @router.post("/update/{job_id}")
-async def update_progress_callback(
+def update_progress_callback(
     job_id: str,
     payload: UpdateProgressPayload,
     database: Session = Depends(db.get_db),

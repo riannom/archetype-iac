@@ -673,7 +673,7 @@ async def reconcile_images(
 
 
 @router.post("/cleanup-stuck-jobs")
-async def cleanup_stuck_jobs(
+def cleanup_stuck_jobs(
     max_age_minutes: int = Query(5, ge=1, le=60, description="Mark jobs stuck longer than this as failed"),
     database: Session = Depends(db.get_db),
     current_user: models.User = Depends(get_current_admin),
