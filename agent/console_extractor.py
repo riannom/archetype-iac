@@ -725,11 +725,17 @@ class SerialConsoleExtractor:
         if piggyback_result is not None:
             if piggyback_result.success:
                 return piggyback_result
+            # Don't fall through to direct console — it would kill the active
+            # web console's virsh process (kill_orphans=True) just to attempt
+            # commands on a VM that likely isn't ready yet.  Return the failure
+            # so the caller can retry on the next readiness cycle.
             logger.info(
-                "Piggyback post-boot commands failed for %s, falling back to direct console: %s",
+                "Piggyback post-boot commands failed for %s, "
+                "skipping direct console to protect active web session: %s",
                 self.domain_name,
                 piggyback_result.error,
             )
+            return piggyback_result
 
         from agent.virsh_console_lock import console_lock
 
@@ -792,6 +798,7 @@ class SerialConsoleExtractor:
         if not commands:
             return CommandCaptureResult(success=True, commands_run=0, outputs=[])
 
+        from agent.console_session_registry import get_session
         from agent.virsh_console_lock import console_lock
 
         last_result = CommandCaptureResult(success=False, error="No attempts made")
@@ -804,8 +811,10 @@ class SerialConsoleExtractor:
                 )
                 time.sleep(delay)
 
+            # Check each attempt — session may open/close between retries.
+            has_web_session = get_session(self.domain_name) is not None
             try:
-                with console_lock(self.domain_name, timeout=60):
+                with console_lock(self.domain_name, timeout=60, kill_orphans=not has_web_session):
                     last_result = self._run_commands_capture_inner(
                         commands,
                         username,

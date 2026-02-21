@@ -43,10 +43,18 @@ def test_n9kv_efi_boot_enabled():
     assert config.efi_boot is True
 
 
-def test_n9kv_console_method_is_ssh():
-    """N9Kv uses SSH console which triggers dedicated management NIC."""
+def test_n9kv_console_method_is_virsh():
+    """N9Kv uses virsh serial console for NX-OS CLI (SSH hits bash underlay)."""
     config = VENDOR_CONFIGS["cisco_n9kv"]
-    assert config.console_method == "ssh"
+    assert config.console_method == "virsh"
+
+
+def test_n9kv_readiness_probe_is_log_pattern():
+    """N9Kv uses log_pattern probe to detect login prompt before post-boot commands."""
+    config = VENDOR_CONFIGS["cisco_n9kv"]
+    assert config.readiness_probe == "log_pattern"
+    assert config.readiness_pattern is not None
+    assert "login:" in config.readiness_pattern
 
 
 # ---------------------------------------------------------------------------

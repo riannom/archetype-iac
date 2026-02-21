@@ -210,6 +210,16 @@
 
 **Rule**: Affinity/sticky placement must always be capacity-gated. Treat sticky placement as a preference, not a hard constraint. When the preferred agent lacks capacity, fail over to the general placement algorithm rather than forcing an overcommit.
 
+## 2026-02-20: NoopProbe masks broken VMs as "ready" — destructive fallbacks compound the damage
+
+**Bug**: N9Kv had `readiness_probe="none"` (NoopProbe) which returned `is_ready=True` immediately, triggering post-boot commands on a VM still in BIOS/kernel boot. When the piggyback attempt failed (no CLI prompt yet), `run_commands()` fell through to direct console with `kill_orphans=True`, SIGKILLing the user's web console virsh process. The frontend reconnected, and the next readiness cycle repeated the same SIGKILL cascade every ~30 seconds.
+
+**Impact**: Users saw repeated cycles of "Automation timed out → [virsh console exited with code -9] → connection lost → reconnecting" making the console unusable during the entire 5-10 minute boot.
+
+**Fix**: (1) Changed N9Kv to `readiness_probe="log_pattern"` with `r"login:|User Access Verification"` to defer post-boot until NX-OS is actually ready. (2) `run_commands()` returns piggyback failure directly instead of falling through to destructive direct console. (3) `run_commands_capture()` passes `kill_orphans=False` when web session detected.
+
+**Rule**: When a fallback path is both destructive (kills another process) AND futile (same failure will occur), don't attempt it — return the failure and let the caller retry on the next cycle. Also: `readiness_probe="none"` should be a last resort, not a convenience — it masks broken boot sequences and can trigger premature post-boot actions.
+
 ## 2026-02-19: async def functions with zero await calls are effectively sync
 
 **Bug**: `get_agent_for_lab()`, `get_healthy_agent()`, `get_agent_by_name()`, `_handle_agent_restart_cleanup()`, `_mark_links_for_recovery()` were all `async def` but contained zero `await` calls — pure synchronous DB operations.
