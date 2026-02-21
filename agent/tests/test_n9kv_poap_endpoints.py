@@ -39,6 +39,8 @@ def test_poap_script_endpoint_includes_startup_config_url(client: TestClient, tm
     assert "CONFIG_URL = \"http://testserver/poap/lab2/n9k2/startup-config\"" in resp.text
     assert "system no poap" in resp.text
     assert "no feature poap" in resp.text
+    assert "boot nxos bootflash:" in resp.text
+    assert "_find_nxos_image" in resp.text
     assert "copy bootflash:startup-config running-config" in resp.text
     assert "copy running-config startup-config" in resp.text
     assert "copy bootflash:startup-config startup-config" in resp.text

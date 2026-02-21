@@ -62,6 +62,29 @@ def _load_and_persist_startup():
     _run("copy running-config startup-config")
 
 
+def _find_nxos_image():
+    import os
+    _log("searching bootflash for NX-OS image")
+    for entry in sorted(os.listdir("/bootflash")):
+        if entry.startswith("nxos") and entry.endswith(".bin"):
+            _log("found NX-OS image: %s" % entry)
+            return entry
+    _log("no NX-OS image found on bootflash")
+    return None
+
+
+def _set_boot_variable():
+    image = _find_nxos_image()
+    if not image:
+        _log("skipping boot variable (no image found)")
+        return
+    _log("setting boot variable to bootflash:%s" % image)
+    _try_run("configure terminal")
+    _try_run("boot nxos bootflash:%s" % image)
+    _try_run("end")
+    _try_run("copy running-config startup-config")
+
+
 def _disable_poap():
     _try_run("configure terminal")
     _try_run("system no poap")
@@ -89,8 +112,9 @@ def main():
 
     _load_and_persist_startup()
     _log("startup-config applied and persisted")
+    _set_boot_variable()
     _disable_poap()
-    _log("POAP disable attempted")
+    _log("POAP provisioning complete")
     return 0
 
 
