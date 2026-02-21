@@ -38,13 +38,12 @@ def test_poap_script_endpoint_includes_startup_config_url(client: TestClient, tm
     assert resp.status_code == 200
     assert "CONFIG_URL = \"http://testserver/poap/lab2/n9k2/startup-config\"" in resp.text
     assert "system no poap" in resp.text
-    assert "no feature poap" in resp.text
-    assert "boot nxos bootflash:" in resp.text
-    assert "_find_nxos_image" in resp.text
     assert "copy bootflash:startup-config running-config" in resp.text
-    assert "copy running-config startup-config" in resp.text
     assert "copy bootflash:startup-config startup-config" in resp.text
     assert "direct copy failed, using compatibility sequence" in resp.text
+    # Verify copy running-config startup-config is NOT in the script
+    # (it triggers bootvar_write_grub which clears boot variables to EMPTY)
+    assert "copy running-config startup-config" not in resp.text
     assert "DEBUG_LOG = \"/bootflash/poap_archetype_debug.log\"" in resp.text
     assert "traceback.format_exc()" in resp.text
     assert "import urllib2 as _urlreq" in resp.text

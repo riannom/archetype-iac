@@ -52,43 +52,25 @@ def _try_run(command):
         _log("command skipped '%s': %s" % (command, exc))
 
 
-def _load_and_persist_startup():
+def _apply_startup_config():
+    # Load startup-config into running-config.  Do NOT run
+    # 'copy running-config startup-config' — that triggers
+    # bootvar_write_grub which clears the boot variable to EMPTY,
+    # causing the loader prompt on reboot.  The config file is
+    # already on bootflash and NX-OS will load it on the next boot.
     try:
         _run("copy bootflash:startup-config running-config")
     except Exception as exc:
         _log("direct copy failed, using compatibility sequence: %s" % exc)
         _run("copy bootflash:startup-config startup-config")
         _run("copy startup-config running-config")
-    _run("copy running-config startup-config")
-
-
-def _find_nxos_image():
-    import os
-    _log("searching bootflash for NX-OS image")
-    for entry in sorted(os.listdir("/bootflash")):
-        if entry.startswith("nxos") and entry.endswith(".bin"):
-            _log("found NX-OS image: %s" % entry)
-            return entry
-    _log("no NX-OS image found on bootflash")
-    return None
-
-
-def _set_boot_variable():
-    image = _find_nxos_image()
-    if not image:
-        _log("skipping boot variable (no image found)")
-        return
-    _log("setting boot variable to bootflash:%s" % image)
-    _try_run("configure terminal")
-    _try_run("boot nxos bootflash:%s" % image)
-    _try_run("end")
-    _try_run("copy running-config startup-config")
 
 
 def _disable_poap():
+    # 'system no poap' persists via a sentinel file on the config
+    # partition — no 'copy running-config startup-config' needed.
     _try_run("configure terminal")
     _try_run("system no poap")
-    _try_run("no feature poap")
     _try_run("end")
 
 
@@ -110,9 +92,8 @@ def main():
         handle.write(content)
     _append_debug("wrote /bootflash/startup-config")
 
-    _load_and_persist_startup()
-    _log("startup-config applied and persisted")
-    _set_boot_variable()
+    _apply_startup_config()
+    _log("startup-config applied")
     _disable_poap()
     _log("POAP provisioning complete")
     return 0
