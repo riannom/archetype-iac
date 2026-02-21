@@ -187,6 +187,8 @@ class LibvirtProvider(Provider):
     _n9kv_loader_recovery_attempted: set[str] = set()
     # One-shot guard for POAP skip per VM lifecycle.
     _n9kv_poap_skip_attempted: set[str] = set()
+    # One-shot guard for admin password wizard per VM lifecycle.
+    _n9kv_admin_password_completed: set[str] = set()
 
     def __init__(self):
         if not LIBVIRT_AVAILABLE:
@@ -2085,6 +2087,7 @@ class LibvirtProvider(Provider):
             )
         LibvirtProvider._n9kv_loader_recovery_attempted.discard(domain_name)
         LibvirtProvider._n9kv_poap_skip_attempted.discard(domain_name)
+        LibvirtProvider._n9kv_admin_password_completed.discard(domain_name)
         LibvirtProvider._clear_vm_console_control_state(domain_name)
 
     @staticmethod
@@ -3454,6 +3457,71 @@ class LibvirtProvider(Provider):
         )
         return status
 
+    async def _run_n9kv_admin_password_setup(
+        self,
+        domain_name: str,
+        kind: str,
+    ) -> str:
+        """Navigate the first-boot admin password wizard via console interaction.
+
+        Uses run_vm_cli_commands which triggers _handle_login() in the console
+        extractor — that method already handles the password prompts, sending
+        a bootstrap password that meets NX-OS complexity requirements.
+        """
+        if domain_name in LibvirtProvider._n9kv_admin_password_completed:
+            return "skipped_already_completed"
+
+        from agent.console_extractor import run_vm_cli_commands, PEXPECT_AVAILABLE
+
+        if not PEXPECT_AVAILABLE:
+            logger.warning(
+                "Skipping N9Kv admin password setup for %s: pexpect unavailable",
+                domain_name,
+            )
+            return "skipped_pexpect_unavailable"
+
+        try:
+            result = await asyncio.to_thread(
+                run_vm_cli_commands,
+                domain_name=domain_name,
+                kind=kind,
+                commands=["show clock"],
+                libvirt_uri=self._uri,
+                timeout=60,
+                retries=1,
+            )
+        except Exception as e:
+            logger.warning(
+                "N9Kv admin password setup failed for %s: %s",
+                domain_name,
+                e,
+            )
+            return "error"
+
+        status = "sent" if result.success else "failed"
+        if not result.success:
+            first_error = ""
+            if result.outputs:
+                first_error = (result.outputs[0].error or "").strip()
+            overall_error = (result.error or "").strip()
+            if "Timeout waiting for command output" in first_error:
+                status = "sent_handoff_timeout"
+            elif "Console connection closed unexpectedly" in overall_error:
+                status = "sent_console_closed"
+
+        logger.info(
+            "N9Kv admin password setup for %s: status=%s commands_run=%s error=%s",
+            domain_name,
+            status,
+            result.commands_run,
+            result.error,
+        )
+
+        if status.startswith("sent"):
+            LibvirtProvider._n9kv_admin_password_completed.add(domain_name)
+
+        return status
+
     def _check_readiness_domain_sync(self, domain_name: str) -> tuple[int, dict] | None:
         """Lookup domain state and readiness overrides — runs on libvirt thread.
 
@@ -3580,6 +3648,24 @@ class LibvirtProvider(Provider):
                     )
                     if skip_status.startswith("sent"):
                         result.message = "POAP skip in progress (skipping to normal setup)"
+            # Admin password wizard blocks before login prompt on first boot.
+            # The console extractor's _handle_login() already handles the
+            # password prompts — we just need to open a console session.
+            elif "admin_password_prompt" in markers and settings.n9kv_boot_modifications_enabled:
+                pw_status = await self._run_n9kv_admin_password_setup(
+                    domain_name,
+                    kind,
+                )
+                pw_note = f"admin_password_setup={pw_status}"
+                result.details = (
+                    f"{result.details}; {pw_note}"
+                    if result.details
+                    else pw_note
+                )
+                if pw_status.startswith("sent"):
+                    result.is_ready = True
+                    result.progress_percent = 100
+                    result.message = "Boot complete (admin password configured)"
 
         # If ready, run post-boot commands (idempotent - only runs once)
         if result.is_ready:

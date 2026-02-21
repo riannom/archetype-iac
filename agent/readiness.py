@@ -394,6 +394,8 @@ class LibvirtLogPatternProbe(ReadinessProbe):
                     status_message = "Boot blocked (loader prompt observed)"
                 elif "poap_failure" in diagnostic_hits:
                     status_message = "Boot in progress (POAP failure observed)"
+                elif "admin_password_prompt" in diagnostic_hits:
+                    status_message = "Admin password setup required"
                 elif "poap_abort_prompt" in diagnostic_hits:
                     status_message = "Boot in progress (POAP prompt observed)"
 
@@ -658,6 +660,7 @@ N9KV_DIAGNOSTIC_PATTERNS = {
     "startup_config_ref": r"startup-config",
     "bootflash_startup_path": r"bootflash[:/].*startup-config",
     "login_prompt": r"login:|Username:",
+    "admin_password_prompt": r'Enter the password for "admin":',
 }
 
 
