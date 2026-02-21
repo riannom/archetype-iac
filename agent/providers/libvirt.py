@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
+import time
 from functools import partial
 import hashlib
 import json
@@ -183,8 +184,11 @@ class LibvirtProvider(Provider):
         "vmxnet2": "e1000",
         "vmxnet": "e1000",
     }
-    # One-shot guard for loader recovery per VM lifecycle.
-    _n9kv_loader_recovery_attempted: set[str] = set()
+    # Loader recovery retry state per VM lifecycle.
+    _n9kv_loader_recovery_attempts: dict[str, int] = {}
+    _n9kv_loader_recovery_last_at: dict[str, float] = {}
+    _N9KV_LOADER_RECOVERY_MAX_ATTEMPTS: int = 3
+    _N9KV_LOADER_RECOVERY_COOLDOWN: float = 60.0
     # One-shot guard for POAP skip per VM lifecycle.
     _n9kv_poap_skip_attempted: set[str] = set()
     # One-shot guard for admin password wizard per VM lifecycle.
@@ -2085,7 +2089,8 @@ class LibvirtProvider(Provider):
                 domain_name,
                 exc_info=True,
             )
-        LibvirtProvider._n9kv_loader_recovery_attempted.discard(domain_name)
+        LibvirtProvider._n9kv_loader_recovery_attempts.pop(domain_name, None)
+        LibvirtProvider._n9kv_loader_recovery_last_at.pop(domain_name, None)
         LibvirtProvider._n9kv_poap_skip_attempted.discard(domain_name)
         LibvirtProvider._n9kv_admin_password_completed.discard(domain_name)
         LibvirtProvider._clear_vm_console_control_state(domain_name)
@@ -3337,11 +3342,23 @@ class LibvirtProvider(Provider):
         domain_name: str,
         kind: str,
     ) -> str:
-        """Attempt one-shot loader recovery by booting NX-OS image from bootflash."""
-        if domain_name in LibvirtProvider._n9kv_loader_recovery_attempted:
-            return "skipped_already_attempted"
+        """Attempt loader recovery by booting NX-OS image from bootflash.
 
-        LibvirtProvider._n9kv_loader_recovery_attempted.add(domain_name)
+        Allows up to _N9KV_LOADER_RECOVERY_MAX_ATTEMPTS retries with a
+        cooldown period between attempts.  NX-OS can crash during early
+        boot (sysconf checksum on fresh NVRAM) and drop back to loader,
+        so a single attempt is insufficient.
+        """
+        attempts = LibvirtProvider._n9kv_loader_recovery_attempts.get(domain_name, 0)
+        max_attempts = LibvirtProvider._N9KV_LOADER_RECOVERY_MAX_ATTEMPTS
+
+        if attempts >= max_attempts:
+            return "skipped_max_attempts"
+
+        last_at = LibvirtProvider._n9kv_loader_recovery_last_at.get(domain_name, 0.0)
+        elapsed = time.monotonic() - last_at
+        if last_at > 0 and elapsed < LibvirtProvider._N9KV_LOADER_RECOVERY_COOLDOWN:
+            return "skipped_cooldown"
 
         from agent.console_extractor import run_vm_cli_commands, PEXPECT_AVAILABLE
 
@@ -3366,12 +3383,20 @@ class LibvirtProvider(Provider):
                 retries=0,
             )
         except Exception as e:
+            LibvirtProvider._n9kv_loader_recovery_attempts[domain_name] = attempts + 1
+            LibvirtProvider._n9kv_loader_recovery_last_at[domain_name] = time.monotonic()
             logger.warning(
-                "N9Kv loader recovery command failed for %s: %s",
+                "N9Kv loader recovery command failed for %s (attempt %d/%d): %s",
                 domain_name,
+                attempts + 1,
+                max_attempts,
                 e,
             )
             return "error"
+
+        # Count this attempt regardless of outcome.
+        LibvirtProvider._n9kv_loader_recovery_attempts[domain_name] = attempts + 1
+        LibvirtProvider._n9kv_loader_recovery_last_at[domain_name] = time.monotonic()
 
         status = "failed"
         if result.success:
@@ -3388,9 +3413,11 @@ class LibvirtProvider(Provider):
                 status = "sent_console_closed"
 
         logger.info(
-            "N9Kv loader recovery for %s: status=%s commands_run=%s error=%s",
+            "N9Kv loader recovery for %s: status=%s attempt=%d/%d commands_run=%s error=%s",
             domain_name,
             status,
+            attempts + 1,
+            max_attempts,
             result.commands_run,
             result.error,
         )
@@ -3625,8 +3652,14 @@ class LibvirtProvider(Provider):
                     if result.details
                     else recovery_note
                 )
+                attempts = LibvirtProvider._n9kv_loader_recovery_attempts.get(domain_name, 0)
+                max_attempts = LibvirtProvider._N9KV_LOADER_RECOVERY_MAX_ATTEMPTS
                 if recovery_status.startswith("sent"):
-                    result.message = "Boot recovery in progress (loader prompt observed)"
+                    result.message = f"Boot recovery in progress (attempt {attempts}/{max_attempts})"
+                elif recovery_status == "skipped_max_attempts":
+                    result.message = f"Boot recovery exhausted ({max_attempts} attempts)"
+                elif recovery_status == "skipped_cooldown":
+                    result.message = f"Boot recovery cooling down (attempt {attempts}/{max_attempts})"
             # POAP skip is safe — just answers "yes" at the standard abort prompt.
             # When POAP preboot is enabled we WANT POAP to run (download script
             # from TFTP, apply startup config), so only skip on explicit failure.

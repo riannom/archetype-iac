@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import concurrent.futures
 import importlib
 import sys
 import types
@@ -150,7 +151,11 @@ def _make_libvirt_provider() -> libvirt_provider.LibvirtProvider:
     provider._next_vlan = {}
     provider._conn = None
     provider._uri = "qemu:///system"
-    libvirt_provider.LibvirtProvider._n9kv_loader_recovery_attempted = set()
+    provider._libvirt_executor = concurrent.futures.ThreadPoolExecutor(
+        max_workers=1, thread_name_prefix="libvirt-test",
+    )
+    libvirt_provider.LibvirtProvider._n9kv_loader_recovery_attempts = {}
+    libvirt_provider.LibvirtProvider._n9kv_loader_recovery_last_at = {}
     return provider
 
 
@@ -992,7 +997,7 @@ async def test_libvirt_check_readiness_ssh_console_uses_probe_when_not_ssh_readi
 
 
 @pytest.mark.asyncio
-async def test_libvirt_check_readiness_n9kv_loader_recovery_runs_once(monkeypatch) -> None:
+async def test_libvirt_check_readiness_n9kv_loader_recovery_respects_cooldown(monkeypatch) -> None:
     provider = _make_libvirt_provider()
     monkeypatch.setattr(libvirt_provider.settings, "n9kv_boot_modifications_enabled", True, raising=False)
 
@@ -1061,10 +1066,12 @@ async def test_libvirt_check_readiness_n9kv_loader_recovery_runs_once(monkeypatc
     result_first = await provider.check_readiness("lab", "node1", "cisco_n9kv")
     result_second = await provider.check_readiness("lab", "node1", "cisco_n9kv")
 
+    # First attempt runs the CLI command; second is within cooldown so skipped.
     assert calls["count"] == 1
-    assert result_first.message == "Boot recovery in progress (loader prompt observed)"
+    assert result_first.message == "Boot recovery in progress (attempt 1/3)"
     assert result_first.details and "loader_recovery=sent_handoff_timeout" in result_first.details
-    assert result_second.details and "loader_recovery=skipped_already_attempted" in result_second.details
+    assert result_second.details and "loader_recovery=skipped_cooldown" in result_second.details
+    assert result_second.message == "Boot recovery cooling down (attempt 1/3)"
 
 
 @pytest.mark.asyncio
@@ -1134,7 +1141,8 @@ async def test_libvirt_check_readiness_n9kv_loader_recovery_skipped_when_boot_mo
 
 def test_libvirt_clear_vm_post_boot_cache_resets_n9kv_loader_guard(monkeypatch) -> None:
     domain_name = "arch-lab-node1"
-    libvirt_provider.LibvirtProvider._n9kv_loader_recovery_attempted = {domain_name}
+    libvirt_provider.LibvirtProvider._n9kv_loader_recovery_attempts = {domain_name: 2}
+    libvirt_provider.LibvirtProvider._n9kv_loader_recovery_last_at = {domain_name: 123.0}
 
     import agent.console_extractor as console_extractor
 
@@ -1147,7 +1155,8 @@ def test_libvirt_clear_vm_post_boot_cache_resets_n9kv_loader_guard(monkeypatch) 
 
     libvirt_provider.LibvirtProvider._clear_vm_post_boot_commands_cache(domain_name)
 
-    assert domain_name not in libvirt_provider.LibvirtProvider._n9kv_loader_recovery_attempted
+    assert domain_name not in libvirt_provider.LibvirtProvider._n9kv_loader_recovery_attempts
+    assert domain_name not in libvirt_provider.LibvirtProvider._n9kv_loader_recovery_last_at
 
 
 def test_libvirt_domain_status_mapping(monkeypatch) -> None:
