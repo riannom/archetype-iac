@@ -27,7 +27,11 @@ from app import agent_client, models
 from app.config import settings
 from app.metrics import nlm_phase_duration, record_reconciliation_cycle, record_node_state_transition
 from app.db import get_redis, get_session
+from collections import defaultdict
+
 from app.services.broadcaster import broadcast_node_state_change, broadcast_link_state_change
+from app.services.interface_naming import normalize_interface
+from app.services.link_reservations import release_link_endpoint_reservations
 from app.services.topology import TopologyService
 from app.utils.job import is_job_within_timeout
 from app.utils.locks import acquire_link_ops_lock, release_link_ops_lock
@@ -128,13 +132,48 @@ def reconciliation_lock(lab_id: str, timeout: int = 60):
 
 
 
+def _canonicalize_link_endpoints(
+    source_node: str,
+    source_interface: str,
+    target_node: str,
+    target_interface: str,
+    source_device: str | None = None,
+    target_device: str | None = None,
+) -> tuple[str, str, str, str]:
+    """Normalize and sort endpoints into canonical source/target order."""
+    src_i = normalize_interface(source_interface, source_device) if source_interface else "eth0"
+    tgt_i = normalize_interface(target_interface, target_device) if target_interface else "eth0"
+    if f"{source_node}:{src_i}" <= f"{target_node}:{tgt_i}":
+        return source_node, src_i, target_node, tgt_i
+    return target_node, tgt_i, source_node, src_i
+
+
+def _link_state_endpoint_key(
+    link_state: models.LinkState,
+    node_device_map: dict[str, str | None],
+) -> tuple[str, str, str, str]:
+    """Return canonical endpoint tuple for an existing LinkState row."""
+    src_dev = node_device_map.get(link_state.source_node)
+    tgt_dev = node_device_map.get(link_state.target_node)
+    return _canonicalize_link_endpoints(
+        link_state.source_node,
+        link_state.source_interface,
+        link_state.target_node,
+        link_state.target_interface,
+        source_device=src_dev,
+        target_device=tgt_dev,
+    )
+
+
 def _ensure_link_states_for_lab(session, lab_id: str) -> int:
     """Ensure LinkState records exist for all links in a lab's topology.
 
     This is called during reconciliation to create missing link state records
     for labs that may have been deployed before link state tracking was added.
 
-    Uses database as source of truth.
+    Uses database as source of truth. Performs canonical deduplication to
+    prevent duplicate link states with different interface naming forms
+    (e.g. eth1 vs Ethernet1).
 
     Returns the number of link states created.
     """
@@ -144,76 +183,132 @@ def _ensure_link_states_for_lab(session, lab_id: str) -> int:
     if not db_links:
         return 0
 
+    # Build node_device_map for canonical normalization
+    nodes = session.query(models.Node).filter(models.Node.lab_id == lab_id).all()
+    node_device_map: dict[str, str | None] = {
+        n.container_name: (n.kind or n.device_id) for n in nodes
+    }
+
     # Get existing link states
-    existing = (
+    existing = list(
         session.query(models.LinkState)
         .filter(models.LinkState.lab_id == lab_id)
         .all()
     )
-    existing_names = {ls.link_name for ls in existing}
+
+    # --- Dedup pass: consolidate existing duplicates by canonical key ---
+    key_groups: dict[tuple, list[models.LinkState]] = defaultdict(list)
+    for ls in existing:
+        key = _link_state_endpoint_key(ls, node_device_map)
+        key_groups[key].append(ls)
+
+    dedup_deleted = 0
+    for key, group in key_groups.items():
+        if len(group) <= 1:
+            continue
+        # Keep the preferred row (canonical naming, most recent)
+        preferred = sorted(
+            group,
+            key=lambda s: (
+                s.desired_state != "deleted",
+                s.updated_at or datetime.min.replace(tzinfo=timezone.utc),
+            ),
+        )[-1]
+        for dup in group:
+            if dup.id != preferred.id:
+                logger.warning(
+                    "Dedup: deleting duplicate LinkState %s (%s) in favour of %s (%s) for lab %s",
+                    dup.id, dup.link_name, preferred.id, preferred.link_name, lab_id,
+                )
+                release_link_endpoint_reservations(session, dup.id)
+                session.delete(dup)
+                existing.remove(dup)
+                dedup_deleted += 1
+    if dedup_deleted:
+        session.flush()
+
+    # --- Build canonical key set from surviving rows ---
+    existing_keys = {_link_state_endpoint_key(ls, node_device_map) for ls in existing}
 
     created_count = 0
     for link in db_links:
-        if link.link_name not in existing_names:
-            # Get node container names for the link state record
-            source_node = session.get(models.Node, link.source_node_id)
-            target_node = session.get(models.Node, link.target_node_id)
-            if not source_node or not target_node:
-                continue
+        # Get node container names for the link state record
+        source_node = session.get(models.Node, link.source_node_id)
+        target_node = session.get(models.Node, link.target_node_id)
+        if not source_node or not target_node:
+            continue
 
-            # Determine host placement from nodes or node_placements
-            source_host_id = source_node.host_id
-            target_host_id = target_node.host_id
+        src_dev = node_device_map.get(source_node.container_name)
+        tgt_dev = node_device_map.get(target_node.container_name)
+        canonical_key = _canonicalize_link_endpoints(
+            source_node.container_name, link.source_interface,
+            target_node.container_name, link.target_interface,
+            src_dev, tgt_dev,
+        )
 
-            # Fall back to NodePlacement if node.host_id not set
-            if not source_host_id:
-                placement = (
-                    session.query(models.NodePlacement)
-                    .filter(
-                        models.NodePlacement.lab_id == lab_id,
-                        models.NodePlacement.node_name == source_node.container_name,
-                    )
-                    .first()
+        if canonical_key in existing_keys:
+            continue  # Already exists (possibly under different naming)
+
+        # Determine host placement from nodes or node_placements
+        source_host_id = source_node.host_id
+        target_host_id = target_node.host_id
+
+        # Fall back to NodePlacement if node.host_id not set
+        if not source_host_id:
+            placement = (
+                session.query(models.NodePlacement)
+                .filter(
+                    models.NodePlacement.lab_id == lab_id,
+                    models.NodePlacement.node_name == source_node.container_name,
                 )
-                if placement:
-                    source_host_id = placement.host_id
+                .first()
+            )
+            if placement:
+                source_host_id = placement.host_id
 
-            if not target_host_id:
-                placement = (
-                    session.query(models.NodePlacement)
-                    .filter(
-                        models.NodePlacement.lab_id == lab_id,
-                        models.NodePlacement.node_name == target_node.container_name,
-                    )
-                    .first()
+        if not target_host_id:
+            placement = (
+                session.query(models.NodePlacement)
+                .filter(
+                    models.NodePlacement.lab_id == lab_id,
+                    models.NodePlacement.node_name == target_node.container_name,
                 )
-                if placement:
-                    target_host_id = placement.host_id
-
-            # Determine if cross-host
-            is_cross_host = (
-                source_host_id is not None
-                and target_host_id is not None
-                and source_host_id != target_host_id
+                .first()
             )
+            if placement:
+                target_host_id = placement.host_id
 
-            new_state = models.LinkState(
-                lab_id=lab_id,
-                link_name=link.link_name,
-                link_definition_id=link.id,
-                source_node=source_node.container_name,
-                source_interface=link.source_interface,
-                target_node=target_node.container_name,
-                target_interface=link.target_interface,
-                source_host_id=source_host_id,
-                target_host_id=target_host_id,
-                is_cross_host=is_cross_host,
-                desired_state="up",
-                actual_state="unknown",
-            )
-            session.add(new_state)
-            existing_names.add(link.link_name)
-            created_count += 1
+        # Determine if cross-host
+        is_cross_host = (
+            source_host_id is not None
+            and target_host_id is not None
+            and source_host_id != target_host_id
+        )
+
+        # Use canonical (normalized) interface names for the new state
+        src_n_canon, src_i_canon, tgt_n_canon, tgt_i_canon = canonical_key
+
+        # If canonical ordering swapped source/target, swap host IDs too
+        if src_n_canon != source_node.container_name:
+            source_host_id, target_host_id = target_host_id, source_host_id
+
+        new_state = models.LinkState(
+            lab_id=lab_id,
+            link_name=f"{src_n_canon}:{src_i_canon}-{tgt_n_canon}:{tgt_i_canon}",
+            link_definition_id=link.id,
+            source_node=src_n_canon,
+            source_interface=src_i_canon,
+            target_node=tgt_n_canon,
+            target_interface=tgt_i_canon,
+            source_host_id=source_host_id,
+            target_host_id=target_host_id,
+            is_cross_host=is_cross_host,
+            desired_state="up",
+            actual_state="unknown",
+        )
+        session.add(new_state)
+        existing_keys.add(canonical_key)
+        created_count += 1
 
     return created_count
 
