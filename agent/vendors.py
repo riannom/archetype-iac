@@ -1291,7 +1291,7 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         # Detect login prompt via serial console log to defer post-boot commands
         # until NX-OS is actually ready (boot takes 5-10 min).
         readiness_probe="log_pattern",
-        readiness_pattern=r"login:|User Access Verification",
+        readiness_pattern=r"login:|User Access Verification|switch[^\s]*[#>]",
         readiness_timeout=600,  # N9Kv takes a long time to boot
         # Serial (virsh) console for NX-OS CLI access.
         # SSH hits the Wind Linux underlay (bash), not NX-OS.
