@@ -815,6 +815,31 @@ class SerialConsoleExtractor:
         if not commands:
             return CommandCaptureResult(success=True, commands_run=0, outputs=[])
 
+        # If a user console session is active, temporarily pause user input and
+        # run capture through that PTY to avoid competing virsh sessions.
+        from agent.console_session_registry import piggyback_run_commands_capture
+
+        piggyback_result = piggyback_run_commands_capture(
+            domain_name=self.domain_name,
+            commands=commands,
+            username=username,
+            password=password,
+            enable_password=enable_password,
+            prompt_pattern=prompt_pattern,
+            paging_disable=paging_disable,
+            attempt_enable=attempt_enable,
+            timeout=self.timeout,
+        )
+        if piggyback_result is not None:
+            if piggyback_result.success:
+                return piggyback_result
+            logger.info(
+                "Piggyback CLI capture failed for %s, "
+                "skipping direct console to protect active web session: %s",
+                self.domain_name, piggyback_result.error,
+            )
+            return piggyback_result
+
         from agent.console_session_registry import get_session
         from agent.virsh_console_lock import console_lock
 

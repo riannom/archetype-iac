@@ -24,6 +24,7 @@ import shlex
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Optional
 
 import docker
@@ -247,6 +248,7 @@ class LibvirtLogPatternProbe(ReadinessProbe):
         uri: str = "qemu:///system",
         progress_patterns: Optional[dict[str, int]] = None,
         diagnostic_patterns: Optional[dict[str, str]] = None,
+        serial_log_path: str | None = None,
     ):
         """Initialize libvirt log pattern probe.
 
@@ -255,10 +257,12 @@ class LibvirtLogPatternProbe(ReadinessProbe):
             domain_name: Libvirt domain name
             uri: Libvirt connection URI
             progress_patterns: Optional dict of pattern -> progress percent
+            serial_log_path: Optional path to serial log file for lock-free reading
         """
         self.pattern = re.compile(pattern, re.IGNORECASE)
         self.domain_name = domain_name
         self.uri = uri
+        self.serial_log_path = serial_log_path
         self.progress_patterns = progress_patterns or {}
         self._compiled_progress = {
             re.compile(p, re.IGNORECASE): pct
@@ -498,15 +502,32 @@ class LibvirtLogPatternProbe(ReadinessProbe):
     def _get_console_output(self) -> str:
         """Get console output from VM serial port.
 
-        For TCP serial VMs: reads directly from the TCP port (no lock needed).
-        For PTY serial VMs: uses virsh console with a non-blocking lock to skip
-        gracefully if another session is using the serial console.
+        Priority: serial log file (no lock) > TCP serial > PTY virsh console.
         """
+        self._last_console_read_reason = "attempted"
+
+        # Primary: serial log file (no lock needed, works even with active console)
+        if self.serial_log_path:
+            try:
+                log_path = Path(self.serial_log_path)
+                if log_path.exists() and log_path.stat().st_size > 0:
+                    content = log_path.read_text(errors="replace")
+                    if len(content) > 65536:
+                        content = content[-65536:]  # Tail ~64KB
+                    self._last_console_read_reason = (
+                        "serial_log_file" if content.strip() else "serial_log_empty"
+                    )
+                    return content
+                self._last_console_read_reason = "serial_log_not_ready"
+            except Exception as e:
+                logger.debug(f"Error reading serial log {self.serial_log_path}: {e}")
+                self._last_console_read_reason = "serial_log_error"
+            # Fall through to virsh console path
+
         # TCP serial VMs: QEMU's chardev TCP only allows one active connection.
         # Connecting from the readiness probe blocks the user's console session
         # (CLOSE-WAIT sockets prevent QEMU from accepting new connections).
         # Skip serial output reading for TCP serial — rely on SSH probe or timeout.
-        self._last_console_read_reason = "attempted"
         tcp_port = self._get_tcp_serial_port()
         if tcp_port:
             logger.debug(
@@ -670,6 +691,7 @@ def get_libvirt_probe(
     uri: str = "qemu:///system",
     readiness_probe: str | None = None,
     readiness_pattern: str | None = None,
+    serial_log_path: str | None = None,
 ) -> ReadinessProbe:
     """Get the appropriate readiness probe for a VM device.
 
@@ -679,6 +701,7 @@ def get_libvirt_probe(
         uri: Libvirt connection URI
         readiness_probe: Optional explicit probe type override
         readiness_pattern: Optional explicit readiness pattern override
+        serial_log_path: Optional path to serial log file for lock-free reading
 
     Returns:
         ReadinessProbe instance configured for this VM
@@ -719,6 +742,7 @@ def get_libvirt_probe(
             uri=uri,
             progress_patterns=progress_patterns,
             diagnostic_patterns=diagnostic_patterns,
+            serial_log_path=serial_log_path,
         )
 
     return NoopProbe()

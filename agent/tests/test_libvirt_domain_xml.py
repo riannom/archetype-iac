@@ -255,7 +255,7 @@ def _gen_xml(provider=None, **overrides):
         "name", "node_config", "overlay_path", "data_volume_path",
         "interface_count", "vlan_tags", "kind",
         "include_management_interface", "management_network",
-        "config_iso_path",
+        "config_iso_path", "serial_log_path",
     }
 
     # Route overrides: method params stay as kwargs, everything else → node_config
@@ -908,3 +908,69 @@ class TestVendorRoundTrip:
         # Machine type i440fx
         type_elem = root.find(".//os/type")
         assert "i440fx" in type_elem.get("machine")
+
+
+# ---------------------------------------------------------------------------
+# Serial log element tests
+# ---------------------------------------------------------------------------
+
+
+class TestSerialLog:
+    """Verify <log> element appears in serial devices for lock-free observation."""
+
+    def test_pty_serial_has_log_element(self):
+        """PTY serial should include <log> when serial_log_path is provided."""
+        xml = _gen_xml(serial_log_path="/tmp/serial-logs/test.log")
+        root = ET.fromstring(xml)
+        serial = root.find(".//devices/serial[@type='pty']")
+        assert serial is not None
+        log = serial.find("log")
+        assert log is not None, "Missing <log> element in PTY serial"
+        assert log.get("file") == "/tmp/serial-logs/test.log"
+        assert log.get("append") == "off"
+
+    def test_tcp_serial_has_log_element(self):
+        """TCP serial should include <log> when serial_log_path is provided."""
+        xml = _gen_xml(
+            serial_type="tcp",
+            serial_log_path="/tmp/serial-logs/tcp-test.log",
+        )
+        root = ET.fromstring(xml)
+        serial = root.find(".//devices/serial[@type='tcp']")
+        assert serial is not None
+        log = serial.find("log")
+        assert log is not None, "Missing <log> element in TCP serial"
+        assert log.get("file") == "/tmp/serial-logs/tcp-test.log"
+        assert log.get("append") == "off"
+
+    def test_no_log_without_path(self):
+        """No <log> element when serial_log_path is not provided."""
+        xml = _gen_xml()
+        root = ET.fromstring(xml)
+        serial = root.find(".//devices/serial[@type='pty']")
+        assert serial is not None
+        log = serial.find("log")
+        assert log is None, "<log> should not appear without serial_log_path"
+
+    def test_log_path_xml_escaped(self):
+        """Paths with special XML chars should be escaped in <log> element."""
+        xml = _gen_xml(serial_log_path="/tmp/lab&test/serial.log")
+        root = ET.fromstring(xml)
+        log = root.find(".//devices/serial/log")
+        assert log is not None
+        assert log.get("file") == "/tmp/lab&test/serial.log"
+
+    def test_additional_serial_ports_no_log(self):
+        """Only the primary serial port (port 0) should have <log>."""
+        xml = _gen_xml(
+            serial_port_count=2,
+            serial_log_path="/tmp/serial.log",
+        )
+        root = ET.fromstring(xml)
+        serials = root.findall(".//devices/serial")
+        assert len(serials) >= 2
+        # Only the first serial should have <log>
+        logs = [s.find("log") for s in serials]
+        assert logs[0] is not None, "Primary serial should have <log>"
+        for i, log in enumerate(logs[1:], 1):
+            assert log is None, f"Serial port {i} should not have <log>"

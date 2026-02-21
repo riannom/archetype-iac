@@ -22,7 +22,12 @@ import threading
 from dataclasses import dataclass, field
 from typing import Callable, Optional
 
-from agent.console_extractor import CommandResult, ExtractionResult
+from agent.console_extractor import (
+    CommandCaptureResult,
+    CommandOutput,
+    CommandResult,
+    ExtractionResult,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -611,6 +616,207 @@ def piggyback_run_commands(
             f"Unexpected error in piggyback command automation for {domain_name}"
         )
         return CommandResult(success=False, error=f"Unexpected error: {e}")
+
+    finally:
+        set_console_control_state(
+            domain_name,
+            state="interactive",
+            message="Configuration completed. Interactive control restored.",
+        )
+        session.input_paused.set()
+        session.pty_read_paused.set()
+        session._lock.release()
+
+
+def piggyback_run_commands_capture(
+    domain_name: str,
+    commands: list[str],
+    username: str = "",
+    password: str = "",
+    enable_password: str = "",
+    prompt_pattern: str = r"[>#]\s*$",
+    paging_disable: str = "terminal length 0",
+    attempt_enable: bool = True,
+    timeout: float = 30,
+) -> Optional[CommandCaptureResult]:
+    """Attempt to run and capture commands via an active web console session.
+
+    Like piggyback_run_commands() but returns per-command captured output.
+    Used by boot intervention handlers that need to read CLI responses.
+
+    Returns:
+        CommandCaptureResult on success/failure if a session was found.
+        None if no active session exists (caller should fall back to
+        normal direct console automation).
+    """
+    if not commands:
+        return CommandCaptureResult(success=True, commands_run=0, outputs=[])
+
+    session = get_session(domain_name)
+    if session is None:
+        return None
+
+    if not session._lock.acquire(timeout=5):
+        logger.debug(f"Piggyback capture lock busy for {domain_name}, falling back")
+        return None
+
+    ws_forward: Callable[[bytes], None] = lambda _data: None
+    try:
+        if get_session(domain_name) is None:
+            return None
+
+        logger.info(f"Piggybacking CLI capture on web console for {domain_name}")
+
+        session.input_paused.clear()
+        session.pty_read_paused.clear()
+        set_console_control_state(
+            domain_name,
+            state="read_only",
+            message="Configuration in progress. Console is view-only.",
+        )
+
+        import time
+        time.sleep(0.2)
+
+        def _ws_forward(data: bytes) -> None:
+            try:
+                asyncio.run_coroutine_threadsafe(
+                    session.websocket.send_bytes(data),
+                    session.loop,
+                ).result(timeout=2)
+            except Exception:
+                pass
+
+        ws_forward = _ws_forward
+
+        injector = PtyInjector(
+            fd=session.master_fd,
+            ws_forward=ws_forward,
+            default_timeout=timeout,
+        )
+
+        # Prime the prompt
+        injector.send("\x15")
+        time.sleep(0.1)
+        injector.sendline("")
+
+        prompt_text = injector.expect(prompt_pattern, timeout=10)
+        prompt_match = (getattr(injector, "last_match", "") or "").strip()
+
+        # Exit config mode if needed
+        if "(config" in prompt_match or "(config" in prompt_text:
+            injector.sendline("end")
+            injector.expect(prompt_pattern, timeout=5)
+            prompt_match = (getattr(injector, "last_match", "") or "").strip()
+
+        # Handle login if needed
+        if username and ("Username:" in prompt_text or "Login:" in prompt_text):
+            injector.sendline(username)
+            injector.expect(r"[Pp]assword:", timeout=10)
+            injector.sendline(password)
+            injector.expect(prompt_pattern, timeout=10)
+            prompt_match = (getattr(injector, "last_match", "") or "").strip()
+
+        # Enable mode
+        if attempt_enable and prompt_match.endswith(">"):
+            injector.sendline("enable")
+            try:
+                injector.expect(r"[Pp]assword:", timeout=5)
+                injector.sendline(enable_password or "")
+                injector.expect(prompt_pattern, timeout=10)
+            except TimeoutError:
+                try:
+                    injector.expect(prompt_pattern, timeout=3)
+                except TimeoutError:
+                    pass
+
+        # Disable paging
+        if paging_disable:
+            injector.sendline(paging_disable)
+            try:
+                injector.expect(prompt_pattern, timeout=5)
+            except TimeoutError:
+                pass
+
+        # Execute commands and capture output
+        commands_run = 0
+        outputs: list[CommandOutput] = []
+        for command in commands:
+            logger.info(f"Piggyback capture running on {domain_name}: {command}")
+            injector.sendline(command)
+            try:
+                output = injector.expect(prompt_pattern, timeout=timeout)
+            except TimeoutError:
+                outputs.append(CommandOutput(
+                    command=command,
+                    success=False,
+                    error="Timeout waiting for command output",
+                ))
+                continue
+
+            if _contains_cli_error(output):
+                outputs.append(CommandOutput(
+                    command=command,
+                    success=False,
+                    output=output,
+                    error=f"CLI rejected command: {command}",
+                ))
+                continue
+
+            # Clean output: strip the echoed command and trailing prompt
+            clean = output
+            lines = clean.splitlines()
+            if lines and command in lines[0]:
+                lines = lines[1:]
+            clean = "\n".join(lines).strip()
+
+            outputs.append(CommandOutput(
+                command=command,
+                success=True,
+                output=clean,
+            ))
+            commands_run += 1
+
+        ws_forward(
+            b"\r\n\x1b[93m--- Automation complete; interactive control restored ---\x1b[0m\r\n"
+        )
+
+        success = commands_run == len(commands)
+        error = ""
+        if not success:
+            failed = len(commands) - commands_run
+            error = f"{failed} command(s) failed"
+
+        logger.info(
+            f"Piggyback CLI capture succeeded for {domain_name} "
+            f"({commands_run}/{len(commands)} commands)"
+        )
+        return CommandCaptureResult(
+            success=success,
+            commands_run=commands_run,
+            outputs=outputs,
+            error=error,
+        )
+
+    except TimeoutError as e:
+        ws_forward(
+            b"\r\n\x1b[91m--- Automation timed out; restoring control ---\x1b[0m\r\n"
+        )
+        logger.warning(f"Piggyback CLI capture timed out for {domain_name}: {e}")
+        return CommandCaptureResult(success=False, error=f"Piggyback timeout: {e}")
+
+    except OSError as e:
+        ws_forward(
+            b"\r\n\x1b[91m--- Automation failed; restoring control ---\x1b[0m\r\n"
+        )
+        logger.warning(f"Piggyback CLI capture PTY error for {domain_name}: {e}")
+        return CommandCaptureResult(success=False, error=f"PTY error: {e}")
+
+    except Exception as e:
+        logger.exception(
+            f"Unexpected error in piggyback CLI capture for {domain_name}"
+        )
+        return CommandCaptureResult(success=False, error=f"Unexpected error: {e}")
 
     finally:
         set_console_control_state(

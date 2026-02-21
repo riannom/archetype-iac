@@ -1109,6 +1109,7 @@ class LibvirtProvider(Provider):
         include_management_interface: bool = False,
         management_network: str = "default",
         config_iso_path: Path | None = None,
+        serial_log_path: Path | None = None,
     ) -> str:
         """Generate libvirt domain XML for a VM.
 
@@ -1364,11 +1365,15 @@ class LibvirtProvider(Provider):
         # Build serial/console XML — PTY (default) or TCP telnet
         serial_type = node_config.get("serial_type", "pty")
         serial_port_count = node_config.get("serial_port_count", 1)
+        # Libvirt <log> element tees serial output to a file for lock-free observation
+        log_xml = ""
+        if serial_log_path:
+            log_xml = f"\n      <log file='{xml_escape(str(serial_log_path))}' append='off'/>"
         if serial_type == "tcp":
             tcp_port = self._allocate_tcp_serial_port()
             serial_xml = f"""    <serial type='tcp'>
       <source mode='bind' host='127.0.0.1' service='{tcp_port}'/>
-      <protocol type='telnet'/>
+      <protocol type='telnet'/>{log_xml}
       <target port='0'/>
     </serial>
     <console type='tcp'>
@@ -1383,7 +1388,7 @@ class LibvirtProvider(Provider):
       <target port='{port_idx}'/>
     </serial>"""
         else:
-            serial_xml = """    <serial type='pty'>
+            serial_xml = f"""    <serial type='pty'>{log_xml}
       <target port='0'/>
     </serial>
     <console type='pty'>
@@ -1815,6 +1820,11 @@ class LibvirtProvider(Provider):
             self._resolve_management_network, lab_id, node_name, kind,
         )
 
+        # Serial log for lock-free readiness observation
+        serial_log_dir = workspace / "serial-logs"
+        serial_log_dir.mkdir(parents=True, exist_ok=True)
+        serial_log_path = serial_log_dir / f"{domain_name}.log"
+
         xml = self._generate_domain_xml(
             domain_name,
             node_config,
@@ -1825,6 +1835,7 @@ class LibvirtProvider(Provider):
             kind=kind,
             include_management_interface=include_management_interface,
             management_network=management_network,
+            serial_log_path=serial_log_path,
         )
 
         # Phase 4: define + start domain (libvirt thread)
@@ -1886,6 +1897,13 @@ class LibvirtProvider(Provider):
                         logger.info(f"Removed disk: {disk_file}")
                     except Exception as e:
                         logger.warning(f"Failed to remove disk {disk_file}: {e}")
+
+            # Clean up serial logs
+            serial_log_dir = workspace / "serial-logs"
+            if serial_log_dir.exists():
+                import shutil
+                shutil.rmtree(serial_log_dir, ignore_errors=True)
+                logger.info(f"Removed serial log directory: {serial_log_dir}")
 
             # Clean up VLAN allocations
             if lab_id in self._vlan_allocations:
@@ -2060,6 +2078,15 @@ class LibvirtProvider(Provider):
                 logger.info(f"Removed config ISO: {iso_path}")
             except Exception as e:
                 logger.warning(f"Failed to remove config ISO {iso_path}: {e}")
+
+        # Clean up per-node serial log
+        serial_log = workspace / "serial-logs" / f"{domain_name}.log"
+        if serial_log.exists():
+            try:
+                serial_log.unlink()
+                logger.info(f"Removed serial log: {serial_log}")
+            except Exception as e:
+                logger.warning(f"Failed to remove serial log {serial_log}: {e}")
 
         # Clean up per-node VLAN allocations
         lab_allocs = self._vlan_allocations.get(lab_id, {})
@@ -2452,6 +2479,11 @@ class LibvirtProvider(Provider):
                 self._resolve_management_network, lab_id, node_name, kind,
             )
 
+            # Serial log for lock-free readiness observation
+            serial_log_dir = workspace / "serial-logs"
+            serial_log_dir.mkdir(parents=True, exist_ok=True)
+            serial_log_path = serial_log_dir / f"{domain_name}.log"
+
             xml = self._generate_domain_xml(
                 domain_name,
                 node_config,
@@ -2463,6 +2495,7 @@ class LibvirtProvider(Provider):
                 include_management_interface=include_management_interface,
                 management_network=management_network,
                 config_iso_path=config_iso_path,
+                serial_log_path=serial_log_path,
             )
 
             # Phase 4: define domain (libvirt thread)
@@ -3626,12 +3659,18 @@ class LibvirtProvider(Provider):
                 progress_percent=100,
             )
 
+        # Compute serial log path for lock-free observation
+        serial_log_path = (
+            Path(settings.workspace_path) / lab_id / "serial-logs" / f"{domain_name}.log"
+        )
+
         probe = get_libvirt_probe(
             kind,
             domain_name,
             self._uri,
             readiness_probe=overrides.get("readiness_probe"),
             readiness_pattern=overrides.get("readiness_pattern"),
+            serial_log_path=str(serial_log_path),
         )
 
         # Run the probe
