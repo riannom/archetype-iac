@@ -295,10 +295,14 @@ class VendorConfig:
     config_inject_fs_type: str = "ext2"
     # Path within the mounted partition where startup-config is written — bootflash only
     config_inject_path: str = "/startup-config"
-    # ISO 9660 volume label for config CD-ROM — iso only (e.g., "config-1" for IOS-XR CVAC)
+    # ISO 9660 volume label for config CD-ROM — iso only (e.g., "config" for IOS-XR CVAC)
     config_inject_iso_volume_label: str = ""
     # Filename inside the ISO — iso only (e.g., "iosxr_config.txt" for IOS-XR CVAC)
     config_inject_iso_filename: str = ""
+
+    # Default startup config template applied when no user config exists.
+    # Use {hostname} placeholder for the node name.
+    default_startup_config: str = ""
 
     # ==========================================================================
     # Container runtime configuration (used by DockerProvider)
@@ -560,10 +564,30 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         tags=["routing", "bgp", "mpls", "segment-routing", "netconf"],
         filename_patterns=[r"xrv9k[_-]?[\d\.]+.*\.qcow2", r"iosxrv9000[_-]?[\d\.]+.*\.qcow2"],
         vrnetlab_subdir="cisco/xrv9k",
-        # Config injection: IOS-XR CVAC reads config from CD-ROM with label "config-1"
+        # Config injection: IOS-XR CVAC reads config from CD-ROM with label "config"
         config_inject_method="iso",
-        config_inject_iso_volume_label="config-1",
+        config_inject_iso_volume_label="config",
         config_inject_iso_filename="iosxr_config.txt",
+        # Default config prevents the Administrative User Dialog on first boot
+        default_startup_config=(
+            "hostname {hostname}\n"
+            "username cisco\n"
+            " group root-lr\n"
+            " group cisco-support\n"
+            " secret cisco\n"
+            "!\n"
+            "username admin\n"
+            " group root-lr\n"
+            " group cisco-support\n"
+            " secret cisco\n"
+            "!\n"
+            "username lab\n"
+            " group root-lr\n"
+            " group cisco-support\n"
+            " secret cisco\n"
+            "!\n"
+            "end\n"
+        ),
         default_credentials="cisco / cisco",
     ),
     "cisco_xrd": VendorConfig(

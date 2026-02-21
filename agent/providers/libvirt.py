@@ -2368,6 +2368,11 @@ class LibvirtProvider(Provider):
                 config_file = workspace / "configs" / node_name / "startup-config"
                 if config_file.exists():
                     startup_config = config_file.read_text()
+            if not startup_config:
+                vendor = get_vendor_config(kind)
+                if vendor and vendor.default_startup_config:
+                    startup_config = vendor.default_startup_config.replace("{hostname}", node_name)
+                    logger.info("Using default startup config for %s (%s)", node_name, kind)
             if startup_config and (
                 canonical_kind != "cisco_n9kv" or settings.n9kv_boot_modifications_enabled
             ):
@@ -2503,9 +2508,34 @@ class LibvirtProvider(Provider):
         ansi_escape = re.compile(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
         text = ansi_escape.sub("", text).replace("\r", "")
 
-        # Keep normalization narrowly scoped to N9Kv bootflash staging.
         vendor = get_vendor_config(kind)
         canonical_kind = vendor.kind if vendor else get_kind_for_device(kind)
+
+        # IOS-XR: strip SSH extraction artifacts before ISO injection
+        if canonical_kind == "cisco_iosxr":
+            iosxr_lines: list[str] = []
+            for line in text.split("\n"):
+                stripped = line.strip()
+                if stripped.startswith("Building configuration"):
+                    continue
+                if stripped.startswith("!! IOS XR Configuration"):
+                    continue
+                if stripped.startswith("!! Last configuration change"):
+                    continue
+                if re.match(r"^RP/\d+/RP\d+/CPU\d+:[\w\-]+#", stripped):
+                    continue
+                iosxr_lines.append(line)
+            # Strip leading/trailing blank lines
+            while iosxr_lines and not iosxr_lines[0].strip():
+                iosxr_lines.pop(0)
+            while iosxr_lines and not iosxr_lines[-1].strip():
+                iosxr_lines.pop()
+            text = "\n".join(iosxr_lines)
+            if text and not text.endswith("\n"):
+                text += "\n"
+            return text
+
+        # N9Kv-specific normalization for bootflash staging
         if canonical_kind != "cisco_n9kv":
             return text
 
