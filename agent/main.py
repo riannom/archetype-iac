@@ -2772,7 +2772,7 @@ async def cleanup_workspaces(request: CleanupWorkspacesRequest):
         if not entry.is_dir():
             continue
         # Skip known non-lab directories
-        if entry.name in ("images", "uploads", ".tmp", "configs"):
+        if entry.name in ("images", "uploads", ".tmp", "configs", ".poap-tftp"):
             continue
         if entry.name not in valid_set:
             try:

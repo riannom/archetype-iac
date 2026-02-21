@@ -43,17 +43,30 @@ def _run(command):
         raise
 
 
+def _try_run(command):
+    _log("running command (best-effort): %s" % command)
+    try:
+        cli(command)
+        _log("command completed: %s" % command)
+    except Exception as exc:
+        _log("command skipped '%s': %s" % (command, exc))
+
+
 def _load_and_persist_startup():
     try:
-        # Preferred path validated in lab:
-        # this imports bootflash startup into running and (on this image path)
-        # also triggers save-to-disk behavior.
         _run("copy bootflash:startup-config running-config")
     except Exception as exc:
         _log("direct copy failed, using compatibility sequence: %s" % exc)
         _run("copy bootflash:startup-config startup-config")
         _run("copy startup-config running-config")
     _run("copy running-config startup-config")
+
+
+def _disable_poap():
+    _try_run("configure terminal")
+    _try_run("system no poap")
+    _try_run("no feature poap")
+    _try_run("end")
 
 
 def main():
@@ -74,9 +87,10 @@ def main():
         handle.write(content)
     _append_debug("wrote /bootflash/startup-config")
 
-    _run("configure terminal ; system no poap ; end")
     _load_and_persist_startup()
     _log("startup-config applied and persisted")
+    _disable_poap()
+    _log("POAP disable attempted")
     return 0
 
 
