@@ -63,6 +63,7 @@ from agent.vendors import (
     get_container_config,
     get_console_shell,
     is_ceos_kind,
+    is_cjunos_kind,
 )
 
 
@@ -988,6 +989,39 @@ event-handler IPTABLES_CLEANUP
         if_wait_script.chmod(0o755)
         logger.debug(f"Created if-wait.sh for {node.log_name()}")
 
+    def _setup_cjunos_directories(
+        self,
+        node_name: str,
+        node: TopologyNode,
+        workspace: Path,
+    ) -> None:
+        """Set up cJunOS directories and startup config.
+
+        cJunOS reads startup config from /config/startup-config.cfg when
+        the /config directory is bind-mounted into the container.
+
+        This is a blocking operation meant to run in asyncio.to_thread().
+        """
+        import shutil
+
+        config_dir = workspace / "configs" / node_name / "config"
+        config_dir.mkdir(parents=True, exist_ok=True)
+        logger.debug(f"Created cJunOS config directory: {config_dir}")
+
+        startup_config_path = config_dir / "startup-config.cfg"
+
+        # Check for existing extracted config
+        extracted_config = workspace / "configs" / node_name / "startup-config"
+
+        if node.startup_config:
+            startup_config_path.write_text(node.startup_config)
+            logger.debug(f"Wrote startup-config from topology for {node.log_name()}")
+        elif extracted_config.exists():
+            shutil.copy2(extracted_config, startup_config_path)
+            logger.debug(f"Copied extracted startup-config for {node.log_name()}")
+        else:
+            logger.debug(f"No startup-config for {node.log_name()}, booting with factory defaults")
+
     async def _ensure_directories(
         self,
         topology: ParsedTopology,
@@ -1010,6 +1044,16 @@ event-handler IPTABLES_CLEANUP
                     )
                 else:
                     self._setup_ceos_directories(node_name, node, workspace)
+            elif is_cjunos_kind(node.kind):
+                if use_thread:
+                    await asyncio.to_thread(
+                        self._setup_cjunos_directories,
+                        node_name,
+                        node,
+                        workspace,
+                    )
+                else:
+                    self._setup_cjunos_directories(node_name, node, workspace)
 
     def _calculate_required_interfaces(self, topology: ParsedTopology) -> int:
         """Calculate the maximum interface index needed for pre-provisioning.
@@ -2976,10 +3020,14 @@ event-handler IPTABLES_CLEANUP
                         error=f"Docker image not found: {effective_image}",
                     )
 
-            # Set up cEOS directories if needed
+            # Set up vendor-specific directories if needed
             if is_ceos_kind(kind):
                 await asyncio.to_thread(
                     self._setup_ceos_directories, node_name, node, workspace
+                )
+            elif is_cjunos_kind(kind):
+                await asyncio.to_thread(
+                    self._setup_cjunos_directories, node_name, node, workspace
                 )
 
             # Ensure management network exists

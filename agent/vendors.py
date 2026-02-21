@@ -988,7 +988,7 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         readiness_pattern=r"EVO FLAVORS|login:",
         readiness_timeout=600,
         config_extract_method="docker",
-        config_extract_command="cli -c 'show configuration | display set'",
+        config_extract_command="cli -c 'show configuration'",
         config_extract_timeout=30,
         environment={
             "CPTX_COSIM": "BT|BX",
@@ -998,6 +998,7 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         binds=[
             "/dev/kvm:/dev/kvm",
             "/dev/net/tun:/dev/net/tun",
+            "{workspace}/configs/{node}/config:/config",
         ],
         sysctls={
             "net.ipv4.ip_forward": "1",
@@ -2232,6 +2233,19 @@ def is_ceos_kind(kind: str) -> bool:
     # Normalize to canonical kind first
     canonical = get_kind_for_device(kind)
     return canonical == "ceos"
+
+
+def is_cjunos_kind(kind: str) -> bool:
+    """Check if a device kind is cJunOS (Juniper containerized Junos Evolved).
+
+    Args:
+        kind: Device kind to check
+
+    Returns:
+        True if the kind is cJunOS or one of its aliases
+    """
+    canonical = get_kind_for_device(kind)
+    return canonical == "juniper_cjunos"
 
 
 def get_all_vendors() -> list[VendorConfig]:
