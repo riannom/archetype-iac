@@ -244,3 +244,98 @@ def test_get_libvirt_config_fallback_has_no_config_injection():
     """Fallback config should have config_inject_method='none'."""
     lc = get_libvirt_config("unknown_device_xyz_fallback")
     assert lc.config_inject_method == "none"
+
+
+# ---------------------------------------------------------------------------
+# Console POAP abort handling
+# ---------------------------------------------------------------------------
+
+
+def test_prime_console_answers_yes_to_poap_abort():
+    """_prime_console_for_prompt must send 'yes' at POAP abort, not Enter."""
+    try:
+        import pexpect
+    except ImportError:
+        import pytest as _pytest
+        _pytest.skip("pexpect not available")
+    from unittest.mock import MagicMock, patch
+    from agent.console_extractor import SerialConsoleExtractor
+
+    ext = SerialConsoleExtractor.__new__(SerialConsoleExtractor)
+    ext.timeout = 30
+    ext.domain_name = "test-domain"
+    ext.child = MagicMock()
+
+    sent_lines: list[str] = []
+    sent_raw: list[str] = []
+
+    def mock_sendline(text):
+        sent_lines.append(text)
+
+    def mock_send(text):
+        sent_raw.append(text)
+
+    ext.child.sendline = mock_sendline
+    ext.child.send = mock_send
+
+    # Simulate: first expect finds the POAP abort prompt (index 4+N)
+    # The POAP abort pattern is the 5th pattern (index 4 after prompt patterns)
+    poap_abort_idx = None
+
+    def mock_expect(patterns, timeout=None):
+        nonlocal poap_abort_idx
+        for i, pat in enumerate(patterns):
+            if "Abort" in pat and "Power On Auto Provisioning" in pat:
+                poap_abort_idx = i
+                return i
+        raise pexpect.TIMEOUT("no match")
+
+    ext.child.expect = mock_expect
+
+    result = ext._prime_console_for_prompt(r"[>#]\s*$")
+
+    assert result is True
+    # Must have sent "yes" via sendline (not just Enter via send)
+    assert "yes" in sent_lines, f"Expected 'yes' in sent_lines, got {sent_lines}"
+    # Must NOT have sent Enter before the expect matched
+    assert len(sent_raw) == 0, f"Expected no raw sends before POAP abort, got {sent_raw}"
+
+
+def test_prime_console_sends_enter_when_no_output():
+    """_prime_console_for_prompt sends Enter only after expect timeout."""
+    try:
+        import pexpect
+    except ImportError:
+        import pytest as _pytest
+        _pytest.skip("pexpect not available")
+    from unittest.mock import MagicMock
+    from agent.console_extractor import SerialConsoleExtractor
+
+    ext = SerialConsoleExtractor.__new__(SerialConsoleExtractor)
+    ext.timeout = 30
+    ext.domain_name = "test-domain"
+    ext.child = MagicMock()
+
+    sent_raw: list[str] = []
+    ext.child.send = lambda text: sent_raw.append(text)
+    ext.child.sendline = MagicMock()
+
+    call_count = 0
+    prompt_idx = 0  # First pattern = prompt
+
+    def mock_expect(patterns, timeout=None):
+        nonlocal call_count
+        call_count += 1
+        if call_count <= 2:
+            raise pexpect.TIMEOUT("no output")
+        # Third call: simulate prompt appearing
+        return prompt_idx
+
+    ext.child.expect = mock_expect
+
+    result = ext._prime_console_for_prompt(r"[>#]\s*$")
+
+    assert result is True
+    # Enter should have been sent during the timeout iterations
+    enter_sends = [s for s in sent_raw if s == "\r"]
+    assert len(enter_sends) == 2, f"Expected 2 Enter sends, got {len(enter_sends)}"

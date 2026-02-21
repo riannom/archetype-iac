@@ -333,34 +333,51 @@ class SerialConsoleExtractor:
         """Wake serial console by sending Enter several times.
 
         IOSv often requires multiple Enter key presses before it emits a prompt.
+
+        For prompts with default answers (POAP abort ``[no]``), we check
+        the buffer BEFORE sending Enter to avoid inadvertently selecting
+        the default.  When the POAP abort prompt is detected we answer
+        ``yes`` immediately so the switch skips POAP.
         """
         prompt_patterns = self._prompt_patterns(prompt_pattern)
+        poap_abort_pat = r"Abort\s+Power\s+On\s+Auto\s+Provisioning[^\r\n]*\(yes/no\)\[no\]:"
         patterns = [
             *prompt_patterns,
             r"Press RETURN to get started!",
             r"[Uu]sername:",
             r"[Ll]ogin:",
             r"Would you like to enter the initial configuration dialog\?\s*\[yes/no\]:",
-            r"Abort\s+Power\s+On\s+Auto\s+Provisioning[^\r\n]*\(yes/no\)\[no\]:",
+            poap_abort_pat,
             r"Would you like to enforce secure password standard\s*\(yes/no\)\s*\[y\]:",
             r"Enter the password for \"admin\":",
             r"Confirm the password for \"admin\":",
         ]
-        for _ in range(8):
-            self.child.send("\r")
+        for attempt in range(8):
+            # First check for existing output without sending anything.
+            # This prevents Enter from answering prompts with defaults
+            # (e.g. POAP abort [no]) before we can respond correctly.
             try:
                 idx = self.child.expect(patterns, timeout=2)
-                if idx < len(prompt_patterns):
-                    return True
-                if patterns[idx].startswith(r"Would you like to enter"):
-                    self.child.sendline("no")
-                    self.child.send("\r")
-                # Console is awake; let _handle_login drive any remaining
-                # onboarding prompts (POAP abort, admin password setup, etc).
-                if patterns[idx] != r"Press RETURN to get started!":
-                    return True
             except pexpect.TIMEOUT:
-                pass
+                # Nothing in buffer — send Enter to wake the console.
+                self.child.send("\r")
+                time.sleep(0.35)
+                continue
+
+            if idx < len(prompt_patterns):
+                return True
+            matched = patterns[idx]
+            if matched.startswith(r"Would you like to enter"):
+                self.child.sendline("no")
+                self.child.send("\r")
+            elif matched == poap_abort_pat:
+                # Answer immediately — an Enter here would select the
+                # default "no" and let POAP proceed.
+                self.child.sendline("yes")
+            # Console is awake; let _handle_login drive any remaining
+            # onboarding prompts (admin password setup, etc).
+            if matched != r"Press RETURN to get started!":
+                return True
             time.sleep(0.35)
         return False
 

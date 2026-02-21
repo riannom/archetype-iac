@@ -2395,10 +2395,13 @@ def _upsert_link_states(
 
         existing, duplicates = _find_matching_link_state(existing_states, src_n, src_i, tgt_n, tgt_i, node_name_to_device)
         # Old naming variants can collide to the same canonical endpoints.
-        # Keep one record and mark duplicates for deletion.
+        # Delete duplicates immediately so the preferred row's link_name
+        # rename doesn't hit the unique constraint (uq_link_state_lab_link).
         for duplicate in duplicates:
-            duplicate.desired_state = "deleted"
-            mutated_states.append(duplicate)
+            existing_states.remove(duplicate)
+            database.delete(duplicate)
+        if duplicates:
+            database.flush()
 
         if existing:
             # Update existing link state to canonical storage

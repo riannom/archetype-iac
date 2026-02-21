@@ -14,36 +14,44 @@ logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
 
+# Captured at startup so sync threadpool handlers can schedule async tasks.
+_main_loop: asyncio.AbstractEventLoop | None = None
+
+
+def capture_event_loop() -> None:
+    """Store the running event loop. Call once during app startup."""
+    global _main_loop
+    _main_loop = asyncio.get_running_loop()
+
 
 def safe_create_task(
     coro: Awaitable[T],
     *,
     name: str | None = None,
     suppress_exceptions: bool = True,
-) -> asyncio.Task[T]:
+) -> asyncio.Task[T] | None:
     """Create an asyncio task with proper exception handling.
 
-    This wrapper ensures that:
-    1. All exceptions are logged with full stack traces
-    2. The task name is included in error messages for debugging
-    3. Exceptions don't silently disappear
-
-    Args:
-        coro: The coroutine to run as a task
-        name: Optional name for the task (used in error messages)
-        suppress_exceptions: If True, log but don't re-raise exceptions.
-                           If False, the exception will propagate when the task is awaited.
+    Works from both async and sync (threadpool) contexts.  When called from
+    a sync FastAPI handler (which runs in a threadpool), the coroutine is
+    scheduled onto the main event loop via ``call_soon_threadsafe``.
 
     Returns:
-        The created asyncio Task
-
-    Example:
-        # Instead of:
-        asyncio.create_task(run_job(job_id))
-
-        # Use:
-        safe_create_task(run_job(job_id), name=f"job:{job_id}")
+        The created asyncio Task, or None when scheduled cross-thread.
     """
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        # Called from a sync context (e.g. threadpool handler).
+        if _main_loop is None or _main_loop.is_closed():
+            logger.error("No event loop available for background task %s", name)
+            coro.close()  # prevent "was never awaited" warning
+            return None
+        _main_loop.call_soon_threadsafe(
+            lambda: safe_create_task(coro, name=name, suppress_exceptions=suppress_exceptions)
+        )
+        return None
+
     task = asyncio.create_task(coro, name=name)
 
     def handle_exception(task: asyncio.Task) -> None:

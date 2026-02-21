@@ -38,7 +38,7 @@ from app.middleware import CurrentUserMiddleware, DeprecationMiddleware
 from app.routers.v1 import router as v1_router
 from app.routers import admin, agents, auth, callbacks, console, events, images, infrastructure, iso, jobs, labs, permissions, state_ws, support, system, users, vendors, webhooks
 from app.events.publisher import close_publisher
-from app.utils.async_tasks import setup_asyncio_exception_handler
+from app.utils.async_tasks import capture_event_loop, setup_asyncio_exception_handler
 from alembic.config import Config as AlembicConfig
 from alembic import command as alembic_command
 
@@ -61,7 +61,8 @@ async def lifespan(app: FastAPI):
     if settings.jwt_secret in WEAK_SECRETS:
         logger.warning("JWT_SECRET appears to be a weak/default value - change it in production!")
 
-    # Set up asyncio exception handler for catching unhandled exceptions in tasks
+    # Capture event loop for sync→async task scheduling and set up exception handler
+    capture_event_loop()
     setup_asyncio_exception_handler()
 
     # Run database migrations
