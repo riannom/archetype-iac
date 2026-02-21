@@ -220,6 +220,36 @@
 
 **Rule**: When a fallback path is both destructive (kills another process) AND futile (same failure will occur), don't attempt it — return the failure and let the caller retry on the next cycle. Also: `readiness_probe="none"` should be a last resort, not a convenience — it masks broken boot sequences and can trigger premature post-boot actions.
 
+## 2026-02-20: Console prompt handlers must check buffer before sending Enter
+
+**Bug**: `_prime_console_for_prompt` sent `\r` (Enter) BEFORE running `expect()` to check what was on screen. When the POAP abort prompt `(yes/no)[no]:` was displayed, Enter selected the default "no", letting POAP proceed. The subsequent `_handle_login` couldn't recover because the prompt was already answered.
+
+**Impact**: N9Kv VMs never had POAP skipped despite the automation being present. VMs entered POAP DHCP discovery and eventually timed out or proceeded to initial admin setup.
+
+**Fix**: Reversed the order — run `expect()` first (with 2s timeout), only send `\r` on timeout. When POAP abort prompt is detected, send "yes" immediately inline (don't delegate to a later handler).
+
+**Rule**: When automating interactive serial consoles with prompts that have default answers (e.g., `[no]:`), always check what's on screen BEFORE sending any keystrokes. Enter/Return selects the default, which may be the wrong answer.
+
+## 2026-02-20: Link state dedup must hard-delete duplicates before renaming
+
+**Bug**: `_upsert_link_states` found duplicate LinkState rows for the same physical link (different naming conventions). It set `desired_state="deleted"` on duplicates, then tried to rename the preferred row to canonical form. The renamed `link_name` collided with the still-existing duplicate row, violating the `uq_link_state_lab_link` unique constraint. This crashed ALL sync jobs for the lab.
+
+**Impact**: Total sync failure — reconciliation, enforcement, and link creation all crashed with `UniqueViolation` on every cycle.
+
+**Fix**: Changed from soft-delete to hard-delete: `database.delete(duplicate)` + `existing_states.remove(duplicate)` + `database.flush()` before renaming the preferred row.
+
+**Rule**: When dedup logic needs to rename a record that would collide with the duplicate, the duplicate must be actually removed from the database (not just marked), and the session must be flushed before the rename. Soft-delete with a status flag doesn't remove unique constraint violations.
+
+## 2026-02-20: Image manifest metadata can silently override vendor config
+
+**Bug**: The N9Kv image's `manifest.json` had `boot_timeout: 480` (stale value from import) and an old `readiness_pattern`. The hw_specs merge chain (Layer 1c: image metadata) applied these over the vendor config's `readiness_timeout: 600` and current `readiness_pattern`. Domain XML generation then stored these stale values.
+
+**Impact**: N9Kv readiness timeout was 480s instead of 600s (correct for 5-10 min boot). Old readiness pattern could cause pattern match failures.
+
+**Fix**: Updated manifest.json with correct values matching vendor config.
+
+**Rule**: When vendor config is updated, also audit the image manifest for the same device — it's Layer 1c in the merge chain and can silently override vendor defaults. The merge order is: vendor config (1a) → image metadata (1c) → device overrides → per-node config_json.
+
 ## 2026-02-19: async def functions with zero await calls are effectively sync
 
 **Bug**: `get_agent_for_lab()`, `get_healthy_agent()`, `get_agent_by_name()`, `_handle_agent_restart_cleanup()`, `_mark_links_for_recovery()` were all `async def` but contained zero `await` calls — pure synchronous DB operations.

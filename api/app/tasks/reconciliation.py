@@ -535,6 +535,7 @@ async def refresh_states_from_agents():
                     session.query(models.Lab)
                     .filter(models.Lab.state.in_([
                         LabState.RUNNING.value, LabState.ERROR.value,
+                        LabState.STOPPED.value,
                     ]))
                     .all()
                 )
