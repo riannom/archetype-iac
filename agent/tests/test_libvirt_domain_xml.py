@@ -884,7 +884,7 @@ class TestVendorRoundTrip:
         assert os_elem.get("firmware") is None
 
     def test_n9kv_round_trip(self, monkeypatch):
-        """N9Kv: SATA disk, e1000 NIC, stateless EFI."""
+        """N9Kv: SATA disk, e1000 NIC, stateful EFI with writable NVRAM."""
         root = self._xml_for_vendor("cisco_n9kv", monkeypatch)
 
         # SATA disk driver
@@ -895,10 +895,15 @@ class TestVendorRoundTrip:
         for iface in root.findall(".//devices/interface"):
             assert iface.find("model").get("type") == "e1000"
 
-        # Stateless EFI — qemu:commandline with pflash
-        ns = {"qemu": "http://libvirt.org/schemas/domain/qemu/1.0"}
-        args = root.findall(".//qemu:commandline/qemu:arg", ns)
-        assert any("pflash" in a.get("value", "") for a in args)
+        # Stateful EFI — <os firmware='efi'> with <loader> and <nvram>
+        os_elem = root.find(".//os")
+        assert os_elem.get("firmware") == "efi"
+        loader = os_elem.find("loader")
+        assert loader is not None
+        assert loader.get("readonly") == "yes"
+        nvram = os_elem.find("nvram")
+        assert nvram is not None
+        assert nvram.get("template") is not None
 
         # Machine type i440fx
         type_elem = root.find(".//os/type")
