@@ -1126,81 +1126,6 @@ _vm_post_boot_in_progress: set[str] = set()
 _vm_post_boot_lock = threading.Lock()
 
 
-def _discover_and_set_boot_variable(
-    domain_name: str,
-    libvirt_uri: str,
-    extraction_settings: "ConfigExtractionSettings",
-) -> None:
-    """Discover running NX-OS image and set boot variable.
-
-    Runs ``show version`` to find the NX-OS image filename, then
-    configures ``boot nxos <image>`` and saves.  This prevents the
-    VM from dropping to the ``loader >`` prompt on subsequent
-    stop/start cycles.
-
-    Best-effort: failures are logged but do not fail the overall
-    post-boot flow.
-    """
-    # Step 1: capture "show version" output
-    extractor = SerialConsoleExtractor(
-        domain_name=domain_name,
-        libvirt_uri=libvirt_uri,
-        timeout=30,
-    )
-    capture = extractor.run_commands_capture(
-        commands=["show version"],
-        username=extraction_settings.user,
-        password=extraction_settings.password,
-        enable_password=extraction_settings.enable_password,
-        prompt_pattern=extraction_settings.prompt_pattern,
-        paging_disable="terminal length 0",
-    )
-    if not capture.success or not capture.outputs:
-        logger.warning(
-            "Boot variable discovery failed for %s: %s",
-            domain_name, capture.error,
-        )
-        return
-
-    output = capture.outputs[0].output or ""
-
-    # Parse "NXOS image file is:  bootflash:///nxos64-cs.10.5.3.F.bin"
-    m = re.search(r"NXOS image file is:\s*(\S+)", output)
-    if not m:
-        logger.warning(
-            "Could not find NXOS image file in show version output for %s",
-            domain_name,
-        )
-        return
-
-    nxos_image = m.group(1)
-    logger.info("Discovered NX-OS boot image for %s: %s", domain_name, nxos_image)
-
-    # Step 2: set boot variable and save
-    setter = SerialConsoleExtractor(
-        domain_name=domain_name,
-        libvirt_uri=libvirt_uri,
-        timeout=30,
-    )
-    set_result = setter.run_commands(
-        commands=[
-            f"configure terminal ; boot nxos {nxos_image} ; end",
-            "copy running-config startup-config",
-        ],
-        username=extraction_settings.user,
-        password=extraction_settings.password,
-        enable_password=extraction_settings.enable_password,
-        prompt_pattern=extraction_settings.prompt_pattern,
-    )
-    if set_result.success:
-        logger.info("Boot variable set to %s for %s", nxos_image, domain_name)
-    else:
-        logger.warning(
-            "Failed to set boot variable for %s: %s",
-            domain_name, set_result.error,
-        )
-
-
 def run_vm_post_boot_commands(
     domain_name: str,
     kind: str,
@@ -1289,12 +1214,6 @@ def run_vm_post_boot_commands(
         )
 
         if result.success:
-            # Set boot variable if configured (e.g. N9Kv loader prevention)
-            if config.post_boot_set_boot_variable:
-                _discover_and_set_boot_variable(
-                    domain_name, libvirt_uri, extraction_settings,
-                )
-
             with _vm_post_boot_lock:
                 _vm_post_boot_completed.add(domain_name)
             logger.info(

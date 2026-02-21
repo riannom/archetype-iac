@@ -250,6 +250,16 @@
 
 **Rule**: When vendor config is updated, also audit the image manifest for the same device — it's Layer 1c in the merge chain and can silently override vendor defaults. The merge order is: vendor config (1a) → image metadata (1c) → device overrides → per-node config_json.
 
+## 2026-02-20: N9Kv boot variable is futile when overlays are recreated
+
+**Bug**: Implemented `_discover_and_set_boot_variable()` to run `show version`, parse the NX-OS image, and set `boot nxos <image>` after first boot. The intent was to prevent the `loader >` prompt on subsequent stop/start cycles.
+
+**Impact**: The boot variable was correctly set in the running VM's overlay disk, but on every stop/start cycle, the qcow2 overlay is recreated from the backing image (fresh disk). The boot variable is lost every time.
+
+**Fix**: Removed the boot variable feature entirely. Instead, enabled POAP preboot provisioning (`n9kv_poap_preboot_enabled=True`) which handles config delivery via DHCP+TFTP+HTTP on each fresh boot. Also discovered that N9Kv requires `serial_port_count=2` (CML reference confirms) — the missing second serial port was the root cause of earlier POAP failures.
+
+**Rule**: When VM disk overlays are recreated on every lifecycle operation, any persistent state written to the overlay (boot variables, saved configs) is lost. Use a provisioning mechanism that operates independently of disk state (e.g., POAP via network, ISO injection, or external config delivery).
+
 ## 2026-02-19: async def functions with zero await calls are effectively sync
 
 **Bug**: `get_agent_for_lab()`, `get_healthy_agent()`, `get_agent_by_name()`, `_handle_agent_restart_cleanup()`, `_mark_links_for_recovery()` were all `async def` but contained zero `await` calls — pure synchronous DB operations.

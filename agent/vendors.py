@@ -347,11 +347,6 @@ class VendorConfig:
     # Use for vendor-specific workarounds (e.g., removing iptables rules)
     post_boot_commands: list[str] = field(default_factory=list)
 
-    # After post-boot commands, discover the running NX-OS image via
-    # "show version" and set `boot nxos <image>` to prevent loader prompt
-    # on subsequent stop/start cycles.  Currently only relevant to N9Kv.
-    post_boot_set_boot_variable: bool = False
-
     # -------------------------------------------------------------------------
     # Composed sub-configuration property accessors
     # These return frozen dataclass views grouping related fields.
@@ -1299,9 +1294,6 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
             "copy startup-config running-config",
             "copy running-config startup-config",
         ],
-        # Discover running NX-OS image and set boot variable after first boot
-        # to prevent loader prompt on subsequent stop/start cycles.
-        post_boot_set_boot_variable=True,
         # Config injection: write startup-config to bootflash partition before boot
         config_inject_method="bootflash",
         config_inject_partition=0,  # auto-detect via blkid

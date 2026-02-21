@@ -33,7 +33,7 @@ class Settings(BaseSettings):
     # Enable N9Kv pre-boot POAP provisioning path via libvirt DHCP boot options.
     # When enabled, N9Kv management NICs use a dedicated libvirt network with
     # DHCP bootfile/server set to the agent POAP script endpoint.
-    n9kv_poap_preboot_enabled: bool = False
+    n9kv_poap_preboot_enabled: bool = True
     # N9Kv boot automation: disk injection, POAP skip, post-boot config
     # recovery, and loader auto-recovery. Recommended enabled — without it,
     # N9Kv boots into POAP every time and ignores startup-config.
