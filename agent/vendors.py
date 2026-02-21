@@ -1260,6 +1260,7 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         machine_type="pc-i440fx-6.2",  # e1000 TX hangs on Q35; i440fx works with explicit AHCI controller
         efi_boot=True,  # N9Kv image uses UEFI; legacy BIOS drops to boot manager
         efi_vars="stateless",  # N9Kv uses stateless NVRAM per CML spec
+        serial_port_count=2,  # CML spec: console + aux; N9Kv sysconf expects 2 serial ports
         requires_image=True,
         supported_image_kinds=["qcow2"],
         documentation_url="https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/",
