@@ -39,6 +39,7 @@ from app.state import (
     NodeDesiredState,
 )
 from app.utils.async_tasks import safe_create_task
+from app.utils.time import utcnow
 
 logger = logging.getLogger(__name__)
 
@@ -76,9 +77,9 @@ class LifecycleResult:
 
 def _get_container_name(lab_id: str, node_name: str) -> str:
     """Get the container name for a node."""
-    safe_lab_id = re.sub(r"[^a-zA-Z0-9_-]", "", lab_id)[:20]
-    safe_node = re.sub(r"[^a-zA-Z0-9_-]", "", node_name)
-    return f"archetype-{safe_lab_id}-{safe_node}"
+    from app.utils.naming import docker_container_name
+
+    return docker_container_name(lab_id, node_name)
 
 
 class NodeLifecycleManager:
@@ -137,11 +138,18 @@ class NodeLifecycleManager:
         # Topology graph — loaded once in _filter_topology_for_agent, reused
         self.graph = None
 
-    # Known device types for bounded Prometheus labels
-    _KNOWN_DEVICE_TYPES = frozenset({
-        "ceos", "srlinux", "iosv", "iosvl2", "csr1000v", "cat8000v",
-        "cat9000v", "xrv9k", "asav", "nxosv", "linux", "frr",
-    })
+    # Known device types for bounded Prometheus labels.
+    # Loaded dynamically from agent vendor registry; hardcoded fallback for
+    # environments where the agent package is not available.
+    try:
+        from agent.vendors import VENDOR_CONFIGS as _VC
+        _KNOWN_DEVICE_TYPES = frozenset(_VC.keys())
+        del _VC
+    except ImportError:
+        _KNOWN_DEVICE_TYPES = frozenset({
+            "ceos", "srlinux", "iosv", "iosvl2", "csr1000v", "cat8000v",
+            "cat9000v", "xrv9k", "asav", "nxosv", "linux", "frr",
+        })
 
     def _dominant_device_type(self, node_states: list | None = None) -> str:
         """Return the most common device type among target nodes, bounded to known set."""
@@ -193,7 +201,7 @@ class NodeLifecycleManager:
         # Mark job running
         self.job.status = JobStatus.RUNNING.value
         self.job.agent_id = self.agent.id
-        self.job.started_at = datetime.now(timezone.utc)
+        self.job.started_at = utcnow()
         self.session.commit()
         queue_wait = (
             (self.job.started_at - self.job.created_at).total_seconds()
@@ -380,7 +388,7 @@ class NodeLifecycleManager:
 
         if not self.node_states:
             self.job.status = JobStatus.COMPLETED.value
-            self.job.completed_at = datetime.now(timezone.utc)
+            self.job.completed_at = utcnow()
             self.job.log_path = "No nodes to sync"
             self.session.commit()
             return False
@@ -474,7 +482,7 @@ class NodeLifecycleManager:
 
         if not nodes_needing_action:
             self.job.status = JobStatus.COMPLETED.value
-            self.job.completed_at = datetime.now(timezone.utc)
+            self.job.completed_at = utcnow()
             self.job.log_path = "All nodes already in desired state"
             self.session.commit()
             logger.info(
@@ -501,9 +509,9 @@ class NodeLifecycleManager:
                     ns.actual_state = next_state.value
                     ns.error_message = None
                     if next_state == NodeActualState.STOPPING:
-                        ns.stopping_started_at = datetime.now(timezone.utc)
+                        ns.stopping_started_at = utcnow()
                     elif next_state == NodeActualState.STARTING:
-                        ns.starting_started_at = datetime.now(timezone.utc)
+                        ns.starting_started_at = utcnow()
             except ValueError:
                 # Handle legacy state values
                 if (
@@ -511,14 +519,14 @@ class NodeLifecycleManager:
                     and ns.actual_state == NodeActualState.RUNNING.value
                 ):
                     ns.actual_state = NodeActualState.STOPPING.value
-                    ns.stopping_started_at = datetime.now(timezone.utc)
+                    ns.stopping_started_at = utcnow()
                     ns.error_message = None
                 elif ns.desired_state == NodeDesiredState.RUNNING.value and ns.actual_state in (
                     NodeActualState.STOPPED.value,
                     NodeActualState.ERROR.value,
                 ):
                     ns.actual_state = NodeActualState.STARTING.value
-                    ns.starting_started_at = datetime.now(timezone.utc)
+                    ns.starting_started_at = utcnow()
                     ns.error_message = None
                 elif ns.desired_state == NodeDesiredState.RUNNING.value and ns.actual_state in (
                     NodeActualState.UNDEPLOYED.value,
@@ -549,7 +557,7 @@ class NodeLifecycleManager:
         """Return online agents that support the required provider."""
         from app.agent_client import get_agent_providers
 
-        cutoff = datetime.now(timezone.utc) - timedelta(
+        cutoff = utcnow() - timedelta(
             seconds=settings.agent_stale_timeout
         )
         agents = (
@@ -574,15 +582,25 @@ class NodeLifecycleManager:
                   lab.agent_id > any healthy agent.
         Returns True if an agent was found, False otherwise.
         """
-        # Build node -> agent mapping
         all_node_agents: dict[str, str] = {}  # node_name -> agent_id
 
-        # Priority 1: Explicit placement (Node.host_id)
+        if not await self._resolve_explicit_placements(all_node_agents):
+            return False
+
+        if not await self._resolve_auto_placements(all_node_agents):
+            return False
+
+        nodes_without_agent = self._group_and_dispatch(all_node_agents)
+        self._handle_unassigned_nodes(nodes_without_agent)
+
+        return await self._resolve_final_agent()
+
+    async def _resolve_explicit_placements(
+        self, all_node_agents: dict[str, str],
+    ) -> bool:
+        """Resolve explicit host assignments (Node.host_id). Fail fast on errors."""
         explicit_placement_failures = []
         for ns in self.node_states:
-            # Prefer exact container-name lookup, but fall back to gui_id-based
-            # lookup so explicit host assignment is still enforced when
-            # NodeState.node_name is stale.
             db_node = self.db_nodes_map.get(ns.node_name) or self.db_nodes_by_gui_id.get(ns.node_id)
             if db_node and db_node.host_id:
                 host_agent = self.session.get(models.Host, db_node.host_id)
@@ -597,7 +615,6 @@ class NodeLifecycleManager:
                         f"{host_agent.name} is offline"
                     )
                 else:
-                    # Verify agent is actually reachable (not just heartbeat-fresh)
                     try:
                         await agent_client.ping_agent(host_agent)
                     except AgentUnavailableError:
@@ -620,14 +637,13 @@ class NodeLifecycleManager:
                         },
                     )
 
-        # Fail fast if any explicit placements can't be honored
         if explicit_placement_failures:
             error_msg = (
                 "Cannot deploy - explicit host assignments failed:\n"
                 + "\n".join(explicit_placement_failures)
             )
             self.job.status = JobStatus.FAILED.value
-            self.job.completed_at = datetime.now(timezone.utc)
+            self.job.completed_at = utcnow()
             self.job.log_path = error_msg
             for ns in self.node_states:
                 if ns.node_name in [
@@ -639,255 +655,280 @@ class NodeLifecycleManager:
             logger.error(f"Sync job {self.job.id} failed: {error_msg}")
             return False
 
-        # Priority 2: Sticky placements (NodePlacement affinity)
-        # Priority 3: Auto-placed nodes (resource-aware spread or legacy fallback)
+        return True
+
+    async def _resolve_auto_placements(
+        self, all_node_agents: dict[str, str],
+    ) -> bool:
+        """Resolve sticky placements and bin-pack new nodes.
+
+        Returns False if bin-packing fails (marks job FAILED).
+        """
         auto_placed_nodes = [
             ns for ns in self.node_states if ns.node_name not in all_node_agents
         ]
-        if auto_placed_nodes:
-            # Separate sticky (have placement) from truly new
-            sticky_nodes = []
-            new_nodes = []
-            for ns in auto_placed_nodes:
-                placement = self.placements_map.get(ns.node_name)
-                if placement:
-                    if placement.status == "failed":
-                        # Skip failed placement, treat as new for re-scoring
-                        new_nodes.append(ns)
-                        logger.info(
-                            f"Skipping failed placement for {ns.node_name} "
-                            f"on agent {placement.host_id}"
-                        )
-                    else:
-                        all_node_agents[ns.node_name] = placement.host_id
-                        sticky_nodes.append(ns.node_name)
-                else:
+        if not auto_placed_nodes:
+            return True
+
+        # Separate sticky (have placement) from truly new
+        sticky_nodes = []
+        new_nodes = []
+        for ns in auto_placed_nodes:
+            placement = self.placements_map.get(ns.node_name)
+            if placement:
+                if placement.status == "failed":
                     new_nodes.append(ns)
-
-            if sticky_nodes:
-                logger.debug(
-                    f"Job {self.job.id}: {len(sticky_nodes)} node(s) use "
-                    f"sticky placement: {sticky_nodes}"
-                )
-
-            # Distribute truly new nodes via bin-packing
-            if new_nodes and settings.placement_scoring_enabled:
-                from app.services.resource_capacity import (
-                    build_node_requirements,
-                    plan_placement,
-                    AgentBucket,
-                )
-
-                # 1. Find all online agents with the required provider
-                candidates = await self._get_candidate_agents()
-
-                # 2. Parallel-ping all candidate agents
-                ping_tasks = [
-                    agent_client.ping_agent(cand) for cand in candidates
-                ]
-                ping_results = await asyncio.gather(
-                    *ping_tasks, return_exceptions=True
-                )
-                reachable = [
-                    c for c, r in zip(candidates, ping_results)
-                    if not isinstance(r, Exception)
-                ]
-                for c, r in zip(candidates, ping_results):
-                    if isinstance(r, Exception):
-                        logger.warning(
-                            f"Agent {c.name} heartbeat fresh but "
-                            f"unreachable, skipping for placement"
-                        )
-
-                # 3. Query real-time capacity from each agent (parallel)
-                cap_tasks = [
-                    agent_client.query_agent_capacity(c) for c in reachable
-                ]
-                cap_results = await asyncio.gather(
-                    *cap_tasks, return_exceptions=True
-                )
-
-                # 4. Build agent buckets from real-time data
-                agent_buckets: list[AgentBucket] = []
-                for agent, cap in zip(reachable, cap_results):
-                    if (
-                        isinstance(cap, Exception)
-                        or not cap
-                        or "error" in cap
-                        or not cap.get("memory_total_gb")
-                    ):
-                        logger.warning(
-                            f"Capacity query failed for {agent.name}: {cap}"
-                        )
-                        continue
-                    mem_total = cap.get("memory_total_gb", 0) * 1024
-                    allocated_mem = cap.get("allocated_memory_mb", 0)
-                    cpu_total = cap.get("cpu_count", 0)
-                    allocated_cpu = cap.get("allocated_vcpus", 0)
-                    bucket = AgentBucket(
-                        agent_id=agent.id,
-                        agent_name=agent.name or agent.id,
-                        memory_available_mb=max(0, mem_total - allocated_mem),
-                        cpu_available_cores=max(0, cpu_total - allocated_cpu),
-                        memory_total_mb=mem_total,
-                        cpu_total_cores=cpu_total,
-                    )
-                    agent_buckets.append(bucket)
-                    logger.debug(
-                        f"Job {self.job.id}: Agent {agent.id} ({agent.name}) "
-                        f"capacity: {bucket.memory_available_mb:.0f}MB / "
-                        f"{bucket.cpu_available_cores:.0f} vCPUs available"
-                    )
-
-                if agent_buckets:
-                    # 5. Build node requirements
-                    _DUMMY_NODE = type("_D", (), {"device": "linux"})()
-                    node_reqs = build_node_requirements([
-                        (
-                            ns.node_name,
-                            (
-                                self.db_nodes_map.get(ns.node_name)
-                                or _DUMMY_NODE
-                            ).device or "linux",
-                        )
-                        for ns in new_nodes
-                    ])
-
-                    # 5.5 Pre-subtract sticky node requirements from buckets
-                    # so bin-packer sees accurate remaining capacity.
-                    # If a sticky agent is overloaded, move those nodes
-                    # into the new_nodes pool for bin-packing.
-                    if sticky_nodes:
-                        sticky_reqs = build_node_requirements([
-                            (
-                                name,
-                                (
-                                    self.db_nodes_map.get(name)
-                                    or _DUMMY_NODE
-                                ).device or "linux",
-                            )
-                            for name in sticky_nodes
-                        ])
-                        bucket_map = {
-                            b.agent_id: b for b in agent_buckets
-                        }
-                        overflow_names = []
-                        for sreq in sticky_reqs:
-                            agent_id = all_node_agents.get(sreq.node_name)
-                            bucket = bucket_map.get(agent_id) if agent_id else None
-                            if bucket and (
-                                bucket.memory_available_mb >= sreq.memory_mb
-                                and bucket.cpu_available_cores >= sreq.cpu_cores
-                            ):
-                                # Fits — subtract from bucket
-                                bucket.memory_available_mb -= sreq.memory_mb
-                                bucket.cpu_available_cores -= sreq.cpu_cores
-                            else:
-                                # Doesn't fit — move to bin-packer pool
-                                overflow_names.append(sreq.node_name)
-                                node_reqs.append(sreq)
-                        if overflow_names:
-                            for name in overflow_names:
-                                all_node_agents.pop(name, None)
-                            logger.info(
-                                f"Job {self.job.id}: {len(overflow_names)} "
-                                f"sticky node(s) overflowed to bin-packer: "
-                                f"{overflow_names}"
-                            )
-
-                    # 6. Determine local agent for controller reserve
-                    local_id = None
-                    for b in agent_buckets:
-                        agent_obj = next(
-                            (a for a in reachable if a.id == b.agent_id),
-                            None,
-                        )
-                        if agent_obj and agent_obj.is_local:
-                            local_id = b.agent_id
-                            break
-
-                    # 7. Run bin-packer
-                    placement = plan_placement(
-                        node_reqs,
-                        agent_buckets,
-                        controller_reserve_mb=settings.placement_controller_reserve_mb,
-                        local_agent_id=local_id,
-                    )
-
-                    if placement.unplaceable:
-                        error_msg = "\n".join(placement.errors)
-                        logger.error(
-                            f"Job {self.job.id}: Bin-packing failed: "
-                            f"{error_msg}"
-                        )
-                        self.job.status = JobStatus.FAILED.value
-                        self.job.completed_at = datetime.now(timezone.utc)
-                        self.job.log_path = f"ERROR: {error_msg}"
-                        for ns in self.node_states:
-                            if ns.node_name in placement.unplaceable:
-                                ns.actual_state = NodeActualState.ERROR.value
-                                ns.error_message = (
-                                    "Insufficient cluster resources"
-                                )
-                                self._broadcast_state(
-                                    ns, name_suffix="placement_error"
-                                )
-                        self.session.commit()
-                        return False
-
-                    for node_name, agent_id in placement.assignments.items():
-                        all_node_agents[node_name] = agent_id
-
-                    for w in placement.warnings:
-                        logger.warning(
-                            f"Job {self.job.id}: Placement warning: {w}"
-                        )
-                        self.log_parts.append(f"WARNING: {w}")
-
-                    # Log spread summary
-                    counts: dict[str, int] = {}
-                    for aid in placement.assignments.values():
-                        counts[aid] = counts.get(aid, 0) + 1
                     logger.info(
-                        f"Job {self.job.id}: Bin-pack placement for "
-                        f"{len(new_nodes)} new node(s): {counts}"
+                        f"Skipping failed placement for {ns.node_name} "
+                        f"on agent {placement.host_id}"
                     )
+                else:
+                    all_node_agents[ns.node_name] = placement.host_id
+                    sticky_nodes.append(ns.node_name)
+            else:
+                new_nodes.append(ns)
 
-            # Fallback for unassigned nodes (scoring disabled or no candidates)
-            fallback_nodes = [
-                ns for ns in new_nodes
-                if ns.node_name not in all_node_agents
-            ]
-            if fallback_nodes:
-                default_agent_id = None
-                if self.lab.agent_id:
-                    default_agent = self.session.get(
-                        models.Host, self.lab.agent_id
+        if sticky_nodes:
+            logger.debug(
+                f"Job {self.job.id}: {len(sticky_nodes)} node(s) use "
+                f"sticky placement: {sticky_nodes}"
+            )
+
+        # Distribute truly new nodes via bin-packing
+        if new_nodes and settings.placement_scoring_enabled:
+            result = await self._run_bin_pack_placement(
+                all_node_agents, new_nodes, sticky_nodes,
+            )
+            if result is False:
+                return False
+
+        # Fallback for unassigned nodes (scoring disabled or no candidates)
+        fallback_nodes = [
+            ns for ns in new_nodes
+            if ns.node_name not in all_node_agents
+        ]
+        if fallback_nodes:
+            default_agent_id = None
+            if self.lab.agent_id:
+                default_agent = self.session.get(
+                    models.Host, self.lab.agent_id
+                )
+                if default_agent and agent_client.is_agent_online(
+                    default_agent
+                ):
+                    default_agent_id = self.lab.agent_id
+            if not default_agent_id:
+                healthy_agent = await agent_client.get_healthy_agent(
+                    self.session, required_provider=self.provider
+                )
+                if healthy_agent:
+                    default_agent_id = healthy_agent.id
+
+            if default_agent_id:
+                for ns in fallback_nodes:
+                    all_node_agents[ns.node_name] = default_agent_id
+
+        return True
+
+    async def _run_bin_pack_placement(
+        self,
+        all_node_agents: dict[str, str],
+        new_nodes: list,
+        sticky_nodes: list[str],
+    ) -> bool | None:
+        """Run bin-packing placement for new nodes. Returns False on failure."""
+        from app.services.resource_capacity import (
+            build_node_requirements,
+            plan_placement,
+            AgentBucket,
+        )
+
+        candidates = await self._get_candidate_agents()
+
+        # Parallel-ping all candidate agents
+        ping_tasks = [
+            agent_client.ping_agent(cand) for cand in candidates
+        ]
+        ping_results = await asyncio.gather(
+            *ping_tasks, return_exceptions=True
+        )
+        reachable = [
+            c for c, r in zip(candidates, ping_results)
+            if not isinstance(r, Exception)
+        ]
+        for c, r in zip(candidates, ping_results):
+            if isinstance(r, Exception):
+                logger.warning(
+                    f"Agent {c.name} heartbeat fresh but "
+                    f"unreachable, skipping for placement"
+                )
+
+        # Query real-time capacity from each agent (parallel)
+        cap_tasks = [
+            agent_client.query_agent_capacity(c) for c in reachable
+        ]
+        cap_results = await asyncio.gather(
+            *cap_tasks, return_exceptions=True
+        )
+
+        # Build agent buckets from real-time data
+        agent_buckets: list[AgentBucket] = []
+        for agent, cap in zip(reachable, cap_results):
+            if (
+                isinstance(cap, Exception)
+                or not cap
+                or "error" in cap
+                or not cap.get("memory_total_gb")
+            ):
+                logger.warning(
+                    f"Capacity query failed for {agent.name}: {cap}"
+                )
+                continue
+            mem_total = cap.get("memory_total_gb", 0) * 1024
+            allocated_mem = cap.get("allocated_memory_mb", 0)
+            cpu_total = cap.get("cpu_count", 0)
+            allocated_cpu = cap.get("allocated_vcpus", 0)
+            bucket = AgentBucket(
+                agent_id=agent.id,
+                agent_name=agent.name or agent.id,
+                memory_available_mb=max(0, mem_total - allocated_mem),
+                cpu_available_cores=max(0, cpu_total - allocated_cpu),
+                memory_total_mb=mem_total,
+                cpu_total_cores=cpu_total,
+            )
+            agent_buckets.append(bucket)
+            logger.debug(
+                f"Job {self.job.id}: Agent {agent.id} ({agent.name}) "
+                f"capacity: {bucket.memory_available_mb:.0f}MB / "
+                f"{bucket.cpu_available_cores:.0f} vCPUs available"
+            )
+
+        if not agent_buckets:
+            return None  # No capacity data — fall through to fallback
+
+        # Build node requirements
+        _DUMMY_NODE = type("_D", (), {"device": "linux"})()
+        node_reqs = build_node_requirements([
+            (
+                ns.node_name,
+                (
+                    self.db_nodes_map.get(ns.node_name)
+                    or _DUMMY_NODE
+                ).device or "linux",
+            )
+            for ns in new_nodes
+        ])
+
+        # Pre-subtract sticky node requirements from buckets
+        if sticky_nodes:
+            sticky_reqs = build_node_requirements([
+                (
+                    name,
+                    (
+                        self.db_nodes_map.get(name)
+                        or _DUMMY_NODE
+                    ).device or "linux",
+                )
+                for name in sticky_nodes
+            ])
+            bucket_map = {
+                b.agent_id: b for b in agent_buckets
+            }
+            overflow_names = []
+            for sreq in sticky_reqs:
+                agent_id = all_node_agents.get(sreq.node_name)
+                bucket = bucket_map.get(agent_id) if agent_id else None
+                if bucket and (
+                    bucket.memory_available_mb >= sreq.memory_mb
+                    and bucket.cpu_available_cores >= sreq.cpu_cores
+                ):
+                    bucket.memory_available_mb -= sreq.memory_mb
+                    bucket.cpu_available_cores -= sreq.cpu_cores
+                else:
+                    overflow_names.append(sreq.node_name)
+                    node_reqs.append(sreq)
+            if overflow_names:
+                for name in overflow_names:
+                    all_node_agents.pop(name, None)
+                logger.info(
+                    f"Job {self.job.id}: {len(overflow_names)} "
+                    f"sticky node(s) overflowed to bin-packer: "
+                    f"{overflow_names}"
+                )
+
+        # Determine local agent for controller reserve
+        local_id = None
+        for b in agent_buckets:
+            agent_obj = next(
+                (a for a in reachable if a.id == b.agent_id),
+                None,
+            )
+            if agent_obj and agent_obj.is_local:
+                local_id = b.agent_id
+                break
+
+        # Run bin-packer
+        placement = plan_placement(
+            node_reqs,
+            agent_buckets,
+            controller_reserve_mb=settings.placement_controller_reserve_mb,
+            local_agent_id=local_id,
+        )
+
+        if placement.unplaceable:
+            error_msg = "\n".join(placement.errors)
+            logger.error(
+                f"Job {self.job.id}: Bin-packing failed: "
+                f"{error_msg}"
+            )
+            self.job.status = JobStatus.FAILED.value
+            self.job.completed_at = utcnow()
+            self.job.log_path = f"ERROR: {error_msg}"
+            for ns in self.node_states:
+                if ns.node_name in placement.unplaceable:
+                    ns.actual_state = NodeActualState.ERROR.value
+                    ns.error_message = (
+                        "Insufficient cluster resources"
                     )
-                    if default_agent and agent_client.is_agent_online(
-                        default_agent
-                    ):
-                        default_agent_id = self.lab.agent_id
-                if not default_agent_id:
-                    healthy_agent = await agent_client.get_healthy_agent(
-                        self.session, required_provider=self.provider
+                    self._broadcast_state(
+                        ns, name_suffix="placement_error"
                     )
-                    if healthy_agent:
-                        default_agent_id = healthy_agent.id
+            self.session.commit()
+            return False
 
-                if default_agent_id:
-                    for ns in fallback_nodes:
-                        all_node_agents[ns.node_name] = default_agent_id
+        for node_name, agent_id in placement.assignments.items():
+            all_node_agents[node_name] = agent_id
 
-        # Group nodes by target agent
+        for w in placement.warnings:
+            logger.warning(
+                f"Job {self.job.id}: Placement warning: {w}"
+            )
+            self.log_parts.append(f"WARNING: {w}")
+
+        # Log spread summary
+        counts: dict[str, int] = {}
+        for aid in placement.assignments.values():
+            counts[aid] = counts.get(aid, 0) + 1
+        logger.info(
+            f"Job {self.job.id}: Bin-pack placement for "
+            f"{len(new_nodes)} new node(s): {counts}"
+        )
+        return None
+
+    def _group_and_dispatch(
+        self, all_node_agents: dict[str, str],
+    ) -> list:
+        """Group nodes by agent, set primary, spawn sub-jobs for others.
+
+        Returns list of nodes without agent assignment.
+        Mutates: self.target_agent_id, self.node_states.
+        """
         nodes_by_agent: dict[str, list] = {}
         nodes_without_agent = []
         for ns in self.node_states:
             agent_id = all_node_agents.get(ns.node_name)
             if agent_id:
-                if agent_id not in nodes_by_agent:
-                    nodes_by_agent[agent_id] = []
-                nodes_by_agent[agent_id].append(ns)
+                nodes_by_agent.setdefault(agent_id, []).append(ns)
             else:
                 nodes_without_agent.append(ns)
 
@@ -936,7 +977,6 @@ class NodeLifecycleManager:
                 self.session.add(other_job)
                 self.session.commit()
                 self.session.refresh(other_job)
-                # Local import to avoid circular dependency
                 from app.tasks.jobs import run_node_reconcile
 
                 safe_create_task(
@@ -949,42 +989,54 @@ class NodeLifecycleManager:
                     name=f"sync:agent:{other_job.id}",
                 )
 
-        # Handle nodes without agents
-        if nodes_without_agent:
-            if not self.node_states:
-                # No other nodes with agents, try fallback logic
-                self.node_states = nodes_without_agent
-            else:
-                # Mark unassigned nodes needing action as error
-                nodes_needing_action = []
-                for ns in nodes_without_agent:
-                    needs_action = False
-                    if ns.desired_state == NodeDesiredState.RUNNING.value:
-                        if ns.actual_state not in (NodeActualState.RUNNING.value,):
-                            needs_action = True
-                    elif ns.desired_state == NodeDesiredState.STOPPED.value:
-                        if ns.actual_state not in (
-                            NodeActualState.STOPPED.value,
-                            NodeActualState.UNDEPLOYED.value,
-                            NodeActualState.EXITED.value,
-                        ):
-                            needs_action = True
-                    if needs_action:
-                        nodes_needing_action.append(ns)
+        return nodes_without_agent
 
-                if nodes_needing_action:
-                    logger.warning(
-                        f"Cannot assign agent for {len(nodes_needing_action)} "
-                        f"node(s), marking as error"
-                    )
-                    for ns in nodes_needing_action:
-                        ns.actual_state = NodeActualState.ERROR.value
-                        ns.error_message = (
-                            "No agent available for explicit host placement"
-                        )
-                    self.session.commit()
+    def _handle_unassigned_nodes(
+        self, nodes_without_agent: list,
+    ) -> None:
+        """Handle nodes with no agent assignment."""
+        if not nodes_without_agent:
+            return
 
-        # Find the agent object
+        if not self.node_states:
+            # No other nodes with agents, try fallback logic
+            self.node_states = nodes_without_agent
+            return
+
+        # Mark unassigned nodes needing action as error
+        nodes_needing_action = []
+        for ns in nodes_without_agent:
+            needs_action = False
+            if ns.desired_state == NodeDesiredState.RUNNING.value:
+                if ns.actual_state not in (NodeActualState.RUNNING.value,):
+                    needs_action = True
+            elif ns.desired_state == NodeDesiredState.STOPPED.value:
+                if ns.actual_state not in (
+                    NodeActualState.STOPPED.value,
+                    NodeActualState.UNDEPLOYED.value,
+                    NodeActualState.EXITED.value,
+                ):
+                    needs_action = True
+            if needs_action:
+                nodes_needing_action.append(ns)
+
+        if nodes_needing_action:
+            logger.warning(
+                f"Cannot assign agent for {len(nodes_needing_action)} "
+                f"node(s), marking as error"
+            )
+            for ns in nodes_needing_action:
+                ns.actual_state = NodeActualState.ERROR.value
+                ns.error_message = (
+                    "No agent available for explicit host placement"
+                )
+            self.session.commit()
+
+    async def _resolve_final_agent(self) -> bool:
+        """Resolve self.agent with multi-tier fallback.
+
+        Returns True if agent found, False if none available (marks job FAILED).
+        """
         if self.target_agent_id:
             self.agent = self.session.get(models.Host, self.target_agent_id)
             if self.agent and not agent_client.is_agent_online(self.agent):
@@ -1030,7 +1082,7 @@ class NodeLifecycleManager:
 
         if not self.agent:
             self.job.status = JobStatus.FAILED.value
-            self.job.completed_at = datetime.now(timezone.utc)
+            self.job.completed_at = utcnow()
             if self.target_agent_id:
                 self.job.log_path = (
                     f"ERROR: Target agent {self.target_agent_id} is offline "
@@ -1102,7 +1154,7 @@ class NodeLifecycleManager:
                     f"(catastrophic): {error_msg}"
                 )
                 self.job.status = JobStatus.FAILED.value
-                self.job.completed_at = datetime.now(timezone.utc)
+                self.job.completed_at = utcnow()
                 self.job.log_path = f"ERROR: {error_msg}"
                 for ns in deploy_candidates:
                     ns.actual_state = NodeActualState.ERROR.value
@@ -1440,7 +1492,7 @@ class NodeLifecycleManager:
         for ns in nodes_to_start_or_deploy:
             if ns.node_name in syncing_nodes:
                 ns.actual_state = NodeActualState.STARTING.value
-                ns.starting_started_at = datetime.now(timezone.utc)
+                ns.starting_started_at = utcnow()
                 ns.error_message = None
                 self._broadcast_state(
                     ns,
@@ -1476,7 +1528,7 @@ class NodeLifecycleManager:
                 )
             else:
                 self.job.status = JobStatus.FAILED.value
-            self.job.completed_at = datetime.now(timezone.utc)
+            self.job.completed_at = utcnow()
             self.job.log_path = "\n".join(self.log_parts)
             self.session.commit()
             return None
@@ -1509,7 +1561,7 @@ class NodeLifecycleManager:
         if not self.topo_service.has_nodes(self.lab.id):
             error_msg = "No topology defined in database"
             self.job.status = JobStatus.FAILED.value
-            self.job.completed_at = datetime.now(timezone.utc)
+            self.job.completed_at = utcnow()
             self.job.log_path = f"ERROR: {error_msg}"
             for ns in nodes_need_deploy:
                 ns.actual_state = NodeActualState.ERROR.value
@@ -1547,7 +1599,7 @@ class NodeLifecycleManager:
                 ns.error_message = "Deploy validation failed - wrong agent"
             self.session.commit()
             self.job.status = JobStatus.FAILED.value
-            self.job.completed_at = datetime.now(timezone.utc)
+            self.job.completed_at = utcnow()
             self.job.log_path = "\n".join(self.log_parts)
             self.session.commit()
             return
@@ -1576,7 +1628,7 @@ class NodeLifecycleManager:
                 ns.error_message = "Deploy lock conflict"
             self.session.commit()
             self.job.status = JobStatus.FAILED.value
-            self.job.completed_at = datetime.now(timezone.utc)
+            self.job.completed_at = utcnow()
             self.job.log_path = "\n".join(self.log_parts)
             self.session.commit()
             return
@@ -1638,7 +1690,7 @@ class NodeLifecycleManager:
                         ns.actual_state = NodeActualState.RUNNING.value
                         ns.error_message = None
                         if not ns.boot_started_at:
-                            ns.boot_started_at = datetime.now(timezone.utc)
+                            ns.boot_started_at = utcnow()
                 self.session.commit()
 
                 # Stop nodes that should be stopped
@@ -1803,7 +1855,7 @@ class NodeLifecycleManager:
                 ns.error_message = "Deploy validation failed - wrong agent"
             self.session.commit()
             self.job.status = JobStatus.FAILED.value
-            self.job.completed_at = datetime.now(timezone.utc)
+            self.job.completed_at = utcnow()
             self.job.log_path = "\n".join(self.log_parts)
             self.session.commit()
             return
@@ -1833,7 +1885,7 @@ class NodeLifecycleManager:
                 ns.error_message = "Deploy lock conflict"
             self.session.commit()
             self.job.status = JobStatus.FAILED.value
-            self.job.completed_at = datetime.now(timezone.utc)
+            self.job.completed_at = utcnow()
             self.job.log_path = "\n".join(self.log_parts)
             self.session.commit()
             return
@@ -1887,7 +1939,7 @@ class NodeLifecycleManager:
                         ns.starting_started_at = None
                         ns.error_message = None
                         if not ns.boot_started_at:
-                            ns.boot_started_at = datetime.now(timezone.utc)
+                            ns.boot_started_at = utcnow()
                         self.log_parts.append(
                             f"  Node {ns.node_name}: started"
                         )
@@ -2077,7 +2129,7 @@ class NodeLifecycleManager:
             if start_result.get("success"):
                 ns.actual_state = NodeActualState.RUNNING.value
                 ns.error_message = None
-                ns.boot_started_at = datetime.now(timezone.utc)
+                ns.boot_started_at = utcnow()
                 self.log_parts.append(f"  {ns.node_name}: deployed and started")
                 self._broadcast_state(ns, name_suffix="started")
                 logger.info(
@@ -2277,7 +2329,7 @@ class NodeLifecycleManager:
                 ns.starting_started_at = None
                 ns.error_message = None
                 if not ns.boot_started_at:
-                    ns.boot_started_at = datetime.now(timezone.utc)
+                    ns.boot_started_at = utcnow()
                 self.log_parts.append(f"  {ns.node_name}: started")
                 self._broadcast_state(ns, name_suffix="started")
                 logger.info(
@@ -2957,7 +3009,7 @@ class NodeLifecycleManager:
                 if ns.actual_state != NodeActualState.ERROR.value:
                     ns.reset_enforcement()
 
-        self.job.completed_at = datetime.now(timezone.utc)
+        self.job.completed_at = utcnow()
         self.job.log_path = "\n".join(self.log_parts)
         self.session.commit()
         duration = (
