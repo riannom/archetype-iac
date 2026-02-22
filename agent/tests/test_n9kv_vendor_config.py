@@ -240,9 +240,6 @@ def test_get_libvirt_config_propagates_config_inject_fields():
     assert lc.config_inject_method == "iso"
     assert lc.config_inject_iso_volume_label == "disk"
     assert lc.config_inject_iso_filename == "nxos_config.txt"
-    # Bootflash params still present for set_boot.py injection
-    assert lc.config_inject_partition == 0
-    assert lc.config_inject_fs_type == "ext2"
 
 
 def test_get_libvirt_config_fallback_has_no_config_injection():

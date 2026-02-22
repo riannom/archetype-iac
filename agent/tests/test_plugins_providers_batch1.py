@@ -397,23 +397,22 @@ def test_libvirt_prepare_startup_config_non_n9kv_only_normalizes_newlines() -> N
     assert cleaned == "Router# show running-config\nhostname R1\n"
 
 
-def test_n9kv_set_boot_script_constant() -> None:
-    """The N9Kv set_boot.py script constant should contain CML reference content."""
-    from agent.providers.libvirt import _N9KV_SET_BOOT_SCRIPT
-    assert "from cli import cli" in _N9KV_SET_BOOT_SCRIPT
-    assert "nxos_file_name" in _N9KV_SET_BOOT_SCRIPT
-    assert "boot nxos" in _N9KV_SET_BOOT_SCRIPT
-    assert "BOOTCONFIG" in _N9KV_SET_BOOT_SCRIPT
-    assert "/bootflash/set_boot.py" in _N9KV_SET_BOOT_SCRIPT
-
-
 def test_n9kv_config_preamble_constant() -> None:
-    """The N9Kv config preamble should set credentials and EEM applet."""
+    """The N9Kv config preamble should create set_boot.py via echo and set credentials."""
     from agent.providers.libvirt import _N9KV_CONFIG_PREAMBLE
+    # Echo commands create set_boot.py on bootflash at boot time (CML reference)
+    assert "echo 'from cli import cli' > set_boot.py" in _N9KV_CONFIG_PREAMBLE
+    assert "nxos_file_name" in _N9KV_CONFIG_PREAMBLE
+    assert "boot nxos" in _N9KV_CONFIG_PREAMBLE
+    assert "/bootflash/set_boot.py" in _N9KV_CONFIG_PREAMBLE
+    # Credentials and EEM applet
     assert "no password strength-check" in _N9KV_CONFIG_PREAMBLE
     assert "username admin password admin" in _N9KV_CONFIG_PREAMBLE
     assert "event manager applet BOOTCONFIG" in _N9KV_CONFIG_PREAMBLE
-    assert "python3 bootflash:set_boot.py" in _N9KV_CONFIG_PREAMBLE
+    # CML uses `python` not `python3`
+    assert "python bootflash:set_boot.py" in _N9KV_CONFIG_PREAMBLE
+    # Hostname placeholder for .format() substitution
+    assert "{hostname}" in _N9KV_CONFIG_PREAMBLE
 
 
 def test_libvirt_undefine_domain_falls_back_to_nvram(monkeypatch) -> None:
@@ -1094,10 +1093,10 @@ async def test_libvirt_check_readiness_n9kv_loader_recovery_respects_cooldown(mo
 
     # First attempt runs the CLI command; second is within cooldown so skipped.
     assert calls["count"] == 1
-    assert result_first.message == "Boot recovery in progress (attempt 1/3)"
+    assert result_first.message == "Boot recovery in progress (attempt 1/5)"
     assert result_first.details and "loader_recovery=sent_handoff_timeout" in result_first.details
     assert result_second.details and "loader_recovery=skipped_cooldown" in result_second.details
-    assert result_second.message == "Boot recovery cooling down (attempt 1/3)"
+    assert result_second.message == "Boot recovery cooling down (attempt 1/5)"
 
 
 @pytest.mark.asyncio

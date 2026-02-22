@@ -1336,14 +1336,11 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
             "configure terminal ; system no poap ; end",
             "copy running-config startup-config",
         ],
-        # Config injection: ISO with CML-style volume_name=disk, file=nxos_config.txt
+        # Config injection: CML-style ISO (volume=disk, file=nxos_config.txt).
+        # Preamble echo commands create set_boot.py on bootflash at boot time.
         config_inject_method="iso",
         config_inject_iso_volume_label="disk",
         config_inject_iso_filename="nxos_config.txt",
-        # Keep bootflash params for set_boot.py injection (separate from config delivery)
-        config_inject_partition=0,
-        config_inject_fs_type="ext2",
-        config_inject_path="/startup-config",
         default_credentials="admin / admin",
         # Minimal default config ensures ISO is always created (preamble adds credentials + EEM)
         default_startup_config="hostname {hostname}\n",

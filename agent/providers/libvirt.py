@@ -151,37 +151,33 @@ finally:
 '''
 
 
-# CML reference: set_boot.py — written to bootflash, runs via EEM on first boot.
-# Auto-sets boot variable so NX-OS boots directly instead of dropping to loader.
-# Self-deleting: removes itself and the EEM applet after first run.
-_N9KV_SET_BOOT_SCRIPT = """\
-from cli import cli
-import json
-import os
-import time
-bootimage = json.loads(cli("show version | json"))["nxos_file_name"]
-set_boot = cli("conf t ; boot nxos {} ; no event manager applet BOOTCONFIG".format(bootimage))
-i = 0
-while i < 10:
-    try:
-        save_config = cli("copy running-config startup-config")
-        break
-    except Exception:
-        i += 1
-        time.sleep(1)
-os.remove("/bootflash/set_boot.py")
-"""
-
-# CML reference: preamble prepended to N9Kv ISO config.
-# Sets admin credentials (matching console_user/console_password) and
-# registers EEM applet that auto-sets boot variable on first login.
+# CML reference: preamble prepended to N9Kv ISO config (nxos_config.txt).
+# Echo commands create set_boot.py on bootflash at boot time — no qemu-nbd needed.
+# EEM applet fires on first login, auto-sets boot variable, self-deletes.
+# Uses `python` (not python3) per CML reference.
 _N9KV_CONFIG_PREAMBLE = """\
-no password strength-check
-username admin role network-admin
-username admin password admin
+hostname {hostname}
+echo 'from cli import cli' > set_boot.py
+echo 'import json' >> set_boot.py
+echo 'import os' >> set_boot.py
+echo 'import time' >> set_boot.py
+echo 'bootimage = json.loads(cli("show version | json"))["nxos_file_name"]' >> set_boot.py
+echo 'set_boot = cli("conf t ; boot nxos {{}} ; no event manager applet BOOTCONFIG".format(bootimage))' >> set_boot.py
+echo 'i = 0' >> set_boot.py
+echo 'while i < 10:' >> set_boot.py
+echo '    try:' >> set_boot.py
+echo '        save_config = cli("copy running-config startup-config")' >> set_boot.py
+echo '        break' >> set_boot.py
+echo '    except Exception:' >> set_boot.py
+echo '        i += 1' >> set_boot.py
+echo '        time.sleep(1)' >> set_boot.py
+echo 'os.remove("/bootflash/set_boot.py")' >> set_boot.py
 event manager applet BOOTCONFIG
  event syslog pattern "Configured from vty"
- action 1.0 cli python3 bootflash:set_boot.py"""
+ action 1.0 cli python bootflash:set_boot.py
+no password strength-check
+username admin role network-admin
+username admin password admin"""
 
 
 class LibvirtProvider(Provider):
@@ -220,8 +216,8 @@ class LibvirtProvider(Provider):
     # Loader recovery retry state per VM lifecycle.
     _n9kv_loader_recovery_attempts: dict[str, int] = {}
     _n9kv_loader_recovery_last_at: dict[str, float] = {}
-    _N9KV_LOADER_RECOVERY_MAX_ATTEMPTS: int = 3
-    _N9KV_LOADER_RECOVERY_COOLDOWN: float = 60.0
+    _N9KV_LOADER_RECOVERY_MAX_ATTEMPTS: int = 5
+    _N9KV_LOADER_RECOVERY_COOLDOWN: float = 30.0
     # One-shot guard for POAP skip per VM lifecycle.
     _n9kv_poap_skip_attempted: set[str] = set()
     # One-shot guard for admin password wizard per VM lifecycle.
@@ -2458,28 +2454,6 @@ class LibvirtProvider(Provider):
 
             canonical_kind = self._canonical_kind(kind)
 
-            # N9Kv: write set_boot.py to bootflash for EEM-driven boot variable persistence
-            if canonical_kind == "cisco_n9kv" and settings.n9kv_boot_modifications_enabled:
-                from agent.providers.bootflash_inject import inject_startup_config as _inject_bootflash
-
-                bootfix_diag: dict[str, Any] = {}
-                bootfix_ok = await asyncio.to_thread(
-                    _inject_bootflash,
-                    overlay_path,
-                    _N9KV_SET_BOOT_SCRIPT,
-                    partition=libvirt_config.config_inject_partition,
-                    fs_type=libvirt_config.config_inject_fs_type,
-                    config_path="/set_boot.py",
-                    diagnostics=bootfix_diag,
-                )
-                if bootfix_ok:
-                    logger.info("Wrote set_boot.py to bootflash for %s", node_name)
-                else:
-                    logger.warning(
-                        "Failed to write set_boot.py for %s; boot variable may not persist: %s",
-                        node_name, bootfix_diag,
-                    )
-
             # Inject startup-config
             inject_summary = ""
             if not startup_config:
@@ -2495,7 +2469,7 @@ class LibvirtProvider(Provider):
                 canonical_kind != "cisco_n9kv" or settings.n9kv_boot_modifications_enabled
             ):
                 startup_config = self._prepare_startup_config_for_injection(
-                    kind, startup_config
+                    kind, startup_config, node_name=node_name
                 )
 
             if startup_config and canonical_kind == "cisco_n9kv" and not settings.n9kv_boot_modifications_enabled:
@@ -2641,6 +2615,8 @@ class LibvirtProvider(Provider):
         self,
         kind: str,
         startup_config: str,
+        *,
+        node_name: str = "",
     ) -> str:
         """Normalize startup-config content before disk/ISO injection.
 
@@ -2730,8 +2706,10 @@ class LibvirtProvider(Provider):
         if normalized and not normalized.endswith("\n"):
             normalized += "\n"
 
-        # Prepend CML-style preamble: admin credentials + EEM applet for boot variable
-        normalized = _N9KV_CONFIG_PREAMBLE + "\n" + normalized
+        # Prepend CML-style preamble: echo-based set_boot.py + EEM applet + credentials.
+        # .format() substitutes {hostname} and converts {{}} to {} for the Python script.
+        preamble = _N9KV_CONFIG_PREAMBLE.format(hostname=node_name or "switch")
+        normalized = preamble + "\n" + normalized
         return normalized
 
     def _format_injection_diagnostics(self, inject_ok: bool, diag: dict[str, Any]) -> str:

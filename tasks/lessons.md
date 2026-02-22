@@ -260,6 +260,16 @@
 
 **Rule**: When VM disk overlays are recreated on every lifecycle operation, any persistent state written to the overlay (boot variables, saved configs) is lost. Use a provisioning mechanism that operates independently of disk state (e.g., POAP via network, ISO injection, or external config delivery).
 
+## 2026-02-21: Pexpect readiness probe only reads current console state
+
+**Bug**: N9Kv readiness pattern `login:|User Access Verification` never matched even though the device had successfully booted and was at `switch#` prompt. The `login:` prompt appeared during boot but scrolled out of the buffer by the time the readiness probe connected.
+
+**Impact**: N9Kv VMs stayed `is_ready=false` indefinitely despite being fully operational at the CLI prompt.
+
+**Fix**: Expanded readiness pattern to `login:|User Access Verification|switch[^\s]*[#>]` to also match the NX-OS CLI prompt that appears after login.
+
+**Rule**: Pexpect-based readiness probes connect fresh each cycle, send Enter, and read ~3 seconds of output. They do NOT see historical console output. Readiness patterns must match what's currently on screen — include both the expected boot-time prompt AND the post-login CLI prompt.
+
 ## 2026-02-19: async def functions with zero await calls are effectively sync
 
 **Bug**: `get_agent_for_lab()`, `get_healthy_agent()`, `get_agent_by_name()`, `_handle_agent_restart_cleanup()`, `_mark_links_for_recovery()` were all `async def` but contained zero `await` calls — pure synchronous DB operations.
