@@ -20,18 +20,10 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
-import httpx
-
 from agent.config import settings
+from agent.http_client import get_http_client, get_controller_auth_headers
 
 logger = logging.getLogger(__name__)
-
-
-def _get_controller_auth_headers() -> dict[str, str]:
-    """Return auth headers for controller requests if secret is configured."""
-    if settings.controller_secret:
-        return {"Authorization": f"Bearer {settings.controller_secret}"}
-    return {}
 
 # Retry configuration
 DEFAULT_RETRY_DELAYS = [10, 30, 60]  # Seconds between retries
@@ -147,18 +139,18 @@ async def _try_deliver(callback_url: str, payload: CallbackPayload) -> bool:
     Raises:
         Exception on network/HTTP errors
     """
-    async with httpx.AsyncClient() as client:
-        response = await client.post(
-            callback_url,
-            json=payload.to_dict(),
-            timeout=30.0,
-            headers=_get_controller_auth_headers(),
-        )
+    client = get_http_client()
+    response = await client.post(
+        callback_url,
+        json=payload.to_dict(),
+        timeout=30.0,
+        headers=get_controller_auth_headers(),
+    )
 
-        if response.status_code >= 200 and response.status_code < 300:
-            return True
-        else:
-            raise Exception(f"HTTP {response.status_code}: {response.text[:200]}")
+    if 200 <= response.status_code < 300:
+        return True
+    else:
+        raise Exception(f"HTTP {response.status_code}: {response.text[:200]}")
 
 
 async def send_to_dead_letter(
@@ -195,14 +187,14 @@ async def send_to_dead_letter(
         parts = callback_url.rsplit("/", 1)
         if len(parts) == 2:
             dead_letter_url = f"{parts[0]}/dead-letter/{payload.job_id}"
-            async with httpx.AsyncClient() as client:
-                await client.post(
-                    dead_letter_url,
-                    json=payload.to_dict(),
-                    timeout=10.0,
-                    headers=_get_controller_auth_headers(),
-                )
-                logger.info(f"Dead letter notification sent for job {payload.job_id}")
+            client = get_http_client()
+            await client.post(
+                dead_letter_url,
+                json=payload.to_dict(),
+                timeout=10.0,
+                headers=get_controller_auth_headers(),
+            )
+            logger.info(f"Dead letter notification sent for job {payload.job_id}")
     except Exception as e:
         logger.error(f"Failed to send dead letter notification: {e}")
 
@@ -251,14 +243,14 @@ async def send_heartbeat(callback_url: str, job_id: str) -> bool:
     heartbeat_url = f"{callback_url}/heartbeat"
 
     try:
-        async with httpx.AsyncClient() as client:
-            response = await client.post(heartbeat_url, timeout=10.0, headers=_get_controller_auth_headers())
-            if response.status_code >= 200 and response.status_code < 300:
-                logger.debug(f"Heartbeat sent for job {job_id}")
-                return True
-            else:
-                logger.warning(f"Heartbeat failed for job {job_id}: HTTP {response.status_code}")
-                return False
+        client = get_http_client()
+        response = await client.post(heartbeat_url, timeout=10.0, headers=get_controller_auth_headers())
+        if 200 <= response.status_code < 300:
+            logger.debug(f"Heartbeat sent for job {job_id}")
+            return True
+        else:
+            logger.warning(f"Heartbeat failed for job {job_id}: HTTP {response.status_code}")
+            return False
     except Exception as e:
         logger.warning(f"Heartbeat failed for job {job_id}: {e}")
         return False
@@ -328,25 +320,25 @@ async def report_carrier_state_change(
         "carrier_state": carrier_state,
     }
     try:
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                url,
-                json=payload,
-                timeout=10.0,
-                headers=_get_controller_auth_headers(),
+        client = get_http_client()
+        response = await client.post(
+            url,
+            json=payload,
+            timeout=10.0,
+            headers=get_controller_auth_headers(),
+        )
+        if 200 <= response.status_code < 300:
+            logger.debug(
+                "Carrier state reported: %s:%s %s (lab=%s)",
+                node, interface, carrier_state, lab_id,
             )
-            if 200 <= response.status_code < 300:
-                logger.debug(
-                    "Carrier state reported: %s:%s %s (lab=%s)",
-                    node, interface, carrier_state, lab_id,
-                )
-                return True
-            else:
-                logger.warning(
-                    "Carrier state report failed: HTTP %d for %s:%s",
-                    response.status_code, node, interface,
-                )
-                return False
+            return True
+        else:
+            logger.warning(
+                "Carrier state report failed: HTTP %d for %s:%s",
+                response.status_code, node, interface,
+            )
+            return False
     except Exception as e:
         logger.warning("Carrier state report failed for %s:%s: %s", node, interface, e)
         return False

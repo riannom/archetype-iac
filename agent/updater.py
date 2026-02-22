@@ -18,6 +18,8 @@ from pathlib import Path
 
 import httpx
 
+from agent.http_client import get_http_client
+
 logger = logging.getLogger(__name__)
 
 ROLLBACK_SENTINEL = Path("/tmp/archetype-update-rollback.json")
@@ -276,144 +278,144 @@ async def perform_systemd_update(
             cwd=cwd,
         )
 
-    async with httpx.AsyncClient(timeout=10.0) as client:
-        try:
-            # Capture current HEAD for rollback
-            head_result = await asyncio.to_thread(
-                _run_subprocess,
-                ["git", "rev-parse", "HEAD"],
-                root, 10,
+    client = get_http_client()
+    try:
+        # Capture current HEAD for rollback
+        head_result = await asyncio.to_thread(
+            _run_subprocess,
+            ["git", "rev-parse", "HEAD"],
+            root, 10,
+        )
+        previous_ref = head_result.stdout.strip() if head_result.returncode == 0 else "HEAD"
+
+        # Step 1: Downloading (git fetch)
+        logger.info(f"Update {job_id}: starting git fetch")
+        await report_progress(client, callback_url, job_id, agent_id, "downloading", 10)
+
+        result = await asyncio.to_thread(
+            _run_subprocess,
+            ["git", "fetch", "origin", "--tags", "--force"],
+            root,
+            60,
+        )
+        if result.returncode != 0:
+            logger.error(f"Update {job_id}: git fetch failed: {result.stderr}")
+            await report_progress(
+                client, callback_url, job_id, agent_id, "failed", 0,
+                f"git fetch failed: {result.stderr}"
             )
-            previous_ref = head_result.stdout.strip() if head_result.returncode == 0 else "HEAD"
+            return False
 
-            # Step 1: Downloading (git fetch)
-            logger.info(f"Update {job_id}: starting git fetch")
-            await report_progress(client, callback_url, job_id, agent_id, "downloading", 10)
+        logger.info(f"Update {job_id}: git fetch complete")
+        await report_progress(client, callback_url, job_id, agent_id, "downloading", 30)
 
+        # Resolve the target version to a checkout ref
+        # Support: "latest" (origin/main), commit SHAs, tags (v0.3.7),
+        # version strings (0.3.7), branches (main)
+        checkout_ref = None
+
+        if target_version.lower() == "latest":
+            # "latest" means the tip of the default branch
+            checkout_ref = "origin/main"
+            logger.info(f"Update {job_id}: resolved 'latest' to origin/main")
+        elif is_commit_sha(target_version):
+            # Direct commit SHA - verify it exists
             result = await asyncio.to_thread(
                 _run_subprocess,
-                ["git", "fetch", "origin", "--tags", "--force"],
-                root,
-                60,
+                ["git", "rev-parse", "--verify", target_version],
+                root, 10,
             )
-            if result.returncode != 0:
-                logger.error(f"Update {job_id}: git fetch failed: {result.stderr}")
-                await report_progress(
-                    client, callback_url, job_id, agent_id, "failed", 0,
-                    f"git fetch failed: {result.stderr}"
-                )
-                return False
-
-            logger.info(f"Update {job_id}: git fetch complete")
-            await report_progress(client, callback_url, job_id, agent_id, "downloading", 30)
-
-            # Resolve the target version to a checkout ref
-            # Support: "latest" (origin/main), commit SHAs, tags (v0.3.7),
-            # version strings (0.3.7), branches (main)
-            checkout_ref = None
-
-            if target_version.lower() == "latest":
-                # "latest" means the tip of the default branch
-                checkout_ref = "origin/main"
-                logger.info(f"Update {job_id}: resolved 'latest' to origin/main")
-            elif is_commit_sha(target_version):
-                # Direct commit SHA - verify it exists
+            if result.returncode == 0:
+                checkout_ref = target_version
+                logger.info(f"Update {job_id}: resolved commit SHA {target_version[:8]}")
+        else:
+            # Try tag/branch formats
+            for ref in [
+                f"v{target_version}",
+                target_version,
+                f"origin/v{target_version}",
+                f"origin/{target_version}",
+            ]:
                 result = await asyncio.to_thread(
                     _run_subprocess,
-                    ["git", "rev-parse", "--verify", target_version],
+                    ["git", "rev-parse", "--verify", ref],
                     root, 10,
                 )
                 if result.returncode == 0:
-                    checkout_ref = target_version
-                    logger.info(f"Update {job_id}: resolved commit SHA {target_version[:8]}")
-            else:
-                # Try tag/branch formats
-                for ref in [
-                    f"v{target_version}",
-                    target_version,
-                    f"origin/v{target_version}",
-                    f"origin/{target_version}",
-                ]:
-                    result = await asyncio.to_thread(
-                        _run_subprocess,
-                        ["git", "rev-parse", "--verify", ref],
-                        root, 10,
-                    )
-                    if result.returncode == 0:
-                        checkout_ref = ref
-                        logger.info(f"Update {job_id}: resolved ref '{ref}'")
-                        break
+                    checkout_ref = ref
+                    logger.info(f"Update {job_id}: resolved ref '{ref}'")
+                    break
 
-            if not checkout_ref:
-                logger.error(f"Update {job_id}: version {target_version} not found")
-                await report_progress(
-                    client, callback_url, job_id, agent_id, "failed", 0,
-                    f"Version {target_version} not found"
-                )
-                return False
-
-            # Save rollback info before checkout
-            _save_rollback_info(previous_ref, checkout_ref)
-
-            result = await asyncio.to_thread(
-                _run_subprocess,
-                ["git", "checkout", checkout_ref],
-                root,
-                30,
-            )
-            if result.returncode != 0:
-                logger.error(f"Update {job_id}: git checkout failed: {result.stderr}")
-                await report_progress(
-                    client, callback_url, job_id, agent_id, "failed", 0,
-                    f"git checkout failed: {result.stderr}"
-                )
-                _clear_rollback_info()
-                return False
-
-            logger.info(f"Update {job_id}: checked out {checkout_ref}")
-            await report_progress(client, callback_url, job_id, agent_id, "downloading", 50)
-
-            # Step 2: Installing dependencies
-            logger.info(f"Update {job_id}: installing dependencies")
-            await report_progress(client, callback_url, job_id, agent_id, "installing", 60)
-
-            # Find the correct pip/python
-            python_exe = sys.executable
-            result = await asyncio.to_thread(
-                _run_subprocess,
-                [python_exe, "-m", "pip", "install", "-r", "requirements.txt"],
-                root / "agent",
-                300,  # 5 min for pip install
-            )
-            if result.returncode != 0:
-                logger.error(f"Update {job_id}: pip install failed: {result.stderr}")
-                await report_progress(
-                    client, callback_url, job_id, agent_id, "failed", 0,
-                    f"pip install failed: {result.stderr}"
-                )
-                return False
-
-            logger.info(f"Update {job_id}: dependencies installed")
-            await report_progress(client, callback_url, job_id, agent_id, "installing", 80)
-
-            # Step 3: Restart the service
-            logger.info(f"Update {job_id}: scheduling restart")
-            await report_progress(client, callback_url, job_id, agent_id, "restarting", 90)
-
-        except subprocess.TimeoutExpired as e:
-            logger.error(f"Update {job_id}: command timed out: {e.cmd}")
+        if not checkout_ref:
+            logger.error(f"Update {job_id}: version {target_version} not found")
             await report_progress(
                 client, callback_url, job_id, agent_id, "failed", 0,
-                f"Command timed out: {e.cmd}"
+                f"Version {target_version} not found"
             )
             return False
-        except Exception as e:
-            logger.error(f"Update {job_id}: error: {e}")
+
+        # Save rollback info before checkout
+        _save_rollback_info(previous_ref, checkout_ref)
+
+        result = await asyncio.to_thread(
+            _run_subprocess,
+            ["git", "checkout", checkout_ref],
+            root,
+            30,
+        )
+        if result.returncode != 0:
+            logger.error(f"Update {job_id}: git checkout failed: {result.stderr}")
             await report_progress(
                 client, callback_url, job_id, agent_id, "failed", 0,
-                f"Update error: {str(e)}"
+                f"git checkout failed: {result.stderr}"
+            )
+            _clear_rollback_info()
+            return False
+
+        logger.info(f"Update {job_id}: checked out {checkout_ref}")
+        await report_progress(client, callback_url, job_id, agent_id, "downloading", 50)
+
+        # Step 2: Installing dependencies
+        logger.info(f"Update {job_id}: installing dependencies")
+        await report_progress(client, callback_url, job_id, agent_id, "installing", 60)
+
+        # Find the correct pip/python
+        python_exe = sys.executable
+        result = await asyncio.to_thread(
+            _run_subprocess,
+            [python_exe, "-m", "pip", "install", "-r", "requirements.txt"],
+            root / "agent",
+            300,  # 5 min for pip install
+        )
+        if result.returncode != 0:
+            logger.error(f"Update {job_id}: pip install failed: {result.stderr}")
+            await report_progress(
+                client, callback_url, job_id, agent_id, "failed", 0,
+                f"pip install failed: {result.stderr}"
             )
             return False
+
+        logger.info(f"Update {job_id}: dependencies installed")
+        await report_progress(client, callback_url, job_id, agent_id, "installing", 80)
+
+        # Step 3: Restart the service
+        logger.info(f"Update {job_id}: scheduling restart")
+        await report_progress(client, callback_url, job_id, agent_id, "restarting", 90)
+
+    except subprocess.TimeoutExpired as e:
+        logger.error(f"Update {job_id}: command timed out: {e.cmd}")
+        await report_progress(
+            client, callback_url, job_id, agent_id, "failed", 0,
+            f"Command timed out: {e.cmd}"
+        )
+        return False
+    except Exception as e:
+        logger.error(f"Update {job_id}: error: {e}")
+        await report_progress(
+            client, callback_url, job_id, agent_id, "failed", 0,
+            f"Update error: {str(e)}"
+        )
+        return False
 
     # Schedule the restart after a short delay to allow the response to be sent
     # The restart will kill this process, so we won't report completion here
@@ -463,11 +465,11 @@ async def perform_docker_update(
         True to indicate the request was acknowledged
     """
     # For Docker, we just report back that update needs external handling
-    async with httpx.AsyncClient(timeout=10.0) as client:
-        await report_progress(
-            client, callback_url, job_id, agent_id, "failed", 0,
-            "Docker deployment detected. Update must be performed by restarting "
-            "the container with the new image version. Use: "
-            f"docker pull archetype-agent:{target_version} && docker-compose up -d"
-        )
+    client = get_http_client()
+    await report_progress(
+        client, callback_url, job_id, agent_id, "failed", 0,
+        "Docker deployment detected. Update must be performed by restarting "
+        "the container with the new image version. Use: "
+        f"docker pull archetype-agent:{target_version} && docker-compose up -d"
+    )
     return False

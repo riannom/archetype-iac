@@ -185,19 +185,19 @@ class Host(Base):
     data_plane_address: Mapped[str | None] = mapped_column(String(255), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
-    def get_resource_usage(self) -> dict:
-        """Parse resource_usage JSON string into a dict, with safe fallback."""
+    def _parse_json_field(self, value: str | None) -> dict:
         try:
-            return json.loads(self.resource_usage) if self.resource_usage else {}
+            return json.loads(value) if value else {}
         except (json.JSONDecodeError, TypeError):
             return {}
 
+    def get_resource_usage(self) -> dict:
+        """Parse resource_usage JSON string into a dict, with safe fallback."""
+        return self._parse_json_field(self.resource_usage)
+
     def get_capabilities(self) -> dict:
         """Parse capabilities JSON string into a dict, with safe fallback."""
-        try:
-            return json.loads(self.capabilities) if self.capabilities else {}
-        except (json.JSONDecodeError, TypeError):
-            return {}
+        return self._parse_json_field(self.capabilities)
 
 
 class NodePlacement(Base):

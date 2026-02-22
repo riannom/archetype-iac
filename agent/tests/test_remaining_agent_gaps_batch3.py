@@ -20,12 +20,6 @@ class FakeAsyncClient:
         self._response = response or FakeResponse()
         self.posts: list[tuple[str, dict | None, float | None]] = []
 
-    async def __aenter__(self):
-        return self
-
-    async def __aexit__(self, exc_type, exc, tb):
-        return False
-
     async def post(self, url: str, json: dict | None = None, timeout: float | None = None, **kwargs):
         self.posts.append((url, json, timeout))
         return self._response
@@ -37,7 +31,7 @@ async def test_callbacks_deliver_and_dead_letter(monkeypatch) -> None:
 
     callbacks._dead_letters.clear()
     client = FakeAsyncClient(response=FakeResponse(status_code=500, text="fail"))
-    monkeypatch.setattr(callbacks.httpx, "AsyncClient", lambda **_: client)
+    monkeypatch.setattr(callbacks, "get_http_client", lambda: client)
     monkeypatch.setattr(callbacks, "DEFAULT_RETRY_DELAYS", [0])
     monkeypatch.setattr(callbacks, "MAX_RETRY_ATTEMPTS", 1)
 
@@ -52,7 +46,7 @@ async def test_callbacks_heartbeat(monkeypatch) -> None:
     import agent.callbacks as callbacks
 
     client = FakeAsyncClient(response=FakeResponse(status_code=204, text=""))
-    monkeypatch.setattr(callbacks.httpx, "AsyncClient", lambda **_: client)
+    monkeypatch.setattr(callbacks, "get_http_client", lambda: client)
     result = await callbacks.send_heartbeat("http://controller/callbacks/job/job1", "job1")
     assert result is True
     assert client.posts[0][0].endswith("/heartbeat")

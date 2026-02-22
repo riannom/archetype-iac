@@ -184,6 +184,7 @@ from agent.logging_config import setup_agent_logging
 # Module-level imports for testability (patch targets need module-level attributes)
 import docker  # noqa: E402
 from agent.docker_client import get_docker_client  # noqa: E402
+from agent.http_client import get_http_client, close_http_client, get_controller_auth_headers  # noqa: E402
 from agent.console.docker_exec import DockerConsole  # noqa: E402, F401
 from agent.console.ssh_console import SSHConsole  # noqa: E402, F401
 from agent.readiness import get_probe_for_vendor, run_post_boot_commands  # noqa: E402, F401
@@ -299,17 +300,17 @@ async def forward_event_to_controller(event):
     }
 
     try:
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                f"{settings.controller_url}/events/node",
-                json=payload,
-                timeout=5.0,
-                headers=_get_controller_auth_headers(),
-            )
-            if response.status_code == 200:
-                logger.debug(f"Forwarded event: {event.event_type.value} for {event.log_name()}")
-            else:
-                logger.warning(f"Failed to forward event: HTTP {response.status_code}")
+        client = get_http_client()
+        response = await client.post(
+            f"{settings.controller_url}/events/node",
+            json=payload,
+            timeout=5.0,
+            headers=get_controller_auth_headers(),
+        )
+        if response.status_code == 200:
+            logger.debug(f"Forwarded event: {event.event_type.value} for {event.log_name()}")
+        else:
+            logger.warning(f"Failed to forward event: HTTP {response.status_code}")
     except Exception as e:
         logger.error(f"Error forwarding event to controller: {e}")
 
@@ -688,30 +689,30 @@ async def register_with_controller() -> bool:
     )
 
     try:
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                f"{settings.controller_url}/agents/register",
-                json=request.model_dump(mode='json'),
-                timeout=settings.registration_timeout,
-                headers=_get_controller_auth_headers(),
-            )
-            if response.status_code == 200:
-                result = RegistrationResponse(**response.json())
-                if result.success:
-                    _registered = True
-                    # Use the assigned ID from controller (may differ if we're
-                    # re-registering an existing agent with a new generated ID)
-                    if result.assigned_id and result.assigned_id != AGENT_ID:
-                        logger.info(f"Controller assigned existing ID: {result.assigned_id}")
-                        AGENT_ID = result.assigned_id
-                    logger.info(f"Registered with controller as {AGENT_ID}")
-                    return True
-                else:
-                    logger.warning(f"Registration rejected: {result.message}")
-                    return False
+        client = get_http_client()
+        response = await client.post(
+            f"{settings.controller_url}/agents/register",
+            json=request.model_dump(mode='json'),
+            timeout=settings.registration_timeout,
+            headers=get_controller_auth_headers(),
+        )
+        if response.status_code == 200:
+            result = RegistrationResponse(**response.json())
+            if result.success:
+                _registered = True
+                # Use the assigned ID from controller (may differ if we're
+                # re-registering an existing agent with a new generated ID)
+                if result.assigned_id and result.assigned_id != AGENT_ID:
+                    logger.info(f"Controller assigned existing ID: {result.assigned_id}")
+                    AGENT_ID = result.assigned_id
+                logger.info(f"Registered with controller as {AGENT_ID}")
+                return True
             else:
-                logger.error(f"Registration failed: HTTP {response.status_code}")
+                logger.warning(f"Registration rejected: {result.message}")
                 return False
+        else:
+            logger.error(f"Registration failed: HTTP {response.status_code}")
+            return False
     except httpx.ConnectError:
         logger.warning(f"Cannot connect to controller at {settings.controller_url}")
         return False
@@ -741,89 +742,89 @@ async def _bootstrap_transport_config() -> None:
             raise RuntimeError(f"ip {' '.join(args)} failed: {stderr}")
 
     try:
-        async with httpx.AsyncClient() as client:
-            response = await client.get(
-                f"{settings.controller_url}/infrastructure/agents/{AGENT_ID}/transport-config",
-                timeout=10.0,
-                headers=_get_controller_auth_headers(),
-            )
-            if response.status_code != 200:
-                logger.debug("No transport config from controller (not configured)")
+        client = get_http_client()
+        response = await client.get(
+            f"{settings.controller_url}/infrastructure/agents/{AGENT_ID}/transport-config",
+            timeout=10.0,
+            headers=get_controller_auth_headers(),
+        )
+        if response.status_code != 200:
+            logger.debug("No transport config from controller (not configured)")
+            return
+
+        config = response.json()
+        mode = config.get("transport_mode", "management")
+
+        if mode == "management":
+            logger.debug("Transport mode: management (no subinterface needed)")
+            return
+
+        if mode == "subinterface":
+            parent = config.get("parent_interface")
+            vlan_id = config.get("vlan_id")
+            ip_cidr = config.get("transport_ip")
+            mtu = config.get("desired_mtu", 9000)
+
+            if not parent or not vlan_id:
+                logger.warning("Subinterface transport config missing parent_interface or vlan_id")
                 return
 
-            config = response.json()
-            mode = config.get("transport_mode", "management")
+            iface_name = f"{parent}.{vlan_id}"
+            logger.info(f"Bootstrap: provisioning transport subinterface {iface_name}")
 
-            if mode == "management":
-                logger.debug("Transport mode: management (no subinterface needed)")
+            # Check if subinterface exists
+            code, _, _ = await _async_run_cmd(["ip", "link", "show", iface_name])
+            if code != 0:
+                # Create the subinterface
+                await _ip_cmd(
+                    "link", "add", "link", parent,
+                    "name", iface_name, "type", "vlan", "id", str(vlan_id),
+                )
+
+            # Set parent MTU if needed
+            try:
+                with open(f"/sys/class/net/{parent}/mtu") as f:
+                    parent_mtu = int(f.read().strip())
+                if parent_mtu < mtu:
+                    await _ip_cmd("link", "set", parent, "mtu", str(mtu))
+            except (FileNotFoundError, ValueError):
+                pass
+
+            # Set MTU, IP, bring up
+            await _ip_cmd("link", "set", iface_name, "mtu", str(mtu))
+            if ip_cidr:
+                await _ip_cmd("addr", "flush", "dev", iface_name)
+                await _ip_cmd("addr", "add", ip_cidr, "dev", iface_name)
+            await _ip_cmd("link", "set", iface_name, "up")
+
+            # Extract IP and set as data plane IP
+            if ip_cidr:
+                dp_ip = ip_cidr.split("/")[0]
+                set_data_plane_ip(dp_ip)
+                logger.info(f"Transport bootstrap complete: {iface_name} with IP {dp_ip}")
+
+        elif mode == "dedicated":
+            dp_iface = config.get("data_plane_interface")
+            ip_cidr = config.get("transport_ip")
+            mtu = config.get("desired_mtu", 9000)
+
+            if not dp_iface:
+                logger.warning("Dedicated transport config missing data_plane_interface")
                 return
 
-            if mode == "subinterface":
-                parent = config.get("parent_interface")
-                vlan_id = config.get("vlan_id")
-                ip_cidr = config.get("transport_ip")
-                mtu = config.get("desired_mtu", 9000)
+            logger.info(f"Bootstrap: configuring dedicated transport interface {dp_iface}")
 
-                if not parent or not vlan_id:
-                    logger.warning("Subinterface transport config missing parent_interface or vlan_id")
-                    return
+            # Configure existing interface
+            await _ip_cmd("link", "set", dp_iface, "mtu", str(mtu))
+            if ip_cidr:
+                await _ip_cmd("addr", "flush", "dev", dp_iface)
+                await _ip_cmd("addr", "add", ip_cidr, "dev", dp_iface)
+            await _ip_cmd("link", "set", dp_iface, "up")
 
-                iface_name = f"{parent}.{vlan_id}"
-                logger.info(f"Bootstrap: provisioning transport subinterface {iface_name}")
-
-                # Check if subinterface exists
-                code, _, _ = await _async_run_cmd(["ip", "link", "show", iface_name])
-                if code != 0:
-                    # Create the subinterface
-                    await _ip_cmd(
-                        "link", "add", "link", parent,
-                        "name", iface_name, "type", "vlan", "id", str(vlan_id),
-                    )
-
-                # Set parent MTU if needed
-                try:
-                    with open(f"/sys/class/net/{parent}/mtu") as f:
-                        parent_mtu = int(f.read().strip())
-                    if parent_mtu < mtu:
-                        await _ip_cmd("link", "set", parent, "mtu", str(mtu))
-                except (FileNotFoundError, ValueError):
-                    pass
-
-                # Set MTU, IP, bring up
-                await _ip_cmd("link", "set", iface_name, "mtu", str(mtu))
-                if ip_cidr:
-                    await _ip_cmd("addr", "flush", "dev", iface_name)
-                    await _ip_cmd("addr", "add", ip_cidr, "dev", iface_name)
-                await _ip_cmd("link", "set", iface_name, "up")
-
-                # Extract IP and set as data plane IP
-                if ip_cidr:
-                    dp_ip = ip_cidr.split("/")[0]
-                    set_data_plane_ip(dp_ip)
-                    logger.info(f"Transport bootstrap complete: {iface_name} with IP {dp_ip}")
-
-            elif mode == "dedicated":
-                dp_iface = config.get("data_plane_interface")
-                ip_cidr = config.get("transport_ip")
-                mtu = config.get("desired_mtu", 9000)
-
-                if not dp_iface:
-                    logger.warning("Dedicated transport config missing data_plane_interface")
-                    return
-
-                logger.info(f"Bootstrap: configuring dedicated transport interface {dp_iface}")
-
-                # Configure existing interface
-                await _ip_cmd("link", "set", dp_iface, "mtu", str(mtu))
-                if ip_cidr:
-                    await _ip_cmd("addr", "flush", "dev", dp_iface)
-                    await _ip_cmd("addr", "add", ip_cidr, "dev", dp_iface)
-                await _ip_cmd("link", "set", dp_iface, "up")
-
-                if ip_cidr:
-                    dp_ip = ip_cidr.split("/")[0]
-                    set_data_plane_ip(dp_ip)
-                    logger.info(f"Transport bootstrap complete: {dp_iface} with IP {dp_ip}")
+            if ip_cidr:
+                dp_ip = ip_cidr.split("/")[0]
+                set_data_plane_ip(dp_ip)
+                logger.info(f"Transport bootstrap complete: {dp_iface} with IP {dp_ip}")
 
     except httpx.ConnectError:
         logger.debug("Cannot reach controller for transport config (will retry on next heartbeat)")
@@ -843,15 +844,15 @@ async def send_heartbeat() -> HeartbeatResponse | None:
     )
 
     try:
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                f"{settings.controller_url}/agents/{AGENT_ID}/heartbeat",
-                json=request.model_dump(),
-                timeout=settings.heartbeat_timeout,
-                headers=_get_controller_auth_headers(),
-            )
-            if response.status_code == 200:
-                return HeartbeatResponse(**response.json())
+        client = get_http_client()
+        response = await client.post(
+            f"{settings.controller_url}/agents/{AGENT_ID}/heartbeat",
+            json=request.model_dump(),
+            timeout=settings.heartbeat_timeout,
+            headers=get_controller_auth_headers(),
+        )
+        if response.status_code == 200:
+            return HeartbeatResponse(**response.json())
     except Exception as e:
         logger.warning(f"Heartbeat failed: {e}")
     return None
@@ -1079,6 +1080,9 @@ async def lifespan(app: FastAPI):
         await _lock_manager.close()
         logger.info("Redis lock manager closed")
 
+    # Close shared HTTP client
+    await close_http_client()
+
     logger.info(f"Agent {AGENT_ID} shutting down")
 
 
@@ -1135,11 +1139,8 @@ class AgentAuthMiddleware(BaseHTTPMiddleware):
 app.add_middleware(AgentAuthMiddleware)
 
 
-def _get_controller_auth_headers() -> dict[str, str]:
-    """Return auth headers for controller requests if secret is configured."""
-    if settings.controller_secret:
-        return {"Authorization": f"Bearer {settings.controller_secret}"}
-    return {}
+# Backward compat alias — canonical implementation in agent.http_client
+_get_controller_auth_headers = get_controller_auth_headers
 
 
 _SAFE_ID_RE = re.compile(r"^[a-zA-Z0-9_\-]+$")
@@ -7145,41 +7146,45 @@ async def _execute_pull_from_controller(job_id: str, image_id: str, reference: s
         logger.debug(f"Fetching from: {stream_url}")
 
         # Stream the image from controller
-        async with httpx.AsyncClient(timeout=httpx.Timeout(600.0)) as client:
-            async with client.stream("GET", stream_url, headers=_get_controller_auth_headers()) as response:
-                if response.status_code != 200:
-                    error_msg = f"Controller returned {response.status_code}"
+        client = get_http_client()
+        async with client.stream(
+            "GET", stream_url,
+            headers=get_controller_auth_headers(),
+            timeout=httpx.Timeout(600.0),
+        ) as response:
+            if response.status_code != 200:
+                error_msg = f"Controller returned {response.status_code}"
+                _image_pull_jobs[job_id] = ImagePullProgress(
+                    job_id=job_id,
+                    status="failed",
+                    error=error_msg,
+                )
+                return
+
+            # Get content length if available
+            total_bytes = int(response.headers.get("content-length", 0))
+
+            # Save to temp file
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".tar") as tmp_file:
+                tmp_path = tmp_file.name
+                bytes_written = 0
+                async for chunk in response.aiter_bytes(chunk_size=1024 * 1024):
+                    tmp_file.write(chunk)
+                    bytes_written += len(chunk)
+
+                    # Update progress
+                    if total_bytes > 0:
+                        percent = min(85, int((bytes_written / total_bytes) * 85))
+                    else:
+                        percent = min(85, bytes_written // (1024 * 1024))  # 1% per MB
                     _image_pull_jobs[job_id] = ImagePullProgress(
                         job_id=job_id,
-                        status="failed",
-                        error=error_msg,
+                        status="transferring",
+                        progress_percent=percent,
+                        bytes_transferred=bytes_written,
+                        total_bytes=total_bytes,
+                        started_at=_pull_started_at,
                     )
-                    return
-
-                # Get content length if available
-                total_bytes = int(response.headers.get("content-length", 0))
-
-                # Save to temp file
-                with tempfile.NamedTemporaryFile(delete=False, suffix=".tar") as tmp_file:
-                    tmp_path = tmp_file.name
-                    bytes_written = 0
-                    async for chunk in response.aiter_bytes(chunk_size=1024 * 1024):
-                        tmp_file.write(chunk)
-                        bytes_written += len(chunk)
-
-                        # Update progress
-                        if total_bytes > 0:
-                            percent = min(85, int((bytes_written / total_bytes) * 85))
-                        else:
-                            percent = min(85, bytes_written // (1024 * 1024))  # 1% per MB
-                        _image_pull_jobs[job_id] = ImagePullProgress(
-                            job_id=job_id,
-                            status="transferring",
-                            progress_percent=percent,
-                            bytes_transferred=bytes_written,
-                            total_bytes=total_bytes,
-                            started_at=_pull_started_at,
-                        )
 
         logger.debug(f"Downloaded {bytes_written} bytes")
 
