@@ -18,6 +18,7 @@ from app.agent_auth import verify_agent_secret
 from app.auth import get_current_admin, get_current_user
 from app.config import settings
 from app.routers.system import get_commit
+from app.state import HostStatus, JobStatus, LabState, LinkActualState
 from app.utils.http import require_admin
 
 
@@ -157,7 +158,7 @@ async def register_agent(
 
                 existing.name = agent.name
                 existing.address = agent.address
-                existing.status = "online"
+                existing.status = HostStatus.ONLINE
                 existing.capabilities = json.dumps(agent.capabilities.model_dump())
                 existing.version = agent.version
                 existing.git_sha = agent.commit or existing.git_sha
@@ -190,7 +191,7 @@ async def register_agent(
                 if existing_duplicate:
                     existing_duplicate.name = agent.name
                     existing_duplicate.address = agent.address
-                    existing_duplicate.status = "online"
+                    existing_duplicate.status = HostStatus.ONLINE
                     existing_duplicate.capabilities = json.dumps(agent.capabilities.model_dump())
                     existing_duplicate.version = agent.version
                     existing_duplicate.git_sha = agent.commit or existing_duplicate.git_sha
@@ -212,7 +213,7 @@ async def register_agent(
                         id=agent.agent_id,
                         name=agent.name,
                         address=agent.address,
-                        status="online",
+                        status=HostStatus.ONLINE,
                         capabilities=json.dumps(agent.capabilities.model_dump()),
                         version=agent.version,
                         git_sha=agent.commit or None,
@@ -274,7 +275,7 @@ async def register_agent(
                 )
                 with get_session() as sess:
                     ag = sess.get(models.Host, host_id)
-                    if ag and ag.status == "online":
+                    if ag and ag.status == HostStatus.ONLINE:
                         host_map = {ag.id: ag}
                         await run_overlay_convergence(sess, host_map)
                         await refresh_interface_mappings(sess, host_map)
@@ -309,7 +310,7 @@ def _handle_agent_restart_cleanup_sync(database: Session, agent_id: str) -> None
         database.query(models.Job)
         .filter(
             models.Job.agent_id == agent_id,
-            models.Job.status == "running",
+            models.Job.status == JobStatus.RUNNING,
         )
         .all()
     )
@@ -321,7 +322,7 @@ def _handle_agent_restart_cleanup_sync(database: Session, agent_id: str) -> None
 
         now = datetime.now(timezone.utc)
         for job in stale_jobs:
-            job.status = "failed"
+            job.status = JobStatus.FAILED
             job.completed_at = now
             job.log_path = (job.log_path or "") + "\n--- Agent restarted, job terminated ---"
 
@@ -330,7 +331,7 @@ def _handle_agent_restart_cleanup_sync(database: Session, agent_id: str) -> None
             if job.lab_id and job.action in ("up", "down"):
                 lab = database.get(models.Lab, job.lab_id)
                 if lab:
-                    lab.state = "error"
+                    lab.state = LabState.ERROR
                     lab.state_error = f"Job {job.action} failed: agent restarted during execution"
                     lab.state_updated_at = now
                     logger.info(f"Set lab {job.lab_id} state to error due to agent restart")
@@ -362,7 +363,7 @@ def _mark_links_for_recovery_sync(database: Session, agent_id: str) -> None:
     links = (
         database.query(models.LinkState)
         .filter(
-            models.LinkState.actual_state == "up",
+            models.LinkState.actual_state == LinkActualState.UP,
             models.LinkState.is_cross_host,
             or_(
                 models.LinkState.source_host_id == agent_id,
@@ -377,7 +378,7 @@ def _mark_links_for_recovery_sync(database: Session, agent_id: str) -> None:
         return
 
     for link in links:
-        link.actual_state = "error"
+        link.actual_state = LinkActualState.ERROR
         link.error_message = "Agent restarted, pending recovery"
 
         if link.source_host_id == agent_id:
@@ -430,7 +431,7 @@ def _check_update_completion(
         )
 
         if version_match or commit_match:
-            job.status = "completed"
+            job.status = JobStatus.COMPLETED
             job.progress_percent = 100
             job.completed_at = now
             logger.info(
@@ -442,7 +443,7 @@ def _check_update_completion(
             started = job.started_at or job.created_at
             age = (now - started).total_seconds() if started else 0
             if age > 300:  # 5 minutes
-                job.status = "failed"
+                job.status = JobStatus.FAILED
                 job.error_message = (
                     f"Expired: agent re-registered with version={new_version} "
                     f"but job expected {job.to_version} (stuck {int(age)}s in '{job.status}')"
@@ -703,7 +704,7 @@ def get_deregister_info(
         .filter(models.Lab.agent_id == agent_id)
         .all()
     )
-    running_labs = [{"id": lab.id, "name": lab.name, "state": lab.state} for lab in labs if lab.state in ("running", "starting")]
+    running_labs = [{"id": lab.id, "name": lab.name, "state": lab.state} for lab in labs if lab.state in (LabState.RUNNING, LabState.STARTING)]
 
     node_placements = (
         database.query(models.NodePlacement)
@@ -946,7 +947,7 @@ async def reconcile_agent_images_endpoint(
     if not host:
         raise HTTPException(status_code=404, detail="Agent not found")
 
-    if host.status != "online":
+    if host.status != HostStatus.ONLINE:
         raise HTTPException(status_code=503, detail="Agent is offline")
 
     from app.tasks.image_sync import reconcile_agent_images
@@ -975,7 +976,7 @@ async def list_agent_interfaces(
     if not host:
         raise HTTPException(status_code=404, detail="Agent not found")
 
-    if host.status != "online":
+    if host.status != HostStatus.ONLINE:
         raise HTTPException(status_code=503, detail="Agent is offline")
 
     try:
@@ -1006,7 +1007,7 @@ async def list_agent_bridges(
     if not host:
         raise HTTPException(status_code=404, detail="Agent not found")
 
-    if host.status != "online":
+    if host.status != HostStatus.ONLINE:
         raise HTTPException(status_code=503, detail="Agent is offline")
 
     try:
@@ -1095,7 +1096,7 @@ async def trigger_agent_update(
     if not host:
         raise HTTPException(status_code=404, detail="Agent not found")
 
-    if host.status != "online":
+    if host.status != HostStatus.ONLINE:
         raise HTTPException(status_code=503, detail="Agent is offline")
 
     # Docker agents use rebuild, not update
@@ -1121,7 +1122,7 @@ async def trigger_agent_update(
             else (datetime.now(timezone.utc) - active_job.created_at).total_seconds()
         )
         if age_seconds > 300:  # 5 minutes
-            active_job.status = "failed"
+            active_job.status = JobStatus.FAILED
             active_job.error_message = f"Expired: stuck in '{active_job.status}' for {int(age_seconds)}s"
             active_job.completed_at = datetime.now(timezone.utc)
             database.commit()
@@ -1186,7 +1187,7 @@ async def trigger_agent_update(
                 update_job.started_at = datetime.now(timezone.utc)
                 message = "Update initiated"
             else:
-                update_job.status = "failed"
+                update_job.status = JobStatus.FAILED
                 update_job.error_message = result.get("message", "Agent rejected update")
                 update_job.completed_at = datetime.now(timezone.utc)
                 message = result.get("message", "Agent rejected update")
@@ -1208,7 +1209,7 @@ async def trigger_agent_update(
 
     except httpx.RequestError as e:
         # Update job as failed
-        update_job.status = "failed"
+        update_job.status = JobStatus.FAILED
         update_job.error_message = f"Failed to contact agent: {e}"
         update_job.completed_at = datetime.now(timezone.utc)
         database.commit()
@@ -1216,7 +1217,7 @@ async def trigger_agent_update(
         raise HTTPException(status_code=502, detail=f"Failed to contact agent: {e}")
 
     except httpx.HTTPStatusError as e:
-        update_job.status = "failed"
+        update_job.status = JobStatus.FAILED
         update_job.error_message = f"Agent error: HTTP {e.response.status_code}"
         update_job.completed_at = datetime.now(timezone.utc)
         database.commit()
@@ -1260,7 +1261,7 @@ async def trigger_bulk_update(
         if not host:
             results.append({"agent_id": agent_id, "success": False, "error": "Agent not found"})
             continue
-        if host.status != "online":
+        if host.status != HostStatus.ONLINE:
             results.append({"agent_id": agent_id, "success": False, "error": "Agent is offline"})
             continue
         if host.deployment_mode == "docker":
@@ -1345,7 +1346,7 @@ async def trigger_bulk_update(
                     job.status = "downloading"
                     job.started_at = now
                 elif dr.get("_status") == "failed":
-                    job.status = "failed"
+                    job.status = JobStatus.FAILED
                     job.error_message = dr.get("_error", "Unknown error")
                     job.completed_at = now
 

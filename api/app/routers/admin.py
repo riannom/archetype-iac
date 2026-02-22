@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 from app import agent_client, db, models, schemas
 from app.auth import get_current_admin, get_current_user
 from app.config import settings
+from app.state import HostStatus, JobStatus, LabState, NodeActualState
 from app.utils.lab import get_lab_or_404
 
 _SAFE_SERVICE_RE = re.compile(r"^[a-zA-Z0-9_.\-]+$")
@@ -68,7 +69,7 @@ async def reconcile_state(
     }
 
     # Get all healthy agents
-    agents = database.query(models.Host).filter(models.Host.status == "online").all()
+    agents = database.query(models.Host).filter(models.Host.status == HostStatus.ONLINE).all()
 
     if not agents:
         result["errors"].append("No healthy agents available")
@@ -95,13 +96,13 @@ async def reconcile_state(
 
                     # Determine lab state from node states
                     if not nodes:
-                        new_state = "stopped"
+                        new_state = LabState.STOPPED
                     elif all(n.get("status") == "running" for n in nodes):
-                        new_state = "running"
+                        new_state = LabState.RUNNING
                     elif any(n.get("status") == "running" for n in nodes):
-                        new_state = "running"  # Partially running = running
+                        new_state = LabState.RUNNING  # Partially running = running
                     else:
-                        new_state = "stopped"
+                        new_state = LabState.STOPPED
 
                     if lab.state != new_state:
                         logger.info(f"Updating lab {lab_id} state: {lab.state} -> {new_state}")
@@ -140,9 +141,9 @@ async def reconcile_state(
     # Update labs that have no containers running (if they were marked running)
     discovered_lab_ids = {d["lab_id"] for d in result["labs_discovered"] if d["state"] != "orphan"}
     for lab in all_labs:
-        if lab.id not in discovered_lab_ids and lab.state == "running":
+        if lab.id not in discovered_lab_ids and lab.state == LabState.RUNNING:
             logger.info(f"Lab {lab.id} has no containers, marking as stopped")
-            lab.state = "stopped"
+            lab.state = LabState.STOPPED
             lab.state_updated_at = datetime.now(timezone.utc)
             result["labs_updated"] += 1
 
@@ -207,7 +208,7 @@ async def audit_lab_runtime_drift(
         scanned += 1
         state = state_by_node_id.get(node.id) or state_by_name.get(node.container_name)
         actual_state = state.actual_state if state else "unknown"
-        if not include_stopped and actual_state != "running":
+        if not include_stopped and actual_state != NodeActualState.RUNNING:
             continue
 
         kind = resolve_device_kind(node.device)
@@ -441,12 +442,12 @@ async def refresh_lab_state(
         if container_status:
             # Map container status to our actual_state
             if container_status == "running":
-                ns.actual_state = "running"
+                ns.actual_state = NodeActualState.RUNNING
                 ns.error_message = None
                 if not ns.boot_started_at:
                     ns.boot_started_at = datetime.now(timezone.utc)
             elif container_status in ("stopped", "exited"):
-                ns.actual_state = "stopped"
+                ns.actual_state = NodeActualState.STOPPED
                 ns.error_message = None
                 ns.boot_started_at = None
             else:
@@ -471,13 +472,13 @@ async def refresh_lab_state(
 
     # Determine lab state from node states
     if not all_nodes:
-        new_state = "stopped"
+        new_state = LabState.STOPPED
     elif all(n.get("status") == "running" for n in all_nodes):
-        new_state = "running"
+        new_state = LabState.RUNNING
     elif any(n.get("status") == "running" for n in all_nodes):
-        new_state = "running"
+        new_state = LabState.RUNNING
     else:
-        new_state = "stopped"
+        new_state = LabState.STOPPED
 
     # Update lab if state changed
     if lab.state != new_state:
@@ -698,7 +699,7 @@ def cleanup_stuck_jobs(
     stuck_jobs = (
         database.query(models.Job)
         .filter(
-            models.Job.status.in_(["running", "queued"]),
+            models.Job.status.in_([JobStatus.RUNNING, JobStatus.QUEUED]),
             models.Job.created_at < cutoff,
         )
         .all()
@@ -707,7 +708,7 @@ def cleanup_stuck_jobs(
     cleaned = []
     for job in stuck_jobs:
         logger.info(f"Cleaning up stuck job {job.id}: action={job.action}, status={job.status}")
-        job.status = "failed"
+        job.status = JobStatus.FAILED
         job.completed_at = now
         if not job.log_path:
             job.log_path = f"Manually marked as failed (stuck for >{max_age_minutes} minutes)"

@@ -22,6 +22,7 @@ from sqlalchemy.orm import Session
 
 from app import db, models, schemas, agent_client
 from app.agent_auth import verify_agent_secret
+from app.state import JobStatus, LinkDesiredState, NodeActualState
 from app.utils.lab import update_lab_state
 from app.tasks.live_links import create_link_if_ready, _build_host_to_agent_map
 from app.services.link_operational_state import recompute_link_oper_state
@@ -69,7 +70,7 @@ async def job_completion_callback(
         )
 
     # Check if job is already completed (idempotency)
-    if job.status in ("completed", "failed"):
+    if job.status in (JobStatus.COMPLETED, JobStatus.FAILED):
         logger.info(f"Job {job_id} already {job.status}, ignoring callback")
         return schemas.JobCallbackResponse(
             success=True,
@@ -84,7 +85,7 @@ async def job_completion_callback(
 
     # Build log content
     log_parts = []
-    if payload.status == "completed":
+    if payload.status == JobStatus.COMPLETED:
         log_parts.append("Job completed successfully (async callback).")
     else:
         log_parts.append("Job failed (async callback).")
@@ -130,7 +131,7 @@ async def _update_lab_from_callback(
     action = job.action or ""
 
     # Determine new lab state based on action and result
-    if payload.status == "completed":
+    if payload.status == JobStatus.COMPLETED:
         if action == "up":
             update_lab_state(database, lab.id, "running", agent_id=job.agent_id)
         elif action == "down":
@@ -177,7 +178,7 @@ async def _update_node_states(
             node_state.actual_state = actual_state
 
             # Clear error if moving to good state
-            if actual_state in ("running", "stopped"):
+            if actual_state in (NodeActualState.RUNNING, NodeActualState.STOPPED):
                 node_state.error_message = None
 
             if old_state != actual_state:
@@ -185,7 +186,7 @@ async def _update_node_states(
                     f"Node {node_name} in lab {lab_id}: "
                     f"{old_state} -> {actual_state} (callback)"
                 )
-                if actual_state == "running" and old_state != "running":
+                if actual_state == NodeActualState.RUNNING and old_state != NodeActualState.RUNNING:
                     nodes_became_running.append(node_name)
 
     if nodes_became_running:
@@ -210,7 +211,7 @@ async def _auto_connect_pending_links(
         database.query(models.LinkState)
         .filter(
             models.LinkState.lab_id == lab_id,
-            models.LinkState.desired_state == "up",
+            models.LinkState.desired_state == LinkDesiredState.UP,
             models.LinkState.actual_state.in_(["pending", "unknown", "down", "error"]),
         )
         .all()
@@ -245,7 +246,7 @@ async def _auto_reattach_overlay_endpoints(
         database.query(models.LinkState)
         .filter(
             models.LinkState.lab_id == lab_id,
-            models.LinkState.desired_state == "up",
+            models.LinkState.desired_state == LinkDesiredState.UP,
             models.LinkState.is_cross_host.is_(True),
         )
         .all()
@@ -317,7 +318,7 @@ def job_heartbeat(
     if not job:
         return {"success": False, "message": "Job not found"}
 
-    if job.status not in ("running", "queued"):
+    if job.status not in (JobStatus.RUNNING, JobStatus.QUEUED):
         return {"success": True, "message": f"Job already {job.status}"}
 
     job.last_heartbeat = datetime.now(timezone.utc)
@@ -553,8 +554,8 @@ def dead_letter_callback(
         )
 
     # If job is still pending/running, mark it as unknown state
-    if job.status in ("pending", "running", "queued"):
-        job.status = "failed"
+    if job.status in ("pending", JobStatus.RUNNING, JobStatus.QUEUED):
+        job.status = JobStatus.FAILED
         job.completed_at = datetime.now(timezone.utc)
         job.log_path = (
             f"ERROR: Job completion callback delivery failed.\n\n"
@@ -633,10 +634,10 @@ def update_progress_callback(
     if payload.status == "downloading" and not update_job.started_at:
         update_job.started_at = datetime.now(timezone.utc)
 
-    if payload.status in ("completed", "failed"):
+    if payload.status in (JobStatus.COMPLETED, JobStatus.FAILED):
         update_job.completed_at = datetime.now(timezone.utc)
         # Ensure completed status shows 100% progress
-        if payload.status == "completed":
+        if payload.status == JobStatus.COMPLETED:
             update_job.progress_percent = 100
 
     database.commit()

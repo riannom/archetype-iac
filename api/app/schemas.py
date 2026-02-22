@@ -1310,3 +1310,90 @@ class SupportBundleOut(BaseModel):
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
+
+
+# =============================================================================
+# Lab Operation Response Schemas
+# =============================================================================
+
+
+class CheckResourcesRequest(BaseModel):
+    """Request body for resource capacity check."""
+    node_ids: list[str] | None = None  # null = check all nodes
+
+
+class PerHostCapacity(BaseModel):
+    agent_name: str = ""
+    fits: bool = True
+    has_warnings: bool = False
+    projected_memory_pct: float = 0
+    projected_cpu_pct: float = 0
+    projected_disk_pct: float = 0
+    node_count: int = 0
+    required_memory_mb: int = 0
+    required_cpu_cores: int = 0
+    available_memory_mb: float = 0
+    available_cpu_cores: float = 0
+    errors: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+
+
+class CheckResourcesResponse(BaseModel):
+    sufficient: bool = True
+    warnings: list[str] = Field(default_factory=list)
+    errors: list[str] = Field(default_factory=list)
+    per_host: dict[str, PerHostCapacity] = Field(default_factory=dict)
+
+
+class HotConnectRequest(BaseModel):
+    """Request to hot-connect two interfaces."""
+    source_node: str
+    source_interface: str
+    target_node: str
+    target_interface: str
+
+
+class HotConnectResponse(BaseModel):
+    """Response from hot-connect request."""
+    success: bool
+    link_id: str | None = None
+    vlan_tag: int | None = None
+    error: str | None = None
+
+
+class ExternalConnectRequest(BaseModel):
+    """Request to connect a node to an external network."""
+    node_name: str
+    interface_name: str
+    external_interface: str
+    vlan_tag: int | None = None
+
+
+class ExternalConnectResponse(BaseModel):
+    """Response from external connect request."""
+    success: bool
+    vlan_tag: int | None = None
+    error: str | None = None
+
+
+class CleanupOrphansResponse(BaseModel):
+    """Response from orphan cleanup."""
+    removed_by_agent: dict[str, list[str]] = Field(default_factory=dict)
+    errors: list[str] = Field(default_factory=list)
+
+
+class InterfaceMappingSyncResponse(BaseModel):
+    """Response from syncing interface mappings."""
+    created: int
+    updated: int
+    errors: int
+    agents_queried: int
+
+
+class LinkReconciliationResponse(BaseModel):
+    """Response from link reconciliation."""
+    checked: int
+    valid: int
+    repaired: int
+    errors: int
+    skipped: int

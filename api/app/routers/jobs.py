@@ -14,6 +14,7 @@ from app.auth import get_current_user
 from app.db import get_session
 from app.netlab import run_netlab_command
 from app.services.topology import TopologyService
+from app.state import HostStatus, JobStatus, LabState, NodeActualState, NodeDesiredState
 from app.storage import lab_workspace
 from app.tasks.jobs import run_agent_job, run_multihost_deploy, run_multihost_destroy
 from app.topology import analyze_topology
@@ -38,7 +39,7 @@ def _extract_error_summary(log_content: str | None, status: str) -> str | None:
     """
     import re
 
-    if status != "failed" or not log_content:
+    if status != JobStatus.FAILED or not log_content:
         return None
 
     # Look for specific error patterns in order of priority
@@ -219,7 +220,7 @@ async def lab_up(
                         database.query(models.Host)
                         .filter(
                             or_(models.Host.name == host_name, models.Host.id == host_name),
-                            models.Host.status == "online",
+                            models.Host.status == HostStatus.ONLINE,
                             models.Host.last_heartbeat >= cutoff,
                         )
                         .first()
@@ -249,7 +250,7 @@ async def lab_up(
 
                     agents = (
                         database.query(models.Host)
-                        .filter(models.Host.status == "online", models.Host.last_heartbeat >= cutoff)
+                        .filter(models.Host.status == HostStatus.ONLINE, models.Host.last_heartbeat >= cutoff)
                         .all()
                     )
                     if lab_provider:
@@ -276,7 +277,7 @@ async def lab_up(
                 # Single-host: check for healthy agent
                 agents = (
                     database.query(models.Host)
-                    .filter(models.Host.status == "online", models.Host.last_heartbeat >= cutoff)
+                    .filter(models.Host.status == HostStatus.ONLINE, models.Host.last_heartbeat >= cutoff)
                     .all()
                 )
                 if lab_provider:
@@ -298,7 +299,7 @@ async def lab_up(
                             database.query(models.Host)
                             .filter(
                                 or_(models.Host.name == first_host, models.Host.id == first_host),
-                                models.Host.status == "online",
+                                models.Host.status == HostStatus.ONLINE,
                                 models.Host.last_heartbeat >= cutoff,
                             )
                             .first()
@@ -349,7 +350,7 @@ async def lab_up(
     # Phase 3: Create job and set desired states in worker thread
     def _sync_create_job():
         with get_session() as database:
-            job = models.Job(lab_id=real_lab_id, user_id=current_user.id, action="up", status="queued")
+            job = models.Job(lab_id=real_lab_id, user_id=current_user.id, action="up", status=JobStatus.QUEUED)
             database.add(job)
             database.commit()
             database.refresh(job)
@@ -363,7 +364,7 @@ async def lab_up(
                 .all()
             )
             for ns in node_states:
-                ns.desired_state = "running"
+                ns.desired_state = NodeDesiredState.RUNNING
                 ns.reset_enforcement(clear_error=True)
             database.commit()
 
@@ -429,7 +430,7 @@ async def lab_down(
                 cutoff = _agent_online_cutoff()
                 agents = (
                     database.query(models.Host)
-                    .filter(models.Host.status == "online", models.Host.last_heartbeat >= cutoff)
+                    .filter(models.Host.status == HostStatus.ONLINE, models.Host.last_heartbeat >= cutoff)
                     .all()
                 )
                 if lab_provider:
@@ -438,7 +439,7 @@ async def lab_down(
                     raise HTTPException(status_code=503, detail=f"No healthy agent available with {lab_provider} support")
 
             # Create job record
-            job = models.Job(lab_id=lab.id, user_id=current_user.id, action="down", status="queued")
+            job = models.Job(lab_id=lab.id, user_id=current_user.id, action="down", status=JobStatus.QUEUED)
             database.add(job)
             database.commit()
             database.refresh(job)
@@ -452,7 +453,7 @@ async def lab_down(
                 .all()
             )
             for ns in node_states:
-                ns.desired_state = "stopped"
+                ns.desired_state = NodeDesiredState.STOPPED
                 ns.reset_enforcement()
             database.commit()
 
@@ -513,7 +514,7 @@ async def lab_restart(
             cutoff = _agent_online_cutoff()
             agents = (
                 database.query(models.Host)
-                .filter(models.Host.status == "online", models.Host.last_heartbeat >= cutoff)
+                .filter(models.Host.status == HostStatus.ONLINE, models.Host.last_heartbeat >= cutoff)
                 .all()
             )
             if lab_provider:
@@ -526,12 +527,12 @@ async def lab_restart(
                 raise HTTPException(status_code=400, detail="No topology defined for this lab")
 
             # Create separate jobs for down and up phases
-            down_job = models.Job(lab_id=lab.id, user_id=current_user.id, action="down", status="queued")
+            down_job = models.Job(lab_id=lab.id, user_id=current_user.id, action="down", status=JobStatus.QUEUED)
             database.add(down_job)
             database.commit()
             database.refresh(down_job)
 
-            up_job = models.Job(lab_id=lab.id, user_id=current_user.id, action="up", status="queued")
+            up_job = models.Job(lab_id=lab.id, user_id=current_user.id, action="up", status=JobStatus.QUEUED)
             database.add(up_job)
             database.commit()
             database.refresh(up_job)
@@ -558,9 +559,9 @@ async def lab_restart(
         with get_session() as session:
             dj = session.get(models.Job, down_job_id)
             uj = session.get(models.Job, up_job_id)
-            if dj and dj.status == "failed":
+            if dj and dj.status == JobStatus.FAILED:
                 if uj:
-                    uj.status = "failed"
+                    uj.status = JobStatus.FAILED
                     uj.log = "Cancelled: down phase failed"
                     session.commit()
                 return
@@ -615,7 +616,7 @@ def node_action(
         raise HTTPException(status_code=404, detail=f"Node '{node}' not found")
 
     node_id = node_state.node_id
-    desired_state = "running" if action == "start" else "stopped"
+    desired_state = NodeDesiredState.RUNNING if action == "start" else NodeDesiredState.STOPPED
     command = "start" if action == "start" else "stop"
 
     # Centralized guard check (6.1)
@@ -637,8 +638,8 @@ def node_action(
 
     elif (
         node_state.desired_state == desired_state
-        and desired_state == "running"
-        and node_state.actual_state == "error"
+        and desired_state == NodeDesiredState.RUNNING
+        and node_state.actual_state == NodeActualState.ERROR
     ):
         # Retry: reset enforcement state
         node_state.reset_enforcement(clear_error=True)
@@ -660,14 +661,14 @@ def node_action(
         .order_by(models.Job.created_at.desc())
         .first()
     )
-    if latest_job and latest_job.status == "queued":
+    if latest_job and latest_job.status == JobStatus.QUEUED:
         return schemas.JobOut.model_validate(latest_job)
 
     noop_job = models.Job(
         lab_id=lab.id,
         user_id=current_user.id,
         action=f"sync:node:{node_id}",
-        status="completed",
+        status=JobStatus.COMPLETED,
     )
     database.add(noop_job)
     database.commit()
@@ -853,7 +854,7 @@ def cancel_job(
         raise HTTPException(status_code=404, detail="Job not found")
 
     # Can only cancel queued or running jobs
-    if job.status not in ("queued", "running"):
+    if job.status not in (JobStatus.QUEUED, JobStatus.RUNNING):
         raise HTTPException(
             status_code=400,
             detail=f"Cannot cancel job with status '{job.status}'. Only 'queued' or 'running' jobs can be cancelled."
@@ -862,7 +863,7 @@ def cancel_job(
     logger.info(f"Cancelling job {job_id} for lab {lab_id} (was {job.status})")
 
     # Mark job as cancelled
-    job.status = "cancelled"
+    job.status = JobStatus.CANCELLED
     job.completed_at = datetime.now(timezone.utc)
 
     # Append cancellation note to log
@@ -876,7 +877,7 @@ def cancel_job(
         job.log_path = f"Job cancelled by user at {job.completed_at.isoformat()}"
 
     # Set lab state to unknown so reconciliation will determine actual state
-    lab.state = "unknown"
+    lab.state = LabState.UNKNOWN
     lab.state_error = "Job cancelled by user - awaiting state reconciliation"
     lab.state_updated_at = datetime.now(timezone.utc)
 
@@ -888,7 +889,7 @@ def cancel_job(
     if job.agent_id:
         try:
             agent = database.get(models.Host, job.agent_id)
-            if agent and agent.status == "online":
+            if agent and agent.status == HostStatus.ONLINE:
                 # Future: Could add agent cancel endpoint here
                 # await agent_client.cancel_job_on_agent(agent, job_id)
                 pass

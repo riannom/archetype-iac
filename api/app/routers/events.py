@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 from app import db, models, schemas
 from app.agent_auth import verify_agent_secret
 from app.services.broadcaster import broadcast_node_state_change
+from app.state import NodeActualState
 
 logger = logging.getLogger(__name__)
 
@@ -101,31 +102,31 @@ def _event_type_to_actual_state(
         Appropriate actual_state value, or empty string to skip update
     """
     if event_type == "started":
-        return "running"
+        return NodeActualState.RUNNING
     elif event_type in ("stopped", "stop"):
-        return "stopped"
+        return NodeActualState.STOPPED
     elif event_type in ("died", "kill", "oom"):
         # Exit code 137 = SIGKILL (128 + 9), typically from docker stop
         # Exit code 143 = SIGTERM (128 + 15), also from docker stop
         # These are intentional stops, not errors
         if "code 137" in status or "code 143" in status:
-            return "stopped"
+            return NodeActualState.STOPPED
         # Status "kill" means Docker sent SIGKILL - this is from docker stop timeout
         # Treat it as a successful stop, not an error
         if status == "kill":
-            return "stopped"
+            return NodeActualState.STOPPED
         # Don't downgrade from "stopped" to "error" - this can happen when
         # events arrive out of order (die after stop)
-        if current_state == "stopped":
+        if current_state == NodeActualState.STOPPED:
             return ""  # Skip update
         # If we were already stopping, treat any death as a successful stop
-        if current_state == "stopping":
-            return "stopped"
-        return "error"
+        if current_state == NodeActualState.STOPPING:
+            return NodeActualState.STOPPED
+        return NodeActualState.ERROR
     elif event_type == "creating":
-        return "pending"
+        return NodeActualState.PENDING
     elif event_type == "destroying":
-        return "stopped"
+        return NodeActualState.STOPPED
     else:
         # Unknown event type - don't change state
         return ""
@@ -189,12 +190,12 @@ async def receive_node_event(
     node_state.actual_state = new_state
 
     # Clear transitional timestamps when reaching final states
-    if new_state in ("stopped", "running", "error"):
+    if new_state in (NodeActualState.STOPPED, NodeActualState.RUNNING, NodeActualState.ERROR):
         node_state.stopping_started_at = None
         node_state.starting_started_at = None
 
     # Set or clear error message
-    if new_state == "error":
+    if new_state == NodeActualState.ERROR:
         node_state.error_message = f"Container {payload.event_type}: {payload.status}"
     else:
         node_state.error_message = None
@@ -267,7 +268,7 @@ def receive_batch_events(
 
             node_state.actual_state = new_state
 
-            if new_state == "error":
+            if new_state == NodeActualState.ERROR:
                 node_state.error_message = f"Container {payload.event_type}: {payload.status}"
             else:
                 node_state.error_message = None

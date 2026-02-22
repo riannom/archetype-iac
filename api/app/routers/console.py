@@ -11,6 +11,7 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from app import agent_client, models
 from app.db import get_session
 from app.services.topology import TopologyService
+from app.state import NodeActualState
 from app.utils.lab import get_node_provider
 from app.utils.agents import get_online_agent_for_lab
 
@@ -131,7 +132,7 @@ async def console_ws(websocket: WebSocket, lab_id: str, node: str, token: str | 
     node_name = db_result.node_name
 
     boot_warning = None
-    if db_result.node_actual_state == "running" and not db_result.node_is_ready:
+    if db_result.node_actual_state == NodeActualState.RUNNING and not db_result.node_is_ready:
         # Node is running but not ready - check readiness from agent
         try:
             provider_type = get_node_provider(db_result.node_def) if db_result.node_def is not None else None

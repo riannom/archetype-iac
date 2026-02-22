@@ -29,6 +29,7 @@ from app import db, models
 from app.config import settings
 from app.services.broadcaster import get_broadcaster
 from app.services.state_machine import NodeStateMachine
+from app.state import NodeActualState, NodeDesiredState
 from app.utils.nodes import get_node_placement_mapping
 
 logger = logging.getLogger(__name__)
@@ -162,8 +163,8 @@ async def _send_initial_state(websocket: WebSocket, lab_id: str) -> None:
                 for ns in node_states:
                     host_id = placement_by_node.get(ns.node_name) or lab.agent_id
                     will_retry = (
-                        ns.actual_state == "error"
-                        and ns.desired_state == "running"
+                        ns.actual_state == NodeActualState.ERROR
+                        and ns.desired_state == NodeDesiredState.RUNNING
                         and ns.enforcement_attempts < max_retries
                         and ns.enforcement_failed_at is None
                     )

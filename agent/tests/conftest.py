@@ -21,6 +21,19 @@ def _set_testing_env(monkeypatch, tmp_path):
     yield
 
 
+@pytest.fixture(autouse=True)
+def _clear_docker_client_cache():
+    """Clear the cached Docker client between tests.
+
+    This ensures test-level patches of ``docker.from_env`` take effect
+    and prevents a cached real/stub client from leaking across tests.
+    """
+    from agent.docker_client import get_docker_client
+    get_docker_client.cache_clear()
+    yield
+    get_docker_client.cache_clear()
+
+
 def _install_docker_stub() -> None:
     """Provide a minimal docker module stub when docker isn't installed.
 

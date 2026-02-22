@@ -20,6 +20,7 @@ from sqlalchemy.orm import Session
 
 from app import agent_client, models
 from app.db import get_session
+from app.state import JobStatus, LinkActualState, NodeActualState
 from app.utils.link import lookup_endpoint_hosts
 from app.tasks.link_orchestration import (
     create_same_host_link,
@@ -92,7 +93,7 @@ async def create_link_if_ready(
 
     claimed, conflicts = claim_link_endpoints(session, link_state)
     if not claimed:
-        link_state.actual_state = "error"
+        link_state.actual_state = LinkActualState.ERROR
         conflict_list = ", ".join(conflicts) if conflicts else "another link"
         link_state.error_message = (
             f"Endpoint already in use by desired-up link(s): {conflict_list}"
@@ -127,12 +128,12 @@ async def create_link_if_ready(
     )
 
     # Check if both nodes are running
-    source_running = source_state and source_state.actual_state == "running"
-    target_running = target_state and target_state.actual_state == "running"
+    source_running = source_state and source_state.actual_state == NodeActualState.RUNNING
+    target_running = target_state and target_state.actual_state == NodeActualState.RUNNING
 
     if not source_running or not target_running:
         # One or both nodes not running - mark link as pending for later auto-connect
-        link_state.actual_state = "pending"
+        link_state.actual_state = LinkActualState.PENDING
         link_state.error_message = None
         _sync_oper_state(session, link_state)
         src_status = source_state.actual_state if source_state else "unknown"
@@ -151,7 +152,7 @@ async def create_link_if_ready(
     source_host_id, target_host_id = lookup_endpoint_hosts(session, link_state)
 
     if not source_host_id or not target_host_id:
-        link_state.actual_state = "error"
+        link_state.actual_state = LinkActualState.ERROR
         link_state.error_message = "Cannot determine endpoint host placement"
         _sync_oper_state(session, link_state)
         log_parts.append(f"  {link_state.link_name}: FAILED - missing host placement")
@@ -219,7 +220,7 @@ async def teardown_link(
     actual_state = link_info.get("actual_state", "unknown")
 
     # Only tear down if link was actually up
-    if actual_state not in ("up", "error", "pending"):
+    if actual_state not in (LinkActualState.UP, LinkActualState.ERROR, LinkActualState.PENDING):
         log_parts.append(f"  {link_name}: skipped (was {actual_state})")
         logger.debug(f"Link {link_name} was not active, skipping teardown")
         return True
@@ -290,7 +291,7 @@ async def teardown_link(
             if tunnel:
                 tunnel.status = "failed"
             if link_state_record:
-                link_state_record.actual_state = "error"
+                link_state_record.actual_state = LinkActualState.ERROR
                 link_state_record.error_message = "Source detach failed"
                 _sync_oper_state(session, link_state_record)
             log_parts.append(f"  {link_name}: FAILED (source detach error)")
@@ -335,7 +336,7 @@ async def teardown_link(
             if tunnel:
                 tunnel.status = "failed"
             if link_state_record:
-                link_state_record.actual_state = "error"
+                link_state_record.actual_state = LinkActualState.ERROR
                 link_state_record.error_message = "Target detach failed after source detach"
                 _sync_oper_state(session, link_state_record)
             log_parts.append(f"  {link_name}: FAILED (target detach error, source rolled back)")
@@ -345,7 +346,7 @@ async def teardown_link(
         if tunnel:
             session.delete(tunnel)
         if link_state_record:
-            link_state_record.actual_state = "down"
+            link_state_record.actual_state = LinkActualState.DOWN
             link_state_record.source_carrier_state = "off"
             link_state_record.target_carrier_state = "off"
             link_state_record.source_vxlan_attached = False
@@ -382,7 +383,7 @@ async def teardown_link(
             result = await agent_client.delete_link_on_agent(agent, lab_id, normalized_link_id)
             if result.get("success"):
                 if link_state_record:
-                    link_state_record.actual_state = "down"
+                    link_state_record.actual_state = LinkActualState.DOWN
                     link_state_record.source_carrier_state = "off"
                     link_state_record.target_carrier_state = "off"
                     link_state_record.error_message = None
@@ -393,7 +394,7 @@ async def teardown_link(
             else:
                 error = result.get("error", "unknown error")
                 if link_state_record:
-                    link_state_record.actual_state = "error"
+                    link_state_record.actual_state = LinkActualState.ERROR
                     link_state_record.error_message = error
                     _sync_oper_state(session, link_state_record)
                 log_parts.append(f"  {link_name}: FAILED - {error}")
@@ -403,7 +404,7 @@ async def teardown_link(
                 return False
         except Exception as e:
             if link_state_record:
-                link_state_record.actual_state = "error"
+                link_state_record.actual_state = LinkActualState.ERROR
                 link_state_record.error_message = str(e)
                 _sync_oper_state(session, link_state_record)
             log_parts.append(f"  {link_name}: FAILED - {e}")
@@ -459,7 +460,7 @@ async def process_link_changes(
                     lab_id=lab_id,
                     user_id=user_id,
                     action=f"links:{','.join(action_desc)}",
-                    status="running",
+                    status=JobStatus.RUNNING,
                     started_at=datetime.now(timezone.utc),
                 )
                 session.add(job)
@@ -478,7 +479,7 @@ async def process_link_changes(
                 if not host_to_agent:
                     log_parts.append("WARNING: No agents available, skipping link operations")
                     logger.warning(f"No agents available for lab {lab_id}, skipping live link operations")
-                    job.status = "completed"
+                    job.status = JobStatus.COMPLETED
                     job.completed_at = datetime.now(timezone.utc)
                     _update_job_log(session, job, log_parts)
                     return
@@ -532,13 +533,13 @@ async def process_link_changes(
                                 success = await create_link_if_ready(
                                     session, lab_id, link_state, host_to_agent, log_parts
                                 )
-                                if not success and link_state.actual_state == "error":
+                                if not success and link_state.actual_state == LinkActualState.ERROR:
                                     error_count += 1
                             except Exception as e:
                                 error_count += 1
                                 log_parts.append(f"  {link_name}: FAILED - {e}")
                                 logger.error(f"Error creating link {link_name}: {e}")
-                                link_state.actual_state = "error"
+                                link_state.actual_state = LinkActualState.ERROR
                                 link_state.error_message = str(e)
                                 _sync_oper_state(session, link_state)
                     log_parts.append("")
@@ -547,10 +548,10 @@ async def process_link_changes(
                 log_parts.append("=== Summary ===")
                 if error_count > 0:
                     log_parts.append(f"Completed with {error_count} error(s)")
-                    job.status = "completed"  # Still completed, just with errors
+                    job.status = JobStatus.COMPLETED  # Still completed, just with errors
                 else:
                     log_parts.append("All link operations completed successfully")
-                    job.status = "completed"
+                    job.status = JobStatus.COMPLETED
 
                 job.completed_at = datetime.now(timezone.utc)
                 _update_job_log(session, job, log_parts)
@@ -560,7 +561,7 @@ async def process_link_changes(
                 logger.error(f"Error processing link changes for lab {lab_id}: {e}")
                 log_parts.append(f"\nFATAL ERROR: {e}")
                 if job:
-                    job.status = "failed"
+                    job.status = JobStatus.FAILED
                     job.completed_at = datetime.now(timezone.utc)
                     _update_job_log(session, job, log_parts)
                 session.commit()  # Commit the job status update

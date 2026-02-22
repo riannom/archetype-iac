@@ -183,6 +183,7 @@ from agent.logging_config import setup_agent_logging
 
 # Module-level imports for testability (patch targets need module-level attributes)
 import docker  # noqa: E402
+from agent.docker_client import get_docker_client  # noqa: E402
 from agent.console.docker_exec import DockerConsole  # noqa: E402, F401
 from agent.console.ssh_console import SSHConsole  # noqa: E402, F401
 from agent.readiness import get_probe_for_vendor, run_post_boot_commands  # noqa: E402, F401
@@ -489,9 +490,7 @@ def _sync_get_resource_usage() -> dict:
         containers_total = 0
         container_details = []
         try:
-            import docker
-            from docker.errors import NotFound, APIError
-            client = docker.from_env()
+            client = get_docker_client()
 
             # Use low-level API to get container list, then fetch each individually
             # This handles "Dead" or corrupted containers gracefully
@@ -501,7 +500,7 @@ def _sync_get_resource_usage() -> dict:
                 try:
                     c = client.containers.get(container_info["Id"])
                     all_containers.append(c)
-                except (NotFound, APIError) as e:
+                except (docker.errors.NotFound, docker.errors.APIError) as e:
                     # Skip dead/corrupted containers that can't be inspected
                     container_name = container_info.get("Names", ["unknown"])[0].lstrip("/")
                     logger.warning(f"Skipping corrupted/dead container {container_name}: {e}")
@@ -1926,10 +1925,8 @@ async def _reconcile_single_node(
 
     # Try Docker first
     try:
-        import docker
-
         def _sync_get_container(cn):
-            client = docker.from_env()
+            client = get_docker_client()
             return client.containers.get(cn)
 
         container = await asyncio.to_thread(_sync_get_container, container_name)
@@ -2290,10 +2287,8 @@ async def start_container(container_name: str) -> dict:
     logger.info(f"Starting container: {container_name}")
 
     try:
-        import docker
-
         def _sync_start():
-            client = docker.from_env()
+            client = get_docker_client()
             container = client.containers.get(container_name)
             if container.status == "running":
                 return {"success": True, "message": "Container already running"}
@@ -2324,11 +2319,10 @@ async def stop_container(container_name: str) -> dict:
     logger.info(f"Stopping container: {container_name}")
 
     try:
-        import docker
         stop_timeout = settings.container_stop_timeout
 
         def _sync_stop():
-            client = docker.from_env()
+            client = get_docker_client()
             container = client.containers.get(container_name)
             if container.status != "running":
                 return {"success": True, "message": "Container already stopped"}
@@ -2359,10 +2353,8 @@ async def remove_container(container_name: str, force: bool = False) -> dict:
     logger.info(f"Removing container: {container_name} (force={force})")
 
     try:
-        import docker
-
         def _sync_remove():
-            client = docker.from_env()
+            client = get_docker_client()
             container = client.containers.get(container_name)
             container.remove(force=force)
             return {"success": True, "message": "Container removed"}
@@ -2401,10 +2393,8 @@ async def remove_container_for_lab(
     logger.info(f"Removing container {container_name} for lab {lab_id} (force={force})")
 
     try:
-        import docker
-
         def _sync_remove_for_lab():
-            client = docker.from_env()
+            client = get_docker_client()
             container = client.containers.get(container_name)
 
             # Validate container belongs to the lab (optional safety check)
@@ -2531,8 +2521,6 @@ async def cleanup_lab_orphans(request: CleanupLabOrphansRequest) -> CleanupLabOr
     Returns:
         Lists of removed and kept containers/VMs
     """
-    from docker.errors import APIError
-
     logger.info(f"Cleaning up orphan containers/VMs for lab {request.lab_id}, keeping {len(request.keep_node_names)} nodes")
 
     removed = []
@@ -2544,7 +2532,7 @@ async def cleanup_lab_orphans(request: CleanupLabOrphansRequest) -> CleanupLabOr
     try:
         def _sync_cleanup_docker_orphans(lab_id, keep):
             _removed, _kept, _errors = [], [], []
-            client = docker.from_env()
+            client = get_docker_client()
             containers = client.containers.list(all=True, filters={
                 "label": f"archetype.lab_id={lab_id}"
             })
@@ -2560,7 +2548,7 @@ async def cleanup_lab_orphans(request: CleanupLabOrphansRequest) -> CleanupLabOr
                         logger.info(f"Removing orphan container {container.name} (node {node_name} deleted from topology)")
                         container.remove(force=True)
                         _removed.append(container.name)
-                    except APIError as e:
+                    except docker.errors.APIError as e:
                         error_msg = f"Failed to remove {container.name}: {e}"
                         logger.warning(error_msg)
                         _errors.append(error_msg)
@@ -2617,9 +2605,7 @@ def _sync_prune_docker(request: DockerPruneRequest) -> DockerPruneResponse:
     errors = []
 
     try:
-        import docker
-
-        client = docker.from_env()
+        client = get_docker_client()
 
         # Get images used by running containers (to protect them)
         protected_image_ids = set()
@@ -3221,9 +3207,7 @@ async def get_lab_port_state(lab_id: str) -> PortStateResponse:
         # Step 1: Collect per-container interface->iflink data via Docker SDK
         # in a worker thread so we do not block the asyncio event loop.
         def _collect_container_iflinks() -> list[tuple[str, str]]:
-            import docker as docker_lib
-
-            client = docker_lib.from_env(timeout=settings.docker_client_timeout)
+            client = docker.from_env(timeout=settings.docker_client_timeout)
             containers = client.containers.list(
                 filters={"label": f"archetype.lab_id={lab_id}"},
             )
@@ -4363,9 +4347,8 @@ def _resolve_ifindex_sync(
     interface_name: str,
 ) -> int | None:
     """Read peer ifindex for a container interface — blocking Docker call."""
-    import docker as docker_lib
     try:
-        client = docker_lib.from_env()
+        client = get_docker_client()
         container = client.containers.get(container_name)
         exit_code, output = container.exec_run(
             ["cat", f"/sys/class/net/{interface_name}/iflink"],
@@ -6019,8 +6002,7 @@ async def check_node_ready(
         # Get the node kind to determine appropriate probe
         try:
             def _sync_get_container_labels(name):
-                import docker
-                client = docker.from_env()
+                client = get_docker_client()
                 c = client.containers.get(name)
                 return {
                     "kind": c.labels.get("archetype.node_kind", ""),
@@ -6096,8 +6078,7 @@ async def run_node_post_boot(lab_id: str, node_name: str) -> dict:
 
     try:
         def _sync_get_node_kind(name):
-            import docker as docker_lib
-            client = docker_lib.from_env()
+            client = get_docker_client()
             c = client.containers.get(name)
             return c.labels.get("archetype.node_kind", "")
 
@@ -6131,8 +6112,7 @@ async def exec_in_node(lab_id: str, node_name: str, request: Request) -> dict:
     container_name = docker_provider.get_container_name(lab_id, node_name)
 
     def _exec_sync():
-        import docker as docker_lib
-        client = docker_lib.from_env()
+        client = get_docker_client()
         container = client.containers.get(container_name)
         exit_code, output = container.exec_run(["sh", "-c", cmd], demux=False)
         output_str = output.decode("utf-8", errors="replace") if output else ""
@@ -6303,9 +6283,7 @@ async def get_node_runtime_profile(
                     pass
 
             def _sync_get_runtime_profile(candidates):
-                import docker
-                from docker.errors import NotFound
-                client = docker.from_env()
+                client = get_docker_client()
                 for candidate in candidates:
                     try:
                         c = client.containers.get(candidate)
@@ -6328,7 +6306,7 @@ async def get_node_runtime_profile(
                                 "cpu": cpu,
                             },
                         }
-                    except NotFound:
+                    except docker.errors.NotFound:
                         continue
                 return None
 
@@ -6731,8 +6709,7 @@ def _load_persisted_transfer_state() -> None:
 def _get_docker_images() -> list[DockerImageInfo]:
     """Get list of Docker images on this agent."""
     try:
-        import docker
-        client = docker.from_env()
+        client = get_docker_client()
         images = []
 
         for img in client.images.list():
@@ -6793,8 +6770,7 @@ def check_image(reference: str) -> ImageExistsResponse:
                         pass
             return ImageExistsResponse(exists=exists, sha256=file_sha256)
 
-        import docker
-        client = docker.from_env()
+        client = get_docker_client()
 
         # Try to get the image
         try:
@@ -7343,8 +7319,7 @@ async def _get_console_config(container_name: str) -> tuple[str, str, str, str]:
     """
     def _sync_get_config() -> tuple[str, str, str, str]:
         try:
-            import docker
-            client = docker.from_env()
+            client = get_docker_client()
             container = client.containers.get(container_name)
             kind = container.labels.get("archetype.node_kind", "")
             method = get_console_method(kind)
@@ -7361,8 +7336,7 @@ async def _get_container_ip(container_name: str) -> str | None:
     """Get the container's IP address for SSH access."""
     def _sync_get_ip() -> str | None:
         try:
-            import docker
-            client = docker.from_env()
+            client = get_docker_client()
             container = client.containers.get(container_name)
             networks = container.attrs.get("NetworkSettings", {}).get("Networks", {})
             for net_name, net_config in networks.items():
@@ -7388,8 +7362,7 @@ async def _get_container_boot_logs(container_name: str, tail_lines: int = 50) ->
     """
     def _sync_get_logs() -> str | None:
         try:
-            import docker
-            client = docker.from_env()
+            client = get_docker_client()
             container = client.containers.get(container_name)
             logs = container.logs(tail=tail_lines, timestamps=False).decode("utf-8", errors="replace")
             return logs if logs.strip() else None
@@ -7468,8 +7441,7 @@ async def _check_container_exists(container_name: str) -> bool:
     """Check if a Docker container exists."""
     def _sync_check() -> bool:
         try:
-            import docker
-            client = docker.from_env()
+            client = get_docker_client()
             client.containers.get(container_name)
             return True
         except Exception:

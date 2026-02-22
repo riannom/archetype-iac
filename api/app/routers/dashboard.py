@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from app import db, models
 from app.auth import get_current_user
+from app.state import HostStatus
 from app.utils.cache import cache_get, cache_set
 from app.utils.lab import find_lab_by_prefix, find_lab_with_name
 
@@ -26,7 +27,7 @@ def get_dashboard_metrics(database: Session = Depends(db.get_db), _user: models.
 
     # Get all hosts
     hosts = database.query(models.Host).all()
-    online_agents = sum(1 for h in hosts if h.status == "online")
+    online_agents = sum(1 for h in hosts if h.status == HostStatus.ONLINE)
     total_agents = len(hosts)
 
     # Get all labs for mapping
@@ -50,7 +51,7 @@ def get_dashboard_metrics(database: Session = Depends(db.get_db), _user: models.
     per_host: list[dict] = []  # Per-host breakdown for multi-host environments
 
     for host in hosts:
-        if host.status != "online":
+        if host.status != HostStatus.ONLINE:
             continue
         online_count += 1
         usage = host.get_resource_usage()
@@ -144,7 +145,7 @@ def get_containers_breakdown(database: Session = Depends(db.get_db), _user: mode
     if cached is not None:
         return cached
 
-    hosts = database.query(models.Host).filter(models.Host.status == "online").all()
+    hosts = database.query(models.Host).filter(models.Host.status == HostStatus.ONLINE).all()
     all_labs = database.query(models.Lab).all()
     # Map both full ID and truncated prefix to lab info
     labs_by_id = {lab.id: lab.name for lab in all_labs}
@@ -215,7 +216,7 @@ def get_resource_distribution(database: Session = Depends(db.get_db), _user: mod
     if cached is not None:
         return cached
 
-    hosts = database.query(models.Host).filter(models.Host.status == "online").all()
+    hosts = database.query(models.Host).filter(models.Host.status == HostStatus.ONLINE).all()
     all_labs = database.query(models.Lab).all()
     labs_by_id = {lab.id: lab.name for lab in all_labs}
 

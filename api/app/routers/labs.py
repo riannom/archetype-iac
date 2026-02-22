@@ -13,7 +13,7 @@ from typing import Literal
 
 import yaml
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel, Field
+
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
@@ -48,6 +48,15 @@ from app.utils.async_tasks import safe_create_task
 from app.jobs import has_conflicting_job
 from app.services.state_machine import NodeStateMachine
 from app.events.publisher import emit_lab_deleted, emit_link_removed, emit_node_removed
+from app.state import (
+    HostStatus,
+    JobStatus,
+    LabState,
+    LinkActualState,
+    LinkDesiredState,
+    NodeActualState,
+    NodeDesiredState,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -69,8 +78,8 @@ def _enrich_node_state(state: models.NodeState) -> schemas.NodeStateOut:
             node_data.all_ips = []
     # Compute will_retry: error state with retries remaining and not permanently failed
     node_data.will_retry = (
-        state.actual_state == "error"
-        and state.desired_state == "running"
+        state.actual_state == NodeActualState.ERROR
+        and state.desired_state == NodeDesiredState.RUNNING
         and state.enforcement_attempts < settings.state_enforcement_max_retries
         and state.enforcement_failed_at is None
     )
@@ -81,7 +90,7 @@ def _get_or_create_node_state(
     database: Session,
     lab_id: str,
     node_id: str,
-    initial_desired_state: str = "stopped",
+    initial_desired_state: str = NodeDesiredState.STOPPED,
     for_update: bool = False,
 ) -> models.NodeState:
     """Get or create NodeState, using Node definition for correct naming.
@@ -134,7 +143,7 @@ def _get_or_create_node_state(
         node_name=node_name,
         node_definition_id=node_definition_id,
         desired_state=initial_desired_state,
-        actual_state="undeployed",
+        actual_state=NodeActualState.UNDEPLOYED,
     )
     database.add(state)
     database.commit()
@@ -165,7 +174,7 @@ def _create_node_sync_job(
         lab_id=lab.id,
         user_id=current_user.id,
         action=f"sync:node:{node_id}",
-        status="queued",
+        status=JobStatus.QUEUED,
     )
     database.add(job)
     database.commit()
@@ -179,8 +188,8 @@ def _create_node_sync_job(
 
 def _converge_stopped_error_state(state: models.NodeState) -> bool:
     """Force convergence when desired_state=stopped but actual_state=error."""
-    if state.desired_state == "stopped" and state.actual_state == "error":
-        state.actual_state = "stopped"
+    if state.desired_state == NodeDesiredState.STOPPED and state.actual_state == NodeActualState.ERROR:
+        state.actual_state = NodeActualState.STOPPED
         state.image_sync_status = None
         state.image_sync_message = None
         state.starting_started_at = None
@@ -253,8 +262,8 @@ def _upsert_node_states(
                 lab_id=lab_id,
                 node_id=node.id,
                 node_name=container_name,
-                desired_state="stopped",
-                actual_state="undeployed",
+                desired_state=NodeDesiredState.STOPPED,
+                actual_state=NodeActualState.UNDEPLOYED,
             )
             database.add(new_state)
             added_node_ids.append(node.id)
@@ -358,7 +367,7 @@ def list_labs(
     # Count running nodes per lab from node_states
     running_counts = dict(
         database.query(models.NodeState.lab_id, func.count(models.NodeState.id))
-        .filter(models.NodeState.lab_id.in_(lab_ids), models.NodeState.actual_state == "running")
+        .filter(models.NodeState.lab_id.in_(lab_ids), models.NodeState.actual_state == NodeActualState.RUNNING)
         .group_by(models.NodeState.lab_id)
         .all()
     )
@@ -403,7 +412,7 @@ def _populate_lab_counts(database: Session, lab_out: schemas.LabOut) -> None:
     ) or 0
     running = (
         database.query(func.count(models.NodeState.id))
-        .filter(models.NodeState.lab_id == lab_out.id, models.NodeState.actual_state == "running")
+        .filter(models.NodeState.lab_id == lab_out.id, models.NodeState.actual_state == NodeActualState.RUNNING)
         .scalar()
     ) or 0
     device_types = (
@@ -480,7 +489,7 @@ async def delete_lab(
     require_lab_owner(current_user, lab, db=database)
 
     # If lab has running infrastructure, destroy it first
-    if lab.state in ("running", "starting", "stopping"):
+    if lab.state in (LabState.RUNNING, LabState.STARTING, LabState.STOPPING):
         logger.info(f"Lab {lab_id} has state '{lab.state}', destroying infrastructure before deletion")
 
         # Check for multi-host deployment using database
@@ -495,7 +504,7 @@ async def delete_lab(
             lab_id=lab.id,
             user_id=current_user.id,
             action="down",
-            status="queued",
+            status=JobStatus.QUEUED,
         )
         database.add(destroy_job)
         database.commit()
@@ -694,41 +703,13 @@ async def update_topology(
     return schemas.LabOut.model_validate(lab)
 
 
-class CheckResourcesRequest(BaseModel):
-    """Request body for resource capacity check."""
-    node_ids: list[str] | None = None  # null = check all nodes
-
-
-class PerHostCapacity(BaseModel):
-    agent_name: str = ""
-    fits: bool = True
-    has_warnings: bool = False
-    projected_memory_pct: float = 0
-    projected_cpu_pct: float = 0
-    projected_disk_pct: float = 0
-    node_count: int = 0
-    required_memory_mb: int = 0
-    required_cpu_cores: int = 0
-    available_memory_mb: float = 0
-    available_cpu_cores: float = 0
-    errors: list[str] = Field(default_factory=list)
-    warnings: list[str] = Field(default_factory=list)
-
-
-class CheckResourcesResponse(BaseModel):
-    sufficient: bool = True
-    warnings: list[str] = Field(default_factory=list)
-    errors: list[str] = Field(default_factory=list)
-    per_host: dict[str, PerHostCapacity] = Field(default_factory=dict)
-
-
 @router.post("/labs/{lab_id}/check-resources")
 def check_resources(
     lab_id: str,
-    payload: CheckResourcesRequest | None = None,
+    payload: schemas.CheckResourcesRequest | None = None,
     database: Session = Depends(db.get_db),
     current_user: models.User = Depends(get_current_user),
-) -> CheckResourcesResponse:
+) -> schemas.CheckResourcesResponse:
     """Check if agents have sufficient resources to deploy lab nodes.
 
     Returns projected resource usage per host with warnings and errors.
@@ -767,16 +748,16 @@ def check_resources(
             host_device_map[lab.agent_id].append(node.device or "linux")
 
     if not host_device_map:
-        return CheckResourcesResponse()
+        return schemas.CheckResourcesResponse()
 
     results = check_multihost_capacity(host_device_map, database)
 
-    response = CheckResourcesResponse()
+    response = schemas.CheckResourcesResponse()
     all_warnings = []
     all_errors = []
 
     for host_id, result in results.items():
-        per_host = PerHostCapacity(
+        per_host = schemas.PerHostCapacity(
             agent_name=result.agent_name,
             fits=result.fits,
             has_warnings=result.has_warnings,
@@ -1104,13 +1085,13 @@ async def list_node_states(
 
     # Auto-fix stale pending states: if any node is "pending" but no active job exists,
     # refresh from actual container status
-    has_pending = any(s.actual_state == "pending" for s in states)
+    has_pending = any(s.actual_state == NodeActualState.PENDING for s in states)
     if has_pending:
         active_job = (
             database.query(models.Job)
             .filter(
                 models.Job.lab_id == lab_id,
-                models.Job.status.in_(["pending", "running"]),
+                models.Job.status.in_(["pending", JobStatus.RUNNING]),
             )
             .first()
         )
@@ -1128,15 +1109,15 @@ async def list_node_states(
                         n.get("name", ""): n.get("status", "unknown") for n in nodes
                     }
                     for ns in states:
-                        if ns.actual_state == "pending":
+                        if ns.actual_state == NodeActualState.PENDING:
                             container_status = container_status_map.get(ns.node_name)
                             if container_status == "running":
-                                ns.actual_state = "running"
+                                ns.actual_state = NodeActualState.RUNNING
                                 ns.error_message = None
                                 if not ns.boot_started_at:
                                     ns.boot_started_at = datetime.now(timezone.utc)
                             elif container_status in ("stopped", "exited"):
-                                ns.actual_state = "stopped"
+                                ns.actual_state = NodeActualState.STOPPED
                                 ns.error_message = None
                                 ns.boot_started_at = None
                             # NOTE: Don't mark as "undeployed" here if container not found.
@@ -1207,7 +1188,7 @@ def set_node_desired_state(
     )
 
     _ensure_node_states_exist(database, lab.id)
-    command = "start" if payload.state == "running" else "stop"
+    command = "start" if payload.state == NodeDesiredState.RUNNING else "stop"
     state = _get_or_create_node_state(database, lab.id, node_id, initial_desired_state=payload.state, for_update=True)
 
     # Centralized guard check (6.1)
@@ -1222,7 +1203,7 @@ def set_node_desired_state(
     if desired_changed:
         state.desired_state = payload.state
         normalized = False
-        if payload.state == "stopped":
+        if payload.state == NodeDesiredState.STOPPED:
             normalized = _converge_stopped_error_state(state)
         database.commit()
         database.refresh(state)
@@ -1238,8 +1219,8 @@ def set_node_desired_state(
 
     elif (
         state.desired_state == payload.state
-        and payload.state == "running"
-        and state.actual_state == "error"
+        and payload.state == NodeDesiredState.RUNNING
+        and state.actual_state == NodeActualState.ERROR
     ):
         # Retry: node is stuck in error but user wants it running again.
         # Reset enforcement state so the system will attempt reconciliation.
@@ -1250,7 +1231,7 @@ def set_node_desired_state(
         has_conflict, _ = has_conflicting_job(lab_id, "sync", session=database)
         if not has_conflict:
             _create_node_sync_job(database, lab, node_id, current_user)
-    elif payload.state == "stopped":
+    elif payload.state == NodeDesiredState.STOPPED:
         if _converge_stopped_error_state(state):
             database.commit()
             database.refresh(state)
@@ -1289,7 +1270,7 @@ async def set_all_nodes_desired_state(
     )
 
     _ensure_node_states_exist(database, lab.id)
-    command = "start" if payload.state == "running" else "stop"
+    command = "start" if payload.state == NodeDesiredState.RUNNING else "stop"
 
     states = (
         database.query(models.NodeState)
@@ -1370,7 +1351,7 @@ async def set_all_nodes_desired_state(
                 lab_id=lab.id,
                 user_id=current_user.id,
                 action=f"sync:lab:{','.join(nodes_needing_sync)}",
-                status="queued",
+                status=JobStatus.QUEUED,
             )
             database.add(job)
             database.commit()
@@ -1494,20 +1475,20 @@ async def refresh_node_states(
                 continue  # Don't overwrite transitional state
 
         # Also skip if actual_state is transitional (backup for timestamp edge cases)
-        if ns.actual_state in ("stopping", "starting", "pending"):
+        if ns.actual_state in (NodeActualState.STOPPING, NodeActualState.STARTING, NodeActualState.PENDING):
             continue
 
         container_status = container_status_map.get(ns.node_name)
         if container_status:
             if container_status == "running":
-                ns.actual_state = "running"
+                ns.actual_state = NodeActualState.RUNNING
                 ns.stopping_started_at = None  # Clear if recovering
                 ns.starting_started_at = None
                 ns.error_message = None
                 if not ns.boot_started_at:
                     ns.boot_started_at = datetime.now(timezone.utc)
             elif container_status in ("stopped", "exited"):
-                ns.actual_state = "stopped"
+                ns.actual_state = NodeActualState.STOPPED
                 ns.stopping_started_at = None  # Clear if recovering
                 ns.starting_started_at = None
                 ns.error_message = None
@@ -1566,11 +1547,11 @@ def _get_out_of_sync_nodes(
     # - desired=stopped and actual not in (stopped, undeployed)
     out_of_sync = []
     for state in states:
-        if state.desired_state == "running":
-            if state.actual_state not in ("running", "pending"):
+        if state.desired_state == NodeDesiredState.RUNNING:
+            if state.actual_state not in (NodeActualState.RUNNING, NodeActualState.PENDING):
                 out_of_sync.append(state)
-        elif state.desired_state == "stopped":
-            if state.actual_state not in ("stopped", "undeployed"):
+        elif state.desired_state == NodeDesiredState.STOPPED:
+            if state.actual_state not in (NodeActualState.STOPPED, NodeActualState.UNDEPLOYED):
                 out_of_sync.append(state)
 
     return out_of_sync
@@ -1595,7 +1576,7 @@ async def reconcile_node(
     _ensure_node_states_exist(database, lab.id)
 
     # Get or create the node state with correct naming
-    _get_or_create_node_state(database, lab.id, node_id, initial_desired_state="running")
+    _get_or_create_node_state(database, lab.id, node_id, initial_desired_state=NodeDesiredState.RUNNING)
 
     # Check if node needs reconciliation
     out_of_sync = _get_out_of_sync_nodes(database, lab_id, [node_id])
@@ -1629,7 +1610,7 @@ async def reconcile_node(
         lab_id=lab.id,
         user_id=current_user.id,
         action=f"reconcile:node:{node_id}",
-        status="queued",
+        status=JobStatus.QUEUED,
     )
     database.add(job)
     database.commit()
@@ -1698,7 +1679,7 @@ async def reconcile_lab(
         lab_id=lab.id,
         user_id=current_user.id,
         action=f"reconcile:lab:{','.join(node_ids)}",
-        status="queued",
+        status=JobStatus.QUEUED,
     )
     database.add(job)
     database.commit()
@@ -1792,7 +1773,7 @@ async def check_nodes_ready(
         progress_percent = None
         message = None
 
-        if state.actual_state == "running":
+        if state.actual_state == NodeActualState.RUNNING:
             running_count += 1
             db_node = nodes_by_name.get(state.node_name)
             host_id = placement_by_node.get(state.node_name)
@@ -1832,13 +1813,13 @@ async def check_nodes_ready(
             else:
                 message = "No online agent available for node placement"
 
-        if state.is_ready and state.actual_state == "running":
+        if state.is_ready and state.actual_state == NodeActualState.RUNNING:
             ready_count += 1
 
         nodes_out.append(schemas.NodeReadinessOut(
             node_id=state.node_id,
             node_name=state.node_name,
-            is_ready=state.is_ready and state.actual_state == "running",
+            is_ready=state.is_ready and state.actual_state == NodeActualState.RUNNING,
             actual_state=state.actual_state,
             progress_percent=progress_percent,
             message=message,
@@ -1846,10 +1827,10 @@ async def check_nodes_ready(
             management_ip=state.management_ip,
         ))
 
-    nodes_should_run = [s for s in states if s.desired_state == "running"]
+    nodes_should_run = [s for s in states if s.desired_state == NodeDesiredState.RUNNING]
     should_run_count = len(nodes_should_run)
     all_ready = should_run_count == 0 or all(
-        s.is_ready and s.actual_state == "running" for s in nodes_should_run
+        s.is_ready and s.actual_state == NodeActualState.RUNNING for s in nodes_should_run
     )
 
     return schemas.LabReadinessResponse(
@@ -1923,7 +1904,7 @@ async def poll_nodes_ready(
         )
 
         # Count nodes that should be running
-        nodes_should_run = [s for s in states if s.desired_state == "running"]
+        nodes_should_run = [s for s in states if s.desired_state == NodeDesiredState.RUNNING]
 
         if not nodes_should_run:
             # No nodes expected to run - return immediately
@@ -1945,7 +1926,7 @@ async def poll_nodes_ready(
             progress_percent = None
             message = None
 
-            if state.actual_state == "running":
+            if state.actual_state == NodeActualState.RUNNING:
                 running_count += 1
                 if agent and not state.is_ready:
                     try:
@@ -1971,14 +1952,14 @@ async def poll_nodes_ready(
                     except Exception as e:
                         message = f"Readiness check failed: {e}"
 
-            if state.is_ready and state.actual_state == "running":
+            if state.is_ready and state.actual_state == NodeActualState.RUNNING:
                 ready_count += 1
 
             if state in nodes_should_run:
                 nodes_out.append(schemas.NodeReadinessOut(
                     node_id=state.node_id,
                     node_name=state.node_name,
-                    is_ready=state.is_ready and state.actual_state == "running",
+                    is_ready=state.is_ready and state.actual_state == NodeActualState.RUNNING,
                     actual_state=state.actual_state,
                     progress_percent=progress_percent,
                     message=message,
@@ -1988,7 +1969,7 @@ async def poll_nodes_ready(
 
         # Check if all nodes that should run are ready
         all_ready = all(
-            s.is_ready and s.actual_state == "running"
+            s.is_ready and s.actual_state == NodeActualState.RUNNING
             for s in nodes_should_run
         )
 
@@ -2022,15 +2003,15 @@ async def poll_nodes_ready(
     running_count = 0
 
     for state in states:
-        if state.actual_state == "running":
+        if state.actual_state == NodeActualState.RUNNING:
             running_count += 1
-        if state.is_ready and state.actual_state == "running":
+        if state.is_ready and state.actual_state == NodeActualState.RUNNING:
             ready_count += 1
 
         nodes_out.append(schemas.NodeReadinessOut(
             node_id=state.node_id,
             node_name=state.node_name,
-            is_ready=state.is_ready and state.actual_state == "running",
+            is_ready=state.is_ready and state.actual_state == NodeActualState.RUNNING,
             actual_state=state.actual_state,
             progress_percent=None,
             message="Timeout waiting for readiness",
@@ -2416,7 +2397,7 @@ def _upsert_link_states(
             existing.target_interface = tgt_i
             # If this was previously a stale duplicate row, re-activate.
             if existing.desired_state == "deleted":
-                existing.desired_state = "up"
+                existing.desired_state = LinkDesiredState.UP
                 existing_changed = True
             if existing_changed:
                 mutated_states.append(existing)
@@ -2442,8 +2423,8 @@ def _upsert_link_states(
                 source_host_id=src_host_id,
                 target_host_id=tgt_host_id,
                 is_cross_host=is_cross_host,
-                desired_state="up",
-                actual_state="unknown",
+                desired_state=LinkDesiredState.UP,
+                actual_state=LinkActualState.UNKNOWN,
             )
             database.add(new_state)
             existing_states.append(new_state)
@@ -2790,7 +2771,7 @@ async def extract_configs(
 
                 agents = (
                     database.query(models.Host)
-                    .filter(models.Host.status == "online", models.Host.last_heartbeat >= cutoff)
+                    .filter(models.Host.status == HostStatus.ONLINE, models.Host.last_heartbeat >= cutoff)
                     .all()
                 )
                 if lab_provider:
@@ -3533,45 +3514,13 @@ def list_orphaned_configs(
 # ============================================================================
 
 
-class HotConnectRequest(BaseModel):
-    """Request to hot-connect two interfaces."""
-    source_node: str
-    source_interface: str
-    target_node: str
-    target_interface: str
-
-
-class HotConnectResponse(BaseModel):
-    """Response from hot-connect request."""
-    success: bool
-    link_id: str | None = None
-    vlan_tag: int | None = None
-    error: str | None = None
-
-
-class ExternalConnectRequest(BaseModel):
-    """Request to connect a node to an external network."""
-    node_name: str
-    interface_name: str
-    external_interface: str
-    vlan_tag: int | None = None
-
-
-class ExternalConnectResponse(BaseModel):
-    """Response from external connect request."""
-    success: bool
-    vlan_tag: int | None = None
-    error: str | None = None
-
-
-
 @router.post("/labs/{lab_id}/hot-connect")
 async def hot_connect_link(
     lab_id: str,
-    request: HotConnectRequest,
+    request: schemas.HotConnectRequest,
     database: Session = Depends(db.get_db),
     current_user: models.User = Depends(get_current_user),
-) -> HotConnectResponse:
+) -> schemas.HotConnectResponse:
     """Hot-connect two interfaces in a running lab.
 
     This creates a Layer 2 link between two container interfaces without
@@ -3586,7 +3535,7 @@ async def hot_connect_link(
     lab = require_lab_editor(lab_id, database, current_user)
 
     # Verify lab is running
-    if lab.state not in ("running", "starting"):
+    if lab.state not in (LabState.RUNNING, LabState.STARTING):
         raise HTTPException(
             status_code=400,
             detail=f"Lab must be running for hot-connect (current state: {lab.state})"
@@ -3626,7 +3575,7 @@ async def hot_connect_link(
         existing_states, src_n, src_i, tgt_n, tgt_i, _device_map
     )
     for duplicate in duplicate_states:
-        duplicate.desired_state = "deleted"
+        duplicate.desired_state = "deleted"  # not in LinkDesiredState enum — soft-delete marker
 
     if not link_state:
         # Backward compatibility fallback: exact name match
@@ -3682,8 +3631,8 @@ async def hot_connect_link(
             source_host_id=src_host_id,
             target_host_id=tgt_host_id,
             is_cross_host=is_cross_host,
-            desired_state="up",
-            actual_state="unknown",
+            desired_state=LinkDesiredState.UP,
+            actual_state=LinkActualState.UNKNOWN,
         )
         database.add(link_state)
         database.flush()
@@ -3696,7 +3645,7 @@ async def hot_connect_link(
         link_state.target_node = tgt_n
         link_state.target_interface = tgt_i
         if link_state.desired_state == "deleted":
-            link_state.desired_state = "up"
+            link_state.desired_state = LinkDesiredState.UP
         _sync_link_oper_state(database, link_state)
 
     host_to_agent = await _build_host_to_agent_map(database, lab_id)
@@ -3707,19 +3656,19 @@ async def hot_connect_link(
     database.commit()
 
     if success:
-        return HotConnectResponse(
+        return schemas.HotConnectResponse(
             success=True,
             link_id=link_state.link_name,
             vlan_tag=link_state.vlan_tag,
         )
 
-    if link_state.actual_state == "pending":
-        return HotConnectResponse(
+    if link_state.actual_state == LinkActualState.PENDING:
+        return schemas.HotConnectResponse(
             success=False,
             error="Link pending - waiting for nodes to be running",
         )
 
-    return HotConnectResponse(
+    return schemas.HotConnectResponse(
         success=False,
         error=link_state.error_message or "Link creation failed",
     )
@@ -3731,7 +3680,7 @@ async def hot_disconnect_link(
     link_id: str,
     database: Session = Depends(db.get_db),
     current_user: models.User = Depends(get_current_user),
-) -> HotConnectResponse:
+) -> schemas.HotConnectResponse:
     """Hot-disconnect a link in a running lab.
 
     This breaks a Layer 2 link between two container interfaces without
@@ -3768,7 +3717,7 @@ async def hot_disconnect_link(
                 break
 
     if not link_state:
-        return HotConnectResponse(success=False, error=f"Link '{link_id}' not found")
+        return schemas.HotConnectResponse(success=False, error=f"Link '{link_id}' not found")
 
     host_to_agent = await _build_host_to_agent_map(database, lab_id)
     if not host_to_agent:
@@ -3790,9 +3739,9 @@ async def hot_disconnect_link(
     database.commit()
 
     if success:
-        return HotConnectResponse(success=True, link_id=link_id)
+        return schemas.HotConnectResponse(success=True, link_id=link_id)
 
-    return HotConnectResponse(
+    return schemas.HotConnectResponse(
         success=False,
         error="Failed to disconnect link",
     )
@@ -3825,10 +3774,10 @@ async def list_live_links(
 @router.post("/labs/{lab_id}/external/connect")
 async def connect_to_external_network(
     lab_id: str,
-    request: ExternalConnectRequest,
+    request: schemas.ExternalConnectRequest,
     database: Session = Depends(db.get_db),
     current_user: models.User = Depends(get_current_user),
-) -> ExternalConnectResponse:
+) -> schemas.ExternalConnectResponse:
     """Connect a node interface to an external network.
 
     This establishes connectivity between a container interface and an
@@ -3843,7 +3792,7 @@ async def connect_to_external_network(
     lab = require_lab_editor(lab_id, database, current_user)
 
     # Verify lab is running
-    if lab.state not in ("running", "starting"):
+    if lab.state not in (LabState.RUNNING, LabState.STARTING):
         raise HTTPException(
             status_code=400,
             detail=f"Lab must be running for external connect (current state: {lab.state})"
@@ -3865,7 +3814,7 @@ async def connect_to_external_network(
         vlan_tag=request.vlan_tag,
     )
 
-    return ExternalConnectResponse(
+    return schemas.ExternalConnectResponse(
         success=result.get("success", False),
         vlan_tag=result.get("vlan_tag"),
         error=result.get("error"),
@@ -4146,18 +4095,12 @@ def get_lab_logs(
     )
 
 
-class CleanupOrphansResponse(BaseModel):
-    """Response from orphan cleanup."""
-    removed_by_agent: dict[str, list[str]] = Field(default_factory=dict)
-    errors: list[str] = Field(default_factory=list)
-
-
-@router.post("/labs/{lab_id}/cleanup-orphans", response_model=CleanupOrphansResponse)
+@router.post("/labs/{lab_id}/cleanup-orphans", response_model=schemas.CleanupOrphansResponse)
 async def cleanup_lab_orphans(
     lab_id: str,
     database: Session = Depends(db.get_db),
     current_user: models.User = Depends(get_current_user),
-) -> CleanupOrphansResponse:
+) -> schemas.CleanupOrphansResponse:
     """Clean up orphaned containers for a lab across all agents.
 
     Removes containers for nodes that are no longer assigned to a given agent.
@@ -4190,7 +4133,7 @@ async def cleanup_lab_orphans(
     # Get all online agents
     agents = (
         database.query(models.Host)
-        .filter(models.Host.status == "online")
+        .filter(models.Host.status == HostStatus.ONLINE)
         .all()
     )
 
@@ -4218,7 +4161,7 @@ async def cleanup_lab_orphans(
             logger.warning(error_msg)
             errors.append(error_msg)
 
-    return CleanupOrphansResponse(
+    return schemas.CleanupOrphansResponse(
         removed_by_agent=removed_by_agent,
         errors=errors,
     )
@@ -4292,20 +4235,12 @@ def get_node_interfaces(
     )
 
 
-class InterfaceMappingSyncResponse(BaseModel):
-    """Response from syncing interface mappings."""
-    created: int
-    updated: int
-    errors: int
-    agents_queried: int
-
-
 @router.post("/labs/{lab_id}/interface-mappings/sync")
 async def sync_interface_mappings(
     lab_id: str,
     database: Session = Depends(db.get_db),
     current_user: models.User = Depends(get_current_user),
-) -> InterfaceMappingSyncResponse:
+) -> schemas.InterfaceMappingSyncResponse:
     """Sync interface mappings from all agents for a lab.
 
     Fetches OVS port information from agents and updates the
@@ -4315,7 +4250,7 @@ async def sync_interface_mappings(
 
     result = await interface_mapping_service.populate_all_agents(database, lab_id)
 
-    return InterfaceMappingSyncResponse(
+    return schemas.InterfaceMappingSyncResponse(
         created=result["created"],
         updated=result["updated"],
         errors=result["errors"],
@@ -4323,21 +4258,12 @@ async def sync_interface_mappings(
     )
 
 
-class LinkReconciliationResponse(BaseModel):
-    """Response from link reconciliation."""
-    checked: int
-    valid: int
-    repaired: int
-    errors: int
-    skipped: int
-
-
 @router.post("/labs/{lab_id}/links/reconcile")
 async def reconcile_links(
     lab_id: str,
     database: Session = Depends(db.get_db),
     current_user: models.User = Depends(get_current_user),
-) -> LinkReconciliationResponse:
+) -> schemas.LinkReconciliationResponse:
     """Reconcile link states for a lab.
 
     Verifies all links marked as "up" have matching VLAN tags on both
@@ -4347,7 +4273,7 @@ async def reconcile_links(
 
     result = await reconcile_lab_links(database, lab_id)
 
-    return LinkReconciliationResponse(
+    return schemas.LinkReconciliationResponse(
         checked=result["checked"],
         valid=result["valid"],
         repaired=result["repaired"],
