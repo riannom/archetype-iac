@@ -44,7 +44,7 @@ from agent.config import settings
 from agent.network.local import LocalNetworkManager, get_local_manager
 from agent.network.ovs import OVSNetworkManager, get_ovs_manager
 from agent.network.docker_plugin import DockerOVSPlugin, get_docker_ovs_plugin
-from agent.providers.naming import docker_container_name as _docker_name
+from agent.providers.naming import docker_container_name as _docker_name, sanitize_id
 from agent.providers.base import (
     DeployResult,
     DestroyResult,
@@ -391,17 +391,16 @@ class DockerProvider(Provider):
 
     def _lab_prefix(self, lab_id: str) -> str:
         """Get container name prefix for a lab."""
-        safe_lab_id = re.sub(r'[^a-zA-Z0-9_-]', '', lab_id)[:20]
-        return f"{CONTAINER_PREFIX}-{safe_lab_id}"
+        return f"{CONTAINER_PREFIX}-{sanitize_id(lab_id, max_len=20)}"
 
     def _lab_network_prefix(self, lab_id: str) -> str:
         """Get network name prefix for a lab (sanitized, full ID)."""
-        return re.sub(r'[^a-zA-Z0-9_-]', '', lab_id)
+        return sanitize_id(lab_id)
 
     def _legacy_lab_network_prefixes(self, lab_id: str) -> tuple[str, str]:
         """Get current and legacy (truncated) network prefixes for a lab."""
         current_prefix = self._lab_network_prefix(lab_id)
-        legacy_prefix = re.sub(r'[^a-zA-Z0-9_-]', '', lab_id)[:20]
+        legacy_prefix = sanitize_id(lab_id, max_len=20)
         return current_prefix, legacy_prefix
 
     # =========================================================================

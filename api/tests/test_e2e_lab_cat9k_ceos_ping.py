@@ -22,17 +22,13 @@ import httpx
 import pytest
 
 
+from app.utils.naming import docker_container_name as _docker_container_name
+from app.utils.naming import libvirt_domain_name as _libvirt_domain_name
+from app.utils.naming import sanitize_id
+
+
 def _safe_lab_id(lab_id: str) -> str:
-    return re.sub(r"[^a-zA-Z0-9_-]", "", lab_id)[:20]
-
-
-def _docker_container_name(lab_id: str, node_name: str) -> str:
-    return f"archetype-{_safe_lab_id(lab_id)}-{re.sub(r'[^a-zA-Z0-9_-]', '', node_name)}"
-
-
-def _libvirt_domain_name(lab_id: str, node_name: str) -> str:
-    safe_node = re.sub(r"[^a-zA-Z0-9_-]", "", node_name)[:30]
-    return f"arch-{_safe_lab_id(lab_id)}-{safe_node}"
+    return sanitize_id(lab_id, max_len=20)
 
 
 async def _login(api_url: str, username: str, password: str) -> str:
