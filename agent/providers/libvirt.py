@@ -3666,7 +3666,7 @@ class LibvirtProvider(Provider):
                 kind=kind,
                 commands=["yes"],
                 libvirt_uri=self._uri,
-                prompt_pattern=r"\(yes/no\)\[no\]:\s*$",
+                prompt_pattern=r"\(yes/no\)\[n(?:o)?\]:\s*$",
                 paging_disable="",
                 attempt_enable=False,
                 timeout=30,

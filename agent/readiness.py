@@ -683,7 +683,7 @@ N9KV_PROGRESS_PATTERNS = {
 # Diagnostic markers to understand whether NX-OS consumed startup-config.
 N9KV_DIAGNOSTIC_PATTERNS = {
     "poap_failure": r"POAP-\d+-POAP_FAILURE|POAP.*(?:failure|failed)",
-    "poap_abort_prompt": r"Abort Power On Auto Provisioning",
+    "poap_abort_prompt": r"Abort Power On Auto Provisioning|Skip POAP\?",
     "poap_dhcp_issue": r"Invalid DHCP OFFER|DHCP discover phase failed",
     "loader_prompt": r"(?:^|\s)loader >",
     "sysconf_checksum_failed": r"Sysconf checksum failed|No valid sysconf found",
