@@ -7,7 +7,6 @@ import logging
 import docker
 from fastapi import APIRouter, HTTPException, Request
 
-from agent.config import settings
 from agent.docker_client import get_docker_client
 from agent.helpers import get_workspace, get_provider_for_request, _get_docker_ovs_plugin
 from agent.providers import get_provider

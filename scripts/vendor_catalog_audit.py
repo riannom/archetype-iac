@@ -18,7 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "api"))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "agent"))
 
-from agent.vendors import VENDOR_CONFIGS, get_libvirt_config
+from agent.vendors import VENDOR_CONFIGS
 
 
 # Map CML node_definition_id -> vendor config key
@@ -54,8 +54,6 @@ def validate_vendor_catalog():
     for key, config in VENDOR_CONFIGS.items():
         if "qcow2" not in (config.supported_image_kinds or []):
             continue  # Skip non-VM devices
-
-        libvirt_cfg = get_libvirt_config(key)
 
         # EFI devices should have efi_boot=True
         if config.efi_vars and not config.efi_boot:

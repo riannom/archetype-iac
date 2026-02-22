@@ -33,7 +33,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import docker
-from docker.errors import NotFound, APIError
+from docker.errors import NotFound
 
 from agent.network.cmd import run_cmd as _shared_run_cmd, ip_link_exists as _shared_ip_link_exists
 

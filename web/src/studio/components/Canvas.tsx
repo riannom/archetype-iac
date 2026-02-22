@@ -632,7 +632,7 @@ const Canvas: React.FC<CanvasProps> = ({
 
             return (
               <g key={link.id} className="pointer-events-auto cursor-pointer">
-                <line x1={source.x} y1={source.y} x2={target.x} y2={target.y} stroke="transparent" strokeWidth="12" onMouseDown={(e) => handleLinkMouseDown(e, link.id)} onMouseEnter={() => setHoveredLinkId(link.id)} onMouseLeave={() => setHoveredLinkId(null)} />
+                <line x1={source.x} y1={source.y} x2={target.x} y2={target.y} stroke="transparent" strokeWidth="12" onMouseDown={(e) => handleLinkMouseDown(e, link.id)} onContextMenu={(e) => handleLinkContextMenu(e, link.id)} onMouseEnter={() => setHoveredLinkId(link.id)} onMouseLeave={() => setHoveredLinkId(null)} />
                 <line
                   x1={source.x}
                   y1={source.y}

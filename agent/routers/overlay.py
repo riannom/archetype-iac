@@ -9,7 +9,6 @@ import docker
 from fastapi import APIRouter, HTTPException
 
 from agent.config import settings
-from agent.docker_client import get_docker_client
 from agent.agent_state import get_overlay_manager
 from agent.helpers import (
     get_provider_for_request,

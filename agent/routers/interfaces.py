@@ -14,7 +14,6 @@ from agent.helpers import (
     _interface_name_to_index,
     _resolve_ovs_port,
     _resolve_ovs_port_via_ifindex,
-    _validate_port_name,
 )
 from agent.providers import get_provider
 from agent.schemas import (

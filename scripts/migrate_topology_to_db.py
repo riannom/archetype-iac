@@ -17,7 +17,6 @@ Or with explicit database URL:
 from __future__ import annotations
 
 import logging
-import os
 import sys
 from pathlib import Path
 
@@ -31,7 +30,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from app import models
 from app.config import settings
 from app.services.topology import TopologyService
-from app.storage import topology_path, lab_workspace
+from app.storage import topology_path
 
 logging.basicConfig(
     level=logging.INFO,
