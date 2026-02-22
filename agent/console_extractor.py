@@ -666,6 +666,8 @@ class SerialConsoleExtractor:
             "hostname ",
             "interface ",
             "!",
+            "system {",       # Junos hierarchical
+            "interfaces {",   # Junos interfaces block
         )
         if len(text) < 64 and not any(marker in lowered for marker in config_markers):
             return False, f"output too short ({len(text)} bytes)"

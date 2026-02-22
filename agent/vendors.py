@@ -287,7 +287,7 @@ class VendorConfig:
     # These settings control how startup configs are written into VM disks
     # ==========================================================================
 
-    # Injection method: "none", "bootflash" (qemu-nbd mount+write), or "iso" (CD-ROM)
+    # Injection method: "none", "bootflash" (qemu-nbd mount+write), "iso" (CD-ROM), or "config_disk" (VFAT USB)
     config_inject_method: str = "none"
     # Partition number to mount (0 = auto-detect via blkid) — bootflash only
     config_inject_partition: int = 0
@@ -924,6 +924,14 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         readiness_pattern=r"login:",
         readiness_timeout=300,
         default_credentials="root / (no password)",
+        config_extract_method="serial",
+        config_extract_command="show configuration",
+        config_extract_user="admin",
+        config_extract_password="admin@123",
+        config_extract_timeout=60,
+        config_extract_prompt_pattern=r"[\w@.\-]+[>%#]\s*$",
+        config_extract_paging_disable="set cli screen-length 0",
+        config_inject_method="config_disk",
     ),
     "juniper_vjunosevolved": VendorConfig(
         kind="juniper_vjunosevolved",
@@ -959,6 +967,14 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         readiness_pattern=r"login:",
         readiness_timeout=300,
         default_credentials="root / (no password)",
+        config_extract_method="serial",
+        config_extract_command="show configuration",
+        config_extract_user="admin",
+        config_extract_password="admin@123",
+        config_extract_timeout=60,
+        config_extract_prompt_pattern=r"[\w@.\-]+[>%#]\s*$",
+        config_extract_paging_disable="set cli screen-length 0",
+        config_inject_method="config_disk",
     ),
     "juniper_cjunos": VendorConfig(
         kind="juniper_cjunos",
@@ -1254,6 +1270,14 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         readiness_pattern=r"login:",
         readiness_timeout=300,
         default_credentials="root / (no password)",
+        config_extract_method="serial",
+        config_extract_command="show configuration",
+        config_extract_user="admin",
+        config_extract_password="admin@123",
+        config_extract_timeout=60,
+        config_extract_prompt_pattern=r"[\w@.\-]+[>%#]\s*$",
+        config_extract_paging_disable="set cli screen-length 0",
+        config_inject_method="config_disk",
     ),
     "cisco_n9kv": VendorConfig(
         kind="cisco_n9kv",
@@ -2362,7 +2386,7 @@ class LibvirtRuntimeConfig:
     reserved_nics: int = 0  # Dummy NICs after management, before data interfaces
     cpu_sockets: int = 0    # If >0, explicit SMP topology: sockets=N, cores=cpu/N
     needs_nested_vmx: bool = False  # Force VMX CPU flag for AMD hosts (vJunos compat)
-    config_inject_method: str = "none"    # "none", "bootflash", or "iso"
+    config_inject_method: str = "none"    # "none", "bootflash", "iso", or "config_disk"
     config_inject_partition: int = 0      # 0 = auto-detect via blkid (bootflash only)
     config_inject_fs_type: str = "ext2"   # Expected filesystem of bootflash
     config_inject_path: str = "/startup-config"  # Path within mounted partition (bootflash only)

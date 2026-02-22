@@ -255,7 +255,7 @@ def _gen_xml(provider=None, **overrides):
         "name", "node_config", "overlay_path", "data_volume_path",
         "interface_count", "vlan_tags", "kind",
         "include_management_interface", "management_network",
-        "config_iso_path", "serial_log_path",
+        "config_iso_path", "config_disk_path", "serial_log_path",
     }
 
     # Route overrides: method params stay as kwargs, everything else → node_config
@@ -974,3 +974,68 @@ class TestSerialLog:
         assert logs[0] is not None, "Primary serial should have <log>"
         for i, log in enumerate(logs[1:], 1):
             assert log is None, f"Serial port {i} should not have <log>"
+
+
+# ---------------------------------------------------------------------------
+# USB config disk attachment
+# ---------------------------------------------------------------------------
+
+class TestConfigDisk:
+    """Verify USB controller and USB disk for vJunOS config disk injection."""
+
+    def test_config_disk_creates_usb_elements(self):
+        """config_disk_path should add USB controller and USB disk."""
+        xml = _gen_xml(config_disk_path="/tmp/disks/node1-config.img")
+        root = ET.fromstring(xml)
+        usb_ctrl = root.find(".//controller[@type='usb'][@model='qemu-xhci']")
+        assert usb_ctrl is not None, "USB xHCI controller missing"
+        usb_disks = [
+            d for d in root.findall(".//disk[@device='disk']")
+            if d.find("target") is not None and d.find("target").get("bus") == "usb"
+        ]
+        assert len(usb_disks) == 1, "Expected exactly one USB disk"
+        drv = usb_disks[0].find("driver")
+        assert drv.get("type") == "raw"
+        src = usb_disks[0].find("source")
+        assert src.get("file") == "/tmp/disks/node1-config.img"
+        tgt = usb_disks[0].find("target")
+        assert tgt.get("dev") == "sda"
+
+    def test_no_config_disk_no_usb(self):
+        """No USB controller or USB disk when config_disk_path absent."""
+        xml = _gen_xml()
+        root = ET.fromstring(xml)
+        usb_ctrl = root.find(".//controller[@type='usb'][@model='qemu-xhci']")
+        assert usb_ctrl is None, "USB controller should not appear without config disk"
+        usb_disks = [
+            d for d in root.findall(".//disk[@device='disk']")
+            if d.find("target") is not None and d.find("target").get("bus") == "usb"
+        ]
+        assert len(usb_disks) == 0
+
+    def test_config_disk_and_iso_coexist(self):
+        """Both config ISO and config disk can be present simultaneously."""
+        xml = _gen_xml(
+            config_iso_path="/tmp/disks/node1-config.iso",
+            config_disk_path="/tmp/disks/node1-config.img",
+        )
+        root = ET.fromstring(xml)
+        cdrom = root.find(".//disk[@device='cdrom']")
+        assert cdrom is not None, "Config ISO (cdrom) missing"
+        usb_disks = [
+            d for d in root.findall(".//disk[@device='disk']")
+            if d.find("target") is not None and d.find("target").get("bus") == "usb"
+        ]
+        assert len(usb_disks) == 1, "USB config disk missing"
+
+    def test_config_disk_path_xml_escaped(self):
+        """Paths with XML special chars should be properly escaped."""
+        xml = _gen_xml(config_disk_path="/tmp/lab&test/node-config.img")
+        root = ET.fromstring(xml)
+        usb_disks = [
+            d for d in root.findall(".//disk[@device='disk']")
+            if d.find("target") is not None and d.find("target").get("bus") == "usb"
+        ]
+        assert len(usb_disks) == 1
+        src = usb_disks[0].find("source")
+        assert src.get("file") == "/tmp/lab&test/node-config.img"

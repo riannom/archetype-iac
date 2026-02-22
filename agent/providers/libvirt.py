@@ -1109,6 +1109,7 @@ class LibvirtProvider(Provider):
         include_management_interface: bool = False,
         management_network: str = "default",
         config_iso_path: Path | None = None,
+        config_disk_path: Path | None = None,
         serial_log_path: Path | None = None,
     ) -> str:
         """Generate libvirt domain XML for a VM.
@@ -1187,6 +1188,15 @@ class LibvirtProvider(Provider):
       <source file='{xml_escape(str(config_iso_path))}'/>
       <target dev='hdc' bus='ide'/>
       <readonly/>
+    </disk>'''
+
+        if config_disk_path:
+            disks_xml += f'''
+    <controller type='usb' model='qemu-xhci'/>
+    <disk type='file' device='disk'>
+      <driver name='qemu' type='raw'/>
+      <source file='{xml_escape(str(config_disk_path))}'/>
+      <target dev='sda' bus='usb'/>
     </disk>'''
 
         # Build network interface elements
@@ -2079,6 +2089,14 @@ class LibvirtProvider(Provider):
             except Exception as e:
                 logger.warning(f"Failed to remove config ISO {iso_path}: {e}")
 
+        config_disk = disks_dir / f"{node_name}-config.img"
+        if config_disk.exists():
+            try:
+                config_disk.unlink()
+                logger.info(f"Removed config disk: {config_disk}")
+            except Exception as e:
+                logger.warning(f"Failed to remove config disk {config_disk}: {e}")
+
         # Clean up per-node serial log
         serial_log = workspace / "serial-logs" / f"{domain_name}.log"
         if serial_log.exists():
@@ -2459,6 +2477,19 @@ class LibvirtProvider(Provider):
                     logger.warning("Config ISO creation failed for %s; VM will boot without config", node_name)
                     config_iso_path = None
 
+            config_disk_path: Path | None = None
+            if startup_config and libvirt_config.config_inject_method == "config_disk":
+                from agent.providers.config_disk_inject import create_config_disk
+                config_disk_path = disks_dir / f"{node_name}-config.img"
+                disk_ok = await asyncio.to_thread(
+                    create_config_disk, config_disk_path, startup_config,
+                )
+                if disk_ok:
+                    logger.info("Created config disk for %s (%d bytes)", node_name, len(startup_config))
+                else:
+                    logger.warning("Config disk creation failed for %s; VM will boot without config", node_name)
+                    config_disk_path = None
+
             data_volume_path = None
             data_volume_size = node_config.get("data_volume_gb")
             if data_volume_size:
@@ -2495,6 +2526,7 @@ class LibvirtProvider(Provider):
                 include_management_interface=include_management_interface,
                 management_network=management_network,
                 config_iso_path=config_iso_path,
+                config_disk_path=config_disk_path,
                 serial_log_path=serial_log_path,
             )
 
