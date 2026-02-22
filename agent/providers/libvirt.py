@@ -177,7 +177,7 @@ event manager applet BOOTCONFIG
  action 1.0 cli python bootflash:set_boot.py
 no password strength-check
 username admin role network-admin
-username admin password admin"""
+username admin password cisco"""
 
 
 class LibvirtProvider(Provider):

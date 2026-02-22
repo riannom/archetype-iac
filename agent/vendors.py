@@ -1322,12 +1322,12 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         # SSH hits the Wind Linux underlay (bash), not NX-OS.
         console_method="virsh",
         console_user="admin",
-        console_password="admin",
+        console_password="cisco",
         # Config extraction also via serial console
         config_extract_method="serial",
         config_extract_command="show running-config",
         config_extract_user="admin",
-        config_extract_password="admin",
+        config_extract_password="cisco",
         config_extract_timeout=60,
         config_extract_paging_disable="terminal length 0",
         # Post-boot: EEM applet handles boot variable, ISO config handles credentials.
