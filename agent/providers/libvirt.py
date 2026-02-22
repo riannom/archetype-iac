@@ -30,7 +30,7 @@ if TYPE_CHECKING:
 
 from agent.config import settings
 from agent.n9kv_poap import render_poap_script
-from agent.providers.naming import libvirt_domain_name as _libvirt_name
+from agent.providers.naming import libvirt_domain_name as _libvirt_name, sanitize_id
 from agent.providers.base import (
     DeployResult,
     DestroyResult,
@@ -180,6 +180,11 @@ username admin role network-admin
 username admin password cisco"""
 
 
+def _coalesce(node_val, default):
+    """Return node_val if not None, else default."""
+    return node_val if node_val is not None else default
+
+
 class LibvirtProvider(Provider):
     """Provider for libvirt/QEMU-based virtual machine labs.
 
@@ -213,19 +218,10 @@ class LibvirtProvider(Provider):
         "vmxnet2": "e1000",
         "vmxnet": "e1000",
     }
-    # Loader recovery retry state per VM lifecycle.
-    _n9kv_loader_recovery_attempts: dict[str, int] = {}
-    _n9kv_loader_recovery_last_at: dict[str, float] = {}
+    # Loader recovery constants.
     _N9KV_LOADER_RECOVERY_MAX_ATTEMPTS: int = 5
     _N9KV_LOADER_RECOVERY_COOLDOWN: float = 30.0
-    # One-shot guard for POAP skip per VM lifecycle.
-    _n9kv_poap_skip_attempted: set[str] = set()
-    # One-shot guard for admin password wizard per VM lifecycle.
-    _n9kv_admin_password_completed: set[str] = set()
-    # Kernel panic recovery state per VM lifecycle.
-    _n9kv_panic_recovery_attempts: dict[str, int] = {}
-    _n9kv_panic_recovery_last_at: dict[str, float] = {}
-    _n9kv_panic_last_log_size: dict[str, int] = {}
+    # Kernel panic recovery constants.
     _N9KV_PANIC_RECOVERY_MAX_ATTEMPTS: int = 3
     _N9KV_PANIC_RECOVERY_COOLDOWN: float = 60.0
 
@@ -245,16 +241,20 @@ class LibvirtProvider(Provider):
         self._libvirt_executor = concurrent.futures.ThreadPoolExecutor(
             max_workers=1, thread_name_prefix="libvirt",
         )
+        # N9Kv per-VM lifecycle state (mutable, per-instance).
+        self._n9kv_loader_recovery_attempts: dict[str, int] = {}
+        self._n9kv_loader_recovery_last_at: dict[str, float] = {}
+        self._n9kv_poap_skip_attempted: set[str] = set()
+        self._n9kv_admin_password_completed: set[str] = set()
+        self._n9kv_panic_recovery_attempts: dict[str, int] = {}
+        self._n9kv_panic_recovery_last_at: dict[str, float] = {}
+        self._n9kv_panic_last_log_size: dict[str, int] = {}
 
     async def _run_libvirt(self, func, *args, **kwargs):
         """Run a blocking function on the dedicated libvirt thread."""
         loop = asyncio.get_running_loop()
-        if kwargs:
-            return await loop.run_in_executor(
-                self._libvirt_executor, partial(func, *args, **kwargs),
-            )
         return await loop.run_in_executor(
-            self._libvirt_executor, partial(func, *args),
+            self._libvirt_executor, partial(func, *args, **kwargs),
         )
 
     @property
@@ -284,8 +284,6 @@ class LibvirtProvider(Provider):
         Returns a list of dicts with name, status, lab_prefix, node_name
         for all Archetype-managed domains.
         """
-        import libvirt as _libvirt
-
         results = []
         try:
             all_domains = self.conn.listAllDomains(0)
@@ -294,7 +292,7 @@ class LibvirtProvider(Provider):
                 if not name.startswith("arch-"):
                     continue
                 state, _ = domain.state()
-                is_running = state == _libvirt.VIR_DOMAIN_RUNNING
+                is_running = state == libvirt.VIR_DOMAIN_RUNNING
                 parts = name.split("-", 2)
                 lab_prefix = parts[1] if len(parts) >= 2 else ""
                 node_name = parts[2] if len(parts) >= 3 else name
@@ -319,8 +317,7 @@ class LibvirtProvider(Provider):
 
     def _lab_prefix(self, lab_id: str) -> str:
         """Get domain name prefix for a lab."""
-        safe_lab_id = re.sub(r'[^a-zA-Z0-9_-]', '', lab_id)[:20]
-        return f"arch-{safe_lab_id}"
+        return f"arch-{sanitize_id(lab_id, max_len=20)}"
 
     @staticmethod
     def _canonical_kind(kind: str | None) -> str:
@@ -980,7 +977,6 @@ class LibvirtProvider(Provider):
         Uses domain name and interface index to generate consistent MACs.
         Format: 52:54:00:XX:XX:XX (QEMU/KVM OUI prefix)
         """
-        import hashlib
         # Create deterministic hash from domain name and interface index
         hash_input = f"{domain_name}:{interface_index}".encode()
         hash_bytes = hashlib.md5(hash_input).digest()
@@ -1041,7 +1037,6 @@ class LibvirtProvider(Provider):
 
         Returns True if patched (or already patched), False on error.
         """
-        import subprocess
         import tempfile
 
         nbd_dev = None
@@ -1080,7 +1075,6 @@ class LibvirtProvider(Provider):
 
             # Wait for partitions to appear
             subprocess.run(["partprobe", nbd_dev], capture_output=True, timeout=10)
-            import time
             time.sleep(1)
 
             # Mount partition 2 (Linux root)
@@ -1671,47 +1665,22 @@ class LibvirtProvider(Provider):
             # Build node config dict for helper methods
             # interface_count comes from topology (based on links) or defaults to 1
             interface_count = node.interface_count or 1
-            resolved_memory = node.memory if node.memory is not None else libvirt_config.memory_mb
-            resolved_cpu = node.cpu if node.cpu is not None else libvirt_config.cpu_count
-            resolved_cpu_limit = node.cpu_limit
-            resolved_machine_type = (
-                node.machine_type if node.machine_type is not None else libvirt_config.machine_type
-            )
-            resolved_disk_driver = (
-                node.disk_driver if node.disk_driver is not None else libvirt_config.disk_driver
-            )
-            resolved_nic_driver = (
-                node.nic_driver if node.nic_driver is not None else libvirt_config.nic_driver
-            )
-            resolved_libvirt_driver = node.libvirt_driver if node.libvirt_driver is not None else "kvm"
-            resolved_efi_boot = (
-                node.efi_boot if node.efi_boot is not None else libvirt_config.efi_boot
-            )
-            resolved_efi_vars = node.efi_vars if node.efi_vars is not None else libvirt_config.efi_vars
-            resolved_readiness_probe = (
-                node.readiness_probe if node.readiness_probe is not None else libvirt_config.readiness_probe
-            )
-            resolved_readiness_pattern = (
-                node.readiness_pattern if node.readiness_pattern is not None else libvirt_config.readiness_pattern
-            )
-            resolved_readiness_timeout = (
-                node.readiness_timeout if node.readiness_timeout is not None else libvirt_config.readiness_timeout
-            )
+            c = _coalesce  # short alias for config resolution
             node_config = {
                 "image": node.image,
-                "memory": resolved_memory,
-                "cpu": resolved_cpu,
-                "cpu_limit": resolved_cpu_limit,
-                "machine_type": resolved_machine_type,
-                "disk_driver": resolved_disk_driver,
-                "nic_driver": resolved_nic_driver,
-                "libvirt_driver": resolved_libvirt_driver,
-                "efi_boot": resolved_efi_boot,
-                "efi_vars": resolved_efi_vars,
-                "data_volume_gb": node.data_volume_gb if node.data_volume_gb is not None else libvirt_config.data_volume_gb,
-                "readiness_probe": resolved_readiness_probe,
-                "readiness_pattern": resolved_readiness_pattern,
-                "readiness_timeout": resolved_readiness_timeout,
+                "memory": c(node.memory, libvirt_config.memory_mb),
+                "cpu": c(node.cpu, libvirt_config.cpu_count),
+                "cpu_limit": node.cpu_limit,
+                "machine_type": c(node.machine_type, libvirt_config.machine_type),
+                "disk_driver": c(node.disk_driver, libvirt_config.disk_driver),
+                "nic_driver": c(node.nic_driver, libvirt_config.nic_driver),
+                "libvirt_driver": c(node.libvirt_driver, "kvm"),
+                "efi_boot": c(node.efi_boot, libvirt_config.efi_boot),
+                "efi_vars": c(node.efi_vars, libvirt_config.efi_vars),
+                "data_volume_gb": c(node.data_volume_gb, libvirt_config.data_volume_gb),
+                "readiness_probe": c(node.readiness_probe, libvirt_config.readiness_probe),
+                "readiness_pattern": c(node.readiness_pattern, libvirt_config.readiness_pattern),
+                "readiness_timeout": c(node.readiness_timeout, libvirt_config.readiness_timeout),
                 "serial_type": libvirt_config.serial_type,
                 "nographic": libvirt_config.nographic,
                 "serial_port_count": libvirt_config.serial_port_count,
@@ -1723,11 +1692,11 @@ class LibvirtProvider(Provider):
                 "_display_name": display_name,
             }
             logger.info(
-                f"VM config for {log_name}: {resolved_memory}MB RAM, "
-                f"{resolved_cpu} vCPU, disk={resolved_disk_driver}, "
-                f"nic={resolved_nic_driver}, machine={resolved_machine_type}, "
-                f"driver={resolved_libvirt_driver}, cpu_limit={resolved_cpu_limit}, interfaces={interface_count}, "
-                f"efi_boot={resolved_efi_boot}, efi_vars={resolved_efi_vars}"
+                f"VM config for {log_name}: {node_config['memory']}MB RAM, "
+                f"{node_config['cpu']} vCPU, disk={node_config['disk_driver']}, "
+                f"nic={node_config['nic_driver']}, machine={node_config['machine_type']}, "
+                f"driver={node_config['libvirt_driver']}, cpu_limit={node_config['cpu_limit']}, interfaces={interface_count}, "
+                f"efi_boot={node_config['efi_boot']}, efi_vars={node_config['efi_vars']}"
             )
 
             try:
@@ -2173,8 +2142,7 @@ class LibvirtProvider(Provider):
         """Remove a single VM and clean up per-node resources."""
         await self._run_libvirt(self._remove_vm_sync, lab_id, node_name, workspace)
 
-    @staticmethod
-    def _clear_vm_post_boot_commands_cache(domain_name: str) -> None:
+    def _clear_vm_post_boot_commands_cache(self, domain_name: str) -> None:
         """Clear serial post-boot command cache for a specific VM."""
         try:
             from agent.console_extractor import clear_vm_post_boot_cache
@@ -2186,13 +2154,13 @@ class LibvirtProvider(Provider):
                 domain_name,
                 exc_info=True,
             )
-        LibvirtProvider._n9kv_loader_recovery_attempts.pop(domain_name, None)
-        LibvirtProvider._n9kv_loader_recovery_last_at.pop(domain_name, None)
-        LibvirtProvider._n9kv_poap_skip_attempted.discard(domain_name)
-        LibvirtProvider._n9kv_admin_password_completed.discard(domain_name)
-        LibvirtProvider._n9kv_panic_recovery_attempts.pop(domain_name, None)
-        LibvirtProvider._n9kv_panic_recovery_last_at.pop(domain_name, None)
-        LibvirtProvider._n9kv_panic_last_log_size.pop(domain_name, None)
+        self._n9kv_loader_recovery_attempts.pop(domain_name, None)
+        self._n9kv_loader_recovery_last_at.pop(domain_name, None)
+        self._n9kv_poap_skip_attempted.discard(domain_name)
+        self._n9kv_admin_password_completed.discard(domain_name)
+        self._n9kv_panic_recovery_attempts.pop(domain_name, None)
+        self._n9kv_panic_recovery_last_at.pop(domain_name, None)
+        self._n9kv_panic_last_log_size.pop(domain_name, None)
         LibvirtProvider._clear_vm_console_control_state(domain_name)
 
     @staticmethod
@@ -3474,6 +3442,25 @@ class LibvirtProvider(Provider):
             return set()
         return {item.strip() for item in raw.split(",") if item.strip()}
 
+    @staticmethod
+    def _classify_console_result(result) -> str:
+        """Classify console command result into a status string.
+
+        Used by N9Kv boot intervention handlers (loader recovery, POAP skip,
+        admin password setup) to normalize success/failure/timeout outcomes.
+        """
+        if result.success:
+            return "sent"
+        first_error = ""
+        if result.outputs:
+            first_error = (result.outputs[0].error or "").strip()
+        overall_error = (result.error or "").strip()
+        if "Timeout waiting for command output" in first_error:
+            return "sent_handoff_timeout"
+        if "Console connection closed unexpectedly" in overall_error:
+            return "sent_console_closed"
+        return "failed"
+
     async def _run_n9kv_loader_recovery(
         self,
         domain_name: str,
@@ -3486,13 +3473,13 @@ class LibvirtProvider(Provider):
         boot (sysconf checksum on fresh NVRAM) and drop back to loader,
         so a single attempt is insufficient.
         """
-        attempts = LibvirtProvider._n9kv_loader_recovery_attempts.get(domain_name, 0)
+        attempts = self._n9kv_loader_recovery_attempts.get(domain_name, 0)
         max_attempts = LibvirtProvider._N9KV_LOADER_RECOVERY_MAX_ATTEMPTS
 
         if attempts >= max_attempts:
             return "skipped_max_attempts"
 
-        last_at = LibvirtProvider._n9kv_loader_recovery_last_at.get(domain_name, 0.0)
+        last_at = self._n9kv_loader_recovery_last_at.get(domain_name, 0.0)
         elapsed = time.monotonic() - last_at
         if last_at > 0 and elapsed < LibvirtProvider._N9KV_LOADER_RECOVERY_COOLDOWN:
             return "skipped_cooldown"
@@ -3520,8 +3507,8 @@ class LibvirtProvider(Provider):
                 retries=0,
             )
         except Exception as e:
-            LibvirtProvider._n9kv_loader_recovery_attempts[domain_name] = attempts + 1
-            LibvirtProvider._n9kv_loader_recovery_last_at[domain_name] = time.monotonic()
+            self._n9kv_loader_recovery_attempts[domain_name] = attempts + 1
+            self._n9kv_loader_recovery_last_at[domain_name] = time.monotonic()
             logger.warning(
                 "N9Kv loader recovery command failed for %s (attempt %d/%d): %s",
                 domain_name,
@@ -3532,22 +3519,10 @@ class LibvirtProvider(Provider):
             return "error"
 
         # Count this attempt regardless of outcome.
-        LibvirtProvider._n9kv_loader_recovery_attempts[domain_name] = attempts + 1
-        LibvirtProvider._n9kv_loader_recovery_last_at[domain_name] = time.monotonic()
+        self._n9kv_loader_recovery_attempts[domain_name] = attempts + 1
+        self._n9kv_loader_recovery_last_at[domain_name] = time.monotonic()
 
-        status = "failed"
-        if result.success:
-            status = "sent"
-        else:
-            first_error = ""
-            if result.outputs:
-                first_error = (result.outputs[0].error or "").strip()
-            overall_error = (result.error or "").strip()
-            if "Timeout waiting for command output" in first_error:
-                # Expected when loader hands off to image boot and prompt disappears.
-                status = "sent_handoff_timeout"
-            elif "Console connection closed unexpectedly" in overall_error:
-                status = "sent_console_closed"
+        status = self._classify_console_result(result)
 
         logger.info(
             "N9Kv loader recovery for %s: status=%s attempt=%d/%d commands_run=%s error=%s",
@@ -3580,13 +3555,13 @@ class LibvirtProvider(Provider):
           - Staleness check: first detection records log size; restart only
             fires when log size is unchanged on a subsequent probe.
         """
-        attempts = LibvirtProvider._n9kv_panic_recovery_attempts.get(domain_name, 0)
+        attempts = self._n9kv_panic_recovery_attempts.get(domain_name, 0)
         max_attempts = LibvirtProvider._N9KV_PANIC_RECOVERY_MAX_ATTEMPTS
 
         if attempts >= max_attempts:
             return "skipped_max_attempts"
 
-        last_at = LibvirtProvider._n9kv_panic_recovery_last_at.get(domain_name, 0.0)
+        last_at = self._n9kv_panic_recovery_last_at.get(domain_name, 0.0)
         elapsed = time.monotonic() - last_at
         if last_at > 0 and elapsed < LibvirtProvider._N9KV_PANIC_RECOVERY_COOLDOWN:
             return "skipped_cooldown"
@@ -3597,15 +3572,15 @@ class LibvirtProvider(Provider):
         except OSError:
             current_size = -1
 
-        prev_size = LibvirtProvider._n9kv_panic_last_log_size.get(domain_name)
+        prev_size = self._n9kv_panic_last_log_size.get(domain_name)
         if prev_size is None:
             # First time seeing panic — record size and give VM a grace period.
-            LibvirtProvider._n9kv_panic_last_log_size[domain_name] = current_size
+            self._n9kv_panic_last_log_size[domain_name] = current_size
             return "skipped_first_detection"
 
         if current_size != prev_size:
             # Log is still growing — VM may be recovering on its own.
-            LibvirtProvider._n9kv_panic_last_log_size[domain_name] = current_size
+            self._n9kv_panic_last_log_size[domain_name] = current_size
             return "skipped_log_growing"
 
         # Log size unchanged since last check — VM is stuck.  Force restart.
@@ -3613,14 +3588,13 @@ class LibvirtProvider(Provider):
             def _restart_domain(conn, dname):
                 dom = conn.lookupByName(dname)
                 dom.destroy()
-                import time as _time
-                _time.sleep(2)
+                time.sleep(2)
                 dom.create()
 
             await self._run_libvirt(_restart_domain, self.conn, domain_name)
         except Exception as e:
-            LibvirtProvider._n9kv_panic_recovery_attempts[domain_name] = attempts + 1
-            LibvirtProvider._n9kv_panic_recovery_last_at[domain_name] = time.monotonic()
+            self._n9kv_panic_recovery_attempts[domain_name] = attempts + 1
+            self._n9kv_panic_recovery_last_at[domain_name] = time.monotonic()
             logger.warning(
                 "N9Kv panic recovery failed for %s (attempt %d/%d): %s",
                 domain_name, attempts + 1, max_attempts, e,
@@ -3628,10 +3602,10 @@ class LibvirtProvider(Provider):
             return "error"
 
         # Clear log size tracking (fresh boot produces new output).
-        LibvirtProvider._n9kv_panic_last_log_size.pop(domain_name, None)
+        self._n9kv_panic_last_log_size.pop(domain_name, None)
 
-        LibvirtProvider._n9kv_panic_recovery_attempts[domain_name] = attempts + 1
-        LibvirtProvider._n9kv_panic_recovery_last_at[domain_name] = time.monotonic()
+        self._n9kv_panic_recovery_attempts[domain_name] = attempts + 1
+        self._n9kv_panic_recovery_last_at[domain_name] = time.monotonic()
 
         logger.info(
             "N9Kv panic recovery for %s: restarted (attempt %d/%d)",
@@ -3645,10 +3619,10 @@ class LibvirtProvider(Provider):
         kind: str,
     ) -> str:
         """Send 'yes' to POAP abort prompt to skip POAP and continue normal setup."""
-        if domain_name in LibvirtProvider._n9kv_poap_skip_attempted:
+        if domain_name in self._n9kv_poap_skip_attempted:
             return "skipped_already_attempted"
 
-        LibvirtProvider._n9kv_poap_skip_attempted.add(domain_name)
+        self._n9kv_poap_skip_attempted.add(domain_name)
 
         from agent.console_extractor import run_vm_cli_commands, PEXPECT_AVAILABLE
 
@@ -3680,16 +3654,7 @@ class LibvirtProvider(Provider):
             )
             return "error"
 
-        status = "sent" if result.success else "failed"
-        if not result.success:
-            first_error = ""
-            if result.outputs:
-                first_error = (result.outputs[0].error or "").strip()
-            overall_error = (result.error or "").strip()
-            if "Timeout waiting for command output" in first_error:
-                status = "sent_handoff_timeout"
-            elif "Console connection closed unexpectedly" in overall_error:
-                status = "sent_console_closed"
+        status = self._classify_console_result(result)
 
         logger.info(
             "N9Kv POAP skip for %s: status=%s commands_run=%s error=%s",
@@ -3711,7 +3676,7 @@ class LibvirtProvider(Provider):
         extractor — that method already handles the password prompts, sending
         a bootstrap password that meets NX-OS complexity requirements.
         """
-        if domain_name in LibvirtProvider._n9kv_admin_password_completed:
+        if domain_name in self._n9kv_admin_password_completed:
             return "skipped_already_completed"
 
         from agent.console_extractor import run_vm_cli_commands, PEXPECT_AVAILABLE
@@ -3741,16 +3706,7 @@ class LibvirtProvider(Provider):
             )
             return "error"
 
-        status = "sent" if result.success else "failed"
-        if not result.success:
-            first_error = ""
-            if result.outputs:
-                first_error = (result.outputs[0].error or "").strip()
-            overall_error = (result.error or "").strip()
-            if "Timeout waiting for command output" in first_error:
-                status = "sent_handoff_timeout"
-            elif "Console connection closed unexpectedly" in overall_error:
-                status = "sent_console_closed"
+        status = self._classify_console_result(result)
 
         logger.info(
             "N9Kv admin password setup for %s: status=%s commands_run=%s error=%s",
@@ -3761,7 +3717,7 @@ class LibvirtProvider(Provider):
         )
 
         if status.startswith("sent"):
-            LibvirtProvider._n9kv_admin_password_completed.add(domain_name)
+            self._n9kv_admin_password_completed.add(domain_name)
 
         return status
 
@@ -3874,7 +3830,7 @@ class LibvirtProvider(Provider):
                     if result.details
                     else recovery_note
                 )
-                attempts = LibvirtProvider._n9kv_loader_recovery_attempts.get(domain_name, 0)
+                attempts = self._n9kv_loader_recovery_attempts.get(domain_name, 0)
                 max_attempts = LibvirtProvider._N9KV_LOADER_RECOVERY_MAX_ATTEMPTS
                 if recovery_status.startswith("sent"):
                     result.message = f"Boot recovery in progress (attempt {attempts}/{max_attempts})"
@@ -3933,7 +3889,7 @@ class LibvirtProvider(Provider):
                     if result.details
                     else panic_note
                 )
-                attempts = LibvirtProvider._n9kv_panic_recovery_attempts.get(domain_name, 0)
+                attempts = self._n9kv_panic_recovery_attempts.get(domain_name, 0)
                 max_attempts = LibvirtProvider._N9KV_PANIC_RECOVERY_MAX_ATTEMPTS
                 if panic_status == "restarted":
                     result.message = f"Kernel panic detected — restarting VM (attempt {attempts}/{max_attempts})"
@@ -4057,8 +4013,6 @@ class LibvirtProvider(Provider):
 
     def _get_domain_metadata_values(self, domain) -> dict[str, str]:
         """Extract archetype metadata values from domain XML by local tag name."""
-        import xml.etree.ElementTree as ET
-
         xml = domain.XMLDesc()
         root = ET.fromstring(xml)
         metadata = root.find("metadata")
@@ -4081,8 +4035,6 @@ class LibvirtProvider(Provider):
 
     def _get_runtime_profile_sync(self, lab_id: str, node_name: str) -> dict[str, Any]:
         """Get runtime configuration from live domain XML — libvirt thread."""
-        import xml.etree.ElementTree as ET
-
         domain_name = self._domain_name(lab_id, node_name)
         domain = self.conn.lookupByName(domain_name)
         state, _ = domain.state()

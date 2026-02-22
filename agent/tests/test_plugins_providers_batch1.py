@@ -154,8 +154,13 @@ def _make_libvirt_provider() -> libvirt_provider.LibvirtProvider:
     provider._libvirt_executor = concurrent.futures.ThreadPoolExecutor(
         max_workers=1, thread_name_prefix="libvirt-test",
     )
-    libvirt_provider.LibvirtProvider._n9kv_loader_recovery_attempts = {}
-    libvirt_provider.LibvirtProvider._n9kv_loader_recovery_last_at = {}
+    provider._n9kv_loader_recovery_attempts = {}
+    provider._n9kv_loader_recovery_last_at = {}
+    provider._n9kv_poap_skip_attempted = set()
+    provider._n9kv_admin_password_completed = set()
+    provider._n9kv_panic_recovery_attempts = {}
+    provider._n9kv_panic_recovery_last_at = {}
+    provider._n9kv_panic_last_log_size = {}
     return provider
 
 
@@ -306,7 +311,7 @@ async def test_libvirt_start_node_marks_post_boot_console_pending(monkeypatch, t
     monkeypatch.setattr(
         libvirt_provider.LibvirtProvider,
         "_clear_vm_post_boot_commands_cache",
-        staticmethod(lambda domain_name: clear_calls.append(domain_name)),
+        lambda self, domain_name: clear_calls.append(domain_name),
     )
     monkeypatch.setattr(
         libvirt_provider.LibvirtProvider,
@@ -1165,9 +1170,10 @@ async def test_libvirt_check_readiness_n9kv_loader_recovery_skipped_when_boot_mo
 
 
 def test_libvirt_clear_vm_post_boot_cache_resets_n9kv_loader_guard(monkeypatch) -> None:
+    provider = _make_libvirt_provider()
     domain_name = "arch-lab-node1"
-    libvirt_provider.LibvirtProvider._n9kv_loader_recovery_attempts = {domain_name: 2}
-    libvirt_provider.LibvirtProvider._n9kv_loader_recovery_last_at = {domain_name: 123.0}
+    provider._n9kv_loader_recovery_attempts = {domain_name: 2}
+    provider._n9kv_loader_recovery_last_at = {domain_name: 123.0}
 
     import agent.console_extractor as console_extractor
 
@@ -1178,10 +1184,10 @@ def test_libvirt_clear_vm_post_boot_cache_resets_n9kv_loader_guard(monkeypatch) 
         staticmethod(lambda _domain: None),
     )
 
-    libvirt_provider.LibvirtProvider._clear_vm_post_boot_commands_cache(domain_name)
+    provider._clear_vm_post_boot_commands_cache(domain_name)
 
-    assert domain_name not in libvirt_provider.LibvirtProvider._n9kv_loader_recovery_attempts
-    assert domain_name not in libvirt_provider.LibvirtProvider._n9kv_loader_recovery_last_at
+    assert domain_name not in provider._n9kv_loader_recovery_attempts
+    assert domain_name not in provider._n9kv_loader_recovery_last_at
 
 
 def test_libvirt_domain_status_mapping(monkeypatch) -> None:
