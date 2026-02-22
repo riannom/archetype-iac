@@ -14,7 +14,6 @@ import logging
 from dataclasses import dataclass, field
 
 from app import agent_client, models
-from app.agent_client import AgentUnavailableError
 from app.metrics import (
     nlm_phase_duration,
     record_job_completed,
@@ -78,8 +77,8 @@ def _get_container_name(lab_id: str, node_name: str) -> str:
     return docker_container_name(lab_id, node_name)
 
 
-from app.tasks.node_lifecycle_agents import AgentResolutionMixin
-from app.tasks.node_lifecycle_deploy import DeploymentMixin
+from app.tasks.node_lifecycle_agents import AgentResolutionMixin  # noqa: E402
+from app.tasks.node_lifecycle_deploy import DeploymentMixin  # noqa: E402
 
 
 class NodeLifecycleManager(AgentResolutionMixin, DeploymentMixin):

@@ -28,7 +28,7 @@ from app.utils.time import utcnow
 logger = logging.getLogger(__name__)
 
 # Re-import module-level constants from main module to avoid duplication
-from app.tasks.node_lifecycle import (
+from app.tasks.node_lifecycle import (  # noqa: E402
     _is_ceos_kind,
     _get_container_name,
     CEOS_STAGGER_SECONDS,

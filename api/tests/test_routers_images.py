@@ -531,16 +531,7 @@ class TestChunkedImageUpload:
                 if upload_id in images_router._chunk_upload_sessions:
                     images_router._chunk_upload_sessions[upload_id]["status"] = "completed"
 
-        class ImmediateThread:
-            def __init__(self, target, args=(), **kwargs):
-                self.target = target
-                self.args = args
-
-            def start(self):
-                self.target(*self.args)
-
         monkeypatch.setattr(images_router, "_load_image_background_from_archive", fake_loader)
-        monkeypatch.setattr(images_router.threading, "Thread", ImmediateThread)
 
         init_response = test_client.post(
             "/images/upload/init",
@@ -572,6 +563,11 @@ class TestChunkedImageUpload:
         assert complete_data["status"] == "processing"
         assert complete_data["kind"] == "docker"
         assert complete_data["upload_id"] == upload_id
+
+        # Give the background thread time to finish (fake_loader is fast,
+        # but it runs in a real thread now — not synchronously).
+        import time
+        time.sleep(0.2)
 
         progress_response = test_client.get(
             f"/images/load/{upload_id}/progress",

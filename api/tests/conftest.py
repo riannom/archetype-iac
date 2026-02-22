@@ -53,12 +53,6 @@ def _mock_redis_globally(monkeypatch):
     mock_bc.publish_job_progress = AsyncMock(return_value=1)
     monkeypatch.setattr(_broadcaster_mod, "get_broadcaster", lambda: mock_bc)
 
-    # Also patch where get_broadcaster is imported directly
-    import app.tasks.jobs as _jobs_mod
-    monkeypatch.setattr(_jobs_mod, "get_broadcaster", lambda: mock_bc)
-    import app.tasks.node_lifecycle as _nlc_mod
-    monkeypatch.setattr(_nlc_mod, "get_broadcaster", lambda: mock_bc)
-
     # 4. events publisher — reset singleton and mock _get_redis
     from app.events import publisher as _publisher_mod
 
