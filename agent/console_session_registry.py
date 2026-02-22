@@ -544,11 +544,14 @@ def piggyback_run_commands(
             default_timeout=timeout,
         )
 
+        login_pattern = r"[Uu]sername:|[Ll]ogin:"
+        combined_pattern = f"(?:{prompt_pattern})|(?:{login_pattern})"
+
         injector.send("\x15")
         time.sleep(0.1)
         injector.sendline("")
 
-        prompt_text = injector.expect(prompt_pattern, timeout=10)
+        prompt_text = injector.expect(combined_pattern, timeout=10)
         prompt_match = (getattr(injector, "last_match", "") or "").strip()
 
         if "(config" in prompt_match or "(config" in prompt_text:
@@ -556,11 +559,11 @@ def piggyback_run_commands(
             injector.expect(prompt_pattern, timeout=5)
             prompt_match = (getattr(injector, "last_match", "") or "").strip()
 
-        if username and ("Username:" in prompt_text or "Login:" in prompt_text):
+        if username and re.search(login_pattern, prompt_text + prompt_match):
             injector.sendline(username)
             injector.expect(r"[Pp]assword:", timeout=10)
             injector.sendline(password)
-            injector.expect(prompt_pattern, timeout=10)
+            injector.expect(prompt_pattern, timeout=30)
             prompt_match = (getattr(injector, "last_match", "") or "").strip()
 
         if prompt_match.endswith(">"):
@@ -695,12 +698,15 @@ def piggyback_run_commands_capture(
             default_timeout=timeout,
         )
 
-        # Prime the prompt
+        # Prime the prompt — match CLI prompt OR login prompt
+        login_pattern = r"[Uu]sername:|[Ll]ogin:"
+        combined_pattern = f"(?:{prompt_pattern})|(?:{login_pattern})"
+
         injector.send("\x15")
         time.sleep(0.1)
         injector.sendline("")
 
-        prompt_text = injector.expect(prompt_pattern, timeout=10)
+        prompt_text = injector.expect(combined_pattern, timeout=10)
         prompt_match = (getattr(injector, "last_match", "") or "").strip()
 
         # Exit config mode if needed
@@ -710,11 +716,11 @@ def piggyback_run_commands_capture(
             prompt_match = (getattr(injector, "last_match", "") or "").strip()
 
         # Handle login if needed
-        if username and ("Username:" in prompt_text or "Login:" in prompt_text):
+        if username and re.search(login_pattern, prompt_text + prompt_match):
             injector.sendline(username)
             injector.expect(r"[Pp]assword:", timeout=10)
             injector.sendline(password)
-            injector.expect(prompt_pattern, timeout=10)
+            injector.expect(prompt_pattern, timeout=30)
             prompt_match = (getattr(injector, "last_match", "") or "").strip()
 
         # Enable mode
