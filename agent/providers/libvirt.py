@@ -222,6 +222,12 @@ class LibvirtProvider(Provider):
     _n9kv_poap_skip_attempted: set[str] = set()
     # One-shot guard for admin password wizard per VM lifecycle.
     _n9kv_admin_password_completed: set[str] = set()
+    # Kernel panic recovery state per VM lifecycle.
+    _n9kv_panic_recovery_attempts: dict[str, int] = {}
+    _n9kv_panic_recovery_last_at: dict[str, float] = {}
+    _n9kv_panic_last_log_size: dict[str, int] = {}
+    _N9KV_PANIC_RECOVERY_MAX_ATTEMPTS: int = 3
+    _N9KV_PANIC_RECOVERY_COOLDOWN: float = 60.0
 
     def __init__(self):
         if not LIBVIRT_AVAILABLE:
@@ -1494,7 +1500,6 @@ class LibvirtProvider(Provider):
   {os_open}
     {os_type_line}{os_extras}{smbios_os_xml}
   </os>
-  <on_crash>restart</on_crash>
   <features>
     <acpi/>
     <apic/>{smm_xml}
@@ -2177,6 +2182,9 @@ class LibvirtProvider(Provider):
         LibvirtProvider._n9kv_loader_recovery_last_at.pop(domain_name, None)
         LibvirtProvider._n9kv_poap_skip_attempted.discard(domain_name)
         LibvirtProvider._n9kv_admin_password_completed.discard(domain_name)
+        LibvirtProvider._n9kv_panic_recovery_attempts.pop(domain_name, None)
+        LibvirtProvider._n9kv_panic_recovery_last_at.pop(domain_name, None)
+        LibvirtProvider._n9kv_panic_last_log_size.pop(domain_name, None)
         LibvirtProvider._clear_vm_console_control_state(domain_name)
 
     @staticmethod
@@ -3544,6 +3552,85 @@ class LibvirtProvider(Provider):
         )
         return status
 
+    async def _run_n9kv_panic_recovery(
+        self,
+        domain_name: str,
+        kind: str,
+        serial_log_path: str,
+    ) -> str:
+        """Force-restart a VM stuck after a guest kernel panic.
+
+        Guest kernel panics (ksm_scan_thread GPF) leave the VM in QEMU
+        'running' state with no serial output.  QEMU does not detect guest
+        panics as crash events, so ``<on_crash>restart</on_crash>`` is
+        ineffective.  Instead we watch for the panic signature in the serial
+        log and, if the log stops growing, force-restart the domain.
+
+        Guards:
+          - Max attempts (3) to prevent infinite restart loops.
+          - Cooldown (60s) between restarts.
+          - Staleness check: first detection records log size; restart only
+            fires when log size is unchanged on a subsequent probe.
+        """
+        attempts = LibvirtProvider._n9kv_panic_recovery_attempts.get(domain_name, 0)
+        max_attempts = LibvirtProvider._N9KV_PANIC_RECOVERY_MAX_ATTEMPTS
+
+        if attempts >= max_attempts:
+            return "skipped_max_attempts"
+
+        last_at = LibvirtProvider._n9kv_panic_recovery_last_at.get(domain_name, 0.0)
+        elapsed = time.monotonic() - last_at
+        if last_at > 0 and elapsed < LibvirtProvider._N9KV_PANIC_RECOVERY_COOLDOWN:
+            return "skipped_cooldown"
+
+        # Staleness check: only restart when serial log stops growing.
+        try:
+            current_size = os.path.getsize(serial_log_path)
+        except OSError:
+            current_size = -1
+
+        prev_size = LibvirtProvider._n9kv_panic_last_log_size.get(domain_name)
+        if prev_size is None:
+            # First time seeing panic — record size and give VM a grace period.
+            LibvirtProvider._n9kv_panic_last_log_size[domain_name] = current_size
+            return "skipped_first_detection"
+
+        if current_size != prev_size:
+            # Log is still growing — VM may be recovering on its own.
+            LibvirtProvider._n9kv_panic_last_log_size[domain_name] = current_size
+            return "skipped_log_growing"
+
+        # Log size unchanged since last check — VM is stuck.  Force restart.
+        try:
+            def _restart_domain(conn, dname):
+                dom = conn.lookupByName(dname)
+                dom.destroy()
+                import time as _time
+                _time.sleep(2)
+                dom.create()
+
+            await self._run_libvirt(_restart_domain, self.conn, domain_name)
+        except Exception as e:
+            LibvirtProvider._n9kv_panic_recovery_attempts[domain_name] = attempts + 1
+            LibvirtProvider._n9kv_panic_recovery_last_at[domain_name] = time.monotonic()
+            logger.warning(
+                "N9Kv panic recovery failed for %s (attempt %d/%d): %s",
+                domain_name, attempts + 1, max_attempts, e,
+            )
+            return "error"
+
+        # Clear log size tracking (fresh boot produces new output).
+        LibvirtProvider._n9kv_panic_last_log_size.pop(domain_name, None)
+
+        LibvirtProvider._n9kv_panic_recovery_attempts[domain_name] = attempts + 1
+        LibvirtProvider._n9kv_panic_recovery_last_at[domain_name] = time.monotonic()
+
+        logger.info(
+            "N9Kv panic recovery for %s: restarted (attempt %d/%d)",
+            domain_name, attempts + 1, max_attempts,
+        )
+        return "restarted"
+
     async def _run_n9kv_poap_skip(
         self,
         domain_name: str,
@@ -3826,6 +3913,30 @@ class LibvirtProvider(Provider):
                     result.is_ready = True
                     result.progress_percent = 100
                     result.message = "Boot complete (admin password configured)"
+            # Guest kernel panic (ksm_scan_thread GPF) leaves QEMU running
+            # but guest OS dead — no serial output.  Force-restart if stuck.
+            elif "kernel_panic" in markers and settings.n9kv_boot_modifications_enabled:
+                panic_status = await self._run_n9kv_panic_recovery(
+                    domain_name, kind, str(serial_log_path),
+                )
+                panic_note = f"panic_recovery={panic_status}"
+                result.details = (
+                    f"{result.details}; {panic_note}"
+                    if result.details
+                    else panic_note
+                )
+                attempts = LibvirtProvider._n9kv_panic_recovery_attempts.get(domain_name, 0)
+                max_attempts = LibvirtProvider._N9KV_PANIC_RECOVERY_MAX_ATTEMPTS
+                if panic_status == "restarted":
+                    result.message = f"Kernel panic detected — restarting VM (attempt {attempts}/{max_attempts})"
+                elif panic_status == "skipped_first_detection":
+                    result.message = "Kernel panic detected — monitoring for recovery"
+                elif panic_status == "skipped_log_growing":
+                    result.message = "Kernel panic detected — VM recovering (output still growing)"
+                elif panic_status == "skipped_max_attempts":
+                    result.message = f"Kernel panic recovery exhausted ({max_attempts} attempts)"
+                elif panic_status == "skipped_cooldown":
+                    result.message = f"Kernel panic recovery cooling down (attempt {attempts}/{max_attempts})"
 
         # If ready, run post-boot commands (idempotent - only runs once)
         if result.is_ready:

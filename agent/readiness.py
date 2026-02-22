@@ -689,6 +689,7 @@ N9KV_DIAGNOSTIC_PATTERNS = {
     "bootflash_startup_path": r"bootflash[:/].*startup-config",
     "login_prompt": r"login:|Username:",
     "admin_password_prompt": r'Enter the password for "admin":',
+    "kernel_panic": r"Kernel panic|nxos_panic",
 }
 
 
