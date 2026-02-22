@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """Serial console configuration extractor for libvirt VMs.
 
 Uses pexpect to automate interaction with virsh console for
@@ -11,7 +13,6 @@ import signal
 import threading
 import time
 from dataclasses import dataclass, field
-from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -73,7 +74,7 @@ class SerialConsoleExtractor:
         self.domain_name = domain_name
         self.libvirt_uri = libvirt_uri
         self.timeout = timeout
-        self.child: Optional["pexpect.spawn"] = None
+        self.child: pexpect.spawn | None = None
 
     def extract_config(
         self,
@@ -548,7 +549,7 @@ class SerialConsoleExtractor:
         except Exception as e:
             logger.debug(f"Error disabling paging (non-fatal): {e}")
 
-    def _execute_command(self, command: str, prompt_pattern: str) -> Optional[str]:
+    def _execute_command(self, command: str, prompt_pattern: str) -> str | None:
         """Execute command and capture output."""
         try:
             self.child.sendline(command)

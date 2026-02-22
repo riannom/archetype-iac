@@ -14,7 +14,6 @@ Public API:
 from __future__ import annotations
 
 import re
-from typing import Optional
 
 from agent.vendors import get_config_by_device
 from app.image_store import find_custom_device, get_device_override
@@ -109,7 +108,7 @@ _FALLBACK_PATTERNS: list[tuple[re.Pattern, bool]] = [
 ]
 
 
-def _build_normalize_regex(port_naming: str) -> Optional[re.Pattern]:
+def _build_normalize_regex(port_naming: str) -> re.Pattern | None:
     r"""Build a regex that extracts the interface index from a vendor name.
 
     E.g. port_naming="Ethernet" → r"^Ethernet(\d+)$"

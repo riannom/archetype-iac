@@ -331,20 +331,15 @@ async def with_retry(
     raise AgentUnavailableError("Agent request failed for unknown reason")
 
 
-def parse_capabilities(agent: models.Host) -> dict:
-    """Parse agent capabilities from JSON string."""
-    return agent.get_capabilities()
-
-
 def get_agent_providers(agent: models.Host) -> list[str]:
     """Get list of providers supported by an agent."""
-    caps = parse_capabilities(agent)
+    caps = agent.get_capabilities()
     return caps.get("providers", [])
 
 
 def get_agent_max_jobs(agent: models.Host) -> int:
     """Get max concurrent jobs for an agent."""
-    caps = parse_capabilities(agent)
+    caps = agent.get_capabilities()
     return caps.get("max_concurrent_jobs", 4)  # Default to 4
 
 
@@ -1790,7 +1785,7 @@ async def get_overlay_status_from_agent(agent: models.Host) -> dict:
 
 def agent_supports_vxlan(agent: models.Host) -> bool:
     """Check if an agent supports VXLAN overlay."""
-    caps = parse_capabilities(agent)
+    caps = agent.get_capabilities()
     features = caps.get("features", [])
     return "vxlan" in features
 

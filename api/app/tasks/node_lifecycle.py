@@ -15,7 +15,6 @@ import logging
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from typing import Optional
 
 from app import agent_client, models
 from app.agent_client import AgentUnavailableError
@@ -132,8 +131,8 @@ class NodeLifecycleManager:
         self.all_lab_states: dict[str, models.NodeState] = {}  # node_name -> NodeState
 
         # Populated during _resolve_agents
-        self.agent: Optional[models.Host] = None
-        self.target_agent_id: Optional[str] = None
+        self.agent: models.Host | None = None
+        self.target_agent_id: str | None = None
 
         # Topology graph — loaded once in _filter_topology_for_agent, reused
         self.graph = None

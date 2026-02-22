@@ -18,7 +18,6 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections import defaultdict
-from typing import Dict, List, Set
 
 from sqlalchemy.orm import Session
 
@@ -45,16 +44,16 @@ class NodeChangeDebouncer:
 
     def __init__(self):
         # Pending changes per lab_id
-        self._pending_adds: Dict[str, Set[str]] = defaultdict(set)
-        self._pending_removes: Dict[str, List[dict]] = defaultdict(list)
-        self._debounce_tasks: Dict[str, asyncio.Task] = {}
-        self._locks: Dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
+        self._pending_adds: dict[str, set[str]] = defaultdict(set)
+        self._pending_removes: dict[str, list[dict]] = defaultdict(list)
+        self._debounce_tasks: dict[str, asyncio.Task] = {}
+        self._locks: dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
 
     async def add_changes(
         self,
         lab_id: str,
-        added_node_ids: List[str],
-        removed_node_info: List[dict],
+        added_node_ids: list[str],
+        removed_node_info: list[dict],
     ) -> None:
         """Queue changes for debounced processing.
 

@@ -270,6 +270,36 @@
 
 **Rule**: Pexpect-based readiness probes connect fresh each cycle, send Enter, and read ~3 seconds of output. They do NOT see historical console output. Readiness patterns must match what's currently on screen — include both the expected boot-time prompt AND the post-login CLI prompt.
 
+## 2026-02-21: N9Kv POAP has two prompt variants with different text and defaults
+
+**Bug**: The `poap_abort_prompt` diagnostic pattern only matched `Abort Power On Auto Provisioning` but NX-OS also uses `System is not fully online. Skip POAP? (yes/no)[n]:` — a completely different prompt with a different default indicator (`[n]` vs `[no]`). The POAP skip handler never fired for the second variant.
+
+**Impact**: N9Kv VMs stuck at the POAP prompt indefinitely. The readiness probe showed the prompt text in the serial log tail but no `poap_abort_prompt` marker appeared.
+
+**Fix**: Extended the diagnostic pattern to `Abort Power On Auto Provisioning|Skip POAP\?`. Updated the prompt_pattern in `_run_n9kv_poap_skip` to match both `[no]` and `[n]`: `\(yes/no\)\[n(?:o)?\]:\s*$`.
+
+**Rule**: Vendor CLIs often have multiple prompt variants for the same interactive question. When automating console interactions, test against ALL firmware versions and boot scenarios — the prompt text and default indicators may differ. Use regex alternation to match all known variants.
+
+## 2026-02-21: host-passthrough CPU mode causes guest kernel panics in NX-OS
+
+**Bug**: N9Kv VMs consistently hit `ksm_scan_thread` kernel panic during first boot. The NX-OS guest (Wind River Linux) lacks SMAP support, but `host-passthrough` CPU mode exposes SMEP/SMAP/PKU/UMIP features from the host. The kernel enables SMAP in CR4 without corresponding STAC/CLAC instructions, causing general protection faults when KSM scans user-space VMAs from kernel context.
+
+**Impact**: N9Kv VMs entered an infinite kernel panic loop — loader recovery boots NX-OS → panic → drops to loader → recovery boots again → panic. The VM never reached a usable state.
+
+**Fix**: Added `cpu_features_disable` field to VendorConfig/VmConfig/LibvirtRuntimeConfig. N9Kv config disables `["smep", "smap", "pku", "umip"]`. Domain XML generates `<feature policy='disable' name='smep'/>` etc. inside the `<cpu mode='host-passthrough'>` element.
+
+**Rule**: Don't assume `host-passthrough` is safe for all guest OSes. Older kernels (especially embedded/vendor Linux) may lack support for modern CPU security features. Check what CPU model other lab platforms use for each device — if they all use `qemu64`, there's a reason. Keep `host-passthrough` for performance but selectively disable incompatible features.
+
+## 2026-02-21: Serial console \r characters break diagnostic regex patterns
+
+**Bug**: `_collect_diagnostic_hits()` ran regex patterns directly against raw serial console output. Serial output contains embedded `\r` (carriage return) characters that split words — `Kernel panic` appears as `Ker\rnel pan\ric`. The `kernel_panic` diagnostic pattern never matched despite the panic being visible on screen.
+
+**Impact**: Kernel panic detection failed silently. The panic recovery handler never fired, leaving VMs stuck with no automated recovery.
+
+**Fix**: Added output sanitization in `_collect_diagnostic_hits()` — calls `_sanitize_console_output()` to strip control characters before regex matching.
+
+**Rule**: Always sanitize serial console output before regex matching. Terminal output contains `\r`, ANSI escape sequences, and other control characters that are invisible on screen but break pattern matching. Clean the output first, then match.
+
 ## 2026-02-19: async def functions with zero await calls are effectively sync
 
 **Bug**: `get_agent_for_lab()`, `get_healthy_agent()`, `get_agent_by_name()`, `_handle_agent_restart_cleanup()`, `_mark_links_for_recovery()` were all `async def` but contained zero `await` calls — pure synchronous DB operations.
@@ -279,3 +309,33 @@
 **Fix**: For handler refactoring, inline the pure-DB logic directly in the sync closure. For standalone helper functions, convert from `async def` to plain `def` (renamed with `_sync` suffix).
 
 **Rule**: Before wrapping an `async def` function in `asyncio.to_thread()`, check if it actually uses `await`. If it has zero `await` calls, it's effectively sync — either inline its logic in the sync closure or convert it to a plain `def`.
+
+## 2026-02-21: Mutable class-level attributes shared across all Python instances
+
+**Bug**: `LibvirtProvider` had 7 mutable dicts/sets (`_n9kv_loader_recovery_attempts`, `_n9kv_poap_skip_attempted`, etc.) defined at class level. In Python, class-level mutable objects are shared across ALL instances — modifications from one instance are visible to every other instance.
+
+**Impact**: If multiple `LibvirtProvider` instances were created (e.g., testing, future multi-host), N9Kv recovery state from one VM could leak into another instance's state tracking, causing incorrect retry counts, skipped recovery attempts, or guard sets that never reset.
+
+**Fix**: Moved all 7 mutable attributes into `__init__()` as instance attributes (`self._n9kv_*`). Kept 4 immutable constants (`_N9KV_LOADER_RECOVERY_MAX_ATTEMPTS`, etc.) at class level since they're never modified.
+
+**Rule**: Mutable defaults (dicts, sets, lists) must NEVER be defined at class level unless intentionally shared. Always initialize in `__init__()`. Only immutable values (ints, strings, frozensets, tuples) are safe as class attributes.
+
+## 2026-02-21: Computed threshold value silently discarded — no variable assignment
+
+**Bug**: `reconciliation.py` computed `now - timedelta(seconds=settings.stale_starting_threshold)` but never assigned it to a variable or used it in the subsequent query filter. The threshold expression was evaluated and immediately discarded. All transitional labs (starting/stopping/unknown) were reconciled regardless of age.
+
+**Impact**: Every reconciliation cycle swept ALL transitional labs instead of only those older than the configured threshold. This caused unnecessary agent queries and potential false positives for labs that were legitimately in mid-transition.
+
+**Fix**: Assigned to `transitional_threshold` variable and added `.filter(models.Lab.updated_at < transitional_threshold)` to the query.
+
+**Rule**: When computing a threshold or filter value, verify it's actually used in the subsequent query. A bare expression on its own line in Python is a no-op — it computes a value and throws it away. Linters catch `unused variable` but not `unused expression`.
+
+## 2026-02-21: @functools.total_ordering is incompatible with str enums
+
+**Bug**: Attempted to simplify `GlobalRole(str, Enum)` and `LabRole(str, Enum)` comparison methods using `@functools.total_ordering` (which derives `__gt__`, `__ge__`, `__le__` from `__eq__` + `__lt__`). The decorator was a no-op because `str` already defines all comparison methods.
+
+**Impact**: `total_ordering` checks `getattr(cls, op) is not getattr(object, op)` for each comparison method. Since `str.__gt__` etc. exist and differ from `object.__gt__`, the decorator considers them "already user-defined" and doesn't generate replacements. The result: `__gt__` calls `str.__gt__` (lexicographic: `"admin" > "viewer"` → False) instead of our rank-based comparison.
+
+**Fix**: Reverted to explicit 4-method implementation (`__ge__`, `__gt__`, `__le__`, `__lt__`). The original code was correct.
+
+**Rule**: `@functools.total_ordering` does not work with `str` (or any type that already defines rich comparison methods). It only fills in MISSING methods. For `str` enums with custom ordering, explicitly implement all 4 comparison methods.

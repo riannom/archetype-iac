@@ -309,30 +309,30 @@ class MockLab:
 
 # --- Unit Tests for Capability Parsing ---
 
-def test_parse_capabilities_valid():
+def test_get_capabilities_valid():
     """Test parsing valid capabilities JSON."""
     agent = MockAgent("agent1", "localhost:8001", capabilities='{"providers": ["docker", "libvirt"], "max_concurrent_jobs": 8}')
 
-    caps = agent_client.parse_capabilities(agent)
+    caps = agent.get_capabilities()
 
     assert caps["providers"] == ["docker", "libvirt"]
     assert caps["max_concurrent_jobs"] == 8
 
 
-def test_parse_capabilities_empty():
+def test_get_capabilities_empty():
     """Test parsing empty capabilities."""
     agent = MockAgent("agent1", "localhost:8001", capabilities="")
 
-    caps = agent_client.parse_capabilities(agent)
+    caps = agent.get_capabilities()
 
     assert caps == {}
 
 
-def test_parse_capabilities_invalid_json():
+def test_get_capabilities_invalid_json():
     """Test parsing invalid JSON returns empty dict."""
     agent = MockAgent("agent1", "localhost:8001", capabilities="not valid json")
 
-    caps = agent_client.parse_capabilities(agent)
+    caps = agent.get_capabilities()
 
     assert caps == {}
 

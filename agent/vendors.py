@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """Vendor-specific configurations for network devices.
 
 This module provides a centralized registry of vendor configurations
@@ -17,7 +19,6 @@ from dataclasses import dataclass, field
 from enum import Enum
 import functools
 import logging
-from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +46,7 @@ class InterfaceConfig:
     port_naming: str
     port_start_index: int
     max_ports: int
-    management_interface: Optional[str]
+    management_interface: str | None
 
 
 @dataclass(frozen=True)
@@ -89,7 +90,7 @@ class ConsoleConfig:
 class ReadinessConfig:
     """Boot readiness detection configuration."""
     readiness_probe: str
-    readiness_pattern: Optional[str]
+    readiness_pattern: str | None
     readiness_timeout: int
 
 
@@ -124,8 +125,8 @@ class ContainerConfig:
     capabilities: list
     privileged: bool
     binds: list
-    entrypoint: Optional[str]
-    cmd: Optional[list]
+    entrypoint: str | None
+    cmd: list | None
     network_mode: str
     sysctls: dict
     runtime: str
@@ -141,7 +142,7 @@ class UIConfig:
     is_active: bool
     requires_image: bool
     supported_image_kinds: list
-    documentation_url: Optional[str]
+    documentation_url: str | None
     license_required: bool
     tags: list
 
@@ -178,7 +179,7 @@ class VendorConfig:
     kind: str
     vendor: str
     console_shell: str
-    default_image: Optional[str]
+    default_image: str | None
     notes: str = ""
 
     # Alias resolution (used by topology.py)
@@ -191,7 +192,7 @@ class VendorConfig:
     # UI metadata (used by frontend)
     device_type: DeviceType = DeviceType.CONTAINER
     category: str = "Compute"
-    subcategory: Optional[str] = None
+    subcategory: str | None = None
     label: str = ""
     icon: str = "fa-box"
     versions: list[str] = field(default_factory=lambda: ["latest"])
@@ -201,7 +202,7 @@ class VendorConfig:
     port_naming: str = "eth"
     port_start_index: int = 0
     max_ports: int = 8
-    management_interface: Optional[str] = None  # NOS-level management interface name (e.g., "mgmt0")
+    management_interface: str | None = None  # NOS-level management interface name (e.g., "mgmt0")
     # Note: provision_interfaces is deprecated. OVS-based networking handles
     # interface provisioning automatically for all device types.
 
@@ -231,7 +232,7 @@ class VendorConfig:
     supported_image_kinds: list[str] = field(default_factory=lambda: ["docker"])
 
     # Documentation and licensing
-    documentation_url: Optional[str] = None
+    documentation_url: str | None = None
     license_required: bool = False
 
     # Searchable tags
@@ -250,7 +251,7 @@ class VendorConfig:
     # - "log_pattern": Check container logs for boot completion pattern
     # - "cli_probe": Execute CLI command and check for expected output
     readiness_probe: str = "none"
-    readiness_pattern: Optional[str] = None  # Regex pattern for log/cli detection
+    readiness_pattern: str | None = None  # Regex pattern for log/cli detection
     readiness_timeout: int = 120  # Max seconds to wait for ready state
 
     # Console access method
@@ -330,10 +331,10 @@ class VendorConfig:
     binds: list[str] = field(default_factory=list)
 
     # Override the default entrypoint
-    entrypoint: Optional[str] = None
+    entrypoint: str | None = None
 
     # Override the default command
-    cmd: Optional[list[str]] = None
+    cmd: list[str] | None = None
 
     # Network mode for container
     # "none": No networking (links added manually)
@@ -2206,7 +2207,7 @@ def get_console_credentials(kind: str) -> tuple[str, str]:
     return ("admin", "admin")  # Default
 
 
-def get_default_image(kind: str) -> Optional[str]:
+def get_default_image(kind: str) -> str | None:
     """Get the default Docker image for a device kind."""
     config = _get_config_by_kind(kind)
     if config:
@@ -2214,7 +2215,7 @@ def get_default_image(kind: str) -> Optional[str]:
     return None
 
 
-def get_vendor_config(kind: str) -> Optional[VendorConfig]:
+def get_vendor_config(kind: str) -> VendorConfig | None:
     """Get the full vendor configuration for a device kind."""
     return VENDOR_CONFIGS.get(kind)
 

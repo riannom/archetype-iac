@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Optional, Type
 
 from app.iso.models import ISOFormat, ISOManifest
 
@@ -56,10 +55,10 @@ class ParserRegistry:
     reports that it can handle the ISO.
     """
 
-    _parsers: list[Type[ISOParser]] = []
+    _parsers: list[type[ISOParser]] = []
 
     @classmethod
-    def register(cls, parser_class: Type[ISOParser]) -> Type[ISOParser]:
+    def register(cls, parser_class: type[ISOParser]) -> type[ISOParser]:
         """Register a parser class.
 
         Can be used as a decorator:
@@ -71,7 +70,7 @@ class ParserRegistry:
         return parser_class
 
     @classmethod
-    def get_parser(cls, iso_path: Path, file_list: list[str]) -> Optional[ISOParser]:
+    def get_parser(cls, iso_path: Path, file_list: list[str]) -> ISOParser | None:
         """Find a parser that can handle the given ISO.
 
         Args:

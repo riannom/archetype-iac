@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Optional
 
 from pydantic import BaseModel, Field
 
@@ -44,16 +43,16 @@ class ParsedNodeDefinition(BaseModel):
     boot_completed_patterns: list[str] = Field(default_factory=list, description="Patterns indicating boot completion")
 
     # Provisioning
-    provisioning_driver: Optional[str] = Field(default=None, description="Configuration driver")
-    provisioning_media_type: Optional[str] = Field(default=None, description="Provisioning media type (iso, etc.)")
+    provisioning_driver: str | None = Field(default=None, description="Configuration driver")
+    provisioning_media_type: str | None = Field(default=None, description="Provisioning media type (iso, etc.)")
 
     # VM-specific settings
     libvirt_driver: str = Field(default="kvm", description="Libvirt domain driver")
     disk_driver: str = Field(default="virtio", description="Disk driver type")
     nic_driver: str = Field(default="virtio", description="NIC driver type")
-    machine_type: Optional[str] = Field(default=None, description="QEMU machine type")
+    machine_type: str | None = Field(default=None, description="QEMU machine type")
     efi_boot: bool = Field(default=False, description="Whether firmware boot mode is EFI")
-    efi_vars: Optional[str] = Field(default=None, description="EFI vars mode (e.g., stateless)")
+    efi_vars: str | None = Field(default=None, description="EFI vars mode (e.g., stateless)")
 
     # Original YAML content for reference
     raw_yaml: dict = Field(default_factory=dict, description="Original YAML content")
@@ -132,7 +131,7 @@ class ISOManifest(BaseModel):
     parsed_at: datetime = Field(default_factory=datetime.utcnow)
     parse_errors: list[str] = Field(default_factory=list)
 
-    def get_node_definition(self, node_def_id: str) -> Optional[ParsedNodeDefinition]:
+    def get_node_definition(self, node_def_id: str) -> ParsedNodeDefinition | None:
         """Get a node definition by ID."""
         for node_def in self.node_definitions:
             if node_def.id == node_def_id:
@@ -151,9 +150,9 @@ class ImageImportProgress(BaseModel):
     progress_percent: int = Field(default=0)
     bytes_extracted: int = Field(default=0)
     total_bytes: int = Field(default=0)
-    error_message: Optional[str] = None
-    started_at: Optional[datetime] = None
-    completed_at: Optional[datetime] = None
+    error_message: str | None = None
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
 
 
 class ISOSession(BaseModel):
@@ -163,7 +162,7 @@ class ISOSession(BaseModel):
     """
     id: str = Field(..., description="Session ID")
     iso_path: str = Field(..., description="Path to ISO file")
-    manifest: Optional[ISOManifest] = None
+    manifest: ISOManifest | None = None
 
     # Import configuration
     selected_images: list[str] = Field(default_factory=list, description="Image IDs selected for import")
@@ -172,7 +171,7 @@ class ISOSession(BaseModel):
     # Overall status
     status: str = Field(default="pending", description="pending, scanning, importing, completed, failed, cancelled")
     progress_percent: int = Field(default=0)
-    error_message: Optional[str] = None
+    error_message: str | None = None
 
     # Per-image progress
     image_progress: dict[str, ImageImportProgress] = Field(default_factory=dict)
@@ -180,14 +179,14 @@ class ISOSession(BaseModel):
     # Timestamps
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
-    completed_at: Optional[datetime] = None
+    completed_at: datetime | None = None
 
     def update_image_progress(
         self,
         image_id: str,
         status: str,
         progress_percent: int = 0,
-        error_message: Optional[str] = None,
+        error_message: str | None = None,
     ):
         """Update progress for a specific image."""
         if image_id not in self.image_progress:

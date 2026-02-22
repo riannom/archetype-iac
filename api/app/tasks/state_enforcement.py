@@ -19,7 +19,6 @@ import asyncio
 import logging
 import time
 from datetime import datetime, timedelta, timezone
-from typing import Dict, Set
 
 import redis
 from sqlalchemy import or_
@@ -527,8 +526,8 @@ async def enforce_node_state(
 async def _is_enforceable(
     session: Session,
     node_state: models.NodeState,
-    active_job_node_names: Set[tuple[str, str]] | None = None,
-    active_job_node_ids: Set[tuple[str, str]] | None = None,
+    active_job_node_names: set[tuple[str, str]] | None = None,
+    active_job_node_ids: set[tuple[str, str]] | None = None,
 ) -> bool:
     """Check if a node passes all pre-filtering for enforcement.
 
@@ -652,7 +651,7 @@ async def _is_enforceable(
 def _has_lab_wide_active_job(
     session: Session,
     lab_id: str,
-    labs_with_active_jobs: Set[str] | None = None,
+    labs_with_active_jobs: set[str] | None = None,
 ) -> bool:
     """Check if a lab has an active lab-wide job.
 
@@ -680,7 +679,7 @@ async def _try_extract_configs(
     session: Session,
     lab: models.Lab,
     nodes: list[models.NodeState],
-    hosts_by_id: Dict[str, models.Host] | None = None,
+    hosts_by_id: dict[str, models.Host] | None = None,
 ) -> None:
     """Best-effort config extraction before enforcement restart.
 
@@ -815,7 +814,7 @@ async def enforce_lab_states():
 
             # D.1: Batch-load active jobs for all affected labs (replaces per-node queries)
             lab_ids = {ns.lab_id for ns in mismatched_states}
-            node_id_to_name: Dict[str, str] = {
+            node_id_to_name: dict[str, str] = {
                 ns.node_id: ns.node_name
                 for ns in mismatched_states
                 if ns.node_id and ns.node_name
@@ -830,9 +829,9 @@ async def enforce_lab_states():
                 .all()
             )
 
-            active_job_node_names: Set[tuple[str, str]] = set()
-            active_job_node_ids: Set[tuple[str, str]] = set()
-            labs_with_active_jobs: Set[str] = set()
+            active_job_node_names: set[tuple[str, str]] = set()
+            active_job_node_ids: set[tuple[str, str]] = set()
+            labs_with_active_jobs: set[str] = set()
 
             for lab_id_j, action in active_jobs:
                 if (
@@ -867,7 +866,7 @@ async def enforce_lab_states():
 
             # Phase 1: Per-node filtering (skip checks, cooldown, backoff, active jobs)
             # Group passing nodes by lab_id
-            enforceable_by_lab: Dict[str, list[models.NodeState]] = {}
+            enforceable_by_lab: dict[str, list[models.NodeState]] = {}
             for node_state in mismatched_states:
                 try:
                     if await _is_enforceable(
@@ -910,14 +909,14 @@ async def enforce_lab_states():
                 .filter(models.NodePlacement.lab_id.in_(all_lab_ids))
                 .all()
             )
-            all_host_ids: Set[str] = {p.host_id for p in all_placements if p.host_id}
+            all_host_ids: set[str] = {p.host_id for p in all_placements if p.host_id}
             # Include lab default agents
             for _lab_id in all_lab_ids:
                 _lab = session.get(models.Lab, _lab_id)
                 if _lab and _lab.agent_id:
                     all_host_ids.add(_lab.agent_id)
 
-            hosts_by_id: Dict[str, models.Host] = {}
+            hosts_by_id: dict[str, models.Host] = {}
             if all_host_ids:
                 hosts_by_id = {
                     h.id: h for h in

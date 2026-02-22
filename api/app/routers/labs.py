@@ -18,6 +18,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app import agent_client, db, models, schemas
+from app.config import settings
 from app.auth import get_current_user
 from app.services.topology import TopologyService
 from app.storage import (
@@ -58,9 +59,6 @@ def _zip_safe_name(value: str) -> str:
     return (value or "unknown").replace("/", "_").replace("\\", "_")
 
 
-_require_lab_editor = require_lab_editor
-
-
 def _enrich_node_state(state: models.NodeState) -> schemas.NodeStateOut:
     """Convert a NodeState model to schema with all_ips parsed from JSON."""
     node_data = schemas.NodeStateOut.model_validate(state)
@@ -70,7 +68,6 @@ def _enrich_node_state(state: models.NodeState) -> schemas.NodeStateOut:
         except (json.JSONDecodeError, TypeError):
             node_data.all_ips = []
     # Compute will_retry: error state with retries remaining and not permanently failed
-    from app.config import settings
     node_data.will_retry = (
         state.actual_state == "error"
         and state.desired_state == "running"
@@ -585,7 +582,7 @@ async def update_topology_from_yaml(
     database: Session = Depends(db.get_db),
     current_user: models.User = Depends(get_current_user),
 ) -> schemas.LabOut:
-    lab = _require_lab_editor(lab_id, database, current_user)
+    lab = require_lab_editor(lab_id, database, current_user)
     workspace = lab_workspace(lab.id)
     await asyncio.to_thread(workspace.mkdir, parents=True, exist_ok=True)
 
@@ -646,7 +643,7 @@ async def update_topology(
     database: Session = Depends(db.get_db),
     current_user: models.User = Depends(get_current_user),
 ) -> schemas.LabOut:
-    lab = _require_lab_editor(lab_id, database, current_user)
+    lab = require_lab_editor(lab_id, database, current_user)
     workspace = lab_workspace(lab.id)
     await asyncio.to_thread(workspace.mkdir, parents=True, exist_ok=True)
 
@@ -1050,7 +1047,7 @@ def save_layout(
     current_user: models.User = Depends(get_current_user),
 ) -> schemas.LabLayout:
     """Save or update layout data for a lab."""
-    lab = _require_lab_editor(lab_id, database, current_user)
+    lab = require_lab_editor(lab_id, database, current_user)
     write_layout(lab.id, payload)
     return payload
 
@@ -1062,7 +1059,7 @@ def remove_layout(
     current_user: models.User = Depends(get_current_user),
 ) -> dict[str, str]:
     """Delete layout data, reverting to auto-layout on next load."""
-    lab = _require_lab_editor(lab_id, database, current_user)
+    lab = require_lab_editor(lab_id, database, current_user)
     deleted = delete_layout(lab.id)
     if not deleted:
         raise_not_found("Layout not found")
@@ -1194,7 +1191,7 @@ def set_node_desired_state(
     the need for a separate "Sync" button in the UI.
     """
 
-    lab = _require_lab_editor(lab_id, database, current_user)
+    lab = require_lab_editor(lab_id, database, current_user)
 
     logger.info(
         "User state change request",
@@ -1277,7 +1274,7 @@ async def set_all_nodes_desired_state(
     from app.tasks.jobs import run_node_reconcile
     from app.utils.lab import get_lab_provider
 
-    lab = _require_lab_editor(lab_id, database, current_user)
+    lab = require_lab_editor(lab_id, database, current_user)
 
     logger.info(
         "User state change request",
@@ -1594,7 +1591,7 @@ async def reconcile_node(
     from app.tasks.jobs import run_node_reconcile
     from app.utils.lab import get_lab_provider, get_node_provider
 
-    lab = _require_lab_editor(lab_id, database, current_user)
+    lab = require_lab_editor(lab_id, database, current_user)
     _ensure_node_states_exist(database, lab.id)
 
     # Get or create the node state with correct naming
@@ -1665,7 +1662,7 @@ async def reconcile_lab(
     from app.tasks.jobs import run_node_reconcile
     from app.utils.lab import get_lab_provider
 
-    lab = _require_lab_editor(lab_id, database, current_user)
+    lab = require_lab_editor(lab_id, database, current_user)
 
     # Check for conflicting jobs before proceeding
     has_conflict, conflicting_action = has_conflicting_job(lab_id, "reconcile")
@@ -2626,7 +2623,7 @@ def set_link_state(
     will be reconciled by the reconciliation system or can be triggered
     by a manual sync operation.
     """
-    lab = _require_lab_editor(lab_id, database, current_user)
+    lab = require_lab_editor(lab_id, database, current_user)
     _ensure_link_states_exist(database, lab.id)
 
     state = (
@@ -2663,7 +2660,7 @@ def set_all_links_desired_state(
 
     Useful for "Enable All Links" or "Disable All Links" operations.
     """
-    lab = _require_lab_editor(lab_id, database, current_user)
+    lab = require_lab_editor(lab_id, database, current_user)
     _ensure_link_states_exist(database, lab.id)
 
     states = (
@@ -2765,7 +2762,7 @@ async def extract_configs(
     # Phase 1: Gather agent info from DB
     def _sync_prepare():
         with db.get_session() as database:
-            lab = _require_lab_editor(lab_id, database, current_user)
+            lab = require_lab_editor(lab_id, database, current_user)
             lab_provider = get_lab_provider(lab)
 
             placements = (
@@ -2953,7 +2950,7 @@ async def extract_node_config(
     current_user: models.User = Depends(get_current_user),
 ) -> dict:
     """Extract running config from a specific node in the lab."""
-    lab = _require_lab_editor(lab_id, database, current_user)
+    lab = require_lab_editor(lab_id, database, current_user)
 
     node = (
         database.query(models.Node)
@@ -3193,7 +3190,7 @@ def create_config_snapshot(
     Snapshots are deduplicated by content hash - if the content hasn't
     changed since the last snapshot, a new one won't be created.
     """
-    lab = _require_lab_editor(lab_id, database, current_user)
+    lab = require_lab_editor(lab_id, database, current_user)
     workspace = lab_workspace(lab.id)
     configs_dir = workspace / "configs"
 
@@ -3266,7 +3263,7 @@ def delete_config_snapshot(
     current_user: models.User = Depends(get_current_user),
 ) -> dict:
     """Delete a specific config snapshot."""
-    _require_lab_editor(lab_id, database, current_user)
+    require_lab_editor(lab_id, database, current_user)
 
     snapshot = (
         database.query(models.ConfigSnapshot)
@@ -3305,7 +3302,7 @@ def bulk_delete_config_snapshots(
     If any snapshot is the active startup-config for a node and force=False,
     returns 409 with details about which snapshots are active.
     """
-    _require_lab_editor(lab_id, database, current_user)
+    require_lab_editor(lab_id, database, current_user)
 
     from app.services.config_service import ConfigService, ActiveConfigGuardError
     config_svc = ConfigService(database)
@@ -3343,7 +3340,7 @@ def map_config_snapshot(
     Sets mapped_to_node_id on the snapshot. Validates device_kind
     compatibility (warns on mismatch but does not block).
     """
-    _require_lab_editor(lab_id, database, current_user)
+    require_lab_editor(lab_id, database, current_user)
 
     from app.services.config_service import ConfigService
     config_svc = ConfigService(database)
@@ -3389,7 +3386,7 @@ async def set_active_config(
         from app.services.config_service import ConfigService
 
         with db.get_session() as database:
-            _require_lab_editor(lab_id, database, current_user)
+            require_lab_editor(lab_id, database, current_user)
 
             node = (
                 database.query(models.Node)
@@ -3586,7 +3583,7 @@ async def hot_connect_link(
     - Both nodes must be running
     - Interfaces must be pre-provisioned via OVS
     """
-    lab = _require_lab_editor(lab_id, database, current_user)
+    lab = require_lab_editor(lab_id, database, current_user)
 
     # Verify lab is running
     if lab.state not in ("running", "starting"):
@@ -3745,7 +3742,7 @@ async def hot_disconnect_link(
         lab_id: Lab identifier
         link_id: Link identifier (format: "node1:iface1-node2:iface2")
     """
-    _require_lab_editor(lab_id, database, current_user)
+    require_lab_editor(lab_id, database, current_user)
 
     link_states = (
         database.query(models.LinkState)
@@ -3843,7 +3840,7 @@ async def connect_to_external_network(
     - Node must be running
     - External interface must exist on the host
     """
-    lab = _require_lab_editor(lab_id, database, current_user)
+    lab = require_lab_editor(lab_id, database, current_user)
 
     # Verify lab is running
     if lab.state not in ("running", "starting"):
@@ -4346,7 +4343,7 @@ async def reconcile_links(
     Verifies all links marked as "up" have matching VLAN tags on both
     endpoints. Attempts to repair any mismatched links.
     """
-    _require_lab_editor(lab_id, database, current_user)
+    require_lab_editor(lab_id, database, current_user)
 
     result = await reconcile_lab_links(database, lab_id)
 

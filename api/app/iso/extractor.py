@@ -9,7 +9,7 @@ import shutil
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Optional
+from collections.abc import Callable
 
 logger = logging.getLogger(__name__)
 
@@ -134,7 +134,7 @@ class ISOExtractor:
         self,
         file_path: str,
         dest_path: Path,
-        progress_callback: Optional[Callable[[ExtractionProgress], None]] = None,
+        progress_callback: Callable[[ExtractionProgress], None] | None = None,
         timeout_seconds: int = 1800,
     ) -> Path:
         """Extract a single file from the ISO to disk.
@@ -228,7 +228,7 @@ class ISOExtractor:
         self,
         file_paths: list[str],
         dest_dir: Path,
-        progress_callback: Optional[Callable[[str, ExtractionProgress], None]] = None,
+        progress_callback: Callable[[str, ExtractionProgress], None] | None = None,
         timeout_seconds: int = 1800,
     ) -> dict[str, Path]:
         """Extract multiple files from the ISO.

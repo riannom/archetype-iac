@@ -25,7 +25,6 @@ import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
 
 import docker
 import subprocess
@@ -62,8 +61,8 @@ class ReadinessResult:
 
     is_ready: bool
     message: str = ""
-    progress_percent: Optional[int] = None  # 0-100, None if unknown
-    details: Optional[str] = None
+    progress_percent: int | None = None  # 0-100, None if unknown
+    details: str | None = None
 
 
 class ReadinessProbe(ABC):
@@ -99,7 +98,7 @@ class LogPatternProbe(ReadinessProbe):
     for vendor-specific patterns that indicate boot completion.
     """
 
-    def __init__(self, pattern: str, progress_patterns: Optional[dict[str, int]] = None):
+    def __init__(self, pattern: str, progress_patterns: dict[str, int] | None = None):
         """Initialize log pattern probe.
 
         Args:
@@ -246,8 +245,8 @@ class LibvirtLogPatternProbe(ReadinessProbe):
         pattern: str,
         domain_name: str,
         uri: str = "qemu:///system",
-        progress_patterns: Optional[dict[str, int]] = None,
-        diagnostic_patterns: Optional[dict[str, str]] = None,
+        progress_patterns: dict[str, int] | None = None,
+        diagnostic_patterns: dict[str, str] | None = None,
         serial_log_path: str | None = None,
     ):
         """Initialize libvirt log pattern probe.

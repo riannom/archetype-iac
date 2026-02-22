@@ -7,7 +7,6 @@ from pathlib import Path
 import json
 import logging
 import re
-from typing import Optional
 
 from app.config import settings
 from app.services.device_constraints import validate_minimum_hardware
@@ -502,7 +501,7 @@ def save_custom_devices(devices: list[dict]) -> None:
     path.write_text(json.dumps({"devices": devices}, indent=2), encoding="utf-8")
 
 
-def find_custom_device(device_id: str) -> Optional[dict]:
+def find_custom_device(device_id: str) -> dict | None:
     """Find a custom device type by its ID."""
     devices = load_custom_devices()
     for device in devices:
@@ -598,7 +597,7 @@ def add_custom_device(device: dict) -> dict:
     return device
 
 
-def update_custom_device(device_id: str, updates: dict) -> Optional[dict]:
+def update_custom_device(device_id: str, updates: dict) -> dict | None:
     """Update an existing custom device type.
 
     Args:
@@ -626,7 +625,7 @@ def update_custom_device(device_id: str, updates: dict) -> Optional[dict]:
     return None
 
 
-def delete_custom_device(device_id: str) -> Optional[dict]:
+def delete_custom_device(device_id: str) -> dict | None:
     """Delete a custom device type by its ID.
 
     Returns:
@@ -668,7 +667,7 @@ def _display_name_from_device_id(device_id: str) -> str:
 def ensure_custom_device_exists(
     device_id: str,
     preferred_image_kind: str | None = None,
-) -> Optional[dict]:
+) -> dict | None:
     """Ensure a custom device entry exists for a device_id.
 
     If the device_id doesn't exist as a vendor config or custom device,
@@ -879,7 +878,7 @@ def _extract_version(filename: str) -> str | None:
     return match.group(1) if match else None
 
 
-def get_vendor_for_device(device_id: str) -> Optional[str]:
+def get_vendor_for_device(device_id: str) -> str | None:
     """Get the vendor name for a device ID.
 
     Deprecated: prefer DeviceResolver.resolve(device_id).vendor
@@ -912,32 +911,32 @@ class ImageMetadata:
     filename: str
 
     # Core metadata
-    device_id: Optional[str] = None
-    version: Optional[str] = None
-    size_bytes: Optional[int] = None
-    sha256: Optional[str] = None
+    device_id: str | None = None
+    version: str | None = None
+    size_bytes: int | None = None
+    sha256: str | None = None
     notes: str = ""
-    compatible_devices: Optional[list[str]] = None
-    source: Optional[str] = None
+    compatible_devices: list[str] | None = None
+    source: str | None = None
 
     # VM runtime hints (from VIRL2 node-definitions or user overrides)
-    memory_mb: Optional[int] = None
-    cpu_count: Optional[int] = None
-    disk_driver: Optional[str] = None
-    nic_driver: Optional[str] = None
-    machine_type: Optional[str] = None
-    libvirt_driver: Optional[str] = None
-    boot_timeout: Optional[int] = None
-    readiness_probe: Optional[str] = None
-    readiness_pattern: Optional[str] = None
-    efi_boot: Optional[bool] = None
-    efi_vars: Optional[str] = None
-    max_ports: Optional[int] = None
-    port_naming: Optional[str] = None
-    cpu_limit: Optional[int] = None
-    has_loopback: Optional[bool] = None
-    provisioning_driver: Optional[str] = None
-    provisioning_media_type: Optional[str] = None
+    memory_mb: int | None = None
+    cpu_count: int | None = None
+    disk_driver: str | None = None
+    nic_driver: str | None = None
+    machine_type: str | None = None
+    libvirt_driver: str | None = None
+    boot_timeout: int | None = None
+    readiness_probe: str | None = None
+    readiness_pattern: str | None = None
+    efi_boot: bool | None = None
+    efi_vars: str | None = None
+    max_ports: int | None = None
+    port_naming: str | None = None
+    cpu_limit: int | None = None
+    has_loopback: bool | None = None
+    provisioning_driver: str | None = None
+    provisioning_media_type: str | None = None
 
     def to_entry(self) -> dict:
         """Convert to a manifest image entry dict.
@@ -981,30 +980,30 @@ def create_image_entry(
     kind: str,
     reference: str,
     filename: str,
-    device_id: Optional[str] = None,
-    version: Optional[str] = None,
-    size_bytes: Optional[int] = None,
+    device_id: str | None = None,
+    version: str | None = None,
+    size_bytes: int | None = None,
     notes: str = "",
-    compatible_devices: Optional[list[str]] = None,
-    source: Optional[str] = None,
-    memory_mb: Optional[int] = None,
-    cpu_count: Optional[int] = None,
-    disk_driver: Optional[str] = None,
-    nic_driver: Optional[str] = None,
-    machine_type: Optional[str] = None,
-    libvirt_driver: Optional[str] = None,
-    boot_timeout: Optional[int] = None,
-    readiness_probe: Optional[str] = None,
-    readiness_pattern: Optional[str] = None,
-    efi_boot: Optional[bool] = None,
-    efi_vars: Optional[str] = None,
-    max_ports: Optional[int] = None,
-    port_naming: Optional[str] = None,
-    cpu_limit: Optional[int] = None,
-    has_loopback: Optional[bool] = None,
-    provisioning_driver: Optional[str] = None,
-    provisioning_media_type: Optional[str] = None,
-    sha256: Optional[str] = None,
+    compatible_devices: list[str] | None = None,
+    source: str | None = None,
+    memory_mb: int | None = None,
+    cpu_count: int | None = None,
+    disk_driver: str | None = None,
+    nic_driver: str | None = None,
+    machine_type: str | None = None,
+    libvirt_driver: str | None = None,
+    boot_timeout: int | None = None,
+    readiness_probe: str | None = None,
+    readiness_pattern: str | None = None,
+    efi_boot: bool | None = None,
+    efi_vars: str | None = None,
+    max_ports: int | None = None,
+    port_naming: str | None = None,
+    cpu_limit: int | None = None,
+    has_loopback: bool | None = None,
+    provisioning_driver: str | None = None,
+    provisioning_media_type: str | None = None,
+    sha256: str | None = None,
 ) -> dict:
     """Create a new image library entry with all metadata fields.
 
@@ -1076,7 +1075,7 @@ def update_image_entry(
     manifest: dict,
     image_id: str,
     updates: dict,
-) -> Optional[dict]:
+) -> dict | None:
     """Update an existing image entry with new values.
 
     Args:
@@ -1154,7 +1153,7 @@ def update_image_entry(
     return None
 
 
-def find_image_by_id(manifest: dict, image_id: str) -> Optional[dict]:
+def find_image_by_id(manifest: dict, image_id: str) -> dict | None:
     """Find an image entry by its ID."""
     for item in manifest.get("images", []):
         if item.get("id") == image_id:
@@ -1162,7 +1161,7 @@ def find_image_by_id(manifest: dict, image_id: str) -> Optional[dict]:
     return None
 
 
-def find_image_by_reference(manifest: dict, reference: str) -> Optional[dict]:
+def find_image_by_reference(manifest: dict, reference: str) -> dict | None:
     """Find an image entry by its Docker reference or file path."""
     for item in manifest.get("images", []):
         if item.get("reference") == reference:
@@ -1170,7 +1169,7 @@ def find_image_by_reference(manifest: dict, reference: str) -> Optional[dict]:
     return None
 
 
-def delete_image_entry(manifest: dict, image_id: str) -> Optional[dict]:
+def delete_image_entry(manifest: dict, image_id: str) -> dict | None:
     """Delete an image entry from the manifest by its ID.
 
     Args:
@@ -1211,7 +1210,7 @@ def save_device_overrides(overrides: dict[str, dict]) -> None:
     path.write_text(json.dumps({"overrides": overrides}, indent=2), encoding="utf-8")
 
 
-def get_device_override(device_id: str) -> Optional[dict]:
+def get_device_override(device_id: str) -> dict | None:
     """Get configuration override for a specific device.
 
     Returns:

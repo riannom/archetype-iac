@@ -446,7 +446,7 @@ class TestUpdateStaleAgents:
 class TestAgentCapabilities:
     """Tests for capability parsing functions."""
 
-    def test_parse_capabilities_valid_json(self):
+    def test_get_capabilities_valid_json(self):
         """Parses valid JSON capabilities."""
         agent = models.Host(
             id="test",
@@ -455,11 +455,11 @@ class TestAgentCapabilities:
             status="online",
             capabilities='{"providers": ["docker"], "features": ["vxlan"]}',
         )
-        caps = agent_client.parse_capabilities(agent)
+        caps = agent.get_capabilities()
         assert caps["providers"] == ["docker"]
         assert caps["features"] == ["vxlan"]
 
-    def test_parse_capabilities_invalid_json(self):
+    def test_get_capabilities_invalid_json(self):
         """Returns empty dict for invalid JSON."""
         agent = models.Host(
             id="test",
@@ -468,10 +468,10 @@ class TestAgentCapabilities:
             status="online",
             capabilities="not valid json",
         )
-        caps = agent_client.parse_capabilities(agent)
+        caps = agent.get_capabilities()
         assert caps == {}
 
-    def test_parse_capabilities_empty(self):
+    def test_get_capabilities_empty(self):
         """Returns empty dict for empty capabilities."""
         agent = models.Host(
             id="test",
@@ -480,7 +480,7 @@ class TestAgentCapabilities:
             status="online",
             capabilities="",
         )
-        caps = agent_client.parse_capabilities(agent)
+        caps = agent.get_capabilities()
         assert caps == {}
 
     def test_get_agent_providers(self):

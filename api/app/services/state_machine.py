@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """State machine services for centralized state transition logic.
 
 This module provides state machines for nodes and links, validating
@@ -5,7 +7,6 @@ transitions and computing next states based on desired states.
 """
 
 import logging
-from typing import Optional
 
 from app.state import (
     LabState,
@@ -84,7 +85,7 @@ class NodeStateMachine:
         cls,
         current: NodeActualState,
         desired: NodeDesiredState,
-    ) -> Optional[NodeActualState]:
+    ) -> NodeActualState | None:
         """Get the next state to move toward the desired state.
 
         Returns None if no transition is needed or possible.
@@ -132,7 +133,7 @@ class NodeStateMachine:
         return True
 
     @classmethod
-    def get_enforcement_action(cls, actual: NodeActualState, desired: NodeDesiredState) -> Optional[str]:
+    def get_enforcement_action(cls, actual: NodeActualState, desired: NodeDesiredState) -> str | None:
         """Get the enforcement action needed to reach desired state.
 
         Returns 'start', 'stop', or None if no action needed.

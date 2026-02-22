@@ -13,7 +13,6 @@ from __future__ import annotations
 import functools
 import logging
 from dataclasses import dataclass
-from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -26,11 +25,11 @@ class ResolvedDevice:
     # For custom/unknown devices, this is the normalized input.
     canonical_id: str
     # The VENDOR_CONFIGS key if the device is a built-in vendor device, else None.
-    vendor_config_key: Optional[str]
+    vendor_config_key: str | None
     # Runtime kind (from VendorConfig.kind). Same as vendor_config_key for most entries.
-    kind: Optional[str]
+    kind: str | None
     # Vendor display name (e.g., "Arista", "Cisco").
-    vendor: Optional[str]
+    vendor: str | None
     # True if this is a custom (user-created) device, not in VENDOR_CONFIGS.
     is_custom: bool
 
