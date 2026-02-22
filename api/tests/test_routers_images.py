@@ -837,7 +837,7 @@ class TestIolBuildManagement:
             "docker_image_id": "docker:archetype/iol-xe:15.9",
             "docker_reference": "archetype/iol-xe:15.9",
         })
-        monkeypatch.setattr(images_router, "queue", _QueueStub())
+        monkeypatch.setattr(images_router, "get_queue", lambda: _QueueStub())
 
         response = test_client.get(
             "/images/library/iol%3Ai86bi-linux-l3.bin/build-status",
@@ -892,7 +892,7 @@ class TestIolBuildManagement:
             lambda m, image_id: next((img for img in m["images"] if img["id"] == image_id), None),
         )
         monkeypatch.setattr(iol_build_task, "get_iol_build_status", lambda _image_id: None)
-        monkeypatch.setattr(images_router, "queue", _QueueStub())
+        monkeypatch.setattr(images_router, "get_queue", lambda: _QueueStub())
 
         response = test_client.get(
             "/images/library/iol%3Ai86bi-linux-l2.bin/build-status",
@@ -946,7 +946,7 @@ class TestIolBuildManagement:
             "find_image_by_id",
             lambda m, image_id: next((img for img in m["images"] if img["id"] == image_id), None),
         )
-        monkeypatch.setattr(images_router, "queue", _QueueStub())
+        monkeypatch.setattr(images_router, "get_queue", lambda: _QueueStub())
 
         response = test_client.post(
             "/images/library/iol%3Ai86bi-linux-l3.bin/retry-build",
@@ -999,7 +999,7 @@ class TestIolBuildManagement:
             "find_image_by_id",
             lambda m, image_id: next((img for img in m["images"] if img["id"] == image_id), None),
         )
-        monkeypatch.setattr(images_router, "queue", _QueueStub())
+        monkeypatch.setattr(images_router, "get_queue", lambda: _QueueStub())
 
         response = test_client.post(
             "/images/library/iol%3Ai86bi-linux-l3.bin/retry-build",
@@ -1049,7 +1049,7 @@ class TestIolBuildManagement:
             "find_image_by_id",
             lambda m, image_id: next((img for img in m["images"] if img["id"] == image_id), None),
         )
-        monkeypatch.setattr(images_router, "queue", _QueueStub())
+        monkeypatch.setattr(images_router, "get_queue", lambda: _QueueStub())
 
         response = test_client.post(
             "/images/library/iol%3Ai86bi-linux-l3.bin/ignore-build-failure",
@@ -1106,7 +1106,7 @@ class TestIolBuildManagement:
             lambda m, image_id: next((img for img in m["images"] if img["id"] == image_id), None),
         )
         monkeypatch.setattr(iol_build_task, "get_iol_build_status", lambda _image_id: None)
-        monkeypatch.setattr(images_router, "queue", _QueueStub())
+        monkeypatch.setattr(images_router, "get_queue", lambda: _QueueStub())
 
         response = test_client.get(
             "/images/library/iol%3Ai86bi-linux-l3.bin/build-status",
@@ -1169,7 +1169,7 @@ class TestIolBuildManagement:
             lambda m, image_id: next((img for img in m["images"] if img["id"] == image_id), None),
         )
         monkeypatch.setattr(iol_build_task, "get_iol_build_status", lambda _image_id: None)
-        monkeypatch.setattr(images_router, "queue", _QueueStub())
+        monkeypatch.setattr(images_router, "get_queue", lambda: _QueueStub())
 
         response = test_client.get(
             "/images/library/iol%3Ai86bi-linux-l3.bin/build-diagnostics",

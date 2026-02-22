@@ -15,6 +15,7 @@ import pytest
 from app import models
 from app.state import JobStatus, NodeActualState
 from app.tasks.node_lifecycle import LifecycleResult, NodeLifecycleManager, _get_container_name
+import app.tasks.node_lifecycle_deploy as nlc_deploy
 
 
 # ---------------------------------------------------------------------------
@@ -203,7 +204,7 @@ class TestGetStartupConfig:
         cfg.parent.mkdir(parents=True, exist_ok=True)
         cfg.write_text("from-workspace", encoding="utf-8")
 
-        with patch("app.tasks.node_lifecycle.lab_workspace", return_value=ws):
+        with patch("app.tasks.node_lifecycle_deploy.lab_workspace", return_value=ws):
             assert manager._get_startup_config("R1", node_def) == "from-workspace"
 
     def test_non_n9kv_prefers_active_then_json_then_latest(
@@ -228,7 +229,7 @@ class TestGetStartupConfig:
         cfg.parent.mkdir(parents=True, exist_ok=True)
         cfg.write_text("from-workspace", encoding="utf-8")
 
-        with patch("app.tasks.node_lifecycle.lab_workspace", return_value=ws):
+        with patch("app.tasks.node_lifecycle_deploy.lab_workspace", return_value=ws):
             assert manager._get_startup_config("R1", node_def) == "from-active"
 
             node_def.active_config_snapshot_id = None
@@ -259,7 +260,7 @@ class TestGetStartupConfig:
         cfg.parent.mkdir(parents=True, exist_ok=True)
         cfg.write_text("from-workspace", encoding="utf-8")
 
-        with patch("app.tasks.node_lifecycle.lab_workspace", return_value=ws):
+        with patch("app.tasks.node_lifecycle_deploy.lab_workspace", return_value=ws):
             assert manager._get_startup_config("R1", node_def) == "from-workspace"
 
 
@@ -487,7 +488,7 @@ class TestResolveAgents:
         manager.db_nodes_map = {"R1": test_db.query(models.Node).filter_by(container_name="R1").first()}
         manager.placements_map = {}
 
-        with patch("app.tasks.node_lifecycle.agent_client") as mock_ac:
+        with patch("app.tasks.node_lifecycle_agents.agent_client") as mock_ac:
             mock_ac.is_agent_online = MagicMock(return_value=True)
             mock_ac.ping_agent = AsyncMock(return_value=True)
             mock_ac.get_healthy_agent = AsyncMock(return_value=None)
@@ -510,7 +511,7 @@ class TestResolveAgents:
         manager.db_nodes_map = {"R1": test_db.query(models.Node).filter_by(container_name="R1").first()}
         manager.placements_map = {}
 
-        with patch("app.tasks.node_lifecycle.agent_client") as mock_ac:
+        with patch("app.tasks.node_lifecycle_agents.agent_client") as mock_ac:
             mock_ac.is_agent_online = MagicMock(return_value=False)
             result = await manager._resolve_agents()
 
@@ -530,7 +531,7 @@ class TestResolveAgents:
         manager.db_nodes_map = {}
         manager.placements_map = {}
 
-        with patch("app.tasks.node_lifecycle.agent_client") as mock_ac:
+        with patch("app.tasks.node_lifecycle_agents.agent_client") as mock_ac:
             mock_ac.is_agent_online = MagicMock(return_value=False)
             mock_ac.get_healthy_agent = AsyncMock(return_value=None)
             result = await manager._resolve_agents()
@@ -554,7 +555,7 @@ class TestResolveAgents:
         manager.db_nodes_map = {}
         manager.placements_map = {"R1": test_db.query(models.NodePlacement).first()}
 
-        with patch("app.tasks.node_lifecycle.agent_client") as mock_ac:
+        with patch("app.tasks.node_lifecycle_agents.agent_client") as mock_ac:
             mock_ac.is_agent_online = MagicMock(return_value=True)
             mock_ac.get_healthy_agent = AsyncMock(return_value=None)
             result = await manager._resolve_agents()
@@ -583,8 +584,8 @@ class TestResolveAgents:
         }
         manager.placements_map = {}
 
-        with patch("app.tasks.node_lifecycle.agent_client") as mock_ac, \
-             patch("app.tasks.node_lifecycle.safe_create_task"):
+        with patch("app.tasks.node_lifecycle_agents.agent_client") as mock_ac, \
+             patch("app.tasks.node_lifecycle_agents.safe_create_task"):
             mock_ac.is_agent_online = MagicMock(return_value=True)
             mock_ac.ping_agent = AsyncMock(return_value=True)
             mock_ac.get_healthy_agent = AsyncMock(return_value=None)
@@ -619,7 +620,7 @@ class TestResolveAgents:
         }
         manager.placements_map = {}
 
-        with patch("app.tasks.node_lifecycle.agent_client") as mock_ac:
+        with patch("app.tasks.node_lifecycle_agents.agent_client") as mock_ac:
             mock_ac.is_agent_online = MagicMock(return_value=True)
             mock_ac.ping_agent = AsyncMock(return_value=True)
             mock_ac.get_healthy_agent = AsyncMock(return_value=None)
@@ -907,7 +908,7 @@ class TestStopNodes:
         manager.node_states = [ns]
         manager.placements_map = {}
 
-        with patch("app.tasks.node_lifecycle.agent_client") as mock_ac:
+        with patch("app.tasks.node_lifecycle_deploy.agent_client") as mock_ac:
             mock_ac.is_agent_online = MagicMock(return_value=True)
             mock_ac.reconcile_nodes_on_agent = AsyncMock(return_value={
                 "results": [{"container_name": container_name, "success": True}]
@@ -931,7 +932,7 @@ class TestStopNodes:
         manager.node_states = [ns]
         manager.placements_map = {}
 
-        with patch("app.tasks.node_lifecycle.agent_client") as mock_ac:
+        with patch("app.tasks.node_lifecycle_deploy.agent_client") as mock_ac:
             mock_ac.is_agent_online = MagicMock(return_value=True)
             mock_ac.reconcile_nodes_on_agent = AsyncMock(return_value={
                 "results": [{"container_name": container_name, "success": False, "error": "Container busy"}]
@@ -956,7 +957,7 @@ class TestStopNodes:
         manager.node_states = [ns]
         manager._refresh_placements()
 
-        with patch("app.tasks.node_lifecycle.agent_client") as mock_ac:
+        with patch("app.tasks.node_lifecycle_deploy.agent_client") as mock_ac:
             mock_ac.is_agent_online = MagicMock(return_value=True)
             mock_ac.reconcile_nodes_on_agent = AsyncMock(return_value={
                 "results": [{"container_name": container_name, "success": True}]
@@ -981,7 +982,7 @@ class TestStopNodes:
         manager.node_states = [ns]
         manager.placements_map = {}
 
-        with patch("app.tasks.node_lifecycle.agent_client") as mock_ac:
+        with patch("app.tasks.node_lifecycle_deploy.agent_client") as mock_ac:
             mock_ac.is_agent_online = MagicMock(return_value=True)
             mock_ac.reconcile_nodes_on_agent = AsyncMock(
                 side_effect=AgentUnavailableError("Agent timeout")
@@ -1029,14 +1030,14 @@ class TestDeployNodes:
         with patch.object(manager.topo_service, "has_nodes", return_value=True), \
              patch.object(manager, "_filter_topology_for_agent", return_value=(mock_graph, {"R1"})), \
              patch.object(manager, "_validate_topology_placement", return_value=[]), \
-             patch("app.tasks.node_lifecycle.graph_to_deploy_topology", return_value={}), \
+             patch("app.tasks.node_lifecycle_deploy.graph_to_deploy_topology", return_value={}), \
              patch("app.tasks.jobs.acquire_deploy_lock", return_value=(True, [])), \
              patch("app.tasks.jobs.release_deploy_lock"), \
              patch("app.tasks.jobs._update_node_placements", new_callable=AsyncMock), \
              patch("app.tasks.jobs._capture_node_ips", new_callable=AsyncMock), \
              patch("app.tasks.jobs._cleanup_orphan_containers", new_callable=AsyncMock), \
-             patch("app.tasks.node_lifecycle.agent_client") as mock_ac, \
-             patch("app.tasks.node_lifecycle.settings") as mock_settings:
+             patch("app.tasks.node_lifecycle_deploy.agent_client") as mock_ac, \
+             patch("app.tasks.node_lifecycle_deploy.settings") as mock_settings:
             mock_settings.per_node_lifecycle_enabled = False
             mock_ac.deploy_to_agent = AsyncMock(return_value={"status": "completed"})
             await manager._deploy_nodes([ns])
@@ -1071,11 +1072,11 @@ class TestDeployNodes:
         with patch.object(manager.topo_service, "has_nodes", return_value=True), \
              patch.object(manager, "_filter_topology_for_agent", return_value=(mock_graph, {"R1"})), \
              patch.object(manager, "_validate_topology_placement", return_value=[]), \
-             patch("app.tasks.node_lifecycle.graph_to_deploy_topology", return_value={}), \
+             patch("app.tasks.node_lifecycle_deploy.graph_to_deploy_topology", return_value={}), \
              patch("app.tasks.jobs.acquire_deploy_lock", return_value=(True, [])), \
              patch("app.tasks.jobs.release_deploy_lock"), \
-             patch("app.tasks.node_lifecycle.agent_client") as mock_ac, \
-             patch("app.tasks.node_lifecycle.settings") as mock_settings:
+             patch("app.tasks.node_lifecycle_deploy.agent_client") as mock_ac, \
+             patch("app.tasks.node_lifecycle_deploy.settings") as mock_settings:
             mock_settings.per_node_lifecycle_enabled = False
             mock_ac.deploy_to_agent = AsyncMock(
                 return_value={"status": "failed", "error_message": "Timeout"}
@@ -1113,9 +1114,9 @@ class TestDeployNodes:
         with patch.object(manager.topo_service, "has_nodes", return_value=True), \
              patch.object(manager, "_filter_topology_for_agent", return_value=(mock_graph, {"R1"})), \
              patch.object(manager, "_validate_topology_placement", return_value=[]), \
-             patch("app.tasks.node_lifecycle.graph_to_deploy_topology", return_value={}), \
+             patch("app.tasks.node_lifecycle_deploy.graph_to_deploy_topology", return_value={}), \
              patch("app.tasks.jobs.acquire_deploy_lock", return_value=(False, ["R1"])), \
-             patch("app.tasks.node_lifecycle.settings") as mock_settings:
+             patch("app.tasks.node_lifecycle_deploy.settings") as mock_settings:
             mock_settings.per_node_lifecycle_enabled = False
             await manager._deploy_nodes([ns])
 
@@ -1134,7 +1135,7 @@ class TestDeployNodes:
         manager.node_states = [ns]
 
         with patch.object(manager.topo_service, "has_nodes", return_value=False), \
-             patch("app.tasks.node_lifecycle.settings") as mock_settings:
+             patch("app.tasks.node_lifecycle_deploy.settings") as mock_settings:
             mock_settings.per_node_lifecycle_enabled = False
             await manager._deploy_nodes([ns])
 
@@ -1171,11 +1172,11 @@ class TestDeployNodes:
         with patch.object(manager.topo_service, "has_nodes", return_value=True), \
              patch.object(manager, "_filter_topology_for_agent", return_value=(mock_graph, {"R1"})), \
              patch.object(manager, "_validate_topology_placement", return_value=[]), \
-             patch("app.tasks.node_lifecycle.graph_to_deploy_topology", return_value={}), \
+             patch("app.tasks.node_lifecycle_deploy.graph_to_deploy_topology", return_value={}), \
              patch("app.tasks.jobs.acquire_deploy_lock", return_value=(True, [])), \
              patch("app.tasks.jobs.release_deploy_lock"), \
-             patch("app.tasks.node_lifecycle.agent_client") as mock_ac, \
-             patch("app.tasks.node_lifecycle.settings") as mock_settings:
+             patch("app.tasks.node_lifecycle_deploy.agent_client") as mock_ac, \
+             patch("app.tasks.node_lifecycle_deploy.settings") as mock_settings:
             mock_settings.per_node_lifecycle_enabled = False
             mock_ac.deploy_to_agent = AsyncMock(
                 side_effect=AgentUnavailableError("Connection refused")
@@ -1308,27 +1309,32 @@ class TestExecuteOrchestration:
         mock_graph.links = []
         mock_graph.defaults = None
 
+        mock_ac = MagicMock()
+        mock_ac.is_agent_online = MagicMock(return_value=True)
+        mock_ac.ping_agent = AsyncMock(return_value=True)
+        mock_ac.get_healthy_agent = AsyncMock(return_value=None)
+        mock_ac.deploy_to_agent = AsyncMock(return_value={"status": "completed"})
+        mock_settings = MagicMock()
+        mock_settings.resource_validation_enabled = False
+        mock_settings.image_sync_enabled = False
+        mock_settings.image_sync_pre_deploy_check = False
+        mock_settings.per_node_lifecycle_enabled = False
+
         with patch.object(manager.topo_service, "get_nodes", return_value=[node_def]), \
-             patch("app.tasks.node_lifecycle.agent_client") as mock_ac, \
+             patch("app.tasks.node_lifecycle_agents.agent_client", mock_ac), \
+             patch("app.tasks.node_lifecycle_deploy.agent_client", mock_ac), \
              patch.object(manager.topo_service, "has_nodes", return_value=True), \
              patch.object(manager, "_filter_topology_for_agent", return_value=(mock_graph, {"R1"})), \
              patch.object(manager, "_validate_topology_placement", return_value=[]), \
-             patch("app.tasks.node_lifecycle.graph_to_deploy_topology", return_value={}), \
+             patch("app.tasks.node_lifecycle_deploy.graph_to_deploy_topology", return_value={}), \
              patch("app.tasks.jobs.acquire_deploy_lock", return_value=(True, [])), \
              patch("app.tasks.jobs.release_deploy_lock"), \
              patch("app.tasks.jobs._update_node_placements", new_callable=AsyncMock), \
              patch("app.tasks.jobs._capture_node_ips", new_callable=AsyncMock), \
              patch("app.tasks.jobs._cleanup_orphan_containers", new_callable=AsyncMock), \
              patch("app.tasks.jobs._create_cross_host_links_if_ready", new_callable=AsyncMock), \
-             patch("app.tasks.node_lifecycle.settings") as mock_settings:
-            mock_settings.resource_validation_enabled = False
-            mock_settings.image_sync_enabled = False
-            mock_settings.image_sync_pre_deploy_check = False
-            mock_settings.per_node_lifecycle_enabled = False
-            mock_ac.is_agent_online = MagicMock(return_value=True)
-            mock_ac.ping_agent = AsyncMock(return_value=True)
-            mock_ac.get_healthy_agent = AsyncMock(return_value=None)
-            mock_ac.deploy_to_agent = AsyncMock(return_value={"status": "completed"})
+             patch("app.tasks.node_lifecycle.settings", mock_settings), \
+             patch("app.tasks.node_lifecycle_deploy.settings", mock_settings):
 
             result = await manager.execute()
 
@@ -1347,19 +1353,24 @@ class TestExecuteOrchestration:
 
         manager = _make_manager(test_db, lab, job, ["n1"])
 
+        mock_ac = MagicMock()
+        mock_ac.is_agent_online = MagicMock(return_value=True)
+        mock_ac.ping_agent = AsyncMock(return_value=True)
+        mock_ac.get_healthy_agent = AsyncMock(return_value=None)
+        mock_ac.reconcile_nodes_on_agent = AsyncMock(return_value={
+            "results": [{"container_name": container_name, "success": True}]
+        })
+        mock_settings = MagicMock()
+        mock_settings.resource_validation_enabled = False
+        mock_settings.image_sync_enabled = False
+        mock_settings.image_sync_pre_deploy_check = False
+
         with patch.object(manager.topo_service, "get_nodes", return_value=[node_def]), \
-             patch("app.tasks.node_lifecycle.agent_client") as mock_ac, \
+             patch("app.tasks.node_lifecycle_agents.agent_client", mock_ac), \
+             patch("app.tasks.node_lifecycle_deploy.agent_client", mock_ac), \
              patch("app.tasks.jobs._create_cross_host_links_if_ready", new_callable=AsyncMock), \
-             patch("app.tasks.node_lifecycle.settings") as mock_settings:
-            mock_settings.resource_validation_enabled = False
-            mock_settings.image_sync_enabled = False
-            mock_settings.image_sync_pre_deploy_check = False
-            mock_ac.is_agent_online = MagicMock(return_value=True)
-            mock_ac.ping_agent = AsyncMock(return_value=True)
-            mock_ac.get_healthy_agent = AsyncMock(return_value=None)
-            mock_ac.reconcile_nodes_on_agent = AsyncMock(return_value={
-                "results": [{"container_name": container_name, "success": True}]
-            })
+             patch("app.tasks.node_lifecycle.settings", mock_settings), \
+             patch("app.tasks.node_lifecycle_deploy.settings", mock_settings):
 
             result = await manager.execute()
 
@@ -1396,30 +1407,35 @@ class TestExecuteOrchestration:
         mock_graph.links = []
         mock_graph.defaults = None
 
+        mock_ac = MagicMock()
+        mock_ac.is_agent_online = MagicMock(return_value=True)
+        mock_ac.ping_agent = AsyncMock(return_value=True)
+        mock_ac.get_healthy_agent = AsyncMock(return_value=None)
+        mock_ac.deploy_to_agent = AsyncMock(return_value={"status": "completed"})
+        mock_ac.reconcile_nodes_on_agent = AsyncMock(return_value={
+            "results": [{"container_name": container_name_r2, "success": True}]
+        })
+        mock_settings = MagicMock()
+        mock_settings.resource_validation_enabled = False
+        mock_settings.image_sync_enabled = False
+        mock_settings.image_sync_pre_deploy_check = False
+        mock_settings.per_node_lifecycle_enabled = False
+
         with patch.object(manager.topo_service, "get_nodes", return_value=[node_def1, node_def2]), \
-             patch("app.tasks.node_lifecycle.agent_client") as mock_ac, \
+             patch("app.tasks.node_lifecycle_agents.agent_client", mock_ac), \
+             patch("app.tasks.node_lifecycle_deploy.agent_client", mock_ac), \
              patch.object(manager.topo_service, "has_nodes", return_value=True), \
              patch.object(manager, "_filter_topology_for_agent", return_value=(mock_graph, {"R1"})), \
              patch.object(manager, "_validate_topology_placement", return_value=[]), \
-             patch("app.tasks.node_lifecycle.graph_to_deploy_topology", return_value={}), \
+             patch("app.tasks.node_lifecycle_deploy.graph_to_deploy_topology", return_value={}), \
              patch("app.tasks.jobs.acquire_deploy_lock", return_value=(True, [])), \
              patch("app.tasks.jobs.release_deploy_lock"), \
              patch("app.tasks.jobs._update_node_placements", new_callable=AsyncMock), \
              patch("app.tasks.jobs._capture_node_ips", new_callable=AsyncMock), \
              patch("app.tasks.jobs._cleanup_orphan_containers", new_callable=AsyncMock), \
              patch("app.tasks.jobs._create_cross_host_links_if_ready", new_callable=AsyncMock), \
-             patch("app.tasks.node_lifecycle.settings") as mock_settings:
-            mock_settings.resource_validation_enabled = False
-            mock_settings.image_sync_enabled = False
-            mock_settings.image_sync_pre_deploy_check = False
-            mock_settings.per_node_lifecycle_enabled = False
-            mock_ac.is_agent_online = MagicMock(return_value=True)
-            mock_ac.ping_agent = AsyncMock(return_value=True)
-            mock_ac.get_healthy_agent = AsyncMock(return_value=None)
-            mock_ac.deploy_to_agent = AsyncMock(return_value={"status": "completed"})
-            mock_ac.reconcile_nodes_on_agent = AsyncMock(return_value={
-                "results": [{"container_name": container_name_r2, "success": True}]
-            })
+             patch("app.tasks.node_lifecycle.settings", mock_settings), \
+             patch("app.tasks.node_lifecycle_deploy.settings", mock_settings):
 
             result = await manager.execute()
 
@@ -1446,13 +1462,18 @@ class TestExecuteOrchestration:
         async def mock_handle_migration(nodes):
             call_order.append("handle_migration")
 
+        mock_ac = MagicMock()
+        mock_ac.is_agent_online = MagicMock(return_value=True)
+        mock_ac.ping_agent = AsyncMock(return_value=True)
+        mock_ac.get_healthy_agent = AsyncMock(return_value=None)
+        mock_settings = MagicMock()
+        mock_settings.resource_validation_enabled = True
+
         with patch.object(manager.topo_service, "get_nodes", return_value=[node_def]), \
-             patch("app.tasks.node_lifecycle.agent_client") as mock_ac, \
-             patch("app.tasks.node_lifecycle.settings") as mock_settings:
-            mock_settings.resource_validation_enabled = True
-            mock_ac.is_agent_online = MagicMock(return_value=True)
-            mock_ac.ping_agent = AsyncMock(return_value=True)
-            mock_ac.get_healthy_agent = AsyncMock(return_value=None)
+             patch("app.tasks.node_lifecycle_agents.agent_client", mock_ac), \
+             patch("app.tasks.node_lifecycle_deploy.agent_client", mock_ac), \
+             patch("app.tasks.node_lifecycle.settings", mock_settings), \
+             patch("app.tasks.node_lifecycle_deploy.settings", mock_settings):
 
             # Override phase methods to track call order
             manager._check_resources = mock_check_resources
@@ -1490,32 +1511,37 @@ class TestExecuteOrchestration:
         mock_graph.links = []
         mock_graph.defaults = None
 
+        mock_ac = MagicMock()
+        mock_ac.is_agent_online = MagicMock(return_value=True)
+        mock_ac.ping_agent = AsyncMock(return_value=True)
+        mock_ac.get_healthy_agent = AsyncMock(return_value=None)
+        # Deploy fails
+        mock_ac.deploy_to_agent = AsyncMock(
+            return_value={"status": "failed", "error_message": "Deploy error"}
+        )
+        # Stop succeeds (via batch reconcile)
+        mock_ac.reconcile_nodes_on_agent = AsyncMock(return_value={
+            "results": [{"container_name": container_name_r2, "success": True}]
+        })
+        mock_settings = MagicMock()
+        mock_settings.resource_validation_enabled = False
+        mock_settings.image_sync_enabled = False
+        mock_settings.image_sync_pre_deploy_check = False
+        mock_settings.per_node_lifecycle_enabled = False
+
         with patch.object(manager.topo_service, "get_nodes", return_value=[node_def1, node_def2]), \
-             patch("app.tasks.node_lifecycle.agent_client") as mock_ac, \
+             patch("app.tasks.node_lifecycle_agents.agent_client", mock_ac), \
+             patch("app.tasks.node_lifecycle_deploy.agent_client", mock_ac), \
              patch.object(manager.topo_service, "has_nodes", return_value=True), \
              patch.object(manager, "_filter_topology_for_agent", return_value=(mock_graph, {"R1"})), \
              patch.object(manager, "_validate_topology_placement", return_value=[]), \
-             patch("app.tasks.node_lifecycle.graph_to_deploy_topology", return_value={}), \
+             patch("app.tasks.node_lifecycle_deploy.graph_to_deploy_topology", return_value={}), \
              patch("app.tasks.jobs.acquire_deploy_lock", return_value=(True, [])), \
              patch("app.tasks.jobs.release_deploy_lock"), \
              patch("app.tasks.jobs._update_node_placements", new_callable=AsyncMock), \
              patch("app.tasks.jobs._create_cross_host_links_if_ready", new_callable=AsyncMock), \
-             patch("app.tasks.node_lifecycle.settings") as mock_settings:
-            mock_settings.resource_validation_enabled = False
-            mock_settings.image_sync_enabled = False
-            mock_settings.image_sync_pre_deploy_check = False
-            mock_settings.per_node_lifecycle_enabled = False
-            mock_ac.is_agent_online = MagicMock(return_value=True)
-            mock_ac.ping_agent = AsyncMock(return_value=True)
-            mock_ac.get_healthy_agent = AsyncMock(return_value=None)
-            # Deploy fails
-            mock_ac.deploy_to_agent = AsyncMock(
-                return_value={"status": "failed", "error_message": "Deploy error"}
-            )
-            # Stop succeeds (via batch reconcile)
-            mock_ac.reconcile_nodes_on_agent = AsyncMock(return_value={
-                "results": [{"container_name": container_name_r2, "success": True}]
-            })
+             patch("app.tasks.node_lifecycle.settings", mock_settings), \
+             patch("app.tasks.node_lifecycle_deploy.settings", mock_settings):
 
             result = await manager.execute()
 
@@ -1551,7 +1577,7 @@ class TestDeployNodesPerNode:
         manager.latest_snapshots_map = {}
         manager.explicit_snapshots_map = {}
 
-        with patch("app.tasks.node_lifecycle.agent_client") as mock_ac, \
+        with patch("app.tasks.node_lifecycle_deploy.agent_client") as mock_ac, \
              patch("app.tasks.jobs._update_node_placements", new_callable=AsyncMock), \
              patch("app.tasks.jobs._capture_node_ips", new_callable=AsyncMock), \
              patch.object(manager.topo_service, "get_interface_count_map", return_value={"R1": 4}), \
@@ -1584,7 +1610,7 @@ class TestDeployNodesPerNode:
         manager.latest_snapshots_map = {}
         manager.explicit_snapshots_map = {}
 
-        with patch("app.tasks.node_lifecycle.agent_client") as mock_ac, \
+        with patch("app.tasks.node_lifecycle_deploy.agent_client") as mock_ac, \
              patch.object(manager.topo_service, "get_interface_count_map", return_value={}):
             mock_ac.create_node_on_agent = AsyncMock(
                 return_value={"success": False, "error": "Image not found"}
@@ -1614,7 +1640,7 @@ class TestDeployNodesPerNode:
         manager.latest_snapshots_map = {}
         manager.explicit_snapshots_map = {}
 
-        with patch("app.tasks.node_lifecycle.agent_client") as mock_ac, \
+        with patch("app.tasks.node_lifecycle_deploy.agent_client") as mock_ac, \
              patch.object(manager.topo_service, "get_interface_count_map", return_value={}):
             mock_ac.create_node_on_agent = AsyncMock(return_value={"success": True})
             mock_ac.start_node_on_agent = AsyncMock(
@@ -1662,7 +1688,7 @@ class TestDeployNodesPerNode:
         manager.latest_snapshots_map = {}
         manager.explicit_snapshots_map = {}
 
-        with patch("app.tasks.node_lifecycle.agent_client") as mock_ac, \
+        with patch("app.tasks.node_lifecycle_deploy.agent_client") as mock_ac, \
              patch("app.tasks.jobs._update_node_placements", new_callable=AsyncMock), \
              patch("app.tasks.jobs._capture_node_ips", new_callable=AsyncMock), \
              patch.object(manager.topo_service, "get_interface_count_map", return_value={}), \
@@ -1697,7 +1723,7 @@ class TestStartNodesPerNode:
         manager.latest_snapshots_map = {}
         manager.explicit_snapshots_map = {}
 
-        with patch("app.tasks.node_lifecycle.agent_client") as mock_ac, \
+        with patch("app.tasks.node_lifecycle_deploy.agent_client") as mock_ac, \
              patch("app.tasks.jobs._capture_node_ips", new_callable=AsyncMock), \
              patch("app.tasks.jobs._update_node_placements", new_callable=AsyncMock), \
              patch.object(manager, "_connect_same_host_links", new_callable=AsyncMock):
@@ -1730,7 +1756,7 @@ class TestStartNodesPerNode:
         manager.latest_snapshots_map = {}
         manager.explicit_snapshots_map = {}
 
-        with patch("app.tasks.node_lifecycle.agent_client") as mock_ac, \
+        with patch("app.tasks.node_lifecycle_deploy.agent_client") as mock_ac, \
              patch.object(manager.topo_service, "get_interface_count_map", return_value={}):
             mock_ac.start_node_on_agent = AsyncMock(
                 return_value={"success": False, "error": "Network error"}
@@ -1759,7 +1785,7 @@ class TestStartNodesPerNode:
         manager.latest_snapshots_map = {}
         manager.explicit_snapshots_map = {}
 
-        with patch("app.tasks.node_lifecycle.agent_client") as mock_ac, \
+        with patch("app.tasks.node_lifecycle_deploy.agent_client") as mock_ac, \
              patch("app.tasks.jobs._capture_node_ips", new_callable=AsyncMock), \
              patch("app.tasks.jobs._update_node_placements", new_callable=AsyncMock), \
              patch.object(manager, "_connect_same_host_links", new_callable=AsyncMock) as mock_links:
@@ -1799,7 +1825,7 @@ class TestStartNodesPerNode:
             single_ns.boot_started_at = datetime.now(timezone.utc)
             return single_ns.node_name
 
-        with patch("app.tasks.node_lifecycle.agent_client") as mock_ac, \
+        with patch("app.tasks.node_lifecycle_deploy.agent_client") as mock_ac, \
              patch("app.tasks.jobs._capture_node_ips", new_callable=AsyncMock), \
              patch("app.tasks.jobs._update_node_placements", new_callable=AsyncMock), \
              patch.object(manager, "_connect_same_host_links", new_callable=AsyncMock), \
@@ -1831,8 +1857,7 @@ class TestDeployDispatch:
         manager = _make_manager(test_db, lab, job, [ns.node_id], agent=host)
         manager.node_states = [ns]
 
-        from app.tasks import node_lifecycle
-        monkeypatch.setattr(node_lifecycle.settings, "per_node_lifecycle_enabled", True)
+        monkeypatch.setattr(nlc_deploy.settings, "per_node_lifecycle_enabled", True)
 
         manager._deploy_nodes_per_node = AsyncMock()
         manager._deploy_nodes_topology = AsyncMock()
@@ -1853,8 +1878,7 @@ class TestDeployDispatch:
         manager = _make_manager(test_db, lab, job, [ns.node_id], agent=host)
         manager.node_states = [ns]
 
-        from app.tasks import node_lifecycle
-        monkeypatch.setattr(node_lifecycle.settings, "per_node_lifecycle_enabled", False)
+        monkeypatch.setattr(nlc_deploy.settings, "per_node_lifecycle_enabled", False)
 
         manager._deploy_nodes_per_node = AsyncMock()
         manager._deploy_nodes_topology = AsyncMock()
@@ -1909,7 +1933,7 @@ class TestAutoExtractBeforeStop:
 
         mock_save = MagicMock(return_value=MagicMock(id="snap-1"))
 
-        with patch("app.tasks.node_lifecycle.agent_client") as mock_ac:
+        with patch("app.tasks.node_lifecycle_deploy.agent_client") as mock_ac:
             mock_ac.is_agent_online = MagicMock(return_value=True)
             mock_ac.extract_configs_on_agent = AsyncMock(return_value={
                 "success": True,
@@ -1960,7 +1984,7 @@ class TestAutoExtractBeforeStop:
         manager.node_states = [ns]
         manager.placements_map = {}
 
-        with patch("app.tasks.node_lifecycle.agent_client") as mock_ac:
+        with patch("app.tasks.node_lifecycle_deploy.agent_client") as mock_ac:
             mock_ac.extract_configs_on_agent = AsyncMock()
 
             from app.tasks import node_lifecycle
@@ -2001,7 +2025,7 @@ class TestAutoExtractBeforeStop:
 
         mock_save = MagicMock(return_value=MagicMock(id="snap-1"))
 
-        with patch("app.tasks.node_lifecycle.agent_client") as mock_ac:
+        with patch("app.tasks.node_lifecycle_deploy.agent_client") as mock_ac:
             mock_ac.is_agent_online = MagicMock(return_value=True)
             mock_ac.extract_configs_on_agent = AsyncMock(return_value={
                 "success": True,
@@ -2046,7 +2070,7 @@ class TestAutoExtractBeforeStop:
         manager.node_states = [ns]
         manager.placements_map = {}
 
-        with patch("app.tasks.node_lifecycle.agent_client") as mock_ac:
+        with patch("app.tasks.node_lifecycle_deploy.agent_client") as mock_ac:
             mock_ac.extract_configs_on_agent = AsyncMock()
 
             from app.tasks import node_lifecycle
@@ -2080,7 +2104,7 @@ class TestAutoExtractBeforeStop:
         manager.node_states = [ns]
         manager.placements_map = {}
 
-        with patch("app.tasks.node_lifecycle.agent_client") as mock_ac:
+        with patch("app.tasks.node_lifecycle_deploy.agent_client") as mock_ac:
             mock_ac.is_agent_online = MagicMock(return_value=True)
             mock_ac.extract_configs_on_agent = AsyncMock(
                 side_effect=Exception("Agent crashed")
@@ -2135,7 +2159,7 @@ class TestStopNodesCallsAutoExtract:
 
         manager._auto_extract_before_stop = mock_extract
 
-        with patch("app.tasks.node_lifecycle.agent_client") as mock_ac:
+        with patch("app.tasks.node_lifecycle_deploy.agent_client") as mock_ac:
             mock_ac.is_agent_online = MagicMock(return_value=True)
 
             async def mock_reconcile(*args, **kwargs):
@@ -2187,7 +2211,7 @@ class TestStartUsesDeployPath:
         manager._deploy_single_node = mock_deploy
         manager._connect_same_host_links = AsyncMock()
 
-        with patch("app.tasks.node_lifecycle.agent_client"):
+        with patch("app.tasks.node_lifecycle_deploy.agent_client"):
             with patch("app.tasks.jobs._capture_node_ips", new_callable=AsyncMock):
                 with patch(
                     "app.tasks.jobs._update_node_placements", new_callable=AsyncMock
@@ -2222,7 +2246,7 @@ class TestStartUsesDeployPath:
         manager._deploy_single_node = mock_deploy
         manager._connect_same_host_links = AsyncMock()
 
-        with patch("app.tasks.node_lifecycle.agent_client"):
+        with patch("app.tasks.node_lifecycle_deploy.agent_client"):
             with patch(
                 "app.tasks.jobs._capture_node_ips", new_callable=AsyncMock
             ):
@@ -2268,14 +2292,14 @@ class TestStartUsesDeployPath:
         manager._deploy_single_node = mock_deploy
         manager._connect_same_host_links = AsyncMock()
 
-        with patch("app.tasks.node_lifecycle.agent_client"):
+        with patch("app.tasks.node_lifecycle_deploy.agent_client"):
             with patch("app.tasks.jobs._capture_node_ips", new_callable=AsyncMock):
                 with patch(
                     "app.tasks.jobs._update_node_placements",
                     new_callable=AsyncMock,
                 ):
                     with patch(
-                        "app.tasks.node_lifecycle.asyncio.sleep",
+                        "app.tasks.node_lifecycle_deploy.asyncio.sleep",
                         new_callable=AsyncMock,
                     ) as mock_sleep:
                         await manager._start_nodes_per_node([ns1, ns2])
@@ -2325,12 +2349,12 @@ class TestAgentOfflineDuringDeploy:
                 return {"success": True}
             raise AgentUnavailableError("Connection refused")
 
-        with patch("app.tasks.node_lifecycle.agent_client") as mock_ac, \
+        with patch("app.tasks.node_lifecycle_deploy.agent_client") as mock_ac, \
              patch("app.tasks.jobs._update_node_placements", new_callable=AsyncMock), \
              patch("app.tasks.jobs._capture_node_ips", new_callable=AsyncMock), \
              patch.object(manager.topo_service, "get_interface_count_map", return_value={}), \
              patch.object(manager, "_connect_same_host_links", new_callable=AsyncMock), \
-             patch("app.tasks.node_lifecycle.asyncio.sleep", new_callable=AsyncMock):
+             patch("app.tasks.node_lifecycle_deploy.asyncio.sleep", new_callable=AsyncMock):
             mock_ac.create_node_on_agent = mock_create
             mock_ac.start_node_on_agent = AsyncMock(return_value={"success": True})
             await manager._deploy_nodes_per_node([ns1, ns2])
@@ -2380,10 +2404,10 @@ class TestAgentOfflineDuringDeploy:
         manager.latest_snapshots_map = {}
         manager.explicit_snapshots_map = {}
 
-        with patch("app.tasks.node_lifecycle.agent_client") as mock_ac, \
+        with patch("app.tasks.node_lifecycle_deploy.agent_client") as mock_ac, \
              patch.object(manager.topo_service, "get_interface_count_map", return_value={}), \
              patch.object(manager, "_connect_same_host_links", new_callable=AsyncMock), \
-             patch("app.tasks.node_lifecycle.asyncio.sleep", new_callable=AsyncMock):
+             patch("app.tasks.node_lifecycle_deploy.asyncio.sleep", new_callable=AsyncMock):
             mock_ac.create_node_on_agent = AsyncMock(
                 side_effect=AgentUnavailableError("Connection refused")
             )
@@ -2426,9 +2450,9 @@ class TestDeployRetry:
                 raise AgentUnavailableError("Timeout")
             return {"success": True}
 
-        with patch("app.tasks.node_lifecycle.agent_client") as mock_ac, \
+        with patch("app.tasks.node_lifecycle_deploy.agent_client") as mock_ac, \
              patch.object(manager.topo_service, "get_interface_count_map", return_value={}), \
-             patch("app.tasks.node_lifecycle.asyncio.sleep", new_callable=AsyncMock):
+             patch("app.tasks.node_lifecycle_deploy.asyncio.sleep", new_callable=AsyncMock):
             mock_ac.create_node_on_agent = mock_create
             mock_ac.start_node_on_agent = AsyncMock(return_value={"success": True})
             result = await manager._deploy_single_node_with_retry(ns)
@@ -2457,9 +2481,9 @@ class TestDeployRetry:
         manager.latest_snapshots_map = {}
         manager.explicit_snapshots_map = {}
 
-        with patch("app.tasks.node_lifecycle.agent_client") as mock_ac, \
+        with patch("app.tasks.node_lifecycle_deploy.agent_client") as mock_ac, \
              patch.object(manager.topo_service, "get_interface_count_map", return_value={}), \
-             patch("app.tasks.node_lifecycle.asyncio.sleep", new_callable=AsyncMock):
+             patch("app.tasks.node_lifecycle_deploy.asyncio.sleep", new_callable=AsyncMock):
             mock_ac.create_node_on_agent = AsyncMock(
                 side_effect=AgentUnavailableError("Timeout")
             )
@@ -2487,9 +2511,9 @@ class TestDeployRetry:
         manager.latest_snapshots_map = {}
         manager.explicit_snapshots_map = {}
 
-        with patch("app.tasks.node_lifecycle.agent_client") as mock_ac, \
+        with patch("app.tasks.node_lifecycle_deploy.agent_client") as mock_ac, \
              patch.object(manager.topo_service, "get_interface_count_map", return_value={}), \
-             patch("app.tasks.node_lifecycle.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+             patch("app.tasks.node_lifecycle_deploy.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
             # Return a non-transient failure (sets error state, not pending)
             mock_ac.create_node_on_agent = AsyncMock(
                 return_value={"success": False, "error": "Image not found"}
@@ -2522,9 +2546,9 @@ class TestDeployRetry:
         manager.latest_snapshots_map = {}
         manager.explicit_snapshots_map = {}
 
-        with patch("app.tasks.node_lifecycle.agent_client") as mock_ac, \
+        with patch("app.tasks.node_lifecycle_deploy.agent_client") as mock_ac, \
              patch.object(manager.topo_service, "get_interface_count_map", return_value={}), \
-             patch("app.tasks.node_lifecycle.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+             patch("app.tasks.node_lifecycle_deploy.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
             mock_ac.create_node_on_agent = AsyncMock(
                 side_effect=AgentUnavailableError("Timeout")
             )
@@ -2788,7 +2812,7 @@ class TestPlacementFailover:
         manager.placements_map = {}
         manager.all_lab_states = {"R1": ns}
 
-        with patch("app.tasks.node_lifecycle.agent_client") as mock_ac:
+        with patch("app.tasks.node_lifecycle_agents.agent_client") as mock_ac:
             mock_ac.is_agent_online = MagicMock(return_value=False)
             mock_ac.get_healthy_agent = AsyncMock(return_value=None)
             mock_ac.get_agent_providers = MagicMock(return_value=["docker"])

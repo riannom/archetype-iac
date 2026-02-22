@@ -93,14 +93,11 @@ def test_upsert_link_states_deduplicates_vendor_interface_variants(
         .order_by(models.LinkState.created_at.asc())
         .all()
     )
-    active = [s for s in states if s.desired_state != "deleted"]
-    deleted = [s for s in states if s.desired_state == "deleted"]
-
-    assert len(active) == 1
-    assert len(deleted) == 1
-    assert active[0].link_name == "r1:eth1-r2:eth2"
-    assert active[0].source_interface == "eth1"
-    assert active[0].target_interface == "eth2"
+    # Duplicate was hard-deleted, so only 1 row remains
+    assert len(states) == 1
+    assert states[0].link_name == "r1:eth1-r2:eth2"
+    assert states[0].source_interface == "eth1"
+    assert states[0].target_interface == "eth2"
 
 
 def test_links_reconcile_endpoint_uses_db_session_dependency(

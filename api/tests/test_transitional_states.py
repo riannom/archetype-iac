@@ -420,20 +420,26 @@ class TestCategorizationMatchesTransitionalStates:
 
         container_name = f"archetype-{lab.id[:20]}-router1"
 
-        with patch("app.tasks.jobs.get_session", mock_get_session(test_db)):
-            with patch("app.tasks.node_lifecycle.agent_client") as mock_ac, \
-                 patch("app.tasks.node_lifecycle.settings") as mock_settings:
-                mock_ac.is_agent_online = MagicMock(return_value=True)
-                mock_ac.get_healthy_agent = AsyncMock(return_value=None)
-                mock_ac.container_action = AsyncMock(return_value={"success": True})
-                mock_ac.reconcile_nodes_on_agent = AsyncMock(return_value={
-                    "results": [{"container_name": container_name, "success": True}]
-                })
-                mock_settings.resource_validation_enabled = False
-                mock_settings.image_sync_enabled = False
-                mock_settings.image_sync_pre_deploy_check = False
-                mock_settings.per_node_lifecycle_enabled = False
-                await run_node_reconcile(job.id, lab.id, ["node-1"])
+        mock_ac = MagicMock()
+        mock_ac.is_agent_online = MagicMock(return_value=True)
+        mock_ac.get_healthy_agent = AsyncMock(return_value=None)
+        mock_ac.container_action = AsyncMock(return_value={"success": True})
+        mock_ac.reconcile_nodes_on_agent = AsyncMock(return_value={
+            "results": [{"container_name": container_name, "success": True}]
+        })
+        mock_settings = MagicMock()
+        mock_settings.resource_validation_enabled = False
+        mock_settings.image_sync_enabled = False
+        mock_settings.image_sync_pre_deploy_check = False
+        mock_settings.per_node_lifecycle_enabled = False
+
+        with patch("app.tasks.jobs.get_session", mock_get_session(test_db)), \
+             patch("app.tasks.node_lifecycle.agent_client", mock_ac), \
+             patch("app.tasks.node_lifecycle_agents.agent_client", mock_ac), \
+             patch("app.tasks.node_lifecycle_deploy.agent_client", mock_ac), \
+             patch("app.tasks.node_lifecycle.settings", mock_settings), \
+             patch("app.tasks.node_lifecycle_deploy.settings", mock_settings):
+            await run_node_reconcile(job.id, lab.id, ["node-1"])
 
         test_db.refresh(node_state)
 
@@ -484,20 +490,26 @@ class TestCategorizationMatchesTransitionalStates:
         test_db.commit()
         test_db.refresh(job)
 
-        with patch("app.tasks.jobs.get_session", mock_get_session(test_db)):
-            with patch("app.tasks.node_lifecycle.agent_client") as mock_ac, \
-                 patch("app.tasks.node_lifecycle.settings") as mock_settings:
-                mock_ac.is_agent_online = MagicMock(return_value=True)
-                mock_ac.get_healthy_agent = AsyncMock(return_value=None)
-                mock_ac.start_node_on_agent = AsyncMock(return_value={"success": True})
-                mock_ac.container_action = AsyncMock(return_value={"success": True})
-                mock_ac.deploy_to_agent = AsyncMock(return_value={"status": "completed"})
-                mock_ac.get_lab_status_from_agent = AsyncMock(return_value={"nodes": []})
-                mock_settings.resource_validation_enabled = False
-                mock_settings.image_sync_enabled = False
-                mock_settings.image_sync_pre_deploy_check = False
-                mock_settings.per_node_lifecycle_enabled = False
-                await run_node_reconcile(job.id, lab.id, ["node-1"])
+        mock_ac = MagicMock()
+        mock_ac.is_agent_online = MagicMock(return_value=True)
+        mock_ac.get_healthy_agent = AsyncMock(return_value=None)
+        mock_ac.start_node_on_agent = AsyncMock(return_value={"success": True})
+        mock_ac.container_action = AsyncMock(return_value={"success": True})
+        mock_ac.deploy_to_agent = AsyncMock(return_value={"status": "completed"})
+        mock_ac.get_lab_status_from_agent = AsyncMock(return_value={"nodes": []})
+        mock_settings = MagicMock()
+        mock_settings.resource_validation_enabled = False
+        mock_settings.image_sync_enabled = False
+        mock_settings.image_sync_pre_deploy_check = False
+        mock_settings.per_node_lifecycle_enabled = False
+
+        with patch("app.tasks.jobs.get_session", mock_get_session(test_db)), \
+             patch("app.tasks.node_lifecycle.agent_client", mock_ac), \
+             patch("app.tasks.node_lifecycle_agents.agent_client", mock_ac), \
+             patch("app.tasks.node_lifecycle_deploy.agent_client", mock_ac), \
+             patch("app.tasks.node_lifecycle.settings", mock_settings), \
+             patch("app.tasks.node_lifecycle_deploy.settings", mock_settings):
+            await run_node_reconcile(job.id, lab.id, ["node-1"])
 
         # Verify node was categorized for start action:
         # deploy_to_agent is called by _start_nodes_topology when nodes are
@@ -920,30 +932,37 @@ class TestEarlyPlacementUpdate:
             if placement:
                 placement_statuses.append(placement.status)
 
-        with patch("app.tasks.jobs.get_session", mock_get_session(test_db)):
-            with patch("app.tasks.node_lifecycle.agent_client") as mock_ac, \
-                 patch("app.tasks.node_lifecycle.settings") as mock_settings:
-                mock_ac.is_agent_online = MagicMock(return_value=True)
-                mock_ac.get_healthy_agent = AsyncMock(return_value=None)
-                mock_ac.container_action = AsyncMock(
-                    return_value={"success": True, "status": "running"}
-                )
-                mock_ac.start_node_on_agent = AsyncMock(
-                    return_value={"success": True}
-                )
-                mock_ac.deploy_to_agent = AsyncMock(
-                    return_value={"status": "completed"}
-                )
-                mock_ac.get_lab_status_from_agent = AsyncMock(
-                    return_value={"nodes": []}
-                )
-                mock_settings.resource_validation_enabled = False
-                mock_settings.image_sync_enabled = False
-                mock_settings.image_sync_pre_deploy_check = False
-                mock_settings.per_node_lifecycle_enabled = False
-                mock_settings.placement_scoring_enabled = False
-                with patch.object(test_db, "commit", tracking_commit):
-                    await run_node_reconcile(job.id, lab.id, ["node-1"])
+        mock_ac = MagicMock()
+        mock_ac.is_agent_online = MagicMock(return_value=True)
+        mock_ac.get_healthy_agent = AsyncMock(return_value=None)
+        mock_ac.container_action = AsyncMock(
+            return_value={"success": True, "status": "running"}
+        )
+        mock_ac.start_node_on_agent = AsyncMock(
+            return_value={"success": True}
+        )
+        mock_ac.deploy_to_agent = AsyncMock(
+            return_value={"status": "completed"}
+        )
+        mock_ac.get_lab_status_from_agent = AsyncMock(
+            return_value={"nodes": []}
+        )
+        mock_settings = MagicMock()
+        mock_settings.resource_validation_enabled = False
+        mock_settings.image_sync_enabled = False
+        mock_settings.image_sync_pre_deploy_check = False
+        mock_settings.per_node_lifecycle_enabled = False
+        mock_settings.placement_scoring_enabled = False
+
+        with patch("app.tasks.jobs.get_session", mock_get_session(test_db)), \
+             patch("app.tasks.node_lifecycle.agent_client", mock_ac), \
+             patch("app.tasks.node_lifecycle_agents.agent_client", mock_ac), \
+             patch("app.tasks.node_lifecycle_deploy.agent_client", mock_ac), \
+             patch("app.tasks.node_lifecycle.settings", mock_settings), \
+             patch("app.tasks.node_lifecycle_agents.settings", mock_settings), \
+             patch("app.tasks.node_lifecycle_deploy.settings", mock_settings), \
+             patch.object(test_db, "commit", tracking_commit):
+            await run_node_reconcile(job.id, lab.id, ["node-1"])
 
         # "starting" should appear in placement statuses before "deployed"
         assert "starting" in placement_statuses, (
