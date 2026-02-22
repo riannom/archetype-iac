@@ -283,8 +283,8 @@ async def test_resolve_ovs_port_prefers_discovery_over_stale_endpoint(monkeypatc
             return docker_provider
         return None
 
-    monkeypatch.setattr("agent.main.get_provider", _get_provider)
-    monkeypatch.setattr("agent.main._get_docker_ovs_plugin", lambda: plugin)
+    monkeypatch.setattr("agent.helpers.get_provider", _get_provider)
+    monkeypatch.setattr("agent.helpers._get_docker_ovs_plugin", lambda: plugin)
 
     result = await main_mod._resolve_ovs_port("lab1", "r1", "eth5")
     assert result is not None
@@ -340,8 +340,8 @@ async def test_hot_connect_uses_discovered_current_vlan_not_stale():
     from agent.main import create_link
     from agent.schemas import LinkCreate
 
-    with patch("agent.main.get_provider", side_effect=_get_provider):
-        with patch("agent.main._get_docker_ovs_plugin", return_value=plugin):
+    with patch("agent.helpers.get_provider", side_effect=_get_provider):
+        with patch("agent.helpers._get_docker_ovs_plugin", return_value=plugin):
             with patch("agent.main._ovs_allocate_link_vlan", new_callable=AsyncMock, return_value=2050):
                 with patch("agent.main._ovs_set_port_vlan", new_callable=AsyncMock, return_value=True) as set_vlan:
                     response = await create_link(

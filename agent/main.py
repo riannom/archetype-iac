@@ -19,7 +19,6 @@ import re
 import time
 import uuid
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -189,700 +188,50 @@ from agent.console.docker_exec import DockerConsole  # noqa: E402, F401
 from agent.console.ssh_console import SSHConsole  # noqa: E402, F401
 from agent.readiness import get_probe_for_vendor, run_post_boot_commands  # noqa: E402, F401
 
-# Generate agent ID if not configured
-AGENT_ID = settings.agent_id or str(uuid.uuid4())[:8]
+# Phase 7: Shared state, helpers, and registration extracted to dedicated modules
+import agent.agent_state as _state  # noqa: E402
+from agent.agent_state import (  # noqa: E402, F401
+    get_active_jobs, _increment_active_jobs, _decrement_active_jobs,
+    get_overlay_manager, get_ovs_manager, get_event_listener, get_lock_manager,
+    _SAFE_ID_RE, _PORT_NAME_RE, _CONTAINER_PREFIX_RE,
+)
+from agent.helpers import (  # noqa: E402, F401
+    get_workspace, get_provider_for_request, provider_status_to_schema,
+    get_capabilities, get_resource_usage, get_agent_info,
+    _sync_get_resource_usage,
+    _validate_port_name, _validate_container_name,
+    _get_allocated_resources, DEFAULT_CONTAINER_MEMORY_MB,
+    _interface_name_to_index, _resolve_ovs_port, _resolve_ovs_port_via_ifindex,
+    _resolve_ifindex_sync,
+    _ovs_set_port_vlan, _ovs_get_port_vlan, _ovs_list_used_vlans,
+    _ovs_allocate_link_vlan, _ovs_allocate_unique_vlan,
+    _pick_free_vlan, _pick_isolation_vlan,
+    OVSPortInfo, _load_node_startup_config, _render_n9kv_poap_script,
+    _get_docker_images, _get_docker_ovs_plugin,
+    _sync_prune_docker,
+    _fix_running_interfaces, _cleanup_lingering_virsh_sessions,
+)
+from agent.registration import (  # noqa: E402, F401
+    forward_event_to_controller, register_with_controller,
+    _bootstrap_transport_config, send_heartbeat, heartbeat_loop,
+)
 
-# Capture agent start time (used for uptime tracking)
-AGENT_STARTED_AT = datetime.now(timezone.utc)
+# Configure structured logging (uses AGENT_ID from agent_state)
+setup_agent_logging(_state.AGENT_ID)
 
-# Configure structured logging
-setup_agent_logging(AGENT_ID)
-
-import logging
+import logging  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
-# Track registration state
-_registered = False
-_heartbeat_task: asyncio.Task | None = None
-_event_listener_task: asyncio.Task | None = None
-_fix_interfaces_task: asyncio.Task | None = None
-
-# Overlay network manager (lazy initialized)
-# Deploy results cache for concurrent request deduplication
-_deploy_results: dict[str, asyncio.Future] = {}
-
-# Redis lock manager (initialized on startup)
-_lock_manager = None
-
-# Event listener instance (lazy initialized)
-_event_listener = None
-
-# Docker OVS plugin runner (initialized on startup if enabled)
-# Active job counter for heartbeat reporting
-_active_jobs = 0
-
-
-def get_active_jobs() -> int:
-    """Get the current count of active jobs."""
-    return _active_jobs
-
-
-def _increment_active_jobs():
-    """Increment the active jobs counter."""
-    global _active_jobs
-    _active_jobs += 1
-
-
-def _decrement_active_jobs():
-    """Decrement the active jobs counter."""
-    global _active_jobs
-    _active_jobs = max(0, _active_jobs - 1)
-
-
-def get_overlay_manager():
-    """Lazy-initialize overlay manager."""
-    return get_network_backend().overlay_manager
-
-
-# OVS network manager (lazy initialized)
-def get_ovs_manager():
-    """Lazy-initialize OVS network manager."""
-    return get_network_backend().ovs_manager
-
-
-def get_event_listener():
-    """Lazy-initialize Docker event listener."""
-    global _event_listener
-    if _event_listener is None:
-        from agent.events import DockerEventListener
-        _event_listener = DockerEventListener()
-    return _event_listener
-
-
-def get_lock_manager():
-    """Get the deploy lock manager."""
-    global _lock_manager
-    return _lock_manager
-
-
-async def forward_event_to_controller(event):
-    """Forward a node event to the controller.
-
-    This function is called by the event listener when a container
-    state change is detected. It POSTs the event to the controller's
-    /events/node endpoint for real-time state synchronization.
-    """
-    from agent.events.base import NodeEvent, NodeEventType
-
-    if not isinstance(event, NodeEvent):
-        return
-
-    # Handle container restart - reprovision OVS interfaces if needed
-    if event.event_type == NodeEventType.STARTED:
-        container_name = event.attributes.get("container_name") if event.attributes else None
-        if container_name:
-            try:
-                backend = get_network_backend()
-                await backend.handle_container_restart(container_name, event.lab_id)
-            except Exception as e:
-                logger.warning(f"Failed to reprovision interfaces for {container_name}: {e}")
-
-    payload = {
-        "agent_id": AGENT_ID,
-        "lab_id": event.lab_id,
-        "node_name": event.node_name,
-        "container_id": event.container_id,
-        "event_type": event.event_type.value,
-        "timestamp": event.timestamp.isoformat(),
-        "status": event.status,
-        "attributes": event.attributes,
-    }
-
-    try:
-        client = get_http_client()
-        response = await client.post(
-            f"{settings.controller_url}/events/node",
-            json=payload,
-            timeout=5.0,
-            headers=get_controller_auth_headers(),
-        )
-        if response.status_code == 200:
-            logger.debug(f"Forwarded event: {event.event_type.value} for {event.log_name()}")
-        else:
-            logger.warning(f"Failed to forward event: HTTP {response.status_code}")
-    except Exception as e:
-        logger.error(f"Error forwarding event to controller: {e}")
-
-
-def get_workspace(lab_id: str) -> Path:
-    """Get workspace directory for a lab."""
-    if not _SAFE_ID_RE.match(lab_id):
-        raise ValueError(f"Invalid lab_id: {lab_id}")
-    workspace = Path(settings.workspace_path) / lab_id
-    resolved = workspace.resolve()
-    if not resolved.is_relative_to(Path(settings.workspace_path).resolve()):
-        raise ValueError(f"Path traversal detected in lab_id: {lab_id}")
-    workspace.mkdir(parents=True, exist_ok=True)
-    return workspace
-
-
-def get_provider_for_request(provider_name: str = "docker") -> BaseProvider:
-    """Get a provider instance for handling a request.
-
-    Args:
-        provider_name: Name of the provider to use (default: docker)
-
-    Returns:
-        Provider instance
-
-    Raises:
-        HTTPException: If the requested provider is not available
-    """
-    provider = get_provider(provider_name)
-    if provider is None:
-        available = list_providers()
-        raise HTTPException(
-            status_code=503,
-            detail=f"Provider '{provider_name}' not available. Available: {available}"
-        )
-    return provider
-
-
-async def _fix_running_interfaces() -> None:
-    """Fix interface naming/attachments for already-running containers after agent restart."""
-    # Allow plugin/network reconciliation to complete before renaming.
-    await asyncio.sleep(5)
-
-    provider = get_provider("docker")
-    if provider is None:
-        return
-
-    for attempt in range(2):
-        try:
-            containers = await asyncio.to_thread(
-                provider.docker.containers.list,
-                all=True,
-                filters={"label": "archetype.lab_id"},
-            )
-        except Exception as e:
-            logger.warning(f"Failed to list containers for interface fixup: {e}")
-            return
-
-        for container in containers:
-            lab_id = container.labels.get("archetype.lab_id")
-            if not lab_id:
-                continue
-
-            # Restart containers that failed due to OVS plugin socket race
-            if container.status == "exited":
-                exit_code = container.attrs.get("State", {}).get("ExitCode", 0)
-                error_msg = container.attrs.get("State", {}).get("Error", "")
-                if exit_code == 255 or "archetype-ovs.sock" in error_msg:
-                    logger.info(f"Restarting {container.name} (OVS socket race, exit {exit_code})")
-                    try:
-                        await asyncio.to_thread(container.start)
-                        await asyncio.sleep(2)
-                        await provider._fix_interface_names(container.name, lab_id)
-                    except Exception as e:
-                        logger.warning(f"Failed to restart {container.name}: {e}")
-                continue
-
-            # Fix interface names for running containers
-            try:
-                await provider._fix_interface_names(container.name, lab_id)
-            except Exception as e:
-                logger.warning(
-                    f"Failed to fix interfaces for {container.name}: {e}"
-                )
-
-        if attempt == 0:
-            await asyncio.sleep(5)
-
-
-async def _cleanup_lingering_virsh_sessions() -> None:
-    """Best-effort shutdown cleanup for active virsh console sessions."""
-    try:
-        from agent.console_session_registry import list_active_domains, unregister_session
-        from agent.virsh_console_lock import kill_orphaned_virsh
-
-        for domain in list_active_domains():
-            try:
-                unregister_session(domain)
-            except Exception:
-                pass
-
-            try:
-                killed = await asyncio.to_thread(kill_orphaned_virsh, domain)
-                if killed > 0:
-                    logger.info(
-                        "Terminated %d lingering virsh console process(es) for %s",
-                        killed,
-                        domain,
-                    )
-            except Exception as e:
-                logger.debug(
-                    "Failed to clean up lingering virsh console session for %s: %s",
-                    domain,
-                    e,
-                )
-    except Exception as e:
-        logger.debug(f"Virsh session cleanup skipped: {e}")
-
-
-def provider_status_to_schema(status: ProviderNodeStatus) -> NodeStatus:
-    """Convert provider NodeStatus to schema NodeStatus."""
-    mapping = {
-        ProviderNodeStatus.PENDING: NodeStatus.PENDING,
-        ProviderNodeStatus.STARTING: NodeStatus.STARTING,
-        ProviderNodeStatus.RUNNING: NodeStatus.RUNNING,
-        ProviderNodeStatus.STOPPING: NodeStatus.STOPPING,
-        ProviderNodeStatus.STOPPED: NodeStatus.STOPPED,
-        ProviderNodeStatus.ERROR: NodeStatus.ERROR,
-        ProviderNodeStatus.UNKNOWN: NodeStatus.UNKNOWN,
-    }
-    return mapping.get(status, NodeStatus.UNKNOWN)
-
-
-def get_capabilities() -> AgentCapabilities:
-    """Determine agent capabilities based on config and available tools."""
-    providers = []
-    if settings.enable_docker:
-        providers.append(Provider.DOCKER)
-    if settings.enable_libvirt:
-        providers.append(Provider.LIBVIRT)
-
-    features = ["console", "status"]
-    if settings.enable_vxlan:
-        features.append("vxlan")
-
-    return AgentCapabilities(
-        providers=providers,
-        max_concurrent_jobs=settings.max_concurrent_jobs,
-        features=features,
-    )
-
-
-def _sync_get_resource_usage() -> dict:
-    """Gather system resource metrics (synchronous implementation)."""
-    import psutil
-
-    try:
-        # CPU usage (average across all cores)
-        cpu_percent = psutil.cpu_percent(interval=0.1)
-        cpu_count = psutil.cpu_count() or 0
-
-        # Memory usage
-        memory = psutil.virtual_memory()
-        memory_percent = memory.percent
-        memory_used_gb = round(memory.used / (1024 ** 3), 2)
-        memory_total_gb = round(memory.total / (1024 ** 3), 2)
-
-        # Disk usage for workspace partition
-        disk_path = settings.workspace_path if settings.workspace_path else "/"
-        disk = psutil.disk_usage(disk_path)
-        disk_percent = disk.percent
-        disk_used_gb = round(disk.used / (1024 ** 3), 2)
-        disk_total_gb = round(disk.total / (1024 ** 3), 2)
-
-        # Docker container counts and details
-        # Only count Archetype-managed containers (node containers and system containers)
-        containers_running = 0
-        containers_total = 0
-        container_details = []
-        try:
-            client = get_docker_client()
-
-            # Use low-level API to get container list, then fetch each individually
-            # This handles "Dead" or corrupted containers gracefully
-            container_list = client.api.containers(all=True)
-            all_containers = []
-            for container_info in container_list:
-                try:
-                    c = client.containers.get(container_info["Id"])
-                    all_containers.append(c)
-                except (docker.errors.NotFound, docker.errors.APIError) as e:
-                    # Skip dead/corrupted containers that can't be inspected
-                    container_name = container_info.get("Names", ["unknown"])[0].lstrip("/")
-                    logger.warning(f"Skipping corrupted/dead container {container_name}: {e}")
-                    continue
-
-            # Collect detailed container info with lab associations
-            # Include Archetype node containers and system containers
-            for c in all_containers:
-                labels = c.labels
-                is_archetype_node = bool(labels.get("archetype.node_name"))
-                # System containers (e.g., archetype-api, archetype-worker)
-                is_archetype_system = c.name.startswith("archetype-") and not is_archetype_node
-
-                # Only include Archetype-related containers
-                if not is_archetype_node and not is_archetype_system:
-                    continue
-
-                # Count only Archetype-related containers
-                containers_total += 1
-                if c.status == "running":
-                    containers_running += 1
-
-                lab_prefix = labels.get("archetype.lab_id", "")
-                node_name = labels.get("archetype.node_name")
-                node_kind = labels.get("archetype.node_kind")
-
-                # Get image name/tag (handle deleted images gracefully)
-                try:
-                    image_name = c.image.tags[0] if c.image.tags else c.image.short_id
-                except Exception:
-                    image_name = "unknown"
-
-                # Extract resource allocations for capacity tracking
-                host_config = c.attrs.get("HostConfig", {})
-                nano_cpus = host_config.get("NanoCpus") or 0
-                container_vcpus = nano_cpus / 1e9 if nano_cpus else 1
-                mem_limit = host_config.get("Memory") or 0
-                container_memory_mb = mem_limit // (1024 * 1024) if mem_limit else 0
-
-                container_details.append({
-                    "name": c.name,
-                    "status": c.status,
-                    "lab_prefix": lab_prefix,
-                    "node_name": node_name,
-                    "node_kind": node_kind,
-                    "image": image_name,
-                    "is_system": is_archetype_system,
-                    "vcpus": container_vcpus,
-                    "memory_mb": container_memory_mb,
-                })
-        except Exception as e:
-            logger.warning(f"Docker container collection failed: {type(e).__name__}: {e}")
-
-        return {
-            "cpu_percent": cpu_percent,
-            "cpu_count": cpu_count,
-            "memory_percent": memory_percent,
-            "memory_used_gb": memory_used_gb,
-            "memory_total_gb": memory_total_gb,
-            "disk_percent": disk_percent,
-            "disk_used_gb": disk_used_gb,
-            "disk_total_gb": disk_total_gb,
-            "containers_running": containers_running,
-            "containers_total": containers_total,
-            "container_details": container_details,
-        }
-    except Exception as e:
-        logger.warning(f"Failed to gather resource usage: {e}")
-        return {}
-
-
-async def get_resource_usage() -> dict:
-    """Gather system resource metrics for heartbeat (async wrapper).
-
-    Docker stats run in asyncio.to_thread (thread-safe).
-    Libvirt stats run through the provider's single-thread executor
-    to avoid thread-safety violations.
-    """
-    from agent.providers.registry import get_provider
-
-    # Gather system + Docker stats in default thread pool
-    result = await asyncio.to_thread(_sync_get_resource_usage)
-    if not result:
-        return result
-
-    # Gather libvirt stats via the provider's dedicated thread
-    vms_running = 0
-    vms_total = 0
-    vm_details: list[dict] = []
-    if settings.enable_libvirt:
-        try:
-            libvirt_provider = get_provider("libvirt")
-            if libvirt_provider:
-                vm_details = await libvirt_provider._run_libvirt(
-                    libvirt_provider.get_vm_stats_sync
-                )
-                for vm in vm_details:
-                    vms_total += 1
-                    if vm.get("status") == "running":
-                        vms_running += 1
-        except Exception as e:
-            logger.warning(f"Libvirt VM collection failed: {type(e).__name__}: {e}")
-
-    result["vms_running"] = vms_running
-    result["vms_total"] = vms_total
-    result["vm_details"] = vm_details
-    return result
-
-
-_cached_local_ip: str | None = None
-_local_ip_detected: bool = False
-
-
-def _detect_local_ip() -> str | None:
-    """Return cached auto-detected local IP (populated at startup)."""
-    return _cached_local_ip
-
-
-async def _async_detect_local_ip() -> str | None:
-    """Auto-detect local IP address from default route interface (non-blocking)."""
-    global _cached_local_ip, _local_ip_detected
-    if _local_ip_detected:
-        return _cached_local_ip
-    try:
-        from agent.network.cmd import run_cmd as _async_run_cmd
-        code, stdout, _ = await _async_run_cmd(["ip", "route", "get", "1.1.1.1"])
-        if code == 0:
-            # Output: "1.1.1.1 via X.X.X.X dev ethX src Y.Y.Y.Y uid 0"
-            parts = stdout.split()
-            if "src" in parts:
-                src_idx = parts.index("src")
-                if src_idx + 1 < len(parts):
-                    ip = parts[src_idx + 1]
-                    logger.info(f"Auto-detected local IP: {ip}")
-                    _cached_local_ip = ip
-    except Exception as e:
-        logger.warning(f"Failed to auto-detect local IP: {e}")
-    _local_ip_detected = True
-    return _cached_local_ip
-
-
-def get_agent_info() -> AgentInfo:
-    """Build agent info for registration."""
-    # Determine the host to advertise to the controller.
-    # Priority: advertise_host > agent_host (if not 0.0.0.0) > local_ip > auto-detect > agent_name
-    advertise_host = settings.advertise_host
-    if not advertise_host:
-        if settings.agent_host != "0.0.0.0":
-            advertise_host = settings.agent_host
-        elif settings.local_ip:
-            advertise_host = settings.local_ip
-        else:
-            # Try to auto-detect the local IP
-            detected_ip = _detect_local_ip()
-            if detected_ip:
-                advertise_host = detected_ip
-            else:
-                advertise_host = settings.agent_name
-
-    address = f"{advertise_host}:{settings.agent_port}"
-
-    # Get data plane IP if transport config is active
-    from agent.network.transport import get_data_plane_ip
-    dp_ip = get_data_plane_ip()
-
-    return AgentInfo(
-        agent_id=AGENT_ID,
-        name=settings.agent_name,
-        address=address,
-        capabilities=get_capabilities(),
-        started_at=AGENT_STARTED_AT,
-        is_local=settings.is_local,
-        deployment_mode=detect_deployment_mode().value,
-        data_plane_ip=dp_ip,
-    )
-
-
-async def register_with_controller() -> bool:
-    """Register this agent with the controller."""
-    global _registered, AGENT_ID
-
-    request = RegistrationRequest(
-        agent=get_agent_info(),
-        token=settings.registration_token or None,
-    )
-
-    try:
-        client = get_http_client()
-        response = await client.post(
-            f"{settings.controller_url}/agents/register",
-            json=request.model_dump(mode='json'),
-            timeout=settings.registration_timeout,
-            headers=get_controller_auth_headers(),
-        )
-        if response.status_code == 200:
-            result = RegistrationResponse(**response.json())
-            if result.success:
-                _registered = True
-                # Use the assigned ID from controller (may differ if we're
-                # re-registering an existing agent with a new generated ID)
-                if result.assigned_id and result.assigned_id != AGENT_ID:
-                    logger.info(f"Controller assigned existing ID: {result.assigned_id}")
-                    AGENT_ID = result.assigned_id
-                logger.info(f"Registered with controller as {AGENT_ID}")
-                return True
-            else:
-                logger.warning(f"Registration rejected: {result.message}")
-                return False
-        else:
-            logger.error(f"Registration failed: HTTP {response.status_code}")
-            return False
-    except httpx.ConnectError:
-        logger.warning(f"Cannot connect to controller at {settings.controller_url}")
-        return False
-    except Exception as e:
-        logger.error(f"Registration error: {e}")
-        return False
-
-
-async def _bootstrap_transport_config() -> None:
-    """Phase 2 bootstrap: fetch transport config from controller and apply.
-
-    After registration, the agent fetches its transport configuration
-    from the controller. If a subinterface or dedicated interface is
-    configured, it provisions the interface locally and sets the
-    data_plane_ip for VXLAN operations.
-    """
-    from agent.network.cmd import run_cmd as _async_run_cmd
-    from agent.network.transport import set_data_plane_ip
-
-    if not _registered:
-        return
-
-    async def _ip_cmd(*args: str) -> None:
-        """Run an ip command asynchronously, raise on failure."""
-        code, _, stderr = await _async_run_cmd(["ip", *args])
-        if code != 0:
-            raise RuntimeError(f"ip {' '.join(args)} failed: {stderr}")
-
-    try:
-        client = get_http_client()
-        response = await client.get(
-            f"{settings.controller_url}/infrastructure/agents/{AGENT_ID}/transport-config",
-            timeout=10.0,
-            headers=get_controller_auth_headers(),
-        )
-        if response.status_code != 200:
-            logger.debug("No transport config from controller (not configured)")
-            return
-
-        config = response.json()
-        mode = config.get("transport_mode", "management")
-
-        if mode == "management":
-            logger.debug("Transport mode: management (no subinterface needed)")
-            return
-
-        if mode == "subinterface":
-            parent = config.get("parent_interface")
-            vlan_id = config.get("vlan_id")
-            ip_cidr = config.get("transport_ip")
-            mtu = config.get("desired_mtu", 9000)
-
-            if not parent or not vlan_id:
-                logger.warning("Subinterface transport config missing parent_interface or vlan_id")
-                return
-
-            iface_name = f"{parent}.{vlan_id}"
-            logger.info(f"Bootstrap: provisioning transport subinterface {iface_name}")
-
-            # Check if subinterface exists
-            code, _, _ = await _async_run_cmd(["ip", "link", "show", iface_name])
-            if code != 0:
-                # Create the subinterface
-                await _ip_cmd(
-                    "link", "add", "link", parent,
-                    "name", iface_name, "type", "vlan", "id", str(vlan_id),
-                )
-
-            # Set parent MTU if needed
-            try:
-                with open(f"/sys/class/net/{parent}/mtu") as f:
-                    parent_mtu = int(f.read().strip())
-                if parent_mtu < mtu:
-                    await _ip_cmd("link", "set", parent, "mtu", str(mtu))
-            except (FileNotFoundError, ValueError):
-                pass
-
-            # Set MTU, IP, bring up
-            await _ip_cmd("link", "set", iface_name, "mtu", str(mtu))
-            if ip_cidr:
-                await _ip_cmd("addr", "flush", "dev", iface_name)
-                await _ip_cmd("addr", "add", ip_cidr, "dev", iface_name)
-            await _ip_cmd("link", "set", iface_name, "up")
-
-            # Extract IP and set as data plane IP
-            if ip_cidr:
-                dp_ip = ip_cidr.split("/")[0]
-                set_data_plane_ip(dp_ip)
-                logger.info(f"Transport bootstrap complete: {iface_name} with IP {dp_ip}")
-
-        elif mode == "dedicated":
-            dp_iface = config.get("data_plane_interface")
-            ip_cidr = config.get("transport_ip")
-            mtu = config.get("desired_mtu", 9000)
-
-            if not dp_iface:
-                logger.warning("Dedicated transport config missing data_plane_interface")
-                return
-
-            logger.info(f"Bootstrap: configuring dedicated transport interface {dp_iface}")
-
-            # Configure existing interface
-            await _ip_cmd("link", "set", dp_iface, "mtu", str(mtu))
-            if ip_cidr:
-                await _ip_cmd("addr", "flush", "dev", dp_iface)
-                await _ip_cmd("addr", "add", ip_cidr, "dev", dp_iface)
-            await _ip_cmd("link", "set", dp_iface, "up")
-
-            if ip_cidr:
-                dp_ip = ip_cidr.split("/")[0]
-                set_data_plane_ip(dp_ip)
-                logger.info(f"Transport bootstrap complete: {dp_iface} with IP {dp_ip}")
-
-    except httpx.ConnectError:
-        logger.debug("Cannot reach controller for transport config (will retry on next heartbeat)")
-    except Exception as e:
-        logger.warning(f"Transport bootstrap failed: {e}")
-
-
-async def send_heartbeat() -> HeartbeatResponse | None:
-    """Send heartbeat to controller."""
-    from agent.network.transport import get_data_plane_ip
-    request = HeartbeatRequest(
-        agent_id=AGENT_ID,
-        status=AgentStatus.ONLINE,
-        active_jobs=get_active_jobs(),
-        resource_usage=await get_resource_usage(),
-        data_plane_ip=get_data_plane_ip(),
-    )
-
-    try:
-        client = get_http_client()
-        response = await client.post(
-            f"{settings.controller_url}/agents/{AGENT_ID}/heartbeat",
-            json=request.model_dump(),
-            timeout=settings.heartbeat_timeout,
-            headers=get_controller_auth_headers(),
-        )
-        if response.status_code == 200:
-            return HeartbeatResponse(**response.json())
-    except Exception as e:
-        logger.warning(f"Heartbeat failed: {e}")
-    return None
-
-
-async def heartbeat_loop():
-    """Background task to send periodic heartbeats."""
-    global _registered
-
-    while True:
-        await asyncio.sleep(settings.heartbeat_interval)
-
-        if not _registered:
-            # Try to register again
-            await register_with_controller()
-            continue
-
-        response = await send_heartbeat()
-        if response is None:
-            # Controller unreachable, mark as unregistered to retry
-            _registered = False
-            logger.warning("Lost connection to controller, will retry registration")
+# Backward-compat aliases for code that reads module-level globals directly
+AGENT_ID = _state.AGENT_ID
+AGENT_STARTED_AT = _state.AGENT_STARTED_AT
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan - register on startup, cleanup on shutdown."""
-    global _heartbeat_task, _event_listener_task, _fix_interfaces_task, _lock_manager
-
-    logger.info(f"Agent {AGENT_ID} starting...")
+    logger.info(f"Agent {_state.AGENT_ID} starting...")
 
     if os.getenv("ARCHETYPE_AGENT_TESTING") == "1":
         logger.info("Testing mode enabled; skipping agent startup tasks")
@@ -898,23 +247,25 @@ async def lifespan(app: FastAPI):
 
     # Initialize Redis lock manager
     from agent.locks import DeployLockManager, NoopDeployLockManager, set_lock_manager
-    _lock_manager = DeployLockManager(
+    lm = DeployLockManager(
         redis_url=settings.redis_url,
         lock_ttl=settings.lock_ttl,
-        agent_id=AGENT_ID,
+        agent_id=_state.AGENT_ID,
     )
     try:
-        await _lock_manager.ping()
-        set_lock_manager(_lock_manager)
+        await lm.ping()
+        _state.set_lock_manager(lm)
+        set_lock_manager(lm)
         logger.info(f"Redis lock manager initialized (TTL: {settings.lock_ttl}s)")
     except Exception as e:
         logger.error(f"Redis unavailable ({e}); continuing without distributed locks")
-        _lock_manager = NoopDeployLockManager(agent_id=AGENT_ID)
-        set_lock_manager(_lock_manager)
+        lm = NoopDeployLockManager(agent_id=_state.AGENT_ID)
+        _state.set_lock_manager(lm)
+        set_lock_manager(lm)
 
     # Clean up any orphaned locks from previous run (crash recovery)
     try:
-        cleared_locks = await _lock_manager.clear_agent_locks()
+        cleared_locks = await lm.clear_agent_locks()
         if cleared_locks:
             logger.warning(f"Cleared {len(cleared_locks)} orphaned locks from previous run: {cleared_locks}")
     except Exception as e:
@@ -934,7 +285,7 @@ async def lifespan(app: FastAPI):
             )
         if init_info.get("ovs_plugin_started"):
             logger.info("Docker OVS network plugin started")
-            _fix_interfaces_task = asyncio.create_task(_fix_running_interfaces())
+            _state.set_fix_interfaces_task(asyncio.create_task(_fix_running_interfaces()))
     except Exception as e:
         logger.warning(f"Failed to recover network allocations: {e}")
 
@@ -971,7 +322,7 @@ async def lifespan(app: FastAPI):
         logger.warning(f"Failed to start image cleanup: {e}")
 
     # Pre-detect local IP asynchronously (caches result for get_agent_info)
-    await _async_detect_local_ip()
+    await _state._async_detect_local_ip()
 
     # Try initial registration (will notify controller if this is a restart)
     await register_with_controller()
@@ -980,15 +331,15 @@ async def lifespan(app: FastAPI):
     await _bootstrap_transport_config()
 
     # Start heartbeat background task
-    _heartbeat_task = asyncio.create_task(heartbeat_loop())
+    _state.set_heartbeat_task(asyncio.create_task(heartbeat_loop()))
 
     # Start Docker event listener if docker provider is enabled
     if settings.enable_docker:
         try:
             listener = get_event_listener()
-            _event_listener_task = asyncio.create_task(
+            _state.set_event_listener_task(asyncio.create_task(
                 listener.start(forward_event_to_controller)
-            )
+            ))
             logger.info("Docker event listener started")
         except Exception as e:
             logger.error(f"Failed to start Docker event listener: {e}")
@@ -1015,33 +366,33 @@ async def lifespan(app: FastAPI):
     yield
 
     # Cleanup
-    if _heartbeat_task:
-        _heartbeat_task.cancel()
+    if _state._heartbeat_task:
+        _state._heartbeat_task.cancel()
         try:
-            await _heartbeat_task
+            await _state._heartbeat_task
         except asyncio.CancelledError:
             pass
 
-    if _event_listener_task:
+    if _state._event_listener_task:
         try:
             listener = get_event_listener()
             await listener.stop()
         except Exception:
             pass
-        _event_listener_task.cancel()
+        _state._event_listener_task.cancel()
         try:
-            await _event_listener_task
+            await _state._event_listener_task
         except asyncio.CancelledError:
             pass
 
-    if _fix_interfaces_task:
-        _fix_interfaces_task.cancel()
+    if _state._fix_interfaces_task:
+        _state._fix_interfaces_task.cancel()
         try:
-            await _fix_interfaces_task
+            await _state._fix_interfaces_task
         except asyncio.CancelledError:
             pass
         finally:
-            _fix_interfaces_task = None
+            _state.set_fix_interfaces_task(None)
 
     # Stop carrier monitor
     if _carrier_monitor is not None:
@@ -1076,14 +427,14 @@ async def lifespan(app: FastAPI):
         logger.warning(f"Error stopping image cleanup: {e}")
 
     # Close lock manager
-    if _lock_manager:
-        await _lock_manager.close()
+    if _state._lock_manager:
+        await _state._lock_manager.close()
         logger.info("Redis lock manager closed")
 
     # Close shared HTTP client
     await close_http_client()
 
-    logger.info(f"Agent {AGENT_ID} shutting down")
+    logger.info(f"Agent {_state.AGENT_ID} shutting down")
 
 
 # Create FastAPI app
@@ -1139,25 +490,6 @@ class AgentAuthMiddleware(BaseHTTPMiddleware):
 app.add_middleware(AgentAuthMiddleware)
 
 
-# Backward compat alias — canonical implementation in agent.http_client
-_get_controller_auth_headers = get_controller_auth_headers
-
-
-_SAFE_ID_RE = re.compile(r"^[a-zA-Z0-9_\-]+$")
-_PORT_NAME_RE = re.compile(r"^[a-zA-Z0-9_.\-]+$")
-_CONTAINER_PREFIX_RE = re.compile(r"^(archetype-|arch-)")
-
-
-def _validate_port_name(name: str) -> bool:
-    """Validate OVS port name to prevent command injection."""
-    return bool(name) and len(name) <= 64 and _PORT_NAME_RE.match(name) is not None
-
-
-def _validate_container_name(name: str) -> bool:
-    """Validate container name has expected prefix."""
-    return bool(name) and _CONTAINER_PREFIX_RE.match(name) is not None
-
-
 # --- Health Endpoints ---
 
 @app.get("/health")
@@ -1165,9 +497,9 @@ async def health():
     """Detailed health endpoint for diagnostics and UI status."""
     return {
         "status": "ok",
-        "agent_id": AGENT_ID,
+        "agent_id": _state.AGENT_ID,
         "commit": get_commit(),
-        "registered": _registered,
+        "registered": _state._registered,
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
 
@@ -1202,10 +534,6 @@ async def disk_usage():
     }
 
 
-# Default memory for containers without explicit memory limits
-DEFAULT_CONTAINER_MEMORY_MB = 1024
-
-
 @app.get("/capacity")
 async def get_capacity():
     """Real-time capacity snapshot for placement decisions.
@@ -1225,28 +553,6 @@ async def get_capacity():
     }
 
 
-def _get_allocated_resources(usage: dict) -> dict:
-    """Sum CPU and memory allocations from running Docker containers + libvirt VMs."""
-    total_vcpus = 0
-    total_memory_mb = 0
-
-    # Docker allocations: iterate container_details from resource usage
-    for c in usage.get("container_details", []):
-        if c.get("status") != "running" or c.get("is_system"):
-            continue
-        total_vcpus += c.get("vcpus", 1)
-        total_memory_mb += c.get("memory_mb", DEFAULT_CONTAINER_MEMORY_MB)
-
-    # Libvirt VM allocations: vm_details now includes vcpus/memory_mb
-    for vm in usage.get("vm_details", []):
-        if vm.get("status") != "running":
-            continue
-        total_vcpus += vm.get("vcpus", 1)
-        total_memory_mb += vm.get("memory_mb", 0)
-
-    return {"vcpus": total_vcpus, "memory_mb": total_memory_mb}
-
-
 @app.get("/metrics")
 def metrics():
     """Prometheus metrics endpoint."""
@@ -1260,27 +566,6 @@ def metrics():
 def info():
     """Return agent info and capabilities."""
     return get_agent_info().model_dump()
-
-
-def _load_node_startup_config(lab_id: str, node_name: str) -> str:
-    """Load startup-config content from workspace for POAP/bootstrap delivery."""
-    if not _SAFE_ID_RE.match(lab_id):
-        raise HTTPException(status_code=400, detail="Invalid lab_id")
-    if not _SAFE_ID_RE.match(node_name):
-        raise HTTPException(status_code=400, detail="Invalid node_name")
-
-    config_path = get_workspace(lab_id) / "configs" / node_name / "startup-config"
-    if not config_path.exists():
-        raise HTTPException(status_code=404, detail="startup-config not found")
-    content = config_path.read_text(encoding="utf-8")
-    if not content.strip():
-        raise HTTPException(status_code=404, detail="startup-config is empty")
-    return content
-
-
-def _render_n9kv_poap_script(config_url: str) -> str:
-    """Render a minimal NX-OS POAP Python script that applies startup config."""
-    return render_poap_script(config_url)
 
 
 @app.get("/poap/{lab_id}/{node_name}/startup-config")
@@ -1381,7 +666,7 @@ async def release_lock(lab_id: str):
         released = await lock_manager.force_release(lab_id)
 
         # Also clear cached results
-        _deploy_results.pop(lab_id, None)
+        _state._deploy_results.pop(lab_id, None)
 
         if released:
             logger.info(f"Force-released lock for lab {lab_id}")
@@ -1416,7 +701,7 @@ async def trigger_update(request: UpdateRequest) -> UpdateResponse:
         asyncio.create_task(
             perform_systemd_update(
                 job_id=request.job_id,
-                agent_id=AGENT_ID,
+                agent_id=_state.AGENT_ID,
                 target_version=request.target_version,
                 callback_url=request.callback_url,
             )
@@ -1432,7 +717,7 @@ async def trigger_update(request: UpdateRequest) -> UpdateResponse:
         asyncio.create_task(
             perform_docker_update(
                 job_id=request.job_id,
-                agent_id=AGENT_ID,
+                agent_id=_state.AGENT_ID,
                 target_version=request.target_version,
                 callback_url=request.callback_url,
             )
@@ -1554,7 +839,7 @@ async def deploy_lab(request: DeployRequest) -> JobResult:
                 )
 
             # Cache result briefly for concurrent requests
-            _deploy_results[lab_id] = job_result
+            _state._deploy_results[lab_id] = job_result
             asyncio.create_task(_cleanup_deploy_cache(lab_id, delay=5.0))
 
             return job_result
@@ -1572,7 +857,7 @@ async def deploy_lab(request: DeployRequest) -> JobResult:
             status=JobStatus.FAILED,
             error_message=str(e),
         )
-        _deploy_results[lab_id] = job_result
+        _state._deploy_results[lab_id] = job_result
         asyncio.create_task(_cleanup_deploy_cache(lab_id, delay=5.0))
         return job_result
 
@@ -1612,7 +897,7 @@ async def _execute_deploy_with_callback(
             logger.error(f"Lock manager not initialized for async deploy of lab {lab_id}")
             payload = CallbackPayload(
                 job_id=job_id,
-                agent_id=AGENT_ID,
+                agent_id=_state.AGENT_ID,
                 status="failed",
                 error_message="Lock manager not initialized",
                 started_at=started_at,
@@ -1647,7 +932,7 @@ async def _execute_deploy_with_callback(
                     # Build callback payload
                     payload = CallbackPayload(
                         job_id=job_id,
-                        agent_id=AGENT_ID,
+                        agent_id=_state.AGENT_ID,
                         status="completed" if result.success else "failed",
                         stdout=result.stdout or "",
                         stderr=result.stderr or "",
@@ -1661,7 +946,7 @@ async def _execute_deploy_with_callback(
 
                     payload = CallbackPayload(
                         job_id=job_id,
-                        agent_id=AGENT_ID,
+                        agent_id=_state.AGENT_ID,
                         status="failed",
                         error_message=str(e),
                         started_at=started_at,
@@ -1672,7 +957,7 @@ async def _execute_deploy_with_callback(
             logger.warning(f"Async deploy timeout waiting for lock on lab {lab_id}")
             payload = CallbackPayload(
                 job_id=job_id,
-                agent_id=AGENT_ID,
+                agent_id=_state.AGENT_ID,
                 status="failed",
                 error_message=f"Deploy already in progress for lab {lab_id}, timed out waiting for lock",
                 started_at=started_at,
@@ -1688,7 +973,7 @@ async def _execute_deploy_with_callback(
 async def _cleanup_deploy_cache(lab_id: str, delay: float = 5.0):
     """Clean up cached deploy result after a delay."""
     await asyncio.sleep(delay)
-    _deploy_results.pop(lab_id, None)
+    _state._deploy_results.pop(lab_id, None)
 
 
 @app.post("/jobs/destroy")
@@ -1784,7 +1069,7 @@ async def _execute_destroy_with_callback(
             logger.error(f"Lock manager not initialized for async destroy of lab {lab_id}")
             payload = CallbackPayload(
                 job_id=job_id,
-                agent_id=AGENT_ID,
+                agent_id=_state.AGENT_ID,
                 status="failed",
                 error_message="Lock manager not initialized",
                 started_at=started_at,
@@ -1814,7 +1099,7 @@ async def _execute_destroy_with_callback(
 
                 payload = CallbackPayload(
                     job_id=job_id,
-                    agent_id=AGENT_ID,
+                    agent_id=_state.AGENT_ID,
                     status="completed" if result.success else "failed",
                     stdout=result.stdout or "",
                     stderr=result.stderr or "",
@@ -1827,7 +1112,7 @@ async def _execute_destroy_with_callback(
             logger.warning(f"Lock timeout for async destroy of lab {lab_id}")
             payload = CallbackPayload(
                 job_id=job_id,
-                agent_id=AGENT_ID,
+                agent_id=_state.AGENT_ID,
                 status="failed",
                 error_message=f"Another operation is in progress for lab {lab_id}",
                 started_at=started_at,
@@ -1839,7 +1124,7 @@ async def _execute_destroy_with_callback(
 
             payload = CallbackPayload(
                 job_id=job_id,
-                agent_id=AGENT_ID,
+                agent_id=_state.AGENT_ID,
                 status="failed",
                 error_message=str(e),
                 started_at=started_at,
@@ -2593,124 +1878,6 @@ async def cleanup_lab_orphans(request: CleanupLabOrphansRequest) -> CleanupLabOr
         kept_containers=kept,
         errors=errors,
     )
-
-
-def _sync_prune_docker(request: DockerPruneRequest) -> DockerPruneResponse:
-    """Run Docker prune operations synchronously (called via asyncio.to_thread)."""
-    images_removed = 0
-    build_cache_removed = 0
-    volumes_removed = 0
-    containers_removed = 0
-    networks_removed = 0
-    space_reclaimed = 0
-    errors = []
-
-    try:
-        client = get_docker_client()
-
-        # Get images used by running containers (to protect them)
-        protected_image_ids = set()
-        try:
-            containers = client.containers.list(all=True)
-            for container in containers:
-                labels = container.labels
-                lab_id = labels.get("archetype.lab_id", "")
-                is_valid_lab = lab_id in request.valid_lab_ids if lab_id else False
-
-                if is_valid_lab or container.status == "running":
-                    if container.image:
-                        protected_image_ids.add(container.image.id)
-
-        except Exception as e:
-            errors.append(f"Error getting container info: {e}")
-            logger.warning(f"Error getting container info for protection: {e}")
-
-        if request.prune_dangling_images:
-            try:
-                result = client.images.prune(filters={"dangling": True})
-                deleted = result.get("ImagesDeleted") or []
-                images_removed = len([d for d in deleted if d.get("Deleted")])
-                space_reclaimed += result.get("SpaceReclaimed", 0)
-                logger.info(
-                    f"Pruned {images_removed} dangling images, reclaimed "
-                    f"{result.get('SpaceReclaimed', 0)} bytes"
-                )
-            except Exception as e:
-                errors.append(f"Error pruning images: {e}")
-                logger.warning(f"Error pruning dangling images: {e}")
-
-        if request.prune_build_cache:
-            try:
-                result = client.api.prune_builds()
-                build_cache_removed = len(result.get("CachesDeleted") or [])
-                space_reclaimed += result.get("SpaceReclaimed", 0)
-                logger.info(
-                    f"Pruned {build_cache_removed} build cache entries, reclaimed "
-                    f"{result.get('SpaceReclaimed', 0)} bytes"
-                )
-            except Exception as e:
-                errors.append(f"Error pruning build cache: {e}")
-                logger.warning(f"Error pruning build cache: {e}")
-
-        if request.prune_unused_volumes:
-            try:
-                result = client.volumes.prune()
-                deleted = result.get("VolumesDeleted") or []
-                volumes_removed = len(deleted)
-                space_reclaimed += result.get("SpaceReclaimed", 0)
-                logger.info(
-                    f"Pruned {volumes_removed} volumes, reclaimed "
-                    f"{result.get('SpaceReclaimed', 0)} bytes"
-                )
-            except Exception as e:
-                errors.append(f"Error pruning volumes: {e}")
-                logger.warning(f"Error pruning volumes: {e}")
-
-        if request.prune_stopped_containers:
-            try:
-                stopped = client.containers.list(filters={"status": "exited"}, sparse=True)
-                for container in stopped:
-                    labels = container.labels
-                    lab_id = labels.get("archetype.lab_id", "")
-                    if lab_id and lab_id in request.valid_lab_ids:
-                        continue
-                    try:
-                        container.remove(force=False)
-                        containers_removed += 1
-                    except Exception as ce:
-                        errors.append(f"Error removing container {container.short_id}: {ce}")
-                logger.info(f"Removed {containers_removed} stopped containers")
-            except Exception as e:
-                errors.append(f"Error pruning containers: {e}")
-                logger.warning(f"Error pruning stopped containers: {e}")
-
-        if request.prune_unused_networks:
-            try:
-                result = client.networks.prune()
-                pruned = result.get("NetworksDeleted") or []
-                networks_removed = len(pruned)
-                logger.info(f"Pruned {networks_removed} unused networks")
-            except Exception as e:
-                errors.append(f"Error pruning networks: {e}")
-                logger.warning(f"Error pruning networks: {e}")
-
-        return DockerPruneResponse(
-            success=True,
-            images_removed=images_removed,
-            build_cache_removed=build_cache_removed,
-            volumes_removed=volumes_removed,
-            containers_removed=containers_removed,
-            networks_removed=networks_removed,
-            space_reclaimed=space_reclaimed,
-            errors=errors,
-        )
-
-    except Exception as e:
-        logger.error(f"Docker prune failed: {e}")
-        return DockerPruneResponse(
-            success=False,
-            errors=[str(e)],
-        )
 
 
 @app.post("/prune-docker")
@@ -4318,300 +3485,6 @@ async def list_node_linux_interfaces(lab_id: str, node_name: str) -> dict:
 # --- OVS Hot-Connect Link Management ---
 
 
-@dataclass
-class OVSPortInfo:
-    """Resolved OVS port for a node interface."""
-    port_name: str   # OVS port name (e.g., "vh3a4b5" for Docker, "vnet3" for libvirt)
-    vlan_tag: int     # Current VLAN tag on this port
-    provider: str     # "docker" or "libvirt"
-
-
-def _interface_name_to_index(interface_name: str) -> int:
-    """Convert a normalized ethN name to a 0-based data interface index.
-
-    Normalized names always use eth1 = first data port, eth2 = second, etc.
-    (eth0 is Docker management). So the index is simply number - 1.
-
-    Examples:
-        eth1 -> 0, eth2 -> 1, eth3 -> 2
-    """
-    import re
-    match = re.search(r"(\d+)$", interface_name)
-    if not match:
-        raise ValueError(f"Cannot extract interface index from '{interface_name}'")
-    number = int(match.group(1))
-    return max(0, number - 1)
-
-
-def _resolve_ifindex_sync(
-    container_name: str,
-    interface_name: str,
-) -> int | None:
-    """Read peer ifindex for a container interface — blocking Docker call."""
-    try:
-        client = get_docker_client()
-        container = client.containers.get(container_name)
-        exit_code, output = container.exec_run(
-            ["cat", f"/sys/class/net/{interface_name}/iflink"],
-            demux=False,
-        )
-        if exit_code != 0:
-            return None
-        return int(output.decode().strip())
-    except Exception:
-        return None
-
-
-async def _resolve_ovs_port_via_ifindex(
-    container_name: str,
-    interface_name: str,
-) -> tuple[str, int] | None:
-    """Find the correct OVS port for a container interface using ifindex matching.
-
-    The Docker OVS plugin can swap veth-to-interface mappings after restart.
-    This function uses kernel ifindex to find the correct host-side veth for
-    a given container interface, then reads its OVS VLAN tag.
-
-    Returns:
-        (port_name, vlan_tag) tuple, or None if not found.
-    """
-    # Run blocking Docker SDK call in thread pool
-    peer_ifindex = await asyncio.to_thread(_resolve_ifindex_sync, container_name, interface_name)
-    if peer_ifindex is None:
-        return None
-
-    # Find the OVS port with this ifindex
-    bridge = settings.ovs_bridge_name or "arch-ovs"
-    proc = await asyncio.create_subprocess_exec(
-        "ovs-vsctl", "list-ports", bridge,
-        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
-    )
-    stdout, _ = await proc.communicate()
-    if proc.returncode != 0:
-        return None
-
-    for port_name in stdout.decode().strip().split("\n"):
-        port_name = port_name.strip()
-        if not port_name or not port_name.startswith("vh"):
-            continue
-        proc2 = await asyncio.create_subprocess_exec(
-            "ovs-vsctl", "get", "interface", port_name, "ifindex",
-            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
-        )
-        idx_out, _ = await proc2.communicate()
-        try:
-            if int(idx_out.decode().strip()) == peer_ifindex:
-                vlan_tag = await _ovs_get_port_vlan(port_name)
-                return (port_name, vlan_tag or 0)
-        except (ValueError, TypeError):
-            continue
-
-    return None
-
-
-async def _resolve_ovs_port(
-    lab_id: str,
-    node_name: str,
-    interface_name: str,
-) -> OVSPortInfo | None:
-    """Find the OVS port for a node interface, trying Docker then libvirt.
-
-    Both Docker containers and libvirt VMs connect to the same arch-ovs
-    bridge. This function finds the correct OVS port regardless of provider.
-
-    Returns:
-        OVSPortInfo with port name, current VLAN, and provider type.
-        None if the port cannot be found via any provider.
-    """
-    # Detect if this node is a libvirt VM up-front so we can avoid repeated
-    # Docker endpoint discovery attempts for VM nodes.
-    libvirt_provider = get_provider("libvirt")
-    libvirt_kind: str | None = None
-    if libvirt_provider is not None:
-        try:
-            libvirt_kind = await libvirt_provider.get_node_kind_async(lab_id, node_name)
-        except Exception:
-            libvirt_kind = None
-    is_libvirt_node = libvirt_kind is not None
-
-    # --- Try Docker first, using ifindex verification to prevent port swap bugs ---
-    docker_provider = get_provider("docker")
-    if docker_provider is not None and not is_libvirt_node:
-        try:
-            container_name = docker_provider.get_container_name(lab_id, node_name)
-            # Use ifindex matching for reliable port identification.
-            # The Docker OVS plugin's _discover_endpoint() can swap veth-to-interface
-            # mappings after agent restart, so we verify via kernel ifindex.
-            resolved = await _resolve_ovs_port_via_ifindex(
-                container_name, interface_name
-            )
-            if resolved:
-                return OVSPortInfo(
-                    port_name=resolved[0],
-                    vlan_tag=resolved[1],
-                    provider="docker",
-                )
-            # Ifindex lookup failed (container not running?), fall back to plugin
-            plugin = _get_docker_ovs_plugin()
-            ep = await plugin._discover_endpoint(lab_id, container_name, interface_name)
-            if not ep:
-                for endpoint in plugin.endpoints.values():
-                    if endpoint.container_name == container_name and endpoint.interface_name == interface_name:
-                        ep = endpoint
-                        break
-            if ep:
-                if not await plugin._validate_endpoint_exists(ep):
-                    logger.warning(
-                        f"Endpoint for {container_name}:{interface_name} stale "
-                        f"— OVS port {ep.host_veth} missing"
-                    )
-                    return None
-                return OVSPortInfo(
-                    port_name=ep.host_veth,
-                    vlan_tag=ep.vlan_tag,
-                    provider="docker",
-                )
-        except Exception:
-            pass  # Not a Docker node, fall through to libvirt
-
-    # --- Try libvirt (OVS/MAC introspection) ---
-    if libvirt_provider is not None:
-        try:
-            intf_index = _interface_name_to_index(interface_name)
-            port_name = await libvirt_provider.get_vm_interface_port(
-                lab_id, node_name, intf_index,
-            )
-            if port_name:
-                # Prefer actual OVS tag (libvirt allocations can be stale)
-                vlan_tag = await _ovs_get_port_vlan(port_name)
-                if vlan_tag is None:
-                    vlans = libvirt_provider.get_node_vlans(lab_id, node_name)
-                    vlan_tag = vlans[intf_index] if intf_index < len(vlans) else 0
-                return OVSPortInfo(
-                    port_name=port_name,
-                    vlan_tag=vlan_tag,
-                    provider="libvirt",
-                )
-        except Exception as e:
-            logger.debug(f"Libvirt lookup failed for {node_name}:{interface_name}: {e}")
-
-    return None
-
-
-async def _ovs_set_port_vlan(port_name: str, vlan_tag: int) -> bool:
-    """Set VLAN tag on an OVS port."""
-    proc = await asyncio.create_subprocess_exec(
-        "ovs-vsctl", "set", "port", port_name, f"tag={vlan_tag}",
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
-    _, stderr = await proc.communicate()
-    if proc.returncode != 0:
-        logger.error(f"Failed to set VLAN {vlan_tag} on port {port_name}: {stderr.decode().strip()}")
-        return False
-    return True
-
-
-async def _ovs_get_port_vlan(port_name: str) -> int | None:
-    """Get VLAN tag from an OVS port."""
-    proc = await asyncio.create_subprocess_exec(
-        "ovs-vsctl", "get", "port", port_name, "tag",
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
-    stdout, _ = await proc.communicate()
-    if proc.returncode != 0:
-        return None
-    tag = stdout.decode().strip()
-    if not tag or tag == "[]":
-        return None
-    try:
-        return int(tag)
-    except ValueError:
-        return None
-
-
-async def _ovs_list_used_vlans(bridge: str) -> set[int]:
-    """Return the set of VLAN tags currently used on an OVS bridge."""
-    used: set[int] = set()
-    proc = await asyncio.create_subprocess_exec(
-        "ovs-vsctl", "list-ports", bridge,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
-    stdout, _ = await proc.communicate()
-    if proc.returncode != 0 or not stdout:
-        return used
-
-    ports = [p.strip() for p in stdout.decode().splitlines() if p.strip()]
-    for p in ports:
-        tag = await _ovs_get_port_vlan(p)
-        if tag is not None:
-            used.add(tag)
-    return used
-
-
-def _pick_free_vlan(used: set[int], start: int, end: int) -> int | None:
-    """Pick the first free VLAN tag in [start, end]."""
-    for vlan in range(start, end + 1):
-        if vlan not in used:
-            return vlan
-    return None
-
-
-def _pick_isolation_vlan(used: set[int], bridge: str, port_name: str) -> int | None:
-    """Pick an isolation VLAN from ordered pools with fallback."""
-    vlan = _pick_free_vlan(used, 100, 2049)
-    if vlan is not None:
-        return vlan
-
-    logger.warning(
-        "Isolated VLAN range exhausted on %s while disconnecting %s; "
-        "falling back to linked range",
-        bridge,
-        port_name,
-    )
-    return _pick_free_vlan(used, 2050, 4000)
-
-
-async def _ovs_allocate_link_vlan(bridge: str) -> int | None:
-    """Allocate a fresh shared VLAN for an active link.
-
-    Prefers linked range 2050-4000 and falls back to isolated range 100-2049.
-    """
-    used = await _ovs_list_used_vlans(bridge)
-    vlan = _pick_free_vlan(used, 2050, 4000)
-    if vlan is not None:
-        return vlan
-
-    logger.warning(
-        "Linked VLAN range exhausted on %s while creating link; "
-        "falling back to isolated range",
-        bridge,
-    )
-    return _pick_free_vlan(used, 100, 2049)
-
-
-async def _ovs_allocate_unique_vlan(port_name: str) -> int | None:
-    """Allocate a fresh unique VLAN for a port to isolate it.
-
-    Uses deterministic ordered allocation with collision checks:
-    1. Prefer isolated range (100-2049)
-    2. Fall back to linked range (2050-4000) if isolated is exhausted
-    """
-    bridge = settings.ovs_bridge_name or "arch-ovs"
-
-    used = await _ovs_list_used_vlans(bridge)
-    new_vlan = _pick_isolation_vlan(used, bridge, port_name)
-    if new_vlan is None:
-        logger.error("No free VLAN available on %s for port %s", bridge, port_name)
-        return None
-
-    if await _ovs_set_port_vlan(port_name, new_vlan):
-        return new_vlan
-    return None
-
-
 @app.post("/labs/{lab_id}/links")
 async def create_link(lab_id: str, link: LinkCreate) -> LinkCreateResponse:
     """Hot-connect two interfaces in a running lab.
@@ -5030,12 +3903,7 @@ async def ovs_flows():
 
 # --- Docker OVS Plugin Endpoints ---
 
-def _get_docker_ovs_plugin():
-    """Get the Docker OVS plugin instance."""
-    from agent.network.docker_plugin import get_docker_ovs_plugin
-    return get_docker_ovs_plugin()
-
-# Alias for test patchability (tests use agent.main.get_docker_ovs_plugin)
+# Re-export alias for test patchability (tests use agent.main.get_docker_ovs_plugin)
 get_docker_ovs_plugin = _get_docker_ovs_plugin
 
 
@@ -6705,32 +5573,6 @@ def _load_persisted_transfer_state() -> None:
         _TRANSFER_STATE_FILE.unlink(missing_ok=True)
     except Exception as e:
         logger.warning(f"Failed to load persisted transfer state: {e}")
-
-
-def _get_docker_images() -> list[DockerImageInfo]:
-    """Get list of Docker images on this agent."""
-    try:
-        client = get_docker_client()
-        images = []
-
-        for img in client.images.list():
-            # Get image details
-            image_id = img.id
-            tags = img.tags or []
-            size_bytes = img.attrs.get("Size", 0)
-            created = img.attrs.get("Created", None)
-
-            images.append(DockerImageInfo(
-                id=image_id,
-                tags=tags,
-                size_bytes=size_bytes,
-                created=created,
-            ))
-
-        return images
-    except Exception as e:
-        logger.error(f"Error listing Docker images: {e}")
-        return []
 
 
 @app.get("/images")
