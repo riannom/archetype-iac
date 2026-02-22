@@ -4231,10 +4231,23 @@ async def stop_node(lab_id: str, node_name: str, provider: str = "docker") -> St
 
 
 @app.delete("/labs/{lab_id}/nodes/{node_name}")
-async def destroy_node(lab_id: str, node_name: str, provider: str = "docker") -> DestroyNodeResponse:
+async def destroy_node(lab_id: str, node_name: str, provider: str = "auto") -> DestroyNodeResponse:
     """Destroy a node container and clean up resources."""
     import time as _time
     _t0 = _time.monotonic()
+
+    # Auto-detect provider: check if a libvirt domain exists for this node.
+    if provider == "auto":
+        lv = get_provider("libvirt")
+        if lv:
+            domain_name = lv._domain_name(lab_id, node_name)
+            try:
+                lv.conn.lookupByName(domain_name)
+                provider = "libvirt"
+            except Exception:
+                provider = "docker"
+        else:
+            provider = "docker"
 
     provider_instance = get_provider_for_request(provider)
     workspace = get_workspace(lab_id)
