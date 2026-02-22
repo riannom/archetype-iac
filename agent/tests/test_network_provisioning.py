@@ -45,10 +45,10 @@ async def test_hot_connect_uses_ovs_resolution():
     from agent.schemas import LinkCreate
 
     # _resolve_ovs_port is called twice (source + target)
-    with patch("agent.main._resolve_ovs_port", new_callable=AsyncMock, side_effect=[port_a, port_b]):
-        with patch("agent.main._ovs_allocate_link_vlan", new_callable=AsyncMock, return_value=2050):
-            with patch("agent.main._ovs_set_port_vlan", new_callable=AsyncMock, return_value=True) as set_vlan:
-                with patch("agent.main._get_docker_ovs_plugin", return_value=plugin):
+    with patch("agent.routers.links._resolve_ovs_port", new_callable=AsyncMock, side_effect=[port_a, port_b]):
+        with patch("agent.routers.links._ovs_allocate_link_vlan", new_callable=AsyncMock, return_value=2050):
+            with patch("agent.routers.links._ovs_set_port_vlan", new_callable=AsyncMock, return_value=True) as set_vlan:
+                with patch("agent.routers.links._get_docker_ovs_plugin", return_value=plugin):
                     response = await create_link(
                         "lab1",
                         LinkCreate(
@@ -80,10 +80,10 @@ async def test_hot_disconnect_isolates_ports():
 
     from agent.main import delete_link
 
-    with patch("agent.main._resolve_ovs_port", new_callable=AsyncMock, side_effect=[port_a, port_b]):
-        with patch("agent.main._ovs_list_used_vlans", new_callable=AsyncMock, return_value={100}):
-            with patch("agent.main._ovs_set_port_vlan", new_callable=AsyncMock, return_value=True) as set_vlan:
-                with patch("agent.main._get_docker_ovs_plugin", return_value=plugin):
+    with patch("agent.routers.links._resolve_ovs_port", new_callable=AsyncMock, side_effect=[port_a, port_b]):
+        with patch("agent.routers.links._ovs_list_used_vlans", new_callable=AsyncMock, return_value={100}):
+            with patch("agent.routers.links._ovs_set_port_vlan", new_callable=AsyncMock, return_value=True) as set_vlan:
+                with patch("agent.routers.links._get_docker_ovs_plugin", return_value=plugin):
                     response = await delete_link("lab1", "r1:eth1-r2:eth1")
 
     assert response.success is True
@@ -96,7 +96,7 @@ async def test_hot_disconnect_isolates_ports():
 def test_hot_connect_source_not_found(test_client):
     """hot-connect returns error if source port cannot be resolved."""
     # Source port not found, target would succeed
-    with patch("agent.main._resolve_ovs_port", new_callable=AsyncMock, side_effect=[None, _make_port_info("vh_b", 200)]):
+    with patch("agent.routers.links._resolve_ovs_port", new_callable=AsyncMock, side_effect=[None, _make_port_info("vh_b", 200)]):
         response = test_client.post(
             "/labs/lab1/links",
             json={
@@ -139,10 +139,10 @@ async def test_hot_disconnect_error_returns_failure():
 
     from agent.main import delete_link
 
-    with patch("agent.main._resolve_ovs_port", new_callable=AsyncMock, side_effect=[port_a, port_b]):
-        with patch("agent.main._ovs_list_used_vlans", new_callable=AsyncMock, return_value={100}):
-            with patch("agent.main._ovs_set_port_vlan", new_callable=AsyncMock, return_value=False):
-                with patch("agent.main._get_docker_ovs_plugin", return_value=plugin):
+    with patch("agent.routers.links._resolve_ovs_port", new_callable=AsyncMock, side_effect=[port_a, port_b]):
+        with patch("agent.routers.links._ovs_list_used_vlans", new_callable=AsyncMock, return_value={100}):
+            with patch("agent.routers.links._ovs_set_port_vlan", new_callable=AsyncMock, return_value=False):
+                with patch("agent.routers.links._get_docker_ovs_plugin", return_value=plugin):
                     response = await delete_link("lab1", "r1:eth1-r2:eth1")
 
     assert response.success is False
@@ -167,8 +167,8 @@ def test_isolate_interface_uses_plugin(test_client):
     provider = MagicMock()
     provider.get_container_name.return_value = "archetype-lab1-r1"
 
-    with patch("agent.main._get_docker_ovs_plugin", return_value=plugin):
-        with patch("agent.main.get_provider_for_request", return_value=provider):
+    with patch("agent.routers.interfaces._get_docker_ovs_plugin", return_value=plugin):
+        with patch("agent.routers.interfaces.get_provider_for_request", return_value=provider):
             response = test_client.post(
                 "/labs/lab1/interfaces/r1/eth1/isolate",
             )
@@ -189,8 +189,8 @@ def test_restore_interface_uses_plugin(test_client):
     provider = MagicMock()
     provider.get_container_name.return_value = "archetype-lab1-r1"
 
-    with patch("agent.main._get_docker_ovs_plugin", return_value=plugin):
-        with patch("agent.main.get_provider_for_request", return_value=provider):
+    with patch("agent.routers.interfaces._get_docker_ovs_plugin", return_value=plugin):
+        with patch("agent.routers.interfaces.get_provider_for_request", return_value=provider):
             response = test_client.post(
                 "/labs/lab1/interfaces/r1/eth1/restore",
                 json={"target_vlan": 2222},
@@ -214,8 +214,8 @@ def test_get_interface_vlan_uses_plugin(test_client):
     def _fake_get_provider(name):
         return provider if name == "docker" else None
 
-    with patch("agent.main._get_docker_ovs_plugin", return_value=plugin):
-        with patch("agent.main.get_provider", side_effect=_fake_get_provider):
+    with patch("agent.routers.interfaces._get_docker_ovs_plugin", return_value=plugin):
+        with patch("agent.routers.interfaces.get_provider", side_effect=_fake_get_provider):
             response = test_client.get(
                 "/labs/lab1/interfaces/r1/eth1/vlan",
             )
@@ -238,8 +238,8 @@ def test_get_interface_vlan_reads_from_ovs(test_client):
     def _fake_get_provider(name):
         return provider if name == "docker" else None
 
-    with patch("agent.main._get_docker_ovs_plugin", return_value=plugin):
-        with patch("agent.main.get_provider", side_effect=_fake_get_provider):
+    with patch("agent.routers.interfaces._get_docker_ovs_plugin", return_value=plugin):
+        with patch("agent.routers.interfaces.get_provider", side_effect=_fake_get_provider):
             response = test_client.get(
                 "/labs/lab1/interfaces/r1/eth1/vlan?read_from_ovs=true",
             )
@@ -342,8 +342,8 @@ async def test_hot_connect_uses_discovered_current_vlan_not_stale():
 
     with patch("agent.helpers.get_provider", side_effect=_get_provider):
         with patch("agent.helpers._get_docker_ovs_plugin", return_value=plugin):
-            with patch("agent.main._ovs_allocate_link_vlan", new_callable=AsyncMock, return_value=2050):
-                with patch("agent.main._ovs_set_port_vlan", new_callable=AsyncMock, return_value=True) as set_vlan:
+            with patch("agent.routers.links._ovs_allocate_link_vlan", new_callable=AsyncMock, return_value=2050):
+                with patch("agent.routers.links._ovs_set_port_vlan", new_callable=AsyncMock, return_value=True) as set_vlan:
                     response = await create_link(
                         "lab1",
                         LinkCreate(

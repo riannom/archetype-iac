@@ -105,7 +105,7 @@ class StubBackend:
 def test_ovs_status_uses_backend(test_client):
     backend = StubBackend()
 
-    with patch("agent.main.get_network_backend", return_value=backend):
+    with patch("agent.network.backends.registry.get_network_backend", return_value=backend):
         response = test_client.get("/ovs/status")
 
     assert response.status_code == 200
@@ -120,10 +120,10 @@ def test_external_connect_uses_backend(test_client):
     backend.ensure_ovs_initialized = AsyncMock(side_effect=lambda: call_order.append("ensure_init"))
     backend.connect_to_external = AsyncMock(side_effect=lambda **_: call_order.append("connect_external") or 123)
 
-    with patch("agent.main.get_network_backend", return_value=backend):
+    with patch("agent.routers.overlay.get_network_backend", return_value=backend):
         provider = MagicMock()
         provider.get_container_name.return_value = "archetype-lab1-r1"
-        with patch("agent.main.get_provider_for_request", return_value=provider):
+        with patch("agent.routers.overlay.get_provider_for_request", return_value=provider):
             response = test_client.post(
                 "/labs/lab1/external/connect",
                 json={
@@ -149,7 +149,7 @@ def test_bridge_patch_create_order(test_client):
     backend.ensure_ovs_initialized = AsyncMock(side_effect=lambda: call_order.append("ensure_init"))
     backend.create_patch_to_bridge = AsyncMock(side_effect=lambda **_: call_order.append("create_patch") or "patch0")
 
-    with patch("agent.main.get_network_backend", return_value=backend):
+    with patch("agent.routers.overlay.get_network_backend", return_value=backend):
         response = test_client.post(
             "/ovs/patch",
             json={"target_bridge": "br-test", "vlan_tag": 123},
@@ -169,7 +169,7 @@ def test_bridge_patch_delete_order(test_client):
     backend.delete_patch_to_bridge = AsyncMock(side_effect=lambda *_: call_order.append("delete_patch") or True)
     backend._ovs_initialized = True
 
-    with patch("agent.main.get_network_backend", return_value=backend):
+    with patch("agent.routers.overlay.get_network_backend", return_value=backend):
         response = test_client.request(
             "DELETE",
             "/ovs/patch",
@@ -188,7 +188,7 @@ def test_bridge_patch_create_error(test_client):
     backend.ensure_ovs_initialized = AsyncMock()
     backend.create_patch_to_bridge = AsyncMock(side_effect=RuntimeError("boom"))
 
-    with patch("agent.main.get_network_backend", return_value=backend):
+    with patch("agent.routers.overlay.get_network_backend", return_value=backend):
         response = test_client.post(
             "/ovs/patch",
             json={"target_bridge": "br-test", "vlan_tag": 123},
@@ -205,7 +205,7 @@ def test_bridge_patch_delete_error(test_client):
     backend._ovs_initialized = True
     backend.delete_patch_to_bridge = AsyncMock(side_effect=RuntimeError("delete failed"))
 
-    with patch("agent.main.get_network_backend", return_value=backend):
+    with patch("agent.routers.overlay.get_network_backend", return_value=backend):
         response = test_client.request(
             "DELETE",
             "/ovs/patch",
@@ -224,7 +224,7 @@ def test_external_disconnect_error(test_client):
     backend._ovs_initialized = True
     backend.detach_external_interface = AsyncMock(side_effect=RuntimeError("detach failed"))
 
-    with patch("agent.main.get_network_backend", return_value=backend):
+    with patch("agent.routers.overlay.get_network_backend", return_value=backend):
         response = test_client.post(
             "/labs/lab1/external/disconnect",
             json={"external_interface": "eth0"},
@@ -239,7 +239,7 @@ def test_external_disconnect_error(test_client):
 def test_overlay_create_tunnel_uses_backend(test_client):
     backend = StubBackend()
 
-    with patch("agent.main.get_network_backend", return_value=backend):
+    with patch("agent.routers.overlay.get_network_backend", return_value=backend):
         response = test_client.post(
             "/overlay/tunnel",
             json={

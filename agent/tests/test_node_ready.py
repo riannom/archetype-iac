@@ -24,10 +24,10 @@ def test_node_ready_docker_runs_post_boot():
     probe = MagicMock()
     probe.check = AsyncMock(return_value=MagicMock(is_ready=True, message="ok", progress_percent=100))
 
-    with patch("agent.main.get_provider", return_value=provider):
+    with patch("agent.routers.nodes.get_provider", return_value=provider):
         with patch("docker.from_env", return_value=mock_docker):
-            with patch("agent.main.get_probe_for_vendor", return_value=probe):
-                with patch("agent.main.run_post_boot_commands", new_callable=AsyncMock) as mock_post:
+            with patch("agent.routers.nodes.get_probe_for_vendor", return_value=probe):
+                with patch("agent.routers.nodes.run_post_boot_commands", new_callable=AsyncMock) as mock_post:
                     with patch("agent.readiness.get_readiness_timeout", return_value=120):
                         response = client.get("/labs/lab1/nodes/r1/ready")
 
@@ -43,7 +43,7 @@ def test_node_ready_docker_runs_post_boot():
 def test_node_ready_libvirt_requested_uses_libvirt():
     client = TestClient(app)
 
-    with patch("agent.main._check_libvirt_readiness", new_callable=AsyncMock) as mock_libvirt:
+    with patch("agent.routers.nodes._check_libvirt_readiness", new_callable=AsyncMock) as mock_libvirt:
         mock_libvirt.return_value = {
             "is_ready": True,
             "message": "ok",
@@ -70,9 +70,9 @@ def test_node_ready_docker_missing_falls_back_to_libvirt():
     mock_docker = MagicMock()
     mock_docker.containers.get.side_effect = Exception("missing")
 
-    with patch("agent.main.get_provider", return_value=provider):
+    with patch("agent.routers.nodes.get_provider", return_value=provider):
         with patch("docker.from_env", return_value=mock_docker):
-            with patch("agent.main._check_libvirt_readiness", new_callable=AsyncMock) as mock_libvirt:
+            with patch("agent.routers.nodes._check_libvirt_readiness", new_callable=AsyncMock) as mock_libvirt:
                 mock_libvirt.return_value = {
                     "is_ready": False,
                     "message": "libvirt fallback",
@@ -105,10 +105,10 @@ def test_node_ready_docker_not_ready_skips_post_boot():
     probe = MagicMock()
     probe.check = AsyncMock(return_value=MagicMock(is_ready=False, message="booting", progress_percent=10))
 
-    with patch("agent.main.get_provider", return_value=provider):
+    with patch("agent.routers.nodes.get_provider", return_value=provider):
         with patch("docker.from_env", return_value=mock_docker):
-            with patch("agent.main.get_probe_for_vendor", return_value=probe):
-                with patch("agent.main.run_post_boot_commands", new_callable=AsyncMock) as mock_post:
+            with patch("agent.routers.nodes.get_probe_for_vendor", return_value=probe):
+                with patch("agent.routers.nodes.run_post_boot_commands", new_callable=AsyncMock) as mock_post:
                     with patch("agent.readiness.get_readiness_timeout", return_value=120):
                         response = client.get("/labs/lab1/nodes/r1/ready")
 

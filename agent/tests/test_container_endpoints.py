@@ -48,8 +48,8 @@ class TestRemoveContainerForLab:
         mock_container.status = "exited"  # Not running, no need to stop
         mock_docker_client.containers.get.return_value = mock_container
 
-        with patch("agent.main.docker.from_env", return_value=mock_docker_client):
-            with patch("agent.main.asyncio.to_thread", new_callable=AsyncMock) as mock_thread:
+        with patch("agent.routers.labs.docker.from_env", return_value=mock_docker_client):
+            with patch("agent.routers.labs.asyncio.to_thread", new_callable=AsyncMock) as mock_thread:
                 # First call: get container, second call: remove
                 mock_thread.side_effect = [mock_container, None]
 
@@ -65,8 +65,8 @@ class TestRemoveContainerForLab:
         """Container not found should return success (idempotent operation)."""
         import docker.errors
 
-        with patch("agent.main.docker.from_env", return_value=mock_docker_client):
-            with patch("agent.main.asyncio.to_thread", new_callable=AsyncMock) as mock_thread:
+        with patch("agent.routers.labs.docker.from_env", return_value=mock_docker_client):
+            with patch("agent.routers.labs.asyncio.to_thread", new_callable=AsyncMock) as mock_thread:
                 mock_thread.side_effect = docker.errors.NotFound("Container not found")
 
                 result = _run(remove_container_for_lab("test-lab", "archetype-missing-container"))
@@ -83,8 +83,8 @@ class TestRemoveContainerForLab:
         mock_container.status = "running"
         mock_docker_client.containers.get.return_value = mock_container
 
-        with patch("agent.main.docker.from_env", return_value=mock_docker_client):
-            with patch("agent.main.asyncio.to_thread", new_callable=AsyncMock) as mock_thread:
+        with patch("agent.routers.labs.docker.from_env", return_value=mock_docker_client):
+            with patch("agent.routers.labs.asyncio.to_thread", new_callable=AsyncMock) as mock_thread:
                 # Sequence: get container -> stop -> remove
                 mock_thread.side_effect = [mock_container, None, None]
 
@@ -104,18 +104,15 @@ class TestRemoveContainerForLab:
         mock_container.labels = {"archetype.lab_id": "different-lab"}
         mock_docker_client.containers.get.return_value = mock_container
 
-        with patch("agent.main.docker.from_env", return_value=mock_docker_client):
-            with patch("agent.main.asyncio.to_thread", new_callable=AsyncMock) as mock_thread:
-                mock_thread.side_effect = [mock_container, None]
+        with patch("agent.routers.labs.get_docker_client", return_value=mock_docker_client):
+            with patch("agent.routers.labs.logger") as mock_logger:
+                result = _run(remove_container_for_lab("test-lab", "archetype-mismatched-container"))
 
-                with patch("agent.main.logger") as mock_logger:
-                    result = _run(remove_container_for_lab("test-lab", "archetype-mismatched-container"))
+                # Should still succeed
+                assert result["success"] is True
 
-                    # Should still succeed
-                    assert result["success"] is True
-
-                    # Should log warning (check warning was called)
-                    mock_logger.warning.assert_called()
+                # Should log warning (check warning was called)
+                mock_logger.warning.assert_called()
 
     def test_delete_container_force_flag(
         self,
@@ -126,8 +123,8 @@ class TestRemoveContainerForLab:
         mock_container.status = "exited"
         mock_docker_client.containers.get.return_value = mock_container
 
-        with patch("agent.main.docker.from_env", return_value=mock_docker_client):
-            with patch("agent.main.asyncio.to_thread", new_callable=AsyncMock) as mock_thread:
+        with patch("agent.routers.labs.docker.from_env", return_value=mock_docker_client):
+            with patch("agent.routers.labs.asyncio.to_thread", new_callable=AsyncMock) as mock_thread:
                 mock_thread.side_effect = [mock_container, None]
 
                 result = _run(remove_container_for_lab(
@@ -147,15 +144,11 @@ class TestRemoveContainerForLab:
         import docker.errors
 
         mock_container.status = "exited"
+        mock_container.remove.side_effect = docker.errors.APIError("Permission denied")
+        mock_docker_client.containers.get.return_value = mock_container
 
-        with patch("agent.main.docker.from_env", return_value=mock_docker_client):
-            with patch("agent.main.asyncio.to_thread", new_callable=AsyncMock) as mock_thread:
-                mock_thread.side_effect = [
-                    mock_container,
-                    docker.errors.APIError("Permission denied"),
-                ]
-
-                result = _run(remove_container_for_lab("test-lab", "archetype-test-container"))
+        with patch("agent.routers.labs.get_docker_client", return_value=mock_docker_client):
+            result = _run(remove_container_for_lab("test-lab", "archetype-test-container"))
 
         assert result["success"] is False
         assert "error" in result
@@ -170,8 +163,8 @@ class TestRemoveContainerForLab:
         mock_container.labels = {}
         mock_docker_client.containers.get.return_value = mock_container
 
-        with patch("agent.main.docker.from_env", return_value=mock_docker_client):
-            with patch("agent.main.asyncio.to_thread", new_callable=AsyncMock) as mock_thread:
+        with patch("agent.routers.labs.docker.from_env", return_value=mock_docker_client):
+            with patch("agent.routers.labs.asyncio.to_thread", new_callable=AsyncMock) as mock_thread:
                 mock_thread.side_effect = [mock_container, None]
 
                 result = _run(remove_container_for_lab("test-lab", "archetype-unlabeled-container"))
@@ -191,11 +184,8 @@ class TestRemoveContainerGeneric:
         mock_container.status = "exited"
         mock_docker_client.containers.get.return_value = mock_container
 
-        with patch("agent.main.docker.from_env", return_value=mock_docker_client):
-            with patch("agent.main.asyncio.to_thread", new_callable=AsyncMock) as mock_thread:
-                mock_thread.side_effect = [mock_container, None]
-
-                result = _run(remove_container("archetype-test-container"))
+        with patch("agent.routers.labs.get_docker_client", return_value=mock_docker_client):
+            result = _run(remove_container("archetype-test-container"))
 
         assert result["success"] is True
 
@@ -206,8 +196,8 @@ class TestRemoveContainerGeneric:
         """Generic endpoint returns 404 for missing container."""
         import docker.errors
 
-        with patch("agent.main.docker.from_env", return_value=mock_docker_client):
-            with patch("agent.main.asyncio.to_thread", new_callable=AsyncMock) as mock_thread:
+        with patch("agent.routers.labs.docker.from_env", return_value=mock_docker_client):
+            with patch("agent.routers.labs.asyncio.to_thread", new_callable=AsyncMock) as mock_thread:
                 mock_thread.side_effect = docker.errors.NotFound("not found")
 
                 with pytest.raises(HTTPException) as exc:
@@ -231,7 +221,7 @@ class TestPruneDockerEndpoint:
         request = DockerPruneRequest(valid_lab_ids=["lab-1"])
         expected = DockerPruneResponse(success=True, images_removed=1)
 
-        with patch("agent.main.asyncio.to_thread", new_callable=AsyncMock) as mock_thread:
+        with patch("agent.routers.labs.asyncio.to_thread", new_callable=AsyncMock) as mock_thread:
             mock_thread.return_value = expected
             result = _run(prune_docker(request))
 

@@ -87,7 +87,7 @@ def _workspace(tmp_path, monkeypatch):
         ws = tmp_path / lab_id
         ws.mkdir(parents=True, exist_ok=True)
         return ws
-    monkeypatch.setattr('agent.main.get_workspace', _fake_get_workspace)
+    monkeypatch.setattr('agent.routers.jobs.get_workspace', _fake_get_workspace)
     yield
 
 
@@ -106,7 +106,7 @@ async def test_deploy_returns_503_when_lock_timeout():
     mock_manager = MockLockManager()
     mock_manager.set_timeout_mode(True)
 
-    with patch('agent.main.get_lock_manager', return_value=mock_manager):
+    with patch('agent.routers.jobs.get_lock_manager', return_value=mock_manager):
         request = DeployRequest(
             job_id="job-123",
             lab_id=lab_id,
@@ -131,8 +131,8 @@ async def test_deploy_acquires_lock_when_available():
     lab_id = "test-lock-success"
     mock_manager = MockLockManager()
 
-    with patch('agent.main.get_lock_manager', return_value=mock_manager):
-        with patch('agent.main.get_provider_for_request') as mock_get_provider:
+    with patch('agent.routers.jobs.get_lock_manager', return_value=mock_manager):
+        with patch('agent.routers.jobs.get_provider_for_request') as mock_get_provider:
             mock_provider = MagicMock()
             mock_provider.deploy = AsyncMock(return_value=DeployResult(
                 success=True,
@@ -160,7 +160,7 @@ async def test_deploy_returns_503_when_lock_manager_not_initialized():
     from agent.main import deploy_lab
     from fastapi import HTTPException
 
-    with patch('agent.main.get_lock_manager', return_value=None):
+    with patch('agent.routers.jobs.get_lock_manager', return_value=None):
         request = DeployRequest(
             job_id="job-no-manager",
             lab_id="test-lab",
@@ -193,8 +193,8 @@ async def test_async_deploy_returns_accepted():
         callback_url="http://localhost:8000/callback",
     )
 
-    with patch('agent.main.get_lock_manager', return_value=mock_manager):
-        with patch('agent.main._execute_deploy_with_callback', new_callable=AsyncMock):
+    with patch('agent.routers.jobs.get_lock_manager', return_value=mock_manager):
+        with patch('agent.routers.jobs._execute_deploy_with_callback', new_callable=AsyncMock):
             result = await deploy_lab(request)
 
             assert result.status == JobStatus.ACCEPTED
@@ -218,7 +218,7 @@ async def test_async_deploy_callback_sends_timeout_on_lock_failure():
         nonlocal callback_payload
         callback_payload = payload
 
-    with patch('agent.main.get_lock_manager', return_value=mock_manager):
+    with patch('agent.routers.jobs.get_lock_manager', return_value=mock_manager):
         with patch('agent.callbacks.deliver_callback', side_effect=capture_callback):
             await _execute_deploy_with_callback(
                 job_id="job-timeout",
@@ -249,8 +249,8 @@ async def test_async_deploy_callback_sends_success():
         nonlocal callback_payload
         callback_payload = payload
 
-    with patch('agent.main.get_lock_manager', return_value=mock_manager):
-        with patch('agent.main.get_provider_for_request') as mock_get_provider:
+    with patch('agent.routers.jobs.get_lock_manager', return_value=mock_manager):
+        with patch('agent.routers.jobs.get_provider_for_request') as mock_get_provider:
             mock_provider = MagicMock()
             mock_provider.deploy = AsyncMock(return_value=DeployResult(
                 success=True,
@@ -288,8 +288,8 @@ async def test_async_deploy_callback_sends_error_on_exception():
         nonlocal callback_payload
         callback_payload = payload
 
-    with patch('agent.main.get_lock_manager', return_value=mock_manager):
-        with patch('agent.main.get_provider_for_request') as mock_get_provider:
+    with patch('agent.routers.jobs.get_lock_manager', return_value=mock_manager):
+        with patch('agent.routers.jobs.get_provider_for_request') as mock_get_provider:
             mock_provider = MagicMock()
             mock_provider.deploy = AsyncMock(side_effect=Exception("Deploy explosion"))
             mock_get_provider.return_value = mock_provider
@@ -320,7 +320,7 @@ async def test_async_deploy_fails_when_lock_manager_not_initialized():
         nonlocal callback_payload
         callback_payload = payload
 
-    with patch('agent.main.get_lock_manager', return_value=None):
+    with patch('agent.routers.jobs.get_lock_manager', return_value=None):
         with patch('agent.callbacks.deliver_callback', side_effect=capture_callback):
             await _execute_deploy_with_callback(
                 job_id="job-no-manager",

@@ -53,7 +53,7 @@ def _ssh_handler():
 
 
 def test_console_websocket_libvirt_requested():
-    with patch("agent.main._console_websocket_libvirt", new_callable=AsyncMock) as mock_libvirt:
+    with patch("agent.routers.console._console_websocket_libvirt", new_callable=AsyncMock) as mock_libvirt:
         mock_libvirt.side_effect = _libvirt_handler()
         ws = FakeWebSocket()
         _run(console_websocket(ws, "lab1", "r1", provider_type="libvirt"))
@@ -67,9 +67,9 @@ def test_console_websocket_libvirt_requested_skips_docker():
     provider = MagicMock()
     provider.get_container_name.return_value = "archetype-lab1-r1"
 
-    with patch("agent.main.get_provider", return_value=provider):
-        with patch("agent.main._get_console_config", new_callable=AsyncMock) as mock_cfg:
-            with patch("agent.main._console_websocket_libvirt", new_callable=AsyncMock) as mock_libvirt:
+    with patch("agent.routers.console.get_provider", return_value=provider):
+        with patch("agent.routers.console._get_console_config", new_callable=AsyncMock) as mock_cfg:
+            with patch("agent.routers.console._console_websocket_libvirt", new_callable=AsyncMock) as mock_libvirt:
                 mock_libvirt.side_effect = _libvirt_handler()
                 ws = FakeWebSocket()
                 _run(console_websocket(ws, "lab1", "r1", provider_type="libvirt"))
@@ -84,11 +84,11 @@ def test_console_websocket_docker_path():
     provider = MagicMock()
     provider.get_container_name.return_value = "archetype-lab1-r1"
 
-    with patch("agent.main.get_provider", return_value=provider):
-        with patch("agent.main._check_container_exists", new_callable=AsyncMock, return_value=True):
-            with patch("agent.main._get_console_config", new_callable=AsyncMock) as mock_cfg:
+    with patch("agent.routers.console.get_provider", return_value=provider):
+        with patch("agent.routers.console._check_container_exists", new_callable=AsyncMock, return_value=True):
+            with patch("agent.routers.console._get_console_config", new_callable=AsyncMock) as mock_cfg:
                 mock_cfg.return_value = ("docker_exec", "/bin/sh", None, None)
-                with patch("agent.main._console_websocket_docker", new_callable=AsyncMock) as mock_docker:
+                with patch("agent.routers.console._console_websocket_docker", new_callable=AsyncMock) as mock_docker:
                     mock_docker.side_effect = _docker_handler()
                     ws = FakeWebSocket()
                     _run(console_websocket(ws, "lab1", "r1"))
@@ -102,9 +102,9 @@ def test_console_websocket_config_error():
     provider = MagicMock()
     provider.get_container_name.return_value = "archetype-lab1-r1"
 
-    with patch("agent.main.get_provider", return_value=provider):
-        with patch("agent.main._check_container_exists", new_callable=AsyncMock, return_value=True):
-            with patch("agent.main._get_console_config", new_callable=AsyncMock) as mock_cfg:
+    with patch("agent.routers.console.get_provider", return_value=provider):
+        with patch("agent.routers.console._check_container_exists", new_callable=AsyncMock, return_value=True):
+            with patch("agent.routers.console._get_console_config", new_callable=AsyncMock) as mock_cfg:
                 mock_cfg.side_effect = RuntimeError("config failed")
                 ws = FakeWebSocket()
                 _run(console_websocket(ws, "lab1", "r1"))
@@ -119,8 +119,8 @@ def test_console_websocket_fallback_to_libvirt():
             return MagicMock()
         return None
 
-    with patch("agent.main.get_provider", side_effect=_provider_by_name):
-        with patch("agent.main._console_websocket_libvirt", new_callable=AsyncMock) as mock_libvirt:
+    with patch("agent.routers.console.get_provider", side_effect=_provider_by_name):
+        with patch("agent.routers.console._console_websocket_libvirt", new_callable=AsyncMock) as mock_libvirt:
             mock_libvirt.side_effect = _libvirt_handler()
             ws = FakeWebSocket()
             _run(console_websocket(ws, "lab1", "r1"))
@@ -134,11 +134,11 @@ def test_console_websocket_ssh_path():
     provider = MagicMock()
     provider.get_container_name.return_value = "archetype-lab1-r1"
 
-    with patch("agent.main.get_provider", return_value=provider):
-        with patch("agent.main._check_container_exists", new_callable=AsyncMock, return_value=True):
-            with patch("agent.main._get_console_config", new_callable=AsyncMock) as mock_cfg:
+    with patch("agent.routers.console.get_provider", return_value=provider):
+        with patch("agent.routers.console._check_container_exists", new_callable=AsyncMock, return_value=True):
+            with patch("agent.routers.console._get_console_config", new_callable=AsyncMock) as mock_cfg:
                 mock_cfg.return_value = ("ssh", "/bin/sh", "admin", "admin")
-                with patch("agent.main._console_websocket_ssh", new_callable=AsyncMock) as mock_ssh:
+                with patch("agent.routers.console._console_websocket_ssh", new_callable=AsyncMock) as mock_ssh:
                     mock_ssh.side_effect = _ssh_handler()
                     ws = FakeWebSocket()
                     _run(console_websocket(ws, "lab1", "r1"))
@@ -149,8 +149,8 @@ def test_console_websocket_ssh_path():
 
 
 def test_console_websocket_libvirt_error():
-    with patch("agent.main.get_provider", return_value=None):
-        with patch("agent.main._console_websocket_libvirt", new_callable=AsyncMock) as mock_libvirt:
+    with patch("agent.routers.console.get_provider", return_value=None):
+        with patch("agent.routers.console._console_websocket_libvirt", new_callable=AsyncMock) as mock_libvirt:
             mock_libvirt.side_effect = RuntimeError("libvirt failed")
             ws = FakeWebSocket()
             _run(console_websocket(ws, "lab1", "r1"))
@@ -163,9 +163,9 @@ def test_console_websocket_libvirt_fallback_when_docker_missing():
     provider = MagicMock()
     provider.get_container_name.return_value = "archetype-lab1-r1"
 
-    with patch("agent.main.get_provider", return_value=provider):
-        with patch("agent.main._check_container_exists", new_callable=AsyncMock, return_value=False):
-            with patch("agent.main._console_websocket_libvirt", new_callable=AsyncMock) as mock_libvirt:
+    with patch("agent.routers.console.get_provider", return_value=provider):
+        with patch("agent.routers.console._check_container_exists", new_callable=AsyncMock, return_value=False):
+            with patch("agent.routers.console._console_websocket_libvirt", new_callable=AsyncMock) as mock_libvirt:
                 mock_libvirt.side_effect = _libvirt_handler()
                 ws = FakeWebSocket()
                 _run(console_websocket(ws, "lab1", "r1"))
@@ -179,11 +179,11 @@ def test_console_websocket_ssh_error():
     provider = MagicMock()
     provider.get_container_name.return_value = "archetype-lab1-r1"
 
-    with patch("agent.main.get_provider", return_value=provider):
-        with patch("agent.main._check_container_exists", new_callable=AsyncMock, return_value=True):
-            with patch("agent.main._get_console_config", new_callable=AsyncMock) as mock_cfg:
+    with patch("agent.routers.console.get_provider", return_value=provider):
+        with patch("agent.routers.console._check_container_exists", new_callable=AsyncMock, return_value=True):
+            with patch("agent.routers.console._get_console_config", new_callable=AsyncMock) as mock_cfg:
                 mock_cfg.return_value = ("ssh", "/bin/sh", "admin", "admin")
-                with patch("agent.main._console_websocket_ssh", new_callable=AsyncMock) as mock_ssh:
+                with patch("agent.routers.console._console_websocket_ssh", new_callable=AsyncMock) as mock_ssh:
                     mock_ssh.side_effect = RuntimeError("ssh failed")
                     ws = FakeWebSocket()
                     _run(console_websocket(ws, "lab1", "r1"))

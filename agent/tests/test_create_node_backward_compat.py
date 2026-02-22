@@ -28,8 +28,8 @@ def test_create_node_does_not_require_readiness_fields(tmp_path):
 
     req = CreateNodeRequest(node_name="node1", kind="linux")
 
-    with patch("agent.main.get_provider_for_request", return_value=provider):
-        with patch("agent.main.get_workspace", return_value=tmp_path):
+    with patch("agent.routers.nodes.get_provider_for_request", return_value=provider):
+        with patch("agent.routers.nodes.get_workspace", return_value=tmp_path):
             res = _run(create_node("lab1", "node1", req, provider="docker"))
 
     assert res.success is True
@@ -64,8 +64,8 @@ def test_create_node_accepts_controller_payload_with_readiness_overrides(tmp_pat
     }
     req = CreateNodeRequest.model_validate(payload)
 
-    with patch("agent.main.get_provider_for_request", return_value=provider):
-        with patch("agent.main.get_workspace", return_value=tmp_path):
+    with patch("agent.routers.nodes.get_provider_for_request", return_value=provider):
+        with patch("agent.routers.nodes.get_workspace", return_value=tmp_path):
             res = _run(create_node("lab1", "node1", req, provider="docker"))
 
     assert res.success is True

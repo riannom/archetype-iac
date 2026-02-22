@@ -339,3 +339,13 @@
 **Fix**: Reverted to explicit 4-method implementation (`__ge__`, `__gt__`, `__le__`, `__lt__`). The original code was correct.
 
 **Rule**: `@functools.total_ordering` does not work with `str` (or any type that already defines rich comparison methods). It only fills in MISSING methods. For `str` enums with custom ordering, explicitly implement all 4 comparison methods.
+
+## 2026-02-22: Mock patch targets must follow code extraction
+
+**Bug**: After extracting endpoints from `agent/main.py` into `agent/routers/*.py`, 14 test files had `patch("agent.main.X")` that silently created new mocks instead of patching the real function. Python's `unittest.mock.patch` patches the name in the specified module — if the function moved to `agent.routers.nodes`, patching `agent.main.create_node` creates a new mock on `agent.main` that nothing calls.
+
+**Impact**: Tests passed vacuously — mocks were never invoked because the real code path used the function from its new module. Some tests failed outright when the mock was the return value of an endpoint call.
+
+**Fix**: Updated all 14 test files to use `patch("agent.routers.<module>.X")` matching where each function is now defined and looked up. Also caught single-quoted strings (`patch('agent.main.X')`) missed by the initial double-quoted bulk replace.
+
+**Rule**: When extracting code to new modules, update ALL mock patch targets in tests. `patch("old.module.func")` silently succeeds even if `func` no longer lives there — it just creates an unused mock. Search for BOTH `"old.module.` AND `'old.module.` patterns. Verify by checking that mocked functions are actually called (assert_called, assert_awaited).

@@ -68,9 +68,9 @@ def test_cli_verify_uses_default_n9kv_commands() -> None:
     async def _fake_to_thread(fn, *args, **kwargs):
         return fn(*args, **kwargs)
 
-    with patch("agent.main.get_provider", return_value=provider):
+    with patch("agent.routers.nodes.get_provider", return_value=provider):
         with patch("agent.console_extractor.run_vm_cli_commands", side_effect=_fake_run):
-            with patch("agent.main.asyncio.to_thread", new=AsyncMock(side_effect=_fake_to_thread)):
+            with patch("agent.routers.nodes.asyncio.to_thread", new=AsyncMock(side_effect=_fake_to_thread)):
                 res = _run(
                     verify_node_cli("lab1", "node1", CliVerifyRequest(), provider="libvirt")
                 )
@@ -109,7 +109,7 @@ def test_cli_verify_requires_kind_when_runtime_missing() -> None:
         get_node_kind=lambda _lab, _node: None,
     )
 
-    with patch("agent.main.get_provider", return_value=provider):
+    with patch("agent.routers.nodes.get_provider", return_value=provider):
         with pytest.raises(HTTPException) as exc:
             _run(verify_node_cli("lab1", "node1", CliVerifyRequest(commands=["show clock"]), provider="libvirt"))
 
@@ -139,9 +139,9 @@ def test_cli_verify_forwards_override_fields() -> None:
         retries=0,
     )
 
-    with patch("agent.main.get_provider", return_value=provider):
+    with patch("agent.routers.nodes.get_provider", return_value=provider):
         with patch("agent.console_extractor.run_vm_cli_commands", side_effect=_fake_run):
-            with patch("agent.main.asyncio.to_thread", new=AsyncMock(side_effect=_fake_to_thread)):
+            with patch("agent.routers.nodes.asyncio.to_thread", new=AsyncMock(side_effect=_fake_to_thread)):
                 res = _run(verify_node_cli("lab1", "node1", req, provider="libvirt"))
 
     assert res.success is True

@@ -30,7 +30,7 @@ def test_plugin_vxlan_create_delete(test_client):
     plugin.create_vxlan_tunnel = AsyncMock(return_value="vxlan123")
     plugin.delete_vxlan_tunnel = AsyncMock(return_value=True)
 
-    with patch("agent.main._get_docker_ovs_plugin", return_value=plugin):
+    with patch("agent.routers.ovs_plugin._get_docker_ovs_plugin", return_value=plugin):
         response = test_client.post(
             "/ovs-plugin/labs/lab1/vxlan",
             json={
@@ -62,7 +62,7 @@ def test_plugin_external_attach_detach_list(test_client):
     plugin.detach_external_interface = AsyncMock(return_value=True)
     plugin.list_external_interfaces = MagicMock(return_value={"eth0": 2001})
 
-    with patch("agent.main._get_docker_ovs_plugin", return_value=plugin):
+    with patch("agent.routers.ovs_plugin._get_docker_ovs_plugin", return_value=plugin):
         response = test_client.post(
             "/ovs-plugin/labs/lab1/external",
             json={

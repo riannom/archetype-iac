@@ -1,71 +1,40 @@
-# API-Owned Network State Convergence
+# Move Docker Management Interfaces to OVS
 
-## Phase 0: Pre-work (Refactor + Cleanup)
-- [x] 0.1 Split `link_reconciliation.py` into `link_repair.py` + `link_cleanup.py`
-- [x] 0.2 Remove dead `VniAllocator` from agent (~303 lines)
-- [x] 0.3 Add `partial_state` tracking to `setup_cross_host_link_v2`
+## Phase 1: Remove Dead Docker Bridge Management Code
+- [ ] 1.1 `agent/providers/docker.py`: Remove management network creation from `deploy()` and `create_node()`
+- [ ] 1.2 `agent/providers/docker.py`: Remove management network deletion from `destroy()` and single-node destroy
+- [ ] 1.3 `agent/network/docker_plugin.py`: Remove `ManagementNetwork`, `create_management_network()`, `attach_to_management()`, `delete_management_network()`, serialization
+- [ ] 1.4 `agent/network/local.py`: Remove `ManagedNetwork`, management tracking, create/delete methods
 
-## Phase 1: VxlanTunnel port_name
-- [x] 1.1 Migration 050: add `port_name` column with backfill
-- [x] 1.2 Model: `port_name: Mapped[str | None]` + `link_state` relationship
-- [x] 1.3 Populate on link creation (3 sites in link_orchestration + link_manager)
+## Phase 2: OVS-Backed Management + Reserved NICs
+- [ ] 2.1 `agent/providers/docker.py` `_create_lab_networks()`: Start loop at 0 to create eth0 network on OVS
+- [ ] 2.2 `agent/providers/docker.py` `_create_containers()`: Per-device primary network + reserved NIC support
+- [ ] 2.3 `agent/providers/docker.py` `create_node()`: Same per-device logic for single-node creation
+- [ ] 2.4 `agent/providers/docker.py` `_calculate_required_interfaces()`: Account for management + reserved in total
 
-## Phase 2: Declare-state for VXLAN Tunnels (Core Convergence)
-- [x] 2.1 Agent schemas: `DeclaredTunnel`, `DeclareOverlayStateRequest/Response`
-- [x] 2.2 Agent `OverlayManager.declare_state()` — batch OVS read, per-tunnel converge, orphan cleanup
-- [x] 2.3 Agent local cache: `_write_declared_state_cache()`, `load_declared_state_cache()`
-- [x] 2.4 Agent endpoint: `POST /overlay/declare-state`
-- [x] 2.5 API client: `declare_overlay_state_on_agent()` with 404 fallback
-- [x] 2.6 API integration: `run_overlay_convergence()` replaces whitelist in monitor loop
-- [x] 2.7 Tests: 15 API-side (`test_overlay_convergence.py`), 12 agent-side (`test_declare_overlay_state.py`)
+## Phase 3: Per-Device Data Port Offset in Interface Naming
+- [ ] 3.1 `api/app/services/interface_naming.py`: Add `get_data_port_start()` helper
+- [ ] 3.2 `api/app/services/interface_naming.py`: Update `normalize_interface()` for management + per-device offset
+- [ ] 3.3 `api/app/services/interface_naming.py`: Update `denormalize_interface()` for management + reserved NICs
 
-## Phase 3: InterfaceMapping Freshness + Same-Host Convergence
-- [x] 3.1 Migration 051: add `last_verified_at` to `interface_mappings`
-- [x] 3.2 Model: `last_verified_at: Mapped[datetime | None]`
-- [x] 3.3 Agent endpoint: `GET /labs/{lab_id}/port-state`
-- [x] 3.4 Agent endpoint: `POST /ports/declare-state`
-- [x] 3.5 API client: `get_lab_port_state()`, `declare_port_state_on_agent()`
-- [x] 3.6 API integration: `refresh_interface_mappings()`, `run_same_host_convergence()`
-- [x] 3.7 Monitor loop: mapping refresh + same-host convergence on 5th cycle
-- [x] 3.8 Tests: 9 API-side (`test_port_convergence.py`), 7 agent-side (`test_port_state.py`)
+## Phase 4: Frontend — Make Management Interfaces Wireable
+- [ ] 4.1 `web/src/studio/utils/interfaceRegistry.ts`: Add management to `getAvailableInterfaces()` (after data ports)
+- [ ] 4.2 `web/src/studio/utils/interfaceRegistry.ts`: Accept management in `isValidInterface()`
 
-## File Change Summary
+## Phase 5: Deprecate Management Config Settings
+- [ ] 5.1 `agent/config.py`: Mark `mgmt_network_subnet_base` and `mgmt_network_enable_nat` as deprecated
 
-### New Files (10)
-| File | Lines | Purpose |
-|------|-------|---------|
-| `api/app/tasks/link_repair.py` | ~290 | Extracted repair functions |
-| `api/app/tasks/link_cleanup.py` | ~280 | Extracted cleanup functions |
-| `api/alembic/versions/050_*.py` | 63 | VxlanTunnel port_name migration |
-| `api/alembic/versions/051_*.py` | 32 | InterfaceMapping last_verified_at migration |
-| `api/tests/test_overlay_convergence.py` | ~430 | Overlay convergence tests (15) |
-| `api/tests/test_port_convergence.py` | ~340 | Same-host convergence tests (9) |
-| `agent/tests/test_declare_overlay_state.py` | ~340 | Agent declare-state tests (12) |
-| `agent/tests/test_port_state.py` | ~250 | Agent port-state tests (7) |
+## Phase 6: Verification
+- [ ] 6.1 Syntax check all modified Python files
+- [ ] 6.2 TypeScript type check (`npx tsc --noEmit`)
+- [ ] 6.3 Run frontend tests (`npx vitest run`)
 
-### Modified Files (8)
-| File | Changes |
-|------|---------|
-| `api/app/tasks/link_reconciliation.py` | Shrunk, added run_overlay_convergence, refresh_interface_mappings, run_same_host_convergence |
-| `api/app/models.py` | VxlanTunnel.port_name, VxlanTunnel.link_state relationship, InterfaceMapping.last_verified_at |
-| `api/app/agent_client.py` | declare_overlay_state_on_agent, get_lab_port_state, declare_port_state_on_agent, partial_state |
-| `api/app/tasks/link_orchestration.py` | port_name on VxlanTunnel creation, PARTIAL_STATE prefix |
-| `api/app/services/link_manager.py` | port_name on VxlanTunnel creation |
-| `agent/network/overlay.py` | Removed VniAllocator (~303 lines), added declare_state + cache |
-| `agent/main.py` | POST /overlay/declare-state, GET /labs/{lab_id}/port-state, POST /ports/declare-state |
-| `agent/schemas.py` | 8 new schema classes for convergence |
-
-### Deleted Files (2)
-| File | Reason |
-|------|--------|
-| `agent/tests/test_vni_allocator.py` | VniAllocator removed |
-| `agent/tests/test_vni_allocator_recovery.py` | VniAllocator removed |
-
-## Review
-All 4 phases implemented. 43 new tests across 4 test files. Key architecture:
-- **Convergence pattern**: API declares full desired state → agent converges (create/update/delete)
-- **Local cache**: Agent writes declared state to JSON for API-less recovery on restart
-- **404 fallback**: Old agents without declare-state endpoint fall back to whitelist reconciliation
-- **In-progress protection**: Creating/connecting links are included in declared set to prevent orphan cleanup
-- **Lab-scoped orphans**: Only ports from declared labs are subject to orphan cleanup
-- **Same schedule**: All convergence runs on 5th cycle (~5 min) alongside existing reconciliation
+## Files Modified
+| File | Change Type |
+|------|-------------|
+| `agent/providers/docker.py` | Remove mgmt bridge, add eth0 to OVS, per-device primary network + reserved NICs |
+| `agent/network/docker_plugin.py` | Remove ManagementNetwork, create/attach/delete methods, serialization |
+| `agent/network/local.py` | Remove ManagedNetwork, create/delete methods, tracking |
+| `api/app/services/interface_naming.py` | Add `get_data_port_start()`, management normalize/denormalize, per-device offset |
+| `web/src/studio/utils/interfaceRegistry.ts` | Include management in available/valid interfaces |
+| `agent/config.py` | Deprecate mgmt_network_* settings |

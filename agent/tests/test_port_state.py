@@ -61,9 +61,9 @@ async def test_port_state_returns_correct_data():
     docker_client = MagicMock()
     docker_client.containers.list.return_value = [container_a, container_b]
 
-    with patch("agent.main.get_provider", return_value=MagicMock()):
+    with patch("agent.routers.overlay.get_provider", return_value=MagicMock()):
         with patch("docker.from_env", return_value=docker_client):
-            with patch("agent.main.asyncio.create_subprocess_exec", side_effect=_fake_create_subprocess_exec):
+            with patch("agent.routers.overlay.asyncio.create_subprocess_exec", side_effect=_fake_create_subprocess_exec):
                 from agent.main import get_lab_port_state
                 result = await get_lab_port_state("lab1")
 
@@ -80,7 +80,7 @@ async def test_port_state_handles_empty():
     docker_client = MagicMock()
     docker_client.containers.list.return_value = []
 
-    with patch("agent.main.get_provider", return_value=MagicMock()):
+    with patch("agent.routers.overlay.get_provider", return_value=MagicMock()):
         with patch("docker.from_env", return_value=docker_client):
             from agent.main import get_lab_port_state
             result = await get_lab_port_state("empty-lab")
@@ -91,7 +91,7 @@ async def test_port_state_handles_empty():
 @pytest.mark.asyncio
 async def test_port_state_disabled_plugin():
     """Port state returns empty when no Docker provider is available."""
-    with patch("agent.main.get_provider", return_value=None):
+    with patch("agent.routers.overlay.get_provider", return_value=None):
         from agent.main import get_lab_port_state
         result = await get_lab_port_state("lab1")
 
@@ -120,8 +120,8 @@ async def test_declare_port_converged():
     # Both ports return tag=100
     plugin._ovs_vsctl = AsyncMock(return_value=(0, "100", ""))
 
-    with patch("agent.main.settings") as mock_settings, \
-         patch("agent.main._get_docker_ovs_plugin", return_value=plugin):
+    with patch("agent.routers.overlay.settings") as mock_settings, \
+         patch("agent.routers.overlay._get_docker_ovs_plugin", return_value=plugin):
         mock_settings.enable_ovs_plugin = True
 
         from agent.main import declare_port_state
@@ -162,8 +162,8 @@ async def test_declare_port_updates_drifted():
 
     plugin._ovs_vsctl = AsyncMock(side_effect=_mock_ovs_vsctl)
 
-    with patch("agent.main.settings") as mock_settings, \
-         patch("agent.main._get_docker_ovs_plugin", return_value=plugin):
+    with patch("agent.routers.overlay.settings") as mock_settings, \
+         patch("agent.routers.overlay._get_docker_ovs_plugin", return_value=plugin):
         mock_settings.enable_ovs_plugin = True
 
         from agent.main import declare_port_state
@@ -191,8 +191,8 @@ async def test_declare_port_handles_error():
     plugin = _make_plugin_mock()
     plugin._ovs_vsctl = AsyncMock(side_effect=Exception("OVS down"))
 
-    with patch("agent.main.settings") as mock_settings, \
-         patch("agent.main._get_docker_ovs_plugin", return_value=plugin):
+    with patch("agent.routers.overlay.settings") as mock_settings, \
+         patch("agent.routers.overlay._get_docker_ovs_plugin", return_value=plugin):
         mock_settings.enable_ovs_plugin = True
 
         from agent.main import declare_port_state
@@ -218,7 +218,7 @@ async def test_declare_port_disabled_plugin():
         ),
     ])
 
-    with patch("agent.main.settings") as mock_settings:
+    with patch("agent.routers.overlay.settings") as mock_settings:
         mock_settings.enable_ovs_plugin = False
 
         from agent.main import declare_port_state

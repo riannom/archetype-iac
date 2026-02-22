@@ -17,6 +17,7 @@ from fastapi.testclient import TestClient
 
 from agent.main import app
 from agent.config import settings
+from agent.helpers import OVSPortInfo
 
 
 # --- Integration Test Markers ---
@@ -104,11 +105,11 @@ class TestContainerEndpointsUnit:
         mock_container = MagicMock()
         mock_container.status = "exited"
 
-        with patch("agent.main.docker.from_env") as mock_docker:
+        with patch("agent.routers.labs.docker.from_env") as mock_docker:
             mock_client = MagicMock()
             mock_docker.return_value = mock_client
 
-            with patch("agent.main.asyncio.to_thread", new_callable=AsyncMock) as mock_thread:
+            with patch("agent.routers.labs.asyncio.to_thread", new_callable=AsyncMock) as mock_thread:
                 mock_thread.side_effect = [mock_container, None]
 
                 response = test_client.delete("/containers/archetype-test-container")
@@ -119,11 +120,11 @@ class TestContainerEndpointsUnit:
 
     def test_delete_container_not_found(self, test_client):
         """Should return 404 for missing container."""
-        with patch("agent.main.docker.from_env") as mock_docker:
+        with patch("agent.routers.labs.docker.from_env") as mock_docker:
             mock_client = MagicMock()
             mock_docker.return_value = mock_client
 
-            with patch("agent.main.asyncio.to_thread", new_callable=AsyncMock) as mock_thread:
+            with patch("agent.routers.labs.asyncio.to_thread", new_callable=AsyncMock) as mock_thread:
                 mock_thread.side_effect = docker.errors.NotFound("not found")
 
                 response = test_client.delete("/containers/archetype-missing")
@@ -136,11 +137,11 @@ class TestContainerEndpointsUnit:
         mock_container.status = "exited"
         mock_container.labels = {"archetype.lab_id": "test-lab"}
 
-        with patch("agent.main.docker.from_env") as mock_docker:
+        with patch("agent.routers.labs.docker.from_env") as mock_docker:
             mock_client = MagicMock()
             mock_docker.return_value = mock_client
 
-            with patch("agent.main.asyncio.to_thread", new_callable=AsyncMock) as mock_thread:
+            with patch("agent.routers.labs.asyncio.to_thread", new_callable=AsyncMock) as mock_thread:
                 mock_thread.side_effect = [mock_container, None]
 
                 response = test_client.delete("/containers/test-lab/archetype-test-container")
@@ -151,11 +152,11 @@ class TestContainerEndpointsUnit:
 
     def test_delete_container_for_lab_not_found_is_idempotent(self, test_client):
         """Lab container removal is idempotent - returns success for missing container."""
-        with patch("agent.main.docker.from_env") as mock_docker:
+        with patch("agent.routers.labs.docker.from_env") as mock_docker:
             mock_client = MagicMock()
             mock_docker.return_value = mock_client
 
-            with patch("agent.main.asyncio.to_thread", new_callable=AsyncMock) as mock_thread:
+            with patch("agent.routers.labs.asyncio.to_thread", new_callable=AsyncMock) as mock_thread:
                 mock_thread.side_effect = docker.errors.NotFound("not found")
 
                 response = test_client.delete("/containers/test-lab/archetype-missing")
@@ -169,11 +170,11 @@ class TestContainerEndpointsUnit:
         mock_container = MagicMock()
         mock_container.status = "exited"
 
-        with patch("agent.main.docker.from_env") as mock_docker:
+        with patch("agent.routers.labs.docker.from_env") as mock_docker:
             mock_client = MagicMock()
             mock_docker.return_value = mock_client
 
-            with patch("agent.main.asyncio.to_thread", new_callable=AsyncMock) as mock_thread:
+            with patch("agent.routers.labs.asyncio.to_thread", new_callable=AsyncMock) as mock_thread:
                 mock_thread.side_effect = [mock_container, None]
 
                 response = test_client.post("/containers/archetype-test-container/start")
@@ -187,11 +188,11 @@ class TestContainerEndpointsUnit:
         mock_container = MagicMock()
         mock_container.status = "running"
 
-        with patch("agent.main.docker.from_env") as mock_docker:
+        with patch("agent.routers.labs.docker.from_env") as mock_docker:
             mock_client = MagicMock()
             mock_docker.return_value = mock_client
 
-            with patch("agent.main.asyncio.to_thread", new_callable=AsyncMock) as mock_thread:
+            with patch("agent.routers.labs.asyncio.to_thread", new_callable=AsyncMock) as mock_thread:
                 mock_thread.return_value = mock_container
 
                 response = test_client.post("/containers/archetype-test-container/start")
@@ -206,11 +207,11 @@ class TestContainerEndpointsUnit:
         mock_container = MagicMock()
         mock_container.status = "running"
 
-        with patch("agent.main.docker.from_env") as mock_docker:
+        with patch("agent.routers.labs.docker.from_env") as mock_docker:
             mock_client = MagicMock()
             mock_docker.return_value = mock_client
 
-            with patch("agent.main.asyncio.to_thread", new_callable=AsyncMock) as mock_thread:
+            with patch("agent.routers.labs.asyncio.to_thread", new_callable=AsyncMock) as mock_thread:
                 mock_thread.side_effect = [mock_container, None]
 
                 response = test_client.post("/containers/archetype-test-container/stop")
@@ -224,11 +225,11 @@ class TestContainerEndpointsUnit:
         mock_container = MagicMock()
         mock_container.status = "exited"
 
-        with patch("agent.main.docker.from_env") as mock_docker:
+        with patch("agent.routers.labs.docker.from_env") as mock_docker:
             mock_client = MagicMock()
             mock_docker.return_value = mock_client
 
-            with patch("agent.main.asyncio.to_thread", new_callable=AsyncMock) as mock_thread:
+            with patch("agent.routers.labs.asyncio.to_thread", new_callable=AsyncMock) as mock_thread:
                 mock_thread.return_value = mock_container
 
                 response = test_client.post("/containers/archetype-test-container/stop")
@@ -264,29 +265,29 @@ class TestHotConnectLinkUnit:
 
     def test_create_link_success(self, test_client):
         """Should create VLAN link between interfaces."""
+        mock_port_a = OVSPortInfo(port_name="veth-a", vlan_tag=100, provider="docker")
+        mock_port_b = OVSPortInfo(port_name="veth-b", vlan_tag=200, provider="docker")
+
         with patch.object(settings, "enable_ovs", True):
-            with patch("agent.main.get_ovs_manager") as mock_get_ovs:
-                mock_ovs = MagicMock()
-                mock_ovs._initialized = True
-                mock_ovs.hot_connect = AsyncMock(return_value={"success": True, "vlan_tag": 100})
-                mock_get_ovs.return_value = mock_ovs
+            with patch("agent.routers.links._resolve_ovs_port", new_callable=AsyncMock) as mock_resolve:
+                mock_resolve.side_effect = [mock_port_a, mock_port_b]
 
-                with patch("agent.main.get_docker_ovs_plugin") as mock_get_plugin:
-                    mock_plugin = MagicMock()
-                    mock_plugin.hot_connect = AsyncMock(return_value={"success": True, "vlan_tag": 100})
-                    mock_get_plugin.return_value = mock_plugin
-
-                    response = test_client.post(
-                        "/labs/test-lab/links",
-                        json={
-                            "source_node": "node1",
-                            "source_interface": "eth1",
-                            "target_node": "node2",
-                            "target_interface": "eth1",
-                        },
-                    )
+                with patch("agent.routers.links._ovs_allocate_link_vlan", new_callable=AsyncMock, return_value=300):
+                    with patch("agent.routers.links._ovs_set_port_vlan", new_callable=AsyncMock, return_value=True):
+                        with patch("agent.routers.links._get_docker_ovs_plugin", return_value=None):
+                            response = test_client.post(
+                                "/labs/test-lab/links",
+                                json={
+                                    "source_node": "node1",
+                                    "source_interface": "eth1",
+                                    "target_node": "node2",
+                                    "target_interface": "eth1",
+                                },
+                            )
 
         assert response.status_code == 200
+        result = response.json()
+        assert result["success"] is True
 
     def test_delete_link_ovs_disabled(self, test_client):
         """Should return error when OVS is disabled."""
@@ -300,13 +301,14 @@ class TestHotConnectLinkUnit:
     def test_list_links_empty(self, test_client):
         """Should return empty list when no links."""
         with patch.object(settings, "enable_ovs", True):
-            with patch("agent.main.get_ovs_manager") as mock_get_ovs:
-                mock_ovs = MagicMock()
-                mock_ovs._initialized = True
-                mock_ovs.get_lab_links.return_value = []
-                mock_get_ovs.return_value = mock_ovs
+            with patch("agent.routers.links.get_network_backend") as mock_get_backend:
+                mock_backend = MagicMock()
+                mock_backend.ovs_initialized.return_value = True
+                mock_backend.get_links_for_lab.return_value = []
+                mock_get_backend.return_value = mock_backend
 
-                response = test_client.get("/labs/test-lab/links")
+                with patch("agent.routers.links.get_provider_for_request"):
+                    response = test_client.get("/labs/test-lab/links")
 
         assert response.status_code == 200
         result = response.json()
@@ -325,7 +327,7 @@ class TestFixInterfacesEndpoint:
         The fix-interfaces endpoint uses get_provider_for_request() which
         raises HTTPException(503) when the requested provider is not available.
         """
-        with patch("agent.main.get_provider", return_value=None):
+        with patch("agent.helpers.get_provider", return_value=None):
             response = test_client.post("/labs/test-lab/nodes/node1/fix-interfaces")
 
         assert response.status_code == 503
@@ -340,7 +342,7 @@ class TestFixInterfacesEndpoint:
         )
         mock_provider.get_container_name = MagicMock(return_value="archetype-test-lab-node1")
 
-        with patch("agent.main.get_provider", return_value=mock_provider):
+        with patch("agent.helpers.get_provider", return_value=mock_provider):
             response = test_client.post("/labs/test-lab/nodes/node1/fix-interfaces")
 
         assert response.status_code == 200
@@ -355,7 +357,7 @@ class TestFixInterfacesEndpoint:
         )
         mock_provider.get_container_name = MagicMock(return_value="archetype-test-lab-node1")
 
-        with patch("agent.main.get_provider", return_value=mock_provider):
+        with patch("agent.helpers.get_provider", return_value=mock_provider):
             response = test_client.post("/labs/test-lab/nodes/node1/fix-interfaces")
 
         assert response.status_code == 200

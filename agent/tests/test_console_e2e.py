@@ -69,7 +69,7 @@ class TestConsoleWebSocketUnit:
         When get_provider("docker") returns None and get_provider("libvirt")
         also returns None, the handler sends an error message.
         """
-        with patch("agent.main.get_provider", return_value=None):
+        with patch("agent.routers.console.get_provider", return_value=None):
             with test_client.websocket_connect("/console/test-lab/node1") as websocket:
                 data = websocket.receive_text()
                 assert "Node not found" in data or "Error" in data
@@ -82,12 +82,12 @@ class TestConsoleWebSocketUnit:
         Mocks the entire _console_websocket_docker helper so we don't need
         to set up the full DockerConsole chain.
         """
-        with patch("agent.main.get_provider", return_value=mock_provider):
-            with patch("agent.main._check_container_exists", new_callable=AsyncMock, return_value=True):
-                with patch("agent.main._get_console_config", new_callable=AsyncMock) as mock_config:
+        with patch("agent.routers.console.get_provider", return_value=mock_provider):
+            with patch("agent.routers.console._check_container_exists", new_callable=AsyncMock, return_value=True):
+                with patch("agent.routers.console._get_console_config", new_callable=AsyncMock) as mock_config:
                     mock_config.return_value = ("docker_exec", "/bin/sh", None, None)
 
-                    with patch("agent.main._console_websocket_docker", new_callable=AsyncMock) as mock_docker_ws:
+                    with patch("agent.routers.console._console_websocket_docker", new_callable=AsyncMock) as mock_docker_ws:
                         try:
                             with test_client.websocket_connect("/console/test-lab/node1"):
                                 pass
@@ -101,23 +101,23 @@ class TestConsoleWebSocketUnit:
         self, test_client, mock_provider
     ):
         """When Docker container doesn't exist and no libvirt, sends error."""
-        with patch("agent.main.get_provider") as mock_get_prov:
+        with patch("agent.routers.console.get_provider") as mock_get_prov:
             # First call for "docker" returns provider, second for "libvirt" returns None
             mock_get_prov.side_effect = lambda name: mock_provider if name == "docker" else None
 
-            with patch("agent.main._check_container_exists", new_callable=AsyncMock, return_value=False):
+            with patch("agent.routers.console._check_container_exists", new_callable=AsyncMock, return_value=False):
                 with test_client.websocket_connect("/console/test-lab/node1") as websocket:
                     data = websocket.receive_text()
                     assert "Node not found" in data or "Error" in data
 
     def test_console_websocket_ssh_method(self, test_client, mock_provider):
         """Should use SSH console when _get_console_config returns 'ssh'."""
-        with patch("agent.main.get_provider", return_value=mock_provider):
-            with patch("agent.main._check_container_exists", new_callable=AsyncMock, return_value=True):
-                with patch("agent.main._get_console_config", new_callable=AsyncMock) as mock_config:
+        with patch("agent.routers.console.get_provider", return_value=mock_provider):
+            with patch("agent.routers.console._check_container_exists", new_callable=AsyncMock, return_value=True):
+                with patch("agent.routers.console._get_console_config", new_callable=AsyncMock) as mock_config:
                     mock_config.return_value = ("ssh", None, "admin", "admin")
 
-                    with patch("agent.main._console_websocket_ssh", new_callable=AsyncMock, return_value=True) as mock_ssh_ws:
+                    with patch("agent.routers.console._console_websocket_ssh", new_callable=AsyncMock, return_value=True) as mock_ssh_ws:
                         try:
                             with test_client.websocket_connect("/console/test-lab/node1"):
                                 pass
@@ -128,13 +128,13 @@ class TestConsoleWebSocketUnit:
 
     def test_console_websocket_ssh_fallback_to_docker(self, test_client, mock_provider):
         """Should fall back to docker_exec when SSH fails."""
-        with patch("agent.main.get_provider", return_value=mock_provider):
-            with patch("agent.main._check_container_exists", new_callable=AsyncMock, return_value=True):
-                with patch("agent.main._get_console_config", new_callable=AsyncMock) as mock_config:
+        with patch("agent.routers.console.get_provider", return_value=mock_provider):
+            with patch("agent.routers.console._check_container_exists", new_callable=AsyncMock, return_value=True):
+                with patch("agent.routers.console._get_console_config", new_callable=AsyncMock) as mock_config:
                     mock_config.return_value = ("ssh", None, "admin", "admin")
 
-                    with patch("agent.main._console_websocket_ssh", new_callable=AsyncMock, return_value=False) as mock_ssh_ws:
-                        with patch("agent.main._console_websocket_docker", new_callable=AsyncMock) as mock_docker_ws:
+                    with patch("agent.routers.console._console_websocket_ssh", new_callable=AsyncMock, return_value=False) as mock_ssh_ws:
+                        with patch("agent.routers.console._console_websocket_docker", new_callable=AsyncMock) as mock_docker_ws:
                             try:
                                 with test_client.websocket_connect("/console/test-lab/node1"):
                                     pass
@@ -150,12 +150,12 @@ class TestConsoleWebSocketBidirectional:
 
     def test_console_sends_to_docker_handler(self, test_client, mock_provider):
         """Should delegate to _console_websocket_docker for docker_exec method."""
-        with patch("agent.main.get_provider", return_value=mock_provider):
-            with patch("agent.main._check_container_exists", new_callable=AsyncMock, return_value=True):
-                with patch("agent.main._get_console_config", new_callable=AsyncMock) as mock_config:
+        with patch("agent.routers.console.get_provider", return_value=mock_provider):
+            with patch("agent.routers.console._check_container_exists", new_callable=AsyncMock, return_value=True):
+                with patch("agent.routers.console._get_console_config", new_callable=AsyncMock) as mock_config:
                     mock_config.return_value = ("docker_exec", "/bin/sh", None, None)
 
-                    with patch("agent.main._console_websocket_docker", new_callable=AsyncMock) as mock_docker_ws:
+                    with patch("agent.routers.console._console_websocket_docker", new_callable=AsyncMock) as mock_docker_ws:
                         try:
                             with test_client.websocket_connect("/console/test-lab/node1"):
                                 pass
@@ -176,12 +176,12 @@ class TestConsoleWebSocketDisconnect:
 
     def test_console_graceful_disconnect(self, test_client, mock_provider):
         """Should call console handler which manages cleanup internally."""
-        with patch("agent.main.get_provider", return_value=mock_provider):
-            with patch("agent.main._check_container_exists", new_callable=AsyncMock, return_value=True):
-                with patch("agent.main._get_console_config", new_callable=AsyncMock) as mock_config:
+        with patch("agent.routers.console.get_provider", return_value=mock_provider):
+            with patch("agent.routers.console._check_container_exists", new_callable=AsyncMock, return_value=True):
+                with patch("agent.routers.console._get_console_config", new_callable=AsyncMock) as mock_config:
                     mock_config.return_value = ("docker_exec", "/bin/sh", None, None)
 
-                    with patch("agent.main._console_websocket_docker", new_callable=AsyncMock) as mock_docker_ws:
+                    with patch("agent.routers.console._console_websocket_docker", new_callable=AsyncMock) as mock_docker_ws:
                         try:
                             with test_client.websocket_connect("/console/test-lab/node1"):
                                 # Client disconnects by exiting context
@@ -194,12 +194,12 @@ class TestConsoleWebSocketDisconnect:
 
     def test_console_exception_in_handler(self, test_client, mock_provider):
         """Should handle exceptions from the console handler gracefully."""
-        with patch("agent.main.get_provider", return_value=mock_provider):
-            with patch("agent.main._check_container_exists", new_callable=AsyncMock, return_value=True):
-                with patch("agent.main._get_console_config", new_callable=AsyncMock) as mock_config:
+        with patch("agent.routers.console.get_provider", return_value=mock_provider):
+            with patch("agent.routers.console._check_container_exists", new_callable=AsyncMock, return_value=True):
+                with patch("agent.routers.console._get_console_config", new_callable=AsyncMock) as mock_config:
                     mock_config.return_value = ("docker_exec", "/bin/sh", None, None)
 
-                    with patch("agent.main._console_websocket_docker", new_callable=AsyncMock, side_effect=RuntimeError("test error")):
+                    with patch("agent.routers.console._console_websocket_docker", new_callable=AsyncMock, side_effect=RuntimeError("test error")):
                         try:
                             with test_client.websocket_connect("/console/test-lab/node1") as websocket:
                                 data = websocket.receive_text(timeout=2)
@@ -248,12 +248,12 @@ class TestConsoleE2EWithDocker:
         """Should connect to real running container."""
         container_name = alpine_container.name
 
-        with patch("agent.main.get_provider") as mock_get_provider:
+        with patch("agent.routers.console.get_provider") as mock_get_provider:
             mock_provider = MagicMock()
             mock_provider.get_container_name.return_value = container_name
             mock_get_provider.return_value = mock_provider
 
-            with patch("agent.main._get_console_config", new_callable=AsyncMock) as mock_config:
+            with patch("agent.routers.console._get_console_config", new_callable=AsyncMock) as mock_config:
                 # Use real shell
                 mock_config.return_value = ("docker_exec", "/bin/sh", None, None)
 
@@ -271,12 +271,12 @@ class TestConsoleE2EWithDocker:
         """Should execute commands in real container."""
         container_name = alpine_container.name
 
-        with patch("agent.main.get_provider") as mock_get_provider:
+        with patch("agent.routers.console.get_provider") as mock_get_provider:
             mock_provider = MagicMock()
             mock_provider.get_container_name.return_value = container_name
             mock_get_provider.return_value = mock_provider
 
-            with patch("agent.main._get_console_config", new_callable=AsyncMock) as mock_config:
+            with patch("agent.routers.console._get_console_config", new_callable=AsyncMock) as mock_config:
                 mock_config.return_value = ("docker_exec", "/bin/sh", None, None)
 
                 try:
@@ -307,12 +307,12 @@ class TestConsoleE2EWithDocker:
         """Should resize terminal in real container."""
         container_name = alpine_container.name
 
-        with patch("agent.main.get_provider") as mock_get_provider:
+        with patch("agent.routers.console.get_provider") as mock_get_provider:
             mock_provider = MagicMock()
             mock_provider.get_container_name.return_value = container_name
             mock_get_provider.return_value = mock_provider
 
-            with patch("agent.main._get_console_config", new_callable=AsyncMock) as mock_config:
+            with patch("agent.routers.console._get_console_config", new_callable=AsyncMock) as mock_config:
                 mock_config.return_value = ("docker_exec", "/bin/sh", None, None)
 
                 try:
@@ -344,12 +344,12 @@ class TestSSHConsoleWebSocket:
 
     def test_ssh_console_delegates_to_handler(self, test_client, mock_provider):
         """Should use _console_websocket_ssh when method is 'ssh'."""
-        with patch("agent.main.get_provider", return_value=mock_provider):
-            with patch("agent.main._check_container_exists", new_callable=AsyncMock, return_value=True):
-                with patch("agent.main._get_console_config", new_callable=AsyncMock) as mock_config:
+        with patch("agent.routers.console.get_provider", return_value=mock_provider):
+            with patch("agent.routers.console._check_container_exists", new_callable=AsyncMock, return_value=True):
+                with patch("agent.routers.console._get_console_config", new_callable=AsyncMock) as mock_config:
                     mock_config.return_value = ("ssh", None, "admin", "admin")
 
-                    with patch("agent.main._console_websocket_ssh", new_callable=AsyncMock, return_value=True) as mock_ssh:
+                    with patch("agent.routers.console._console_websocket_ssh", new_callable=AsyncMock, return_value=True) as mock_ssh:
                         try:
                             with test_client.websocket_connect("/console/test/router1"):
                                 pass
@@ -366,14 +366,14 @@ class TestSSHConsoleWebSocket:
 
     def test_ssh_console_fallback_when_ip_unavailable(self, test_client, mock_provider):
         """Should fall back to docker when SSH handler returns False."""
-        with patch("agent.main.get_provider", return_value=mock_provider):
-            with patch("agent.main._check_container_exists", new_callable=AsyncMock, return_value=True):
-                with patch("agent.main._get_console_config", new_callable=AsyncMock) as mock_config:
+        with patch("agent.routers.console.get_provider", return_value=mock_provider):
+            with patch("agent.routers.console._check_container_exists", new_callable=AsyncMock, return_value=True):
+                with patch("agent.routers.console._get_console_config", new_callable=AsyncMock) as mock_config:
                     mock_config.return_value = ("ssh", None, "admin", "admin")
 
                     # SSH handler returns False (e.g. no IP, SSH not ready)
-                    with patch("agent.main._console_websocket_ssh", new_callable=AsyncMock, return_value=False):
-                        with patch("agent.main._console_websocket_docker", new_callable=AsyncMock) as mock_docker:
+                    with patch("agent.routers.console._console_websocket_ssh", new_callable=AsyncMock, return_value=False):
+                        with patch("agent.routers.console._console_websocket_docker", new_callable=AsyncMock) as mock_docker:
                             try:
                                 with test_client.websocket_connect("/console/test/router1"):
                                     pass
