@@ -289,7 +289,6 @@ const InfrastructurePage: React.FC = () => {
 
   // Managed interfaces state
   const [managedInterfaces, setManagedInterfaces] = useState<ManagedInterface[]>([]);
-  const [managedInterfacesLoading, setManagedInterfacesLoading] = useState(false);
   const [showManagedInterfaces, setShowManagedInterfaces] = useState(false);
 
   // NIC groups state (future interface affinity)
@@ -410,14 +409,11 @@ const InfrastructurePage: React.FC = () => {
   }, []);
 
   const loadManagedInterfaces = useCallback(async () => {
-    setManagedInterfacesLoading(true);
     try {
       const data = await apiRequest<ManagedInterfacesResponse>('/infrastructure/interfaces');
       setManagedInterfaces(data.interfaces);
     } catch (err) {
       console.error('Failed to load managed interfaces:', err);
-    } finally {
-      setManagedInterfacesLoading(false);
     }
   }, []);
 

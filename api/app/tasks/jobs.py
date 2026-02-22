@@ -22,8 +22,8 @@ from app import agent_client, models, webhooks
 from app.agent_client import AgentJobError, AgentUnavailableError
 from app.config import settings
 from app.db import get_redis, get_session
-from app.services.broadcaster import get_broadcaster
 from app.services.topology import TopologyService
+from app.utils.job import broadcast_job_progress as _broadcast_job_progress
 from app.utils.lab import update_lab_state
 from app.events.publisher import emit_deploy_finished, emit_destroy_finished, emit_job_failed
 from app.metrics import record_job_completed, record_job_failed, record_job_started
@@ -316,32 +316,6 @@ async def _auto_extract_configs_before_destroy(
     except Exception as e:
         logger.warning(f"Error during auto-extract before destroy: {e}")
         # Continue with destroy even if extraction fails
-
-
-async def _broadcast_job_progress(
-    lab_id: str,
-    job_id: str,
-    action: str,
-    status: str,
-    progress_message: str | None = None,
-    error_message: str | None = None,
-) -> None:
-    """Broadcast job progress update via WebSocket.
-
-    Fire-and-forget wrapper that catches exceptions to avoid disrupting job execution.
-    """
-    try:
-        broadcaster = get_broadcaster()
-        await broadcaster.publish_job_progress(
-            lab_id=lab_id,
-            job_id=job_id,
-            action=action,
-            status=status,
-            progress_message=progress_message,
-            error_message=error_message,
-        )
-    except Exception as e:
-        logger.debug(f"Failed to broadcast job progress: {e}")
 
 
 def _get_node_info_for_webhook(session, lab_id: str) -> list[dict]:

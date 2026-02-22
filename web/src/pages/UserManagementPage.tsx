@@ -289,8 +289,6 @@ const UserManagementPage: React.FC = () => {
   const passwordStrength = activeModal === 'create'
     ? getPasswordStrength(createPassword)
     : getPasswordStrength(newPassword);
-  const activePassword = activeModal === 'create' ? createPassword : newPassword;
-
   return (
     <>
       <div className="h-screen bg-stone-50/72 dark:bg-stone-900/72 backdrop-blur-[1px] flex flex-col overflow-hidden">

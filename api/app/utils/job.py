@@ -1,9 +1,12 @@
 """Job utility functions."""
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timedelta, timezone
 
 from app.config import settings
+
+logger = logging.getLogger(__name__)
 
 
 def get_job_timeout(action: str) -> int:
@@ -146,3 +149,31 @@ def is_job_within_timeout(
         return now <= deadline
 
     return True  # Default to giving benefit of doubt
+
+
+async def broadcast_job_progress(
+    lab_id: str,
+    job_id: str,
+    action: str,
+    status: str,
+    progress_message: str | None = None,
+    error_message: str | None = None,
+) -> None:
+    """Broadcast job progress update via WebSocket.
+
+    Fire-and-forget wrapper that catches exceptions to avoid disrupting job execution.
+    """
+    from app.services.broadcaster import get_broadcaster
+
+    try:
+        broadcaster = get_broadcaster()
+        await broadcaster.publish_job_progress(
+            lab_id=lab_id,
+            job_id=job_id,
+            action=action,
+            status=status,
+            progress_message=progress_message,
+            error_message=error_message,
+        )
+    except Exception as e:
+        logger.debug(f"Failed to broadcast job progress: {e}")

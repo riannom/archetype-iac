@@ -120,7 +120,6 @@ const ISOImportModal: React.FC<ISOImportModalProps> = ({
   const [createDevices, setCreateDevices] = useState(true);
   const [importProgress, setImportProgress] = useState<Record<string, ImageProgress>>({});
   const [overallProgress, setOverallProgress] = useState(0);
-  const [importStatus, setImportStatus] = useState<string>('pending');
   const eventSourceRef = useRef<EventSource | null>(null);
 
   // File browser state
@@ -180,7 +179,6 @@ const ISOImportModal: React.FC<ISOImportModalProps> = ({
       setCreateDevices(true);
       setImportProgress({});
       setOverallProgress(0);
-      setImportStatus('pending');
       setInputMode('browse');
       setSelectedFile(null);
       setUploadProgress(0);
@@ -323,7 +321,6 @@ const ISOImportModal: React.FC<ISOImportModalProps> = ({
         const data = await response.json();
         setImportProgress(data.image_progress || {});
         setOverallProgress(data.progress_percent || 0);
-        setImportStatus(data.status);
 
         if (data.status && data.status !== lastLoggedImportStatusRef.current) {
           lastLoggedImportStatusRef.current = data.status;

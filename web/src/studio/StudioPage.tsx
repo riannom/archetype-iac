@@ -416,7 +416,6 @@ const StudioPage: React.FC = () => {
   const {
     isConnected: wsConnected,
     reconnectAttempts: wsReconnectAttempts,
-    refresh: wsRefresh,
   } = useLabStateWS(activeLab?.id || null, {
     onNodeStateChange: handleWSNodeStateChange,
     onJobProgress: handleWSJobProgress,

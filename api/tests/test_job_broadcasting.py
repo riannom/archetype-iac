@@ -12,10 +12,8 @@ import pytest
 from sqlalchemy.orm import Session
 
 from app import models
-from app.tasks.jobs import (
-    _broadcast_job_progress,
-    run_agent_job,
-)
+from app.tasks.jobs import run_agent_job
+from app.utils.job import broadcast_job_progress as _broadcast_job_progress
 
 
 def _mock_get_session(test_db: Session):
@@ -42,7 +40,7 @@ class TestBroadcastJobProgress:
     @pytest.mark.asyncio
     async def test_broadcast_job_progress_calls_broadcaster(self, mock_broadcaster):
         """Should call broadcaster.publish_job_progress with correct args."""
-        with patch("app.tasks.jobs.get_broadcaster", return_value=mock_broadcaster):
+        with patch("app.services.broadcaster.get_broadcaster", return_value=mock_broadcaster):
             await _broadcast_job_progress(
                 lab_id="test-lab",
                 job_id="test-job",
@@ -63,7 +61,7 @@ class TestBroadcastJobProgress:
     @pytest.mark.asyncio
     async def test_broadcast_job_progress_with_error(self, mock_broadcaster):
         """Should pass error_message to broadcaster."""
-        with patch("app.tasks.jobs.get_broadcaster", return_value=mock_broadcaster):
+        with patch("app.services.broadcaster.get_broadcaster", return_value=mock_broadcaster):
             await _broadcast_job_progress(
                 lab_id="test-lab",
                 job_id="test-job",
@@ -82,7 +80,7 @@ class TestBroadcastJobProgress:
         """Should not raise when broadcaster fails."""
         mock_broadcaster.publish_job_progress.side_effect = Exception("Redis error")
 
-        with patch("app.tasks.jobs.get_broadcaster", return_value=mock_broadcaster):
+        with patch("app.services.broadcaster.get_broadcaster", return_value=mock_broadcaster):
             # Should not raise
             await _broadcast_job_progress(
                 lab_id="test-lab",
@@ -125,7 +123,7 @@ class TestRunAgentJobBroadcasts:
         test_db.refresh(job)
 
         with patch("app.tasks.jobs.get_session", _mock_get_session(test_db)):
-            with patch("app.tasks.jobs.get_broadcaster", return_value=mock_broadcaster):
+            with patch("app.services.broadcaster.get_broadcaster", return_value=mock_broadcaster):
                 with patch("app.tasks.jobs.agent_client.get_agent_for_lab", new_callable=AsyncMock) as mock_agent:
                     mock_agent.return_value = sample_host
                     with patch("app.tasks.jobs.agent_client.deploy_to_agent", new_callable=AsyncMock) as mock_deploy:
@@ -169,7 +167,7 @@ class TestRunAgentJobBroadcasts:
         test_db.refresh(job)
 
         with patch("app.tasks.jobs.get_session", _mock_get_session(test_db)):
-            with patch("app.tasks.jobs.get_broadcaster", return_value=mock_broadcaster):
+            with patch("app.services.broadcaster.get_broadcaster", return_value=mock_broadcaster):
                 with patch("app.tasks.jobs.agent_client.get_agent_for_lab", new_callable=AsyncMock) as mock_agent:
                     mock_agent.return_value = sample_host
                     with patch("app.tasks.jobs.agent_client.deploy_to_agent", new_callable=AsyncMock) as mock_deploy:
@@ -213,7 +211,7 @@ class TestRunAgentJobBroadcasts:
         test_db.refresh(job)
 
         with patch("app.tasks.jobs.get_session", _mock_get_session(test_db)):
-            with patch("app.tasks.jobs.get_broadcaster", return_value=mock_broadcaster):
+            with patch("app.services.broadcaster.get_broadcaster", return_value=mock_broadcaster):
                 with patch("app.tasks.jobs.agent_client.get_agent_for_lab", new_callable=AsyncMock) as mock_agent:
                     mock_agent.return_value = sample_host
                     with patch("app.tasks.jobs.agent_client.deploy_to_agent", new_callable=AsyncMock) as mock_deploy:
@@ -264,7 +262,7 @@ class TestRunAgentJobBroadcasts:
         host_id = sample_host.id
 
         with patch("app.tasks.jobs.get_session", _mock_get_session(test_db)):
-            with patch("app.tasks.jobs.get_broadcaster", return_value=mock_broadcaster):
+            with patch("app.services.broadcaster.get_broadcaster", return_value=mock_broadcaster):
                 with patch("app.tasks.jobs.agent_client.get_agent_for_lab", new_callable=AsyncMock) as mock_agent:
                     mock_agent.return_value = sample_host
                     with patch("app.tasks.jobs.agent_client.deploy_to_agent", new_callable=AsyncMock) as mock_deploy:
@@ -296,7 +294,7 @@ class TestRunNodeReconcileBroadcasts:
         # We test the _broadcast_job_progress function directly since
         # run_node_reconcile has complex dependencies. Full integration tests
         # are in test_jobs_execution.py.
-        with patch("app.tasks.jobs.get_broadcaster", return_value=mock_broadcaster):
+        with patch("app.services.broadcaster.get_broadcaster", return_value=mock_broadcaster):
             await _broadcast_job_progress(
                 lab_id="test-lab",
                 job_id="test-job",
@@ -367,7 +365,7 @@ class TestMultihostDeployBroadcasts:
         test_db.commit()
 
         with patch("app.tasks.jobs.get_session", _mock_get_session(test_db)):
-            with patch("app.tasks.jobs.get_broadcaster", return_value=mock_broadcaster):
+            with patch("app.services.broadcaster.get_broadcaster", return_value=mock_broadcaster):
                 with patch("app.tasks.jobs.agent_client.deploy_to_agent", new_callable=AsyncMock) as mock_deploy:
                     mock_deploy.return_value = {"status": "completed"}
                     with patch("app.tasks.jobs.agent_client.is_agent_online", return_value=True):
@@ -423,7 +421,7 @@ class TestBroadcastSequence:
         mock_broadcaster.publish_job_progress = track_broadcast
 
         with patch("app.tasks.jobs.get_session", _mock_get_session(test_db)):
-            with patch("app.tasks.jobs.get_broadcaster", return_value=mock_broadcaster):
+            with patch("app.services.broadcaster.get_broadcaster", return_value=mock_broadcaster):
                 with patch("app.tasks.jobs.agent_client.get_agent_for_lab", new_callable=AsyncMock) as mock_agent:
                     mock_agent.return_value = sample_host
                     with patch("app.tasks.jobs.agent_client.deploy_to_agent", new_callable=AsyncMock) as mock_deploy:
@@ -473,7 +471,7 @@ class TestBroadcastSequence:
         mock_broadcaster.publish_job_progress = track_broadcast
 
         with patch("app.tasks.jobs.get_session", _mock_get_session(test_db)):
-            with patch("app.tasks.jobs.get_broadcaster", return_value=mock_broadcaster):
+            with patch("app.services.broadcaster.get_broadcaster", return_value=mock_broadcaster):
                 with patch("app.tasks.jobs.agent_client.get_agent_for_lab", new_callable=AsyncMock) as mock_agent:
                     mock_agent.return_value = sample_host
                     with patch("app.tasks.jobs.agent_client.deploy_to_agent", new_callable=AsyncMock) as mock_deploy:
