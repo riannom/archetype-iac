@@ -1314,6 +1314,7 @@ class TestExecuteOrchestration:
         mock_ac.ping_agent = AsyncMock(return_value=True)
         mock_ac.get_healthy_agent = AsyncMock(return_value=None)
         mock_ac.deploy_to_agent = AsyncMock(return_value={"status": "completed"})
+        mock_ac.check_node_readiness = AsyncMock(return_value={"is_ready": True})
         mock_settings = MagicMock()
         mock_settings.resource_validation_enabled = False
         mock_settings.image_sync_enabled = False
@@ -1321,6 +1322,7 @@ class TestExecuteOrchestration:
         mock_settings.per_node_lifecycle_enabled = False
 
         with patch.object(manager.topo_service, "get_nodes", return_value=[node_def]), \
+             patch("app.tasks.node_lifecycle.agent_client", mock_ac), \
              patch("app.tasks.node_lifecycle_agents.agent_client", mock_ac), \
              patch("app.tasks.node_lifecycle_deploy.agent_client", mock_ac), \
              patch.object(manager.topo_service, "has_nodes", return_value=True), \
@@ -1412,6 +1414,7 @@ class TestExecuteOrchestration:
         mock_ac.ping_agent = AsyncMock(return_value=True)
         mock_ac.get_healthy_agent = AsyncMock(return_value=None)
         mock_ac.deploy_to_agent = AsyncMock(return_value={"status": "completed"})
+        mock_ac.check_node_readiness = AsyncMock(return_value={"is_ready": True})
         mock_ac.reconcile_nodes_on_agent = AsyncMock(return_value={
             "results": [{"container_name": container_name_r2, "success": True}]
         })
@@ -1422,6 +1425,7 @@ class TestExecuteOrchestration:
         mock_settings.per_node_lifecycle_enabled = False
 
         with patch.object(manager.topo_service, "get_nodes", return_value=[node_def1, node_def2]), \
+             patch("app.tasks.node_lifecycle.agent_client", mock_ac), \
              patch("app.tasks.node_lifecycle_agents.agent_client", mock_ac), \
              patch("app.tasks.node_lifecycle_deploy.agent_client", mock_ac), \
              patch.object(manager.topo_service, "has_nodes", return_value=True), \

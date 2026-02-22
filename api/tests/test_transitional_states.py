@@ -424,6 +424,7 @@ class TestCategorizationMatchesTransitionalStates:
         mock_ac.is_agent_online = MagicMock(return_value=True)
         mock_ac.get_healthy_agent = AsyncMock(return_value=None)
         mock_ac.container_action = AsyncMock(return_value={"success": True})
+        mock_ac.check_node_readiness = AsyncMock(return_value={"is_ready": True})
         mock_ac.reconcile_nodes_on_agent = AsyncMock(return_value={
             "results": [{"container_name": container_name, "success": True}]
         })
@@ -496,6 +497,7 @@ class TestCategorizationMatchesTransitionalStates:
         mock_ac.start_node_on_agent = AsyncMock(return_value={"success": True})
         mock_ac.container_action = AsyncMock(return_value={"success": True})
         mock_ac.deploy_to_agent = AsyncMock(return_value={"status": "completed"})
+        mock_ac.check_node_readiness = AsyncMock(return_value={"is_ready": True})
         mock_ac.get_lab_status_from_agent = AsyncMock(return_value={"nodes": []})
         mock_settings = MagicMock()
         mock_settings.resource_validation_enabled = False
@@ -943,6 +945,9 @@ class TestEarlyPlacementUpdate:
         )
         mock_ac.deploy_to_agent = AsyncMock(
             return_value={"status": "completed"}
+        )
+        mock_ac.check_node_readiness = AsyncMock(
+            return_value={"is_ready": True}
         )
         mock_ac.get_lab_status_from_agent = AsyncMock(
             return_value={"nodes": []}
