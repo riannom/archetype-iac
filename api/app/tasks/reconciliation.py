@@ -44,6 +44,7 @@ from app.state import (
     NodeDesiredState,
 )
 from app.services.state_machine import LabStateMachine
+from app.utils.time import utcnow
 
 logger = logging.getLogger(__name__)
 
@@ -63,7 +64,7 @@ def _set_agent_error(agent: models.Host, error_message: str) -> None:
         error_message: Error message to persist
     """
     if agent.last_error is None:
-        agent.error_since = datetime.now(timezone.utc)
+        agent.error_since = utcnow()
     agent.last_error = error_message
     logger.warning(f"Agent {agent.name} error: {error_message}")
 
@@ -460,13 +461,14 @@ async def refresh_states_from_agents():
             # Find labs that need reconciliation:
             # - Labs in transitional states (starting, stopping, unknown)
             # - Labs where state has been stuck for too long
-            now = datetime.now(timezone.utc)
-            now - timedelta(seconds=settings.stale_starting_threshold)
+            now = utcnow()
+            transitional_threshold = now - timedelta(seconds=settings.stale_starting_threshold)
 
             transitional_labs = (
                 session.query(models.Lab)
                 .filter(
                     models.Lab.state.in_([LabState.STARTING.value, LabState.STOPPING.value, LabState.UNKNOWN.value]),
+                    models.Lab.updated_at < transitional_threshold,
                 )
                 .all()
             )
@@ -734,7 +736,7 @@ async def _check_readiness_for_nodes(session, nodes: list):
             for ns in lab_nodes:
                 # Set boot_started_at if not already set
                 if not ns.boot_started_at:
-                    ns.boot_started_at = datetime.now(timezone.utc)
+                    ns.boot_started_at = utcnow()
 
                 host_id = placement_by_node.get(ns.node_name) or lab.agent_id
                 agent = agents_by_id.get(host_id) if host_id else None
@@ -780,7 +782,7 @@ async def _check_readiness_for_nodes(session, nodes: list):
                         ns.is_ready = True
                         # Record boot-wait duration metric
                         if ns.boot_started_at:
-                            boot_secs = (datetime.now(timezone.utc) - ns.boot_started_at).total_seconds()
+                            boot_secs = (utcnow() - ns.boot_started_at).total_seconds()
                             _boot_device = (node_devices.get(ns.node_name) or "linux").lower()
                             nlm_phase_duration.labels(
                                 phase="boot_wait", device_type=_boot_device, status="success",
@@ -1154,7 +1156,7 @@ async def _do_reconcile_lab(session, lab, lab_id: str) -> int:
 
             # Check for active stop operation
             if ns.stopping_started_at:
-                stopping_duration = datetime.now(timezone.utc) - ns.stopping_started_at
+                stopping_duration = utcnow() - ns.stopping_started_at
                 if stopping_duration.total_seconds() < settings.stale_stopping_threshold:
                     # Stop operation in progress - let the job handle it
                     stopped_count += 1
@@ -1169,7 +1171,7 @@ async def _do_reconcile_lab(session, lab, lab_id: str) -> int:
 
             # Check for active start operation
             if ns.starting_started_at:
-                starting_duration = datetime.now(timezone.utc) - ns.starting_started_at
+                starting_duration = utcnow() - ns.starting_started_at
                 if starting_duration.total_seconds() < settings.stale_node_starting_threshold:
                     # Start operation in progress - let the job handle it
                     running_count += 1
@@ -1218,7 +1220,7 @@ async def _do_reconcile_lab(session, lab, lab_id: str) -> int:
 
                     # Set boot_started_at if not already set (backfill for existing nodes)
                     if not ns.boot_started_at:
-                        ns.boot_started_at = datetime.now(timezone.utc)
+                        ns.boot_started_at = utcnow()
 
                     # Check boot readiness for nodes that are running but not yet ready
                     if not ns.is_ready:
@@ -1261,7 +1263,7 @@ async def _do_reconcile_lab(session, lab, lab_id: str) -> int:
                                 ns.is_ready = True
                                 # Record boot-wait duration metric
                                 if ns.boot_started_at:
-                                    boot_secs = (datetime.now(timezone.utc) - ns.boot_started_at).total_seconds()
+                                    boot_secs = (utcnow() - ns.boot_started_at).total_seconds()
                                     _boot_device = (device_kind or "linux").lower()
                                     nlm_phase_duration.labels(
                                         phase="boot_wait", device_type=_boot_device, status="success",
@@ -1433,7 +1435,7 @@ async def _do_reconcile_lab(session, lab, lab_id: str) -> int:
         else:
             lab.state_error = None
 
-        lab.state_updated_at = datetime.now(timezone.utc)
+        lab.state_updated_at = utcnow()
 
         if lab.state != old_lab_state:
             logger.info(f"Reconciled lab {lab_id} state: {old_lab_state} -> {lab.state}")
@@ -1582,7 +1584,7 @@ async def _do_reconcile_lab(session, lab, lab_id: str) -> int:
                         if ls.actual_state == LinkActualState.ERROR.value
                     ]
                     if error_links:
-                        now = datetime.now(timezone.utc)
+                        now = utcnow()
                         last_repair = _last_endpoint_repair.get(lab_id)
                         if last_repair is None or (now - last_repair) >= ENDPOINT_REPAIR_COOLDOWN:
                             _last_endpoint_repair[lab_id] = now
@@ -1730,7 +1732,7 @@ async def reconcile_managed_interfaces():
                     else:
                         iface.sync_status = "mismatch"
                         iface.is_up = False
-                    iface.last_sync_at = datetime.now(timezone.utc)
+                    iface.last_sync_at = utcnow()
 
                 session.commit()
             except Exception as e:

@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
@@ -181,8 +181,9 @@ class TestRefreshStatesFromAgents:
         """Should skip labs that have active jobs within timeout."""
         from app.tasks.reconciliation import refresh_states_from_agents
 
-        # Set lab to transitional state
+        # Set lab to transitional state with stale updated_at (past threshold)
         sample_lab.state = "starting"
+        sample_lab.updated_at = datetime.now(timezone.utc) - timedelta(hours=1)
         test_db.commit()
 
         from contextlib import contextmanager
