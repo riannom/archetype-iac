@@ -41,7 +41,7 @@ from app.image_store import (
     save_manifest,
     update_image_entry,
 )
-from app.jobs import queue
+from app.jobs import get_queue
 
 router = APIRouter(prefix="/images", tags=["images"])
 
@@ -1699,7 +1699,7 @@ def _register_qcow2(
         if vrnetlab_path:
             from app.tasks.vrnetlab_build import build_vrnetlab_image
 
-            job = queue.enqueue(
+            job = get_queue().enqueue(
                 build_vrnetlab_image,
                 qcow2_path=str(destination),
                 device_id=vrnetlab_device_id or device_id,
@@ -1941,7 +1941,7 @@ def trigger_docker_build(
 
     # Queue the build job
     from app.tasks.vrnetlab_build import build_vrnetlab_image
-    job = queue.enqueue(
+    job = get_queue().enqueue(
         build_vrnetlab_image,
         qcow2_path=qcow2_file,
         device_id=vrnetlab_device_id or image.get("device_id"),
@@ -2020,7 +2020,7 @@ def _enqueue_iol_build_job(
         raise HTTPException(status_code=400, detail="Could not determine IOL device type")
 
     if reject_if_active and image.get("build_job_id"):
-        existing_job = queue.fetch_job(str(image["build_job_id"]))
+        existing_job = get_queue().fetch_job(str(image["build_job_id"]))
         if existing_job:
             normalized = _normalize_rq_build_status(existing_job.get_status(refresh=True))
             if normalized in {"queued", "building"}:
@@ -2037,7 +2037,7 @@ def _enqueue_iol_build_job(
     if force_rebuild:
         enqueue_kwargs["force_rebuild"] = True
 
-    job = queue.enqueue(
+    job = get_queue().enqueue(
         build_iol_image,
         **enqueue_kwargs,
         job_timeout=600,  # 10 minutes
@@ -2075,7 +2075,7 @@ def _get_iol_build_status(
     rq_status = None
 
     if build_job_id:
-        rq_job = queue.fetch_job(str(build_job_id))
+        rq_job = get_queue().fetch_job(str(build_job_id))
         if rq_job:
             rq_status = rq_job.get_status(refresh=True)
             mapped = _normalize_rq_build_status(rq_status)
@@ -2172,7 +2172,7 @@ def get_iol_build_diagnostics(
 
     queue_job: dict[str, object] | None = None
     if build_job_id:
-        rq_job = queue.fetch_job(str(build_job_id))
+        rq_job = get_queue().fetch_job(str(build_job_id))
         if rq_job:
             result_value = getattr(rq_job, "result", None)
             if not isinstance(result_value, (dict, list, str, int, float, bool)) and result_value is not None:
@@ -2236,7 +2236,7 @@ def ignore_iol_build_failure(
         raise HTTPException(status_code=400, detail="Ignore build failure is only available for iol images")
 
     if image.get("build_job_id"):
-        existing_job = queue.fetch_job(str(image["build_job_id"]))
+        existing_job = get_queue().fetch_job(str(image["build_job_id"]))
         if existing_job:
             normalized = _normalize_rq_build_status(existing_job.get_status(refresh=True))
             if normalized in {"queued", "building"}:

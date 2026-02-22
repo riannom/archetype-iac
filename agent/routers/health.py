@@ -8,7 +8,7 @@ from fastapi import APIRouter
 
 import agent.agent_state as _state
 from agent.config import settings
-from agent.helpers import get_agent_info, get_capabilities, get_resource_usage, _get_allocated_resources
+from agent.helpers import get_agent_info, get_resource_usage, _get_allocated_resources
 from agent.version import get_commit
 from agent.updater import detect_deployment_mode
 

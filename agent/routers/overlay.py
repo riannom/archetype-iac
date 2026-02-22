@@ -15,7 +15,6 @@ from agent.helpers import (
     _get_docker_ovs_plugin,
     _validate_port_name,
     _resolve_ovs_port,
-    _resolve_ovs_port_via_ifindex,
     _ovs_set_port_vlan,
 )
 from agent.network.backends.registry import get_network_backend

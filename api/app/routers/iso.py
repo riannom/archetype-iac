@@ -1114,10 +1114,10 @@ async def _import_single_image(
 
         # Enqueue background Docker image build
         _update_image_progress(session_id, image_id, "building", 92)
-        from app.jobs import queue
+        from app.jobs import get_queue
         from app.tasks.iol_build import build_iol_image
 
-        build_job = queue.enqueue(
+        build_job = get_queue().enqueue(
             build_iol_image,
             iol_path=str(dest_path),
             device_id=device_id,

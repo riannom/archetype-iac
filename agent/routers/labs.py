@@ -12,7 +12,7 @@ from agent.config import settings
 from agent.docker_client import get_docker_client
 from agent.helpers import (
     get_workspace, get_provider_for_request, provider_status_to_schema,
-    _validate_container_name, _sync_prune_docker, _get_docker_ovs_plugin,
+    _validate_container_name, _sync_prune_docker,
 )
 from agent.providers import get_provider, list_providers
 from agent.schemas import (

@@ -33,9 +33,6 @@ from agent.schemas import (
 
 logger = logging.getLogger(__name__)
 
-# Import OVSPortInfo from schemas (not helpers) for the /ovs/status endpoint
-from agent.helpers import OVSPortInfo as _HelpersOVSPortInfo  # noqa: F401 - used below indirectly
-
 router = APIRouter(tags=["ovs-plugin"])
 
 

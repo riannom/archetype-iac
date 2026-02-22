@@ -14,8 +14,24 @@ from app.netlab import run_netlab_command
 from app.providers import ProviderActionError, node_action_command
 from app.storage import lab_workspace
 
-redis_conn = Redis.from_url(settings.redis_url)
-queue = Queue("archetype", connection=redis_conn)
+_redis_conn: Redis | None = None
+_queue: Queue | None = None
+
+
+def get_redis_conn() -> Redis:
+    """Lazy Redis connection — avoids module-level connect that hangs in CI."""
+    global _redis_conn
+    if _redis_conn is None:
+        _redis_conn = Redis.from_url(settings.redis_url)
+    return _redis_conn
+
+
+def get_queue() -> Queue:
+    """Lazy RQ queue — avoids module-level connect that hangs in CI."""
+    global _queue
+    if _queue is None:
+        _queue = Queue("archetype", connection=get_redis_conn())
+    return _queue
 
 
 # Actions that conflict with each other for concurrent execution
@@ -148,7 +164,7 @@ def enqueue_job(lab_id: str, action: str, user_id: str | None) -> Job:
         if user_id:
             # Use Redis lock to prevent race condition in concurrency check
             lock_key = f"job_limit_lock:{user_id}"
-            lock_acquired = redis_conn.set(lock_key, "1", nx=True, ex=10)
+            lock_acquired = get_redis_conn().set(lock_key, "1", nx=True, ex=10)
             if not lock_acquired:
                 raise ValueError("Concurrency limit reached (lock contention)")
             try:
@@ -164,14 +180,14 @@ def enqueue_job(lab_id: str, action: str, user_id: str | None) -> Job:
                 session.commit()
                 session.refresh(job_record)
             finally:
-                redis_conn.delete(lock_key)
+                get_redis_conn().delete(lock_key)
         else:
             job_record = Job(lab_id=lab_id, user_id=user_id, action=action, status="queued")
             session.add(job_record)
             session.commit()
             session.refresh(job_record)
 
-        queue.enqueue(
+        get_queue().enqueue(
             execute_netlab_action, job_record.id, lab_id, action,
             result_ttl=3600, failure_ttl=86400,
         )
