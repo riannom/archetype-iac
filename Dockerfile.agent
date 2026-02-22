@@ -15,6 +15,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
   libvirt-dev \
   pkg-config \
   qemu-utils \
+  genisoimage \
   gcc \
   libc-dev \
   && rm -rf /var/lib/apt/lists/*
