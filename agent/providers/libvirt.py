@@ -1494,6 +1494,7 @@ class LibvirtProvider(Provider):
   {os_open}
     {os_type_line}{os_extras}{smbios_os_xml}
   </os>
+  <on_crash>restart</on_crash>
   <features>
     <acpi/>
     <apic/>{smm_xml}
