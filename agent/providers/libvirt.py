@@ -151,6 +151,39 @@ finally:
 '''
 
 
+# CML reference: set_boot.py — written to bootflash, runs via EEM on first boot.
+# Auto-sets boot variable so NX-OS boots directly instead of dropping to loader.
+# Self-deleting: removes itself and the EEM applet after first run.
+_N9KV_SET_BOOT_SCRIPT = """\
+from cli import cli
+import json
+import os
+import time
+bootimage = json.loads(cli("show version | json"))["nxos_file_name"]
+set_boot = cli("conf t ; boot nxos {} ; no event manager applet BOOTCONFIG".format(bootimage))
+i = 0
+while i < 10:
+    try:
+        save_config = cli("copy running-config startup-config")
+        break
+    except Exception:
+        i += 1
+        time.sleep(1)
+os.remove("/bootflash/set_boot.py")
+"""
+
+# CML reference: preamble prepended to N9Kv ISO config.
+# Sets admin credentials (matching console_user/console_password) and
+# registers EEM applet that auto-sets boot variable on first login.
+_N9KV_CONFIG_PREAMBLE = """\
+no password strength-check
+username admin role network-admin
+username admin password admin
+event manager applet BOOTCONFIG
+ event syslog pattern "Configured from vty"
+ action 1.0 cli python3 bootflash:set_boot.py"""
+
+
 class LibvirtProvider(Provider):
     """Provider for libvirt/QEMU-based virtual machine labs.
 
@@ -1833,7 +1866,16 @@ class LibvirtProvider(Provider):
         # Serial log for lock-free readiness observation
         serial_log_dir = workspace / "serial-logs"
         serial_log_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            serial_log_dir.chmod(0o777)
+        except OSError:
+            pass
         serial_log_path = serial_log_dir / f"{domain_name}.log"
+        try:
+            serial_log_path.touch(exist_ok=True)
+            serial_log_path.chmod(0o666)
+        except OSError:
+            pass
 
         xml = self._generate_domain_xml(
             domain_name,
@@ -2414,9 +2456,32 @@ class LibvirtProvider(Provider):
             if libvirt_config.needs_nested_vmx:
                 await asyncio.to_thread(self._patch_vjunos_svm_compat, overlay_path)
 
+            canonical_kind = self._canonical_kind(kind)
+
+            # N9Kv: write set_boot.py to bootflash for EEM-driven boot variable persistence
+            if canonical_kind == "cisco_n9kv" and settings.n9kv_boot_modifications_enabled:
+                from agent.providers.bootflash_inject import inject_startup_config as _inject_bootflash
+
+                bootfix_diag: dict[str, Any] = {}
+                bootfix_ok = await asyncio.to_thread(
+                    _inject_bootflash,
+                    overlay_path,
+                    _N9KV_SET_BOOT_SCRIPT,
+                    partition=libvirt_config.config_inject_partition,
+                    fs_type=libvirt_config.config_inject_fs_type,
+                    config_path="/set_boot.py",
+                    diagnostics=bootfix_diag,
+                )
+                if bootfix_ok:
+                    logger.info("Wrote set_boot.py to bootflash for %s", node_name)
+                else:
+                    logger.warning(
+                        "Failed to write set_boot.py for %s; boot variable may not persist: %s",
+                        node_name, bootfix_diag,
+                    )
+
             # Inject startup-config
             inject_summary = ""
-            canonical_kind = self._canonical_kind(kind)
             if not startup_config:
                 config_file = workspace / "configs" / node_name / "startup-config"
                 if config_file.exists():
@@ -2513,7 +2578,16 @@ class LibvirtProvider(Provider):
             # Serial log for lock-free readiness observation
             serial_log_dir = workspace / "serial-logs"
             serial_log_dir.mkdir(parents=True, exist_ok=True)
+            try:
+                serial_log_dir.chmod(0o777)
+            except OSError:
+                pass
             serial_log_path = serial_log_dir / f"{domain_name}.log"
+            try:
+                serial_log_path.touch(exist_ok=True)
+                serial_log_path.chmod(0o666)
+            except OSError:
+                pass
 
             xml = self._generate_domain_xml(
                 domain_name,
@@ -2655,6 +2729,9 @@ class LibvirtProvider(Provider):
         normalized = "\n".join(cleaned)
         if normalized and not normalized.endswith("\n"):
             normalized += "\n"
+
+        # Prepend CML-style preamble: admin credentials + EEM applet for boot variable
+        normalized = _N9KV_CONFIG_PREAMBLE + "\n" + normalized
         return normalized
 
     def _format_injection_diagnostics(self, inject_ok: bool, diag: dict[str, Any]) -> str:

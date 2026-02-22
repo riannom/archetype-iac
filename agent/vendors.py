@@ -1303,7 +1303,7 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         disk_driver="sata",  # NX-OS requires AHCI/SATA to detect bootflash; IDE boots kernel but no bootflash
         machine_type="pc-i440fx-6.2",  # e1000 TX hangs on Q35; i440fx works with explicit AHCI controller
         efi_boot=True,  # N9Kv image uses UEFI; legacy BIOS drops to boot manager
-        efi_vars="stateful",  # N9Kv needs writable NVRAM for boot variable persistence
+        efi_vars="stateless",  # CML reference: stateless EFI. Boot var stored on bootflash via EEM applet
         serial_port_count=2,  # CML spec: console + aux; N9Kv sysconf expects 2 serial ports
         requires_image=True,
         supported_image_kinds=["qcow2"],
@@ -1330,25 +1330,23 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         config_extract_password="admin",
         config_extract_timeout=60,
         config_extract_paging_disable="terminal length 0",
-        # Post-boot recovery for this environment:
-        # import staged bootflash config into running, persist to startup,
-        # and ensure POAP stays disabled on this VM state.
+        # Post-boot: EEM applet handles boot variable, ISO config handles credentials.
+        # Only disable POAP and persist running config.
         post_boot_commands=[
             "configure terminal ; system no poap ; end",
-            "copy bootflash:startup-config running-config",
-            "copy running-config startup-config",
-            # Compatibility fallback path for images that do not accept the
-            # direct bootflash->running import in one command.
-            "copy bootflash:startup-config startup-config",
-            "copy startup-config running-config",
             "copy running-config startup-config",
         ],
-        # Config injection: write startup-config to bootflash partition before boot
-        config_inject_method="bootflash",
-        config_inject_partition=0,  # auto-detect via blkid
+        # Config injection: ISO with CML-style volume_name=disk, file=nxos_config.txt
+        config_inject_method="iso",
+        config_inject_iso_volume_label="disk",
+        config_inject_iso_filename="nxos_config.txt",
+        # Keep bootflash params for set_boot.py injection (separate from config delivery)
+        config_inject_partition=0,
         config_inject_fs_type="ext2",
         config_inject_path="/startup-config",
-        default_credentials="admin / (no password)",
+        default_credentials="admin / admin",
+        # Minimal default config ensures ISO is always created (preamble adds credentials + EEM)
+        default_startup_config="hostname {hostname}\n",
     ),
 
     # =========================================================================

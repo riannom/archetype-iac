@@ -518,9 +518,16 @@ class LibvirtLogPatternProbe(ReadinessProbe):
                         "serial_log_file" if content.strip() else "serial_log_empty"
                     )
                     return content
-                self._last_console_read_reason = "serial_log_not_ready"
+                elif log_path.exists():
+                    self._last_console_read_reason = "serial_log_empty"
+                else:
+                    self._last_console_read_reason = "serial_log_not_ready"
+                    logger.debug(
+                        "Serial log not found: %s (parent=%s)",
+                        self.serial_log_path, log_path.parent.exists(),
+                    )
             except Exception as e:
-                logger.debug(f"Error reading serial log {self.serial_log_path}: {e}")
+                logger.debug("Serial log error %s: %s", self.serial_log_path, e)
                 self._last_console_read_reason = "serial_log_error"
             # Fall through to virsh console path
 

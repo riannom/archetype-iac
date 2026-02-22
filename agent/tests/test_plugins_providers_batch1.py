@@ -354,6 +354,9 @@ def test_libvirt_prepare_startup_config_for_n9kv_strips_console_noise() -> None:
     assert "N9K-4#" not in cleaned
     assert "version 10.3(3)" in cleaned
     assert cleaned.endswith("\n")
+    # CML preamble prepended
+    assert "no password strength-check" in cleaned
+    assert "event manager applet BOOTCONFIG" in cleaned
 
 
 def test_libvirt_prepare_startup_config_for_n9kv_alias_strips_console_noise() -> None:
@@ -361,7 +364,9 @@ def test_libvirt_prepare_startup_config_for_n9kv_alias_strips_console_noise() ->
     raw = "N9K-4# show running-config\r\nhostname N9K-4\r\nN9K-4#\r\n"
     cleaned = provider._prepare_startup_config_for_injection("nxosv9000", raw)
 
-    assert cleaned == "hostname N9K-4\n"
+    # Preamble + cleaned user config
+    assert "no password strength-check" in cleaned
+    assert "hostname N9K-4\n" in cleaned
 
 
 def test_libvirt_prepare_startup_config_for_n9kv_strips_extraction_headers() -> None:
@@ -379,7 +384,9 @@ def test_libvirt_prepare_startup_config_for_n9kv_strips_extraction_headers() -> 
     assert "!Command:" not in cleaned
     assert "!Running configuration" not in cleaned
     assert "!Time:" not in cleaned
-    assert cleaned.startswith("version 10.5(3)\n")
+    # Preamble comes first, then user config
+    assert "no password strength-check" in cleaned
+    assert "version 10.5(3)" in cleaned
 
 
 def test_libvirt_prepare_startup_config_non_n9kv_only_normalizes_newlines() -> None:
@@ -388,6 +395,25 @@ def test_libvirt_prepare_startup_config_non_n9kv_only_normalizes_newlines() -> N
     cleaned = provider._prepare_startup_config_for_injection("cisco_iosv", raw)
 
     assert cleaned == "Router# show running-config\nhostname R1\n"
+
+
+def test_n9kv_set_boot_script_constant() -> None:
+    """The N9Kv set_boot.py script constant should contain CML reference content."""
+    from agent.providers.libvirt import _N9KV_SET_BOOT_SCRIPT
+    assert "from cli import cli" in _N9KV_SET_BOOT_SCRIPT
+    assert "nxos_file_name" in _N9KV_SET_BOOT_SCRIPT
+    assert "boot nxos" in _N9KV_SET_BOOT_SCRIPT
+    assert "BOOTCONFIG" in _N9KV_SET_BOOT_SCRIPT
+    assert "/bootflash/set_boot.py" in _N9KV_SET_BOOT_SCRIPT
+
+
+def test_n9kv_config_preamble_constant() -> None:
+    """The N9Kv config preamble should set credentials and EEM applet."""
+    from agent.providers.libvirt import _N9KV_CONFIG_PREAMBLE
+    assert "no password strength-check" in _N9KV_CONFIG_PREAMBLE
+    assert "username admin password admin" in _N9KV_CONFIG_PREAMBLE
+    assert "event manager applet BOOTCONFIG" in _N9KV_CONFIG_PREAMBLE
+    assert "python3 bootflash:set_boot.py" in _N9KV_CONFIG_PREAMBLE
 
 
 def test_libvirt_undefine_domain_falls_back_to_nvram(monkeypatch) -> None:

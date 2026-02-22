@@ -205,10 +205,12 @@ def test_domain_xml_machine_type_in_os_element():
 # ---------------------------------------------------------------------------
 
 
-def test_n9kv_config_inject_method_is_bootflash():
-    """N9Kv should use bootflash config injection."""
+def test_n9kv_config_inject_method_is_iso():
+    """N9Kv should use ISO config injection (CML reference)."""
     config = VENDOR_CONFIGS["cisco_n9kv"]
-    assert config.config_inject_method == "bootflash"
+    assert config.config_inject_method == "iso"
+    assert config.config_inject_iso_volume_label == "disk"
+    assert config.config_inject_iso_filename == "nxos_config.txt"
 
 
 def test_n9kv_config_inject_path():
@@ -217,12 +219,13 @@ def test_n9kv_config_inject_path():
     assert config.config_inject_path == "/startup-config"
 
 
-def test_n9kv_post_boot_commands_seed_and_persist_startup_config():
-    """N9Kv post-boot commands should import and persist staged startup config."""
+def test_n9kv_post_boot_commands_disable_poap_and_save():
+    """N9Kv post-boot commands should disable POAP and save config (EEM handles boot var)."""
     config = VENDOR_CONFIGS["cisco_n9kv"]
     assert "configure terminal ; system no poap ; end" in config.post_boot_commands
-    assert "copy bootflash:startup-config running-config" in config.post_boot_commands
     assert "copy running-config startup-config" in config.post_boot_commands
+    # Bootflash import no longer needed — ISO delivers config directly
+    assert "copy bootflash:startup-config running-config" not in config.post_boot_commands
 
 
 def test_default_device_has_no_config_injection():
@@ -234,16 +237,33 @@ def test_default_device_has_no_config_injection():
 def test_get_libvirt_config_propagates_config_inject_fields():
     """Config injection fields must propagate through get_libvirt_config."""
     lc = get_libvirt_config("cisco_n9kv")
-    assert lc.config_inject_method == "bootflash"
+    assert lc.config_inject_method == "iso"
+    assert lc.config_inject_iso_volume_label == "disk"
+    assert lc.config_inject_iso_filename == "nxos_config.txt"
+    # Bootflash params still present for set_boot.py injection
     assert lc.config_inject_partition == 0
     assert lc.config_inject_fs_type == "ext2"
-    assert lc.config_inject_path == "/startup-config"
 
 
 def test_get_libvirt_config_fallback_has_no_config_injection():
     """Fallback config should have config_inject_method='none'."""
     lc = get_libvirt_config("unknown_device_xyz_fallback")
     assert lc.config_inject_method == "none"
+
+
+def test_n9kv_efi_is_stateless():
+    """N9Kv should use stateless EFI (CML reference). Boot var via EEM applet."""
+    config = VENDOR_CONFIGS["cisco_n9kv"]
+    assert config.efi_vars == "stateless"
+    assert config.efi_boot is True
+
+
+def test_n9kv_default_credentials():
+    """N9Kv should have admin/admin credentials matching ISO config preamble."""
+    config = VENDOR_CONFIGS["cisco_n9kv"]
+    assert config.console_user == "admin"
+    assert config.console_password == "admin"
+    assert config.default_credentials == "admin / admin"
 
 
 # ---------------------------------------------------------------------------
