@@ -288,9 +288,12 @@ class LibvirtLogPatternProbe(ReadinessProbe):
         """Return ordered diagnostic marker names found in console output."""
         if not self._compiled_diagnostics:
             return []
+        # Sanitize before matching — serial consoles embed \r and control
+        # chars mid-word which break patterns like "Kernel panic".
+        cleaned = self._sanitize_console_output(console_output)
         hits: list[str] = []
         for name, compiled_pattern in self._compiled_diagnostics:
-            if compiled_pattern.search(console_output):
+            if compiled_pattern.search(cleaned):
                 hits.append(name)
         return hits
 

@@ -71,6 +71,7 @@ class VMConfig:
     reserved_nics: int
     cpu_sockets: int
     needs_nested_vmx: bool
+    cpu_features_disable: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -222,6 +223,7 @@ class VendorConfig:
     reserved_nics: int = 0        # Dummy NICs inserted after management, before data (XRv9k needs 2)
     cpu_sockets: int = 0          # If >0, explicit SMP topology: sockets=N, cores=cpu/N, threads=1
     needs_nested_vmx: bool = False  # Force VMX CPU flag (vJunos checks /proc/cpuinfo for vmx even on AMD)
+    cpu_features_disable: list[str] = field(default_factory=list)  # CPU features to disable (e.g., smep, smap)
 
     # Image requirements
     requires_image: bool = True
@@ -386,6 +388,7 @@ class VendorConfig:
             reserved_nics=self.reserved_nics,
             cpu_sockets=self.cpu_sockets,
             needs_nested_vmx=self.needs_nested_vmx,
+            cpu_features_disable=tuple(self.cpu_features_disable),
         )
 
     @property
@@ -1305,6 +1308,7 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         efi_boot=True,  # N9Kv image uses UEFI; legacy BIOS drops to boot manager
         efi_vars="stateless",  # CML reference: stateless EFI. Boot var stored on bootflash via EEM applet
         serial_port_count=2,  # CML spec: console + aux; N9Kv sysconf expects 2 serial ports
+        cpu_features_disable=["smep", "smap", "pku", "umip"],  # NX-OS guest kernel lacks SMAP support → ksm_scan_thread GPF
         requires_image=True,
         supported_image_kinds=["qcow2"],
         documentation_url="https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus9000/",
@@ -2377,6 +2381,7 @@ class LibvirtRuntimeConfig:
     reserved_nics: int = 0  # Dummy NICs after management, before data interfaces
     cpu_sockets: int = 0    # If >0, explicit SMP topology: sockets=N, cores=cpu/N
     needs_nested_vmx: bool = False  # Force VMX CPU flag for AMD hosts (vJunos compat)
+    cpu_features_disable: list[str] = field(default_factory=list)  # CPU features to disable
     config_inject_method: str = "none"    # "none", "bootflash", "iso", or "config_disk"
     config_inject_partition: int = 0      # 0 = auto-detect via blkid (bootflash only)
     config_inject_fs_type: str = "ext2"   # Expected filesystem of bootflash
@@ -2477,6 +2482,7 @@ def get_libvirt_config(device: str) -> LibvirtRuntimeConfig:
         reserved_nics=config.reserved_nics,
         cpu_sockets=config.cpu_sockets,
         needs_nested_vmx=config.needs_nested_vmx,
+        cpu_features_disable=list(config.cpu_features_disable),
         config_inject_method=config.config_inject_method,
         config_inject_partition=config.config_inject_partition,
         config_inject_fs_type=config.config_inject_fs_type,

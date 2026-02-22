@@ -1478,12 +1478,20 @@ class LibvirtProvider(Provider):
         # instead of sockets-per-core for Spirit bootstrap to detect CPUs correctly.
         # migratable='off' exposes VMX/SVM for nested KVM (required by XRv9000 XR VM).
         cpu_sockets = node_config.get("cpu_sockets", 0)
+        cpu_features_disable = node_config.get("cpu_features_disable", [])
+        cpu_children: list[str] = []
         if cpu_sockets > 0:
             cores = max(1, cpus // cpu_sockets)
+            cpu_children.append(
+                f"    <topology sockets='{cpu_sockets}' cores='{cores}' threads='1'/>"
+            )
+        for feat in cpu_features_disable:
+            cpu_children.append(f"    <feature policy='disable' name='{feat}'/>")
+        if cpu_children:
             cpu_xml = (
-                f"<cpu mode='host-passthrough' migratable='off'>\n"
-                f"    <topology sockets='{cpu_sockets}' cores='{cores}' threads='1'/>\n"
-                f"  </cpu>"
+                "<cpu mode='host-passthrough' migratable='off'>\n"
+                + "\n".join(cpu_children) + "\n"
+                "  </cpu>"
             )
         else:
             cpu_xml = "<cpu mode='host-passthrough' migratable='off'/>"
