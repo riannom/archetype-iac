@@ -926,7 +926,7 @@ class DockerOVSPlugin:
                 )
 
     async def _ensure_lab_network_attachments(self) -> None:
-        """Ensure containers are attached to all lab OVS networks (eth1..ethN)."""
+        """Ensure containers are attached to all lab OVS networks (eth0..ethN)."""
 
         def _sync_attach_all() -> list[tuple[str, str, bool]]:
             import docker
@@ -937,8 +937,6 @@ class DockerOVSPlugin:
 
             networks_by_lab: dict[str, list[NetworkState]] = {}
             for network_state in self.networks.values():
-                if network_state.interface_name == "eth0":
-                    continue
                 networks_by_lab.setdefault(network_state.lab_id, []).append(network_state)
 
             for lab_id, networks in networks_by_lab.items():
@@ -3027,10 +3025,6 @@ class DockerOVSPlugin:
             if ep.container_name and ep.container_name != container_name:
                 continue
 
-            # Skip management network (eth0)
-            if ep.interface_name == "eth0":
-                continue
-
             mapping[ep.host_veth] = ep.interface_name
 
         # If we have endpoint mappings, return them
@@ -3042,9 +3036,6 @@ class DockerOVSPlugin:
         # The mapping will be applied to ALL containers in the lab (caller filters)
         for network in self.networks.values():
             if network.lab_id != lab_id:
-                continue
-            # Skip management network
-            if network.interface_name == "eth0":
                 continue
             # We don't know the exact host_veth for each network without endpoint state,
             # but we can return the intended interface names for the caller to match

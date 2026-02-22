@@ -1640,7 +1640,7 @@ event-handler IPTABLES_CLEANUP
         # Build mapping of network_id -> intended interface name from plugin
         network_to_interface = {}
         for network in plugin.networks.values():
-            if network.lab_id == lab_id and network.interface_name != "eth0":
+            if network.lab_id == lab_id:
                 network_to_interface[network.network_id] = network.interface_name
 
         if not network_to_interface:
@@ -2669,6 +2669,14 @@ event-handler IPTABLES_CLEANUP
         except Exception:
             desired_count = None
 
+        # LABEL_NODE_INTERFACE_COUNT stores data-port count only.
+        # With mgmt on OVS, total attached = eth0 (mgmt) + reserved + data ports.
+        kind = (container.labels or {}).get(LABEL_NODE_KIND)
+        if kind and desired_count is not None:
+            vc = get_config_by_device(kind)
+            if vc and vc.management_interface:
+                desired_count = 1 + vc.reserved_nics + desired_count
+
         def _iface_index(name: str) -> int:
             match = re.search(r"(\d+)$", name)
             return int(match.group(1)) if match else 0
@@ -3029,8 +3037,14 @@ event-handler IPTABLES_CLEANUP
                 )
 
             # Ensure lab Docker networks (idempotent)
+            # Look up vendor config early so we can size networks correctly
+            vendor_config = get_config_by_device(kind)
+            has_mgmt = vendor_config and vendor_config.management_interface
+            reserved = vendor_config.reserved_nics if vendor_config else 0
             if self.use_ovs_plugin:
-                await self._create_lab_networks(lab_id, max_interfaces=iface_count)
+                # Devices with mgmt + reserved NICs need eth0..eth{reserved+iface_count}
+                total_interfaces = (reserved + iface_count) if has_mgmt else iface_count
+                await self._create_lab_networks(lab_id, max_interfaces=total_interfaces)
 
             # Check if container already exists
             try:
@@ -3063,11 +3077,6 @@ event-handler IPTABLES_CLEANUP
 
             try:
                 if self.use_ovs_plugin:
-                    # Determine NIC layout based on vendor config
-                    vendor_config = get_config_by_device(kind)
-                    has_mgmt = vendor_config and vendor_config.management_interface
-                    reserved = vendor_config.reserved_nics if vendor_config else 0
-
                     lab_prefix = self._lab_network_prefix(lab_id)
                     if has_mgmt:
                         first_network = f"{lab_prefix}-eth0"
