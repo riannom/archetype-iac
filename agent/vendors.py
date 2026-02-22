@@ -15,6 +15,7 @@ When adding a new vendor:
 
 from dataclasses import dataclass, field
 from enum import Enum
+import functools
 import logging
 from typing import Optional
 
@@ -358,7 +359,7 @@ class VendorConfig:
     # These return frozen dataclass views grouping related fields.
     # -------------------------------------------------------------------------
 
-    @property
+    @functools.cached_property
     def interfaces(self) -> InterfaceConfig:
         return InterfaceConfig(
             port_naming=self.port_naming,
@@ -367,11 +368,11 @@ class VendorConfig:
             management_interface=self.management_interface,
         )
 
-    @property
+    @functools.cached_property
     def resources(self) -> ResourceConfig:
         return ResourceConfig(memory=self.memory, cpu=self.cpu)
 
-    @property
+    @functools.cached_property
     def vm(self) -> VMConfig:
         return VMConfig(
             disk_driver=self.disk_driver,
@@ -391,7 +392,7 @@ class VendorConfig:
             cpu_features_disable=tuple(self.cpu_features_disable),
         )
 
-    @property
+    @functools.cached_property
     def console(self) -> ConsoleConfig:
         return ConsoleConfig(
             console_method=self.console_method,
@@ -401,7 +402,7 @@ class VendorConfig:
             default_credentials=self.default_credentials,
         )
 
-    @property
+    @functools.cached_property
     def readiness(self) -> ReadinessConfig:
         return ReadinessConfig(
             readiness_probe=self.readiness_probe,
@@ -409,7 +410,7 @@ class VendorConfig:
             readiness_timeout=self.readiness_timeout,
         )
 
-    @property
+    @functools.cached_property
     def config_extraction(self) -> ConfigExtractionConfig:
         return ConfigExtractionConfig(
             config_extract_method=self.config_extract_method,
@@ -422,7 +423,7 @@ class VendorConfig:
             config_extract_paging_disable=self.config_extract_paging_disable,
         )
 
-    @property
+    @functools.cached_property
     def config_injection(self) -> ConfigInjectionConfig:
         return ConfigInjectionConfig(
             config_inject_method=self.config_inject_method,
@@ -433,7 +434,7 @@ class VendorConfig:
             config_inject_iso_filename=self.config_inject_iso_filename,
         )
 
-    @property
+    @functools.cached_property
     def container(self) -> ContainerConfig:
         return ContainerConfig(
             environment=self.environment,
@@ -449,7 +450,7 @@ class VendorConfig:
             post_boot_commands=self.post_boot_commands,
         )
 
-    @property
+    @functools.cached_property
     def ui(self) -> UIConfig:
         return UIConfig(
             icon=self.icon,
