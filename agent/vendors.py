@@ -1330,12 +1330,8 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         config_extract_password="cisco",
         config_extract_timeout=60,
         config_extract_paging_disable="terminal length 0",
-        # Post-boot: EEM applet handles boot variable, ISO config handles credentials.
-        # Only disable POAP and persist running config.
-        post_boot_commands=[
-            "configure terminal ; system no poap ; end",
-            "copy running-config startup-config",
-        ],
+        # No post-boot commands needed: ISO config handles credentials and POAP skip,
+        # EEM applet handles boot variable, config save happens at extraction time.
         # Config injection: CML-style ISO (volume=disk, file=nxos_config.txt).
         # Preamble echo commands create set_boot.py on bootflash at boot time.
         config_inject_method="iso",
