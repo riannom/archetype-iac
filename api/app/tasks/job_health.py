@@ -20,6 +20,7 @@ from app.config import settings
 from app.db import get_session
 from app.utils.job import get_job_timeout, is_job_stuck
 from app.utils.async_tasks import safe_create_task
+from app.utils.time import utcnow
 from app.state import (
     HostStatus,
     JobStatus,
@@ -130,7 +131,7 @@ async def check_stuck_jobs():
     """
     with get_session() as session:
         try:
-            now = datetime.now(timezone.utc)
+            now = utcnow()
 
             # Find all active jobs (queued or running)
             active_jobs = (
@@ -252,7 +253,7 @@ async def _retry_job(session, old_job: models.Job, exclude_agent: str | None = N
             )
             # Mark old job as superseded by existing job instead of creating new one
             old_job.status = "cancelled"
-            old_job.completed_at = datetime.now(timezone.utc)
+            old_job.completed_at = utcnow()
             old_job.superseded_by_id = existing_job.id
             old_job.log_path = (old_job.log_path or "") + f"\n\n--- Cancelled: duplicate of job {existing_job.id} ---"
             session.commit()
@@ -275,7 +276,7 @@ async def _retry_job(session, old_job: models.Job, exclude_agent: str | None = N
 
     # Mark old job as failed
     old_job.status = JobStatus.FAILED.value
-    old_job.completed_at = datetime.now(timezone.utc)
+    old_job.completed_at = utcnow()
     timeout_msg = f"Job timed out after {get_job_timeout(old_job.action)}s, retrying (attempt {old_job.retry_count + 1})..."
     if _is_file_path(old_job.log_path):
         # Append timeout message to existing log file
@@ -319,7 +320,7 @@ async def _retry_job(session, old_job: models.Job, exclude_agent: str | None = N
         logger.info(f"Cancelling {len(child_jobs)} child job(s) of retried parent job {old_job.id}")
         for child in child_jobs:
             child.status = "cancelled"
-            child.completed_at = datetime.now(timezone.utc)
+            child.completed_at = utcnow()
             child.superseded_by_id = new_job.id
             if child.log_path:
                 child.log_path = f"{child.log_path}\n\n--- Cancelled: parent job retried ---"
@@ -421,7 +422,7 @@ async def _fail_job(session, job: models.Job, reason: str):
     logger.error(f"Failing job {job.id}: {reason}")
 
     job.status = JobStatus.FAILED.value
-    job.completed_at = datetime.now(timezone.utc)
+    job.completed_at = utcnow()
     if _is_file_path(job.log_path):
         # Append failure message to existing log file
         try:
@@ -441,7 +442,7 @@ async def _fail_job(session, job: models.Job, reason: str):
         if lab:
             lab.state = LabState.ERROR.value
             lab.state_error = f"Job {job.action} failed: {reason}"
-            lab.state_updated_at = datetime.now(timezone.utc)
+            lab.state_updated_at = utcnow()
             logger.info(f"Set lab {job.lab_id} state to error due to stuck job")
 
     session.commit()
@@ -457,7 +458,7 @@ async def check_orphaned_queued_jobs():
     """
     with get_session() as session:
         try:
-            now = datetime.now(timezone.utc)
+            now = utcnow()
             orphan_cutoff = now - timedelta(minutes=2)
 
             # Find queued jobs older than 2 minutes without an agent
@@ -566,7 +567,7 @@ async def check_stuck_image_sync_jobs():
     """
     with get_session() as session:
         try:
-            now = datetime.now(timezone.utc)
+            now = utcnow()
 
             # Find all active image sync jobs
             active_jobs = (
@@ -738,7 +739,7 @@ def check_stuck_stopping_nodes():
     """
     with get_session() as session:
         try:
-            now = datetime.now(timezone.utc)
+            now = utcnow()
             # 6 minute timeout for stopping operations
             stuck_threshold = now - timedelta(seconds=360)
 
@@ -758,9 +759,7 @@ def check_stuck_stopping_nodes():
             # Group by lab_id for efficient processing
             nodes_by_lab: dict[str, list[models.NodeState]] = {}
             for ns in stuck_nodes:
-                if ns.lab_id not in nodes_by_lab:
-                    nodes_by_lab[ns.lab_id] = []
-                nodes_by_lab[ns.lab_id].append(ns)
+                nodes_by_lab.setdefault(ns.lab_id, []).append(ns)
 
             for lab_id, nodes in nodes_by_lab.items():
                 # Check if there's an active job for this lab
@@ -814,7 +813,7 @@ def check_stuck_starting_nodes():
     """
     with get_session() as session:
         try:
-            now = datetime.now(timezone.utc)
+            now = utcnow()
             # 6 minute timeout for starting operations
             stuck_threshold = now - timedelta(seconds=360)
 
@@ -834,9 +833,7 @@ def check_stuck_starting_nodes():
             # Group by lab_id for efficient processing
             nodes_by_lab: dict[str, list[models.NodeState]] = {}
             for ns in stuck_nodes:
-                if ns.lab_id not in nodes_by_lab:
-                    nodes_by_lab[ns.lab_id] = []
-                nodes_by_lab[ns.lab_id].append(ns)
+                nodes_by_lab.setdefault(ns.lab_id, []).append(ns)
 
             for lab_id, nodes in nodes_by_lab.items():
                 # Check if there's an active job for this lab
@@ -895,7 +892,7 @@ def check_stuck_agent_updates():
     """
     with get_session() as session:
         try:
-            now = datetime.now(timezone.utc)
+            now = utcnow()
             active_statuses = ["pending", "downloading", "installing", "restarting"]
 
             stuck_jobs = (
