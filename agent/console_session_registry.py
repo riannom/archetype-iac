@@ -559,12 +559,14 @@ def piggyback_run_commands(
             injector.expect(prompt_pattern, timeout=5)
             prompt_match = (getattr(injector, "last_match", "") or "").strip()
 
-        if username and re.search(login_pattern, prompt_text + prompt_match):
-            injector.sendline(username)
-            injector.expect(r"[Pp]assword:", timeout=10)
-            injector.sendline(password)
-            injector.expect(prompt_pattern, timeout=30)
-            prompt_match = (getattr(injector, "last_match", "") or "").strip()
+        # Device at login prompt — leave it for the user to login interactively.
+        # Post-boot commands will run on the next readiness cycle after user logs in.
+        if re.search(login_pattern, prompt_text + prompt_match):
+            logger.info(
+                "Device %s at login prompt, deferring to user login",
+                domain_name,
+            )
+            return CommandResult(success=True, commands_run=0)
 
         if prompt_match.endswith(">"):
             injector.sendline("enable")
@@ -715,13 +717,13 @@ def piggyback_run_commands_capture(
             injector.expect(prompt_pattern, timeout=5)
             prompt_match = (getattr(injector, "last_match", "") or "").strip()
 
-        # Handle login if needed
-        if username and re.search(login_pattern, prompt_text + prompt_match):
-            injector.sendline(username)
-            injector.expect(r"[Pp]assword:", timeout=10)
-            injector.sendline(password)
-            injector.expect(prompt_pattern, timeout=30)
-            prompt_match = (getattr(injector, "last_match", "") or "").strip()
+        # Device at login prompt — leave it for the user to login interactively.
+        if re.search(login_pattern, prompt_text + prompt_match):
+            logger.info(
+                "Device %s at login prompt, deferring to user login",
+                domain_name,
+            )
+            return CaptureResult(success=True, outputs={})
 
         # Enable mode
         if attempt_enable and prompt_match.endswith(">"):
