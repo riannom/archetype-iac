@@ -2,6 +2,8 @@ import React, { useState, useCallback, useEffect, useRef } from 'react';
 import TerminalSession from './TerminalSession';
 import { NodeStateEntry } from '../../types/nodeState';
 import { useTheme } from '../../theme';
+import { useUptime } from '../hooks/useUptime';
+import { VersionBadge } from '../../components/VersionBadge';
 
 export interface TaskLogEntry {
   id: string;
@@ -35,6 +37,9 @@ interface TaskLogPanelProps {
   // Lab context for terminals
   labId?: string;
   nodeStates?: Record<string, NodeStateEntry>;
+  // Status bar props (merged from StatusBar)
+  wsConnected?: boolean;
+  reconnectAttempts?: number;
 }
 
 const MIN_HEIGHT = 100;
@@ -62,8 +67,11 @@ const TaskLogPanel: React.FC<TaskLogPanelProps> = ({
   onReorderTab,
   labId,
   nodeStates = {},
+  wsConnected,
+  reconnectAttempts = 0,
 }) => {
   const { effectiveMode } = useTheme();
+  const uptime = useUptime(nodeStates);
   const errorCount = entries.filter((e) => e.level === 'error').length;
   const hasConsoleTabs = showConsoles && consoleTabs.length > 0;
 
@@ -295,6 +303,11 @@ const TaskLogPanel: React.FC<TaskLogPanelProps> = ({
     : 'text-stone-400 dark:text-stone-500 hover:text-stone-600 dark:hover:text-stone-300';
   const headerHoverClass = effectiveMode === 'light' ? 'hover:bg-white/10' : 'hover:bg-stone-100/50 dark:hover:bg-stone-900/50';
   const gripClass = effectiveMode === 'light' ? 'bg-white/40 group-hover:bg-white/60' : 'bg-stone-300 dark:bg-stone-600 group-hover:bg-cyan-400';
+  const isLightMode = effectiveMode === 'light';
+  const uptimeClass = isLightMode
+    ? 'text-white/85 hover:text-white'
+    : 'text-stone-500 dark:text-stone-500 hover:text-sage-600 dark:hover:text-sage-400';
+  const dividerClass = isLightMode ? 'bg-white/30' : 'bg-stone-200 dark:bg-stone-800';
 
   // Keep task log pinned to the latest entry when auto-refresh is enabled.
   useEffect(() => {
@@ -326,7 +339,35 @@ const TaskLogPanel: React.FC<TaskLogPanelProps> = ({
             }`} />
           </div>
         )}
+        {/* Left zone: WS indicator + title + error badge */}
         <div className="flex items-center gap-2">
+          {wsConnected !== undefined && (
+            <div
+              className={`flex items-center gap-1.5 px-2 py-0.5 rounded border text-[10px] font-bold ${
+                reconnectAttempts > 0
+                  ? 'bg-amber-50 dark:bg-amber-900/30 border-amber-200 dark:border-amber-800 text-amber-600 dark:text-amber-400'
+                  : 'bg-sage-100 dark:bg-sage-900 border-sage-300 dark:border-sage-700 text-sage-700 dark:text-sage-300'
+              } transition-colors`}
+              title={
+                wsConnected
+                  ? 'Connected - Receiving real-time updates'
+                  : reconnectAttempts > 0
+                    ? `Reconnecting... (attempt ${reconnectAttempts})`
+                    : 'Disconnected - Using polling fallback'
+              }
+            >
+              <i
+                className={`fa-solid ${
+                  reconnectAttempts > 0
+                    ? 'fa-rotate fa-spin'
+                    : 'fa-signal'
+                } text-[8px]`}
+              ></i>
+              <span className="uppercase">
+                {reconnectAttempts > 0 ? 'RECONNECTING' : 'LIVE'}
+              </span>
+            </div>
+          )}
           <span className={`text-[10px] font-black uppercase tracking-widest ${headerTitleClass}`}>
             {hasConsoleTabs ? 'Panel' : 'Task Log'}
           </span>
@@ -336,6 +377,7 @@ const TaskLogPanel: React.FC<TaskLogPanelProps> = ({
             </span>
           )}
         </div>
+        {/* Right zone: auto-refresh + clear | uptime | version | chevron */}
         <div className="flex items-center gap-3">
           {isVisible && logTabActive && onToggleAutoUpdate && (
             <label
@@ -364,6 +406,22 @@ const TaskLogPanel: React.FC<TaskLogPanelProps> = ({
               Clear
             </button>
           )}
+          <div className={`h-3 w-px ${dividerClass}`}></div>
+          <div
+            onMouseDown={(e) => e.stopPropagation()}
+            onClick={(e) => e.stopPropagation()}
+            className={`flex items-center gap-2 text-[10px] font-bold transition-colors ${uptimeClass}`}
+          >
+            <i className="fa-solid fa-clock-rotate-left"></i>
+            <span className="uppercase">UPTIME: {uptime}</span>
+          </div>
+          <div className={`h-3 w-px ${dividerClass}`}></div>
+          <div
+            onMouseDown={(e) => e.stopPropagation()}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <VersionBadge />
+          </div>
           <button
             onMouseDown={(e) => e.stopPropagation()}
             onClick={(e) => {

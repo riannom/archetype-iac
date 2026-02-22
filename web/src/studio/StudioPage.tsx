@@ -5,7 +5,6 @@ import TopBar from './components/TopBar';
 import PropertiesPanel from './components/PropertiesPanel';
 import ConsoleManager from './components/ConsoleManager';
 import RuntimeControl from './components/RuntimeControl';
-import StatusBar from './components/StatusBar';
 import TaskLogPanel, { TaskLogEntry, DockedConsole } from './components/TaskLogPanel';
 import Auth from './components/Auth';
 import Dashboard from './components/Dashboard';
@@ -2029,7 +2028,6 @@ const StudioPage: React.FC = () => {
           />
         </div>
       </div>
-      <StatusBar nodeStates={nodeStates} wsConnected={wsConnected} reconnectAttempts={wsReconnectAttempts} />
       <TaskLogPanel
         entries={filteredTaskLog}
         isVisible={isTaskLogVisible}
@@ -2047,6 +2045,8 @@ const StudioPage: React.FC = () => {
         onReorderTab={handleReorderDockedTab}
         labId={activeLab?.id}
         nodeStates={nodeStates}
+        wsConnected={wsConnected}
+        reconnectAttempts={wsReconnectAttempts}
       />
       {showYamlModal && (
         <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/80 backdrop-blur-md">
