@@ -5,8 +5,6 @@ which determines whether an image reference requires Docker or libvirt/QEMU.
 """
 from __future__ import annotations
 
-import pytest
-
 from app.image_store import get_image_provider
 
 

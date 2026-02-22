@@ -1,10 +1,9 @@
-from __future__ import annotations
-
 """State machine services for centralized state transition logic.
 
 This module provides state machines for nodes and links, validating
 transitions and computing next states based on desired states.
 """
+from __future__ import annotations
 
 import logging
 

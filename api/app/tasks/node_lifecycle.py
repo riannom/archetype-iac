@@ -12,9 +12,8 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import re
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta
 
 from app import agent_client, models
 from app.agent_client import AgentUnavailableError
@@ -1172,8 +1171,8 @@ class NodeLifecycleManager:
                     f"{warning_msg}"
                 )
                 self.log_parts.append(
-                    f"WARNING: Stale capacity data detected — "
-                    f"proceeding with bin-packer-approved placement"
+                    "WARNING: Stale capacity data detected — "
+                    "proceeding with bin-packer-approved placement"
                 )
 
         if cap_result.has_warnings:

@@ -23,7 +23,6 @@ from app.services.resource_capacity import (
     DEFAULT_CPU_CORES,
     DEFAULT_MEMORY_MB,
     NodeRequirement,
-    PlacementPlan,
     build_node_requirements,
     calculate_node_requirements,
     check_capacity,

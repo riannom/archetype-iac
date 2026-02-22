@@ -54,11 +54,15 @@ const mockLabs = [
     id: "lab-1",
     name: "Test Lab 1",
     created_at: "2024-01-15T10:00:00Z",
+    node_count: 5,
+    running_count: 3,
   },
   {
     id: "lab-2",
     name: "Production Lab",
     created_at: "2024-01-14T10:00:00Z",
+    node_count: 2,
+    running_count: 0,
   },
 ];
 

@@ -126,7 +126,7 @@ def _make_async_url(url: str) -> str:
     SQLite URLs through unchanged.
     """
     if url.startswith("sqlite"):
-        return url
+        return url.replace("sqlite://", "sqlite+aiosqlite://", 1)
     if "+psycopg://" in url:
         return url.replace("+psycopg://", "+psycopg_async://", 1)
     if url.startswith("postgresql://"):
