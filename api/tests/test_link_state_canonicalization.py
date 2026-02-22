@@ -38,14 +38,15 @@ def test_upsert_link_states_deduplicates_vendor_interface_variants(
     test_db.flush()
 
     # Existing duplicate rows for the same physical link.
+    # For cisco_iosv: GigabitEthernet0/1 → port_start_index=0 → eth{1-0+1} = eth2
     canonical = models.LinkState(
         id=str(uuid4()),
         lab_id=sample_lab.id,
-        link_name="r1:eth1-r2:eth1",
+        link_name="r1:eth1-r2:eth2",
         source_node="r1",
         source_interface="eth1",
         target_node="r2",
-        target_interface="eth1",
+        target_interface="eth2",
         desired_state="up",
         actual_state="up",
         updated_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
@@ -97,9 +98,9 @@ def test_upsert_link_states_deduplicates_vendor_interface_variants(
 
     assert len(active) == 1
     assert len(deleted) == 1
-    assert active[0].link_name == "r1:eth1-r2:eth1"
+    assert active[0].link_name == "r1:eth1-r2:eth2"
     assert active[0].source_interface == "eth1"
-    assert active[0].target_interface == "eth1"
+    assert active[0].target_interface == "eth2"
 
 
 def test_links_reconcile_endpoint_uses_db_session_dependency(

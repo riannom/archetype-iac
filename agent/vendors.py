@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """Vendor-specific configurations for network devices.
 
 This module provides a centralized registry of vendor configurations
@@ -14,6 +12,8 @@ When adding a new vendor:
 3. Rebuild containers: docker compose -f docker-compose.gui.yml up -d --build
 4. New device will appear in API (/vendors) and UI automatically
 """
+
+from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum

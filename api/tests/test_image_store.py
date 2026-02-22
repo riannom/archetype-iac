@@ -57,7 +57,7 @@ class TestDetectDeviceFromFilename:
     def test_cisco_csr_image(self):
         """Detects Cisco CSR1000v images."""
         device_id, version = detect_device_from_filename("csr1000v-17.03.04a.qcow2")
-        assert device_id in ("csr", "csr1000v")
+        assert device_id in ("csr", "csr1000v", "cisco_csr1000v")
         assert "17.03" in version or version
 
     def test_cisco_xrv9k_image(self):
@@ -71,7 +71,7 @@ class TestDetectDeviceFromFilename:
     def test_cisco_nxos_image(self):
         """Detects Cisco NX-OS images."""
         device_id, version = detect_device_from_filename("nxos-9.3.9.qcow2")
-        assert device_id in ("nxos", "nexus9000v")
+        assert device_id in ("nxos", "nexus9000v", "cisco_n9kv")
 
     def test_juniper_vmx_image(self):
         """Detects Juniper vMX images."""

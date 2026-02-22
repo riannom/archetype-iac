@@ -687,9 +687,11 @@ class TestCheckResources:
         from app.tasks import node_lifecycle
         monkeypatch.setattr(node_lifecycle.settings, "resource_validation_enabled", True)
 
-        # Mock capacity check to fail
+        # Mock capacity check to fail (catastrophic: available < 50% of required)
         mock_cap_result = MagicMock()
         mock_cap_result.fits = False
+        mock_cap_result.required_memory_mb = 4096
+        mock_cap_result.available_memory_mb = 1024
         with patch("app.services.resource_capacity.check_capacity", return_value=mock_cap_result), \
              patch("app.services.resource_capacity.format_capacity_error", return_value="Not enough RAM"):
             result = await manager._check_resources()
@@ -715,9 +717,11 @@ class TestCheckResources:
         from app.tasks import node_lifecycle
         monkeypatch.setattr(node_lifecycle.settings, "resource_validation_enabled", True)
 
-        # Mock capacity check to fail
+        # Mock capacity check to fail (catastrophic: available < 50% of required)
         mock_cap_result = MagicMock()
         mock_cap_result.fits = False
+        mock_cap_result.required_memory_mb = 4096
+        mock_cap_result.available_memory_mb = 1024
         with patch("app.services.resource_capacity.check_capacity", return_value=mock_cap_result), \
              patch("app.services.resource_capacity.format_capacity_error", return_value="Host A: requires 4096MB RAM, 2048MB available"):
             result = await manager._check_resources()

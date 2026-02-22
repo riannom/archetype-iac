@@ -8,12 +8,19 @@ These tests verify carrier state change propagation logic:
 """
 from __future__ import annotations
 
+from contextlib import contextmanager
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from sqlalchemy.orm import Session
 
 from app import models
+
+
+@contextmanager
+def _mock_get_session(test_db: Session):
+    """Context manager that yields the test database session."""
+    yield test_db
 
 
 # ---------------------------------------------------------------------------
@@ -115,6 +122,7 @@ class TestCarrierStateSourceChange:
         mock_client.post = AsyncMock(return_value=mock_response)
 
         with (
+            patch("app.db.get_session", lambda: _mock_get_session(test_db)),
             patch("app.routers.callbacks.agent_client.get_http_client", return_value=mock_client),
             patch("app.routers.callbacks.agent_client.is_agent_online", return_value=True),
             patch("app.routers.callbacks.get_broadcaster") as mock_bc,
@@ -123,7 +131,6 @@ class TestCarrierStateSourceChange:
             mock_bc.return_value.publish_link_state = AsyncMock(return_value=1)
             result = await carrier_state_changed(
                 payload=payload,
-                database=test_db,
                 _auth=None,
             )
 
@@ -162,6 +169,7 @@ class TestCarrierStateTargetChange:
         mock_client.post = AsyncMock(return_value=mock_response)
 
         with (
+            patch("app.db.get_session", lambda: _mock_get_session(test_db)),
             patch("app.routers.callbacks.agent_client.get_http_client", return_value=mock_client),
             patch("app.routers.callbacks.agent_client.is_agent_online", return_value=True),
             patch("app.routers.callbacks.get_broadcaster") as mock_bc,
@@ -170,7 +178,6 @@ class TestCarrierStateTargetChange:
             mock_bc.return_value.publish_link_state = AsyncMock(return_value=1)
             result = await carrier_state_changed(
                 payload=payload,
-                database=test_db,
                 _auth=None,
             )
 
@@ -209,6 +216,7 @@ class TestCarrierPeerPropagation:
         mock_client.post = AsyncMock(return_value=mock_response)
 
         with (
+            patch("app.db.get_session", lambda: _mock_get_session(test_db)),
             patch("app.routers.callbacks.agent_client.get_http_client", return_value=mock_client),
             patch("app.routers.callbacks.agent_client.is_agent_online", return_value=True),
             patch("app.routers.callbacks.get_broadcaster") as mock_bc,
@@ -217,7 +225,6 @@ class TestCarrierPeerPropagation:
             mock_bc.return_value.publish_link_state = AsyncMock(return_value=1)
             await carrier_state_changed(
                 payload=payload,
-                database=test_db,
                 _auth=None,
             )
 
@@ -262,6 +269,7 @@ class TestCarrierRestore:
         mock_client.post = AsyncMock(return_value=mock_response)
 
         with (
+            patch("app.db.get_session", lambda: _mock_get_session(test_db)),
             patch("app.routers.callbacks.agent_client.get_http_client", return_value=mock_client),
             patch("app.routers.callbacks.agent_client.is_agent_online", return_value=True),
             patch("app.routers.callbacks.get_broadcaster") as mock_bc,
@@ -270,7 +278,6 @@ class TestCarrierRestore:
             mock_bc.return_value.publish_link_state = AsyncMock(return_value=1)
             result = await carrier_state_changed(
                 payload=payload,
-                database=test_db,
                 _auth=None,
             )
 
@@ -323,6 +330,7 @@ class TestCarrierOperStateRecomputed:
         mock_client.post = AsyncMock(return_value=mock_response)
 
         with (
+            patch("app.db.get_session", lambda: _mock_get_session(test_db)),
             patch("app.routers.callbacks.agent_client.get_http_client", return_value=mock_client),
             patch("app.routers.callbacks.agent_client.is_agent_online", return_value=True),
             patch("app.routers.callbacks.get_broadcaster") as mock_bc,
@@ -331,7 +339,6 @@ class TestCarrierOperStateRecomputed:
             mock_bc.return_value.publish_link_state = AsyncMock(return_value=1)
             await carrier_state_changed(
                 payload=payload,
-                database=test_db,
                 _auth=None,
             )
 
@@ -385,6 +392,7 @@ class TestCarrierBroadcast:
         mock_publish = AsyncMock(return_value=1)
 
         with (
+            patch("app.db.get_session", lambda: _mock_get_session(test_db)),
             patch("app.routers.callbacks.agent_client.get_http_client", return_value=mock_client),
             patch("app.routers.callbacks.agent_client.is_agent_online", return_value=True),
             patch("app.routers.callbacks.get_broadcaster") as mock_bc,
@@ -393,7 +401,6 @@ class TestCarrierBroadcast:
             mock_bc.return_value.publish_link_state = mock_publish
             await carrier_state_changed(
                 payload=payload,
-                database=test_db,
                 _auth=None,
             )
 
@@ -423,10 +430,12 @@ class TestCarrierLinkNotFound:
             carrier_state="off",
         )
 
-        with patch("app.routers.callbacks.verify_agent_secret", return_value=None):
+        with (
+            patch("app.db.get_session", lambda: _mock_get_session(test_db)),
+            patch("app.routers.callbacks.verify_agent_secret", return_value=None),
+        ):
             result = await carrier_state_changed(
                 payload=payload,
-                database=test_db,
                 _auth=None,
             )
 
@@ -457,6 +466,7 @@ class TestCarrierPeerAgentOffline:
         )
 
         with (
+            patch("app.db.get_session", lambda: _mock_get_session(test_db)),
             patch("app.routers.callbacks.agent_client.is_agent_online", return_value=False),
             patch("app.routers.callbacks.get_broadcaster") as mock_bc,
             patch("app.routers.callbacks.verify_agent_secret", return_value=None),
@@ -464,7 +474,6 @@ class TestCarrierPeerAgentOffline:
             mock_bc.return_value.publish_link_state = AsyncMock(return_value=1)
             result = await carrier_state_changed(
                 payload=payload,
-                database=test_db,
                 _auth=None,
             )
 

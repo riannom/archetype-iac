@@ -441,6 +441,8 @@ def _check_update_completion(
         else:
             # Agent re-registered but version doesn't match — expire if stale
             started = job.started_at or job.created_at
+            if started and started.tzinfo is None:
+                started = started.replace(tzinfo=timezone.utc)
             age = (now - started).total_seconds() if started else 0
             if age > 300:  # 5 minutes
                 job.status = JobStatus.FAILED
@@ -1116,11 +1118,10 @@ async def trigger_agent_update(
         .first()
     )
     if active_job:
-        age_seconds = (
-            (datetime.now(timezone.utc) - active_job.started_at).total_seconds()
-            if active_job.started_at
-            else (datetime.now(timezone.utc) - active_job.created_at).total_seconds()
-        )
+        ts = active_job.started_at or active_job.created_at
+        if ts and ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        age_seconds = (datetime.now(timezone.utc) - ts).total_seconds() if ts else 0
         if age_seconds > 300:  # 5 minutes
             active_job.status = JobStatus.FAILED
             active_job.error_message = f"Expired: stuck in '{active_job.status}' for {int(age_seconds)}s"

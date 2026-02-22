@@ -275,7 +275,7 @@ def test_prime_console_answers_yes_to_poap_abort():
     except ImportError:
         import pytest as _pytest
         _pytest.skip("pexpect not available")
-    from unittest.mock import MagicMock, patch
+    from unittest.mock import MagicMock
     from agent.console_extractor import SerialConsoleExtractor
 
     ext = SerialConsoleExtractor.__new__(SerialConsoleExtractor)

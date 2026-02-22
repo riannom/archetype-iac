@@ -29,14 +29,9 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse, PlainTextResponse
 
 from agent.config import settings
-from agent.n9kv_poap import render_poap_script
 from agent.network.backends.registry import get_network_backend
-from agent.providers import NodeStatus as ProviderNodeStatus, get_provider, list_providers
-from agent.providers.base import Provider as BaseProvider
+from agent.providers import get_provider, list_providers
 from agent.schemas import (
-    AgentCapabilities,
-    AgentInfo,
-    AgentStatus,
     AttachContainerRequest,
     AttachContainerResponse,
     CleanupLabOrphansRequest,
@@ -60,8 +55,6 @@ from agent.schemas import (
     ExtractNodeConfigResponse,
     ExtractedConfig,
     FixInterfacesResponse,
-    HeartbeatRequest,
-    HeartbeatResponse,
     ImageExistsResponse,
     ImageInventoryResponse,
     ImagePullProgress,
@@ -96,7 +89,6 @@ from agent.schemas import (
     DetachOverlayInterfaceResponse,
     AttachOverlayExternalRequest,
     AttachOverlayExternalResponse,
-    Provider,
     ExternalConnectRequest,
     ExternalConnectResponse,
     ExternalDisconnectRequest,
@@ -107,8 +99,6 @@ from agent.schemas import (
     BridgePatchResponse,
     BridgeDeletePatchRequest,
     BridgeDeletePatchResponse,
-    RegistrationRequest,
-    RegistrationResponse,
     TunnelInfo,
     UpdateConfigRequest,
     UpdateConfigResponse,

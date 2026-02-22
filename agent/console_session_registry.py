@@ -509,7 +509,7 @@ def piggyback_run_commands(
         logger.debug(f"Piggyback lock busy for {domain_name}, falling back")
         return None
 
-    ws_forward: Callable[[bytes], None] = lambda _data: None
+    def ws_forward(_data: bytes) -> None: pass
     try:
         if get_session(domain_name) is None:
             return None
@@ -665,7 +665,7 @@ def piggyback_run_commands_capture(
         logger.debug(f"Piggyback capture lock busy for {domain_name}, falling back")
         return None
 
-    ws_forward: Callable[[bytes], None] = lambda _data: None
+    def ws_forward(_data: bytes) -> None: pass
     try:
         if get_session(domain_name) is None:
             return None
@@ -723,7 +723,7 @@ def piggyback_run_commands_capture(
                 "Device %s at login prompt, deferring to user login",
                 domain_name,
             )
-            return CaptureResult(success=True, outputs={})
+            return CommandCaptureResult(success=True, outputs={})
 
         # Enable mode
         if attempt_enable and prompt_match.endswith(">"):

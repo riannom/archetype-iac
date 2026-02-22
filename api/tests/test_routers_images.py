@@ -532,7 +532,7 @@ class TestChunkedImageUpload:
                     images_router._chunk_upload_sessions[upload_id]["status"] = "completed"
 
         class ImmediateThread:
-            def __init__(self, target, args=(), daemon=None):
+            def __init__(self, target, args=(), **kwargs):
                 self.target = target
                 self.args = args
 

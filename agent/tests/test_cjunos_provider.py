@@ -23,7 +23,6 @@ from agent.providers.docker import (
 from agent.vendors import (
     get_config_by_device,
     is_cjunos_kind,
-    VENDOR_CONFIGS,
 )
 
 

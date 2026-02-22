@@ -771,9 +771,8 @@ class TestVendorRoundTrip:
 
     def _xml_for_vendor(self, vendor_key, monkeypatch):
         """Generate domain XML using real vendor config values."""
-        from agent.vendors import VENDOR_CONFIGS, get_libvirt_config
+        from agent.vendors import get_libvirt_config
 
-        vc = VENDOR_CONFIGS[vendor_key]
         lc = get_libvirt_config(vendor_key)
 
         p = _make_provider()

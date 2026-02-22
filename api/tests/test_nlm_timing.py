@@ -72,9 +72,9 @@ class TestDominantDeviceType:
 
     def test_subset_of_nodes(self):
         """Can pass a subset of node_states."""
-        mgr = self._make_manager(["ceos", "srlinux", "linux"])
-        subset = [mgr.node_states[1]]  # srlinux
-        assert mgr._dominant_device_type(subset) == "srlinux"
+        mgr = self._make_manager(["ceos", "nokia_srlinux", "linux"])
+        subset = [mgr.node_states[1]]  # nokia_srlinux
+        assert mgr._dominant_device_type(subset) == "nokia_srlinux"
 
 
 class TestPhaseTimingInstrumentation:

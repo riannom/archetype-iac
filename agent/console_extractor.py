@@ -1,10 +1,10 @@
-from __future__ import annotations
-
 """Serial console configuration extractor for libvirt VMs.
 
 Uses pexpect to automate interaction with virsh console for
 extracting running configurations from network devices.
 """
+
+from __future__ import annotations
 
 import logging
 import os

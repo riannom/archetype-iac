@@ -433,7 +433,7 @@ class TestExtractConfigsEndpoint:
         lab_no_placements: models.Lab,
         sample_host: models.Host,
     ):
-        """Lab without placements falls back to get_agent_for_lab."""
+        """Lab without placements falls back to inline DB-based agent resolution."""
         lab = lab_no_placements
 
         mock_result = {
@@ -445,14 +445,9 @@ class TestExtractConfigsEndpoint:
         }
 
         with patch("app.routers.labs.agent_client") as mock_agent_client, \
-             patch("app.routers.labs._save_config_to_workspace"), \
-             patch("app.utils.agents.agent_client") as mock_utils_agent_client:
-            mock_agent_client.get_agent_for_lab = AsyncMock(return_value=sample_host)
+             patch("app.routers.labs._save_config_to_workspace"):
             mock_agent_client.is_agent_online.return_value = True
             mock_agent_client.extract_configs_on_agent = AsyncMock(return_value=mock_result)
-            # Also mock in utils.agents where get_online_agent_for_lab lives
-            mock_utils_agent_client.get_agent_for_lab = AsyncMock(return_value=sample_host)
-            mock_utils_agent_client.is_agent_online.return_value = True
 
             response = test_client.post(
                 f"/labs/{lab.id}/extract-configs",
@@ -463,9 +458,6 @@ class TestExtractConfigsEndpoint:
         data = response.json()
         assert data["success"] is True
         assert data["extracted_count"] == 1
-
-        # Verify fallback was used (get_online_agent_for_lab lives in app.utils.agents)
-        mock_utils_agent_client.get_agent_for_lab.assert_called_once()
 
     def test_extract_configs_deduplication(
         self,

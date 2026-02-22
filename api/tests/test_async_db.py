@@ -26,15 +26,15 @@ def test_make_async_url_bare():
 
 
 def test_make_async_url_sqlite():
-    """SQLite URLs pass through unchanged."""
+    """SQLite URLs are converted to aiosqlite."""
     url = "sqlite:///test.db"
-    assert _make_async_url(url) == url
+    assert _make_async_url(url) == "sqlite+aiosqlite:///test.db"
 
 
 def test_make_async_url_sqlite_memory():
-    """SQLite in-memory URLs pass through unchanged."""
+    """SQLite in-memory URLs are converted to aiosqlite."""
     url = "sqlite:///:memory:"
-    assert _make_async_url(url) == url
+    assert _make_async_url(url) == "sqlite+aiosqlite:///:memory:"
 
 
 def test_make_async_url_already_async():

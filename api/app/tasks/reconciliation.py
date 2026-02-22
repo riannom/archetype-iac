@@ -187,7 +187,7 @@ def _ensure_link_states_for_lab(session, lab_id: str) -> int:
     # Build node_device_map for canonical normalization
     nodes = session.query(models.Node).filter(models.Node.lab_id == lab_id).all()
     node_device_map: dict[str, str | None] = {
-        n.container_name: (n.kind or n.device_id) for n in nodes
+        n.container_name: n.device for n in nodes
     }
 
     # Get existing link states
