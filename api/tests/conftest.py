@@ -24,6 +24,51 @@ from app.config import settings
 from app.main import app
 
 
+# ---------------------------------------------------------------------------
+# Global Redis isolation — autouse fixtures that prevent any test from
+# attempting real Redis connections (which hang indefinitely in CI where
+# Redis is not running).
+# ---------------------------------------------------------------------------
+
+@pytest.fixture(autouse=True)
+def _mock_redis_globally(monkeypatch):
+    """Block all Redis connection attempts so tests never hang."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    # 1. db.get_redis (sync)
+    mock_sync_redis = MagicMock()
+    monkeypatch.setattr(db, "get_redis", lambda: mock_sync_redis)
+
+    # 2. db.get_async_redis (async)
+    mock_async_redis = MagicMock()
+    monkeypatch.setattr(db, "get_async_redis", lambda: mock_async_redis)
+
+    # 3. broadcaster — mock the singleton so publish_* calls are no-ops
+    from app.services import broadcaster as _broadcaster_mod
+
+    mock_bc = MagicMock()
+    mock_bc.publish_node_state = AsyncMock(return_value=1)
+    mock_bc.publish_link_state = AsyncMock(return_value=1)
+    mock_bc.publish_lab_state = AsyncMock(return_value=1)
+    mock_bc.publish_job_progress = AsyncMock(return_value=1)
+    monkeypatch.setattr(_broadcaster_mod, "get_broadcaster", lambda: mock_bc)
+
+    # Also patch where get_broadcaster is imported directly
+    import app.tasks.jobs as _jobs_mod
+    monkeypatch.setattr(_jobs_mod, "get_broadcaster", lambda: mock_bc)
+    import app.tasks.node_lifecycle as _nlc_mod
+    monkeypatch.setattr(_nlc_mod, "get_broadcaster", lambda: mock_bc)
+
+    # 4. events publisher — reset singleton and mock _get_redis
+    from app.events import publisher as _publisher_mod
+
+    monkeypatch.setattr(_publisher_mod, "_publisher_redis", None)
+    monkeypatch.setattr(
+        _publisher_mod, "_get_redis",
+        AsyncMock(return_value=MagicMock()),
+    )
+
+
 def pytest_sessionstart(session):
     """Fail fast on unsupported Python versions for API TestClient runs."""
     if sys.version_info >= (3, 13):

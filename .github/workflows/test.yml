@@ -10,6 +10,7 @@ jobs:
   backend-tests:
     name: Backend Tests
     runs-on: ubuntu-latest
+    timeout-minutes: 15
 
     steps:
       - uses: actions/checkout@v4
@@ -28,9 +29,9 @@ jobs:
           cd api
           pip install -r requirements.txt
 
-      - name: Install coverage tooling
+      - name: Install test tooling
         run: |
-          pip install pytest-cov
+          pip install pytest-cov pytest-timeout
 
       - name: Run API tests with coverage
         env:
@@ -39,7 +40,7 @@ jobs:
           WORKSPACE: /tmp/archetype-test
         run: |
           cd api
-          PYTHONPATH="${PYTHONPATH}:$(pwd)/.." pytest tests/ -v --tb=short --cov=app --cov-report=term-missing --cov-report=xml:../reports/api-coverage.xml --cov-fail-under=55
+          PYTHONPATH="${PYTHONPATH}:$(pwd)/.." pytest tests/ -v --tb=short --timeout=60 --cov=app --cov-report=term-missing --cov-report=xml:../reports/api-coverage.xml --cov-fail-under=55
 
       - name: Install Agent dependencies
         run: |
