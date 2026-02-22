@@ -71,12 +71,13 @@ def test_interface_name_translations() -> None:
     assert interface_mapping.linux_to_vendor_interface("eth1", None) is None
 
     assert interface_mapping.vendor_to_linux_interface("Ethernet1", "ceos") == "eth1"
-    assert interface_mapping.vendor_to_linux_interface("ge-0/0/2", "juniper_vjunosswitch") == "eth2"
-    assert interface_mapping.vendor_to_linux_interface("ge-0/0/2", "juniper_vjunosrouter") == "eth2"
-    assert interface_mapping.vendor_to_linux_interface("ge-0/0/2", "juniper_vjunosevolved") == "eth2"
+    # Juniper ge-0/0/{N}: port_start_index=0, dps=1 → eth{2 - 0 + 1} = eth3
+    assert interface_mapping.vendor_to_linux_interface("ge-0/0/2", "juniper_vjunosswitch") == "eth3"
+    assert interface_mapping.vendor_to_linux_interface("ge-0/0/2", "juniper_vjunosrouter") == "eth3"
+    assert interface_mapping.vendor_to_linux_interface("ge-0/0/2", "juniper_vjunosevolved") == "eth3"
     # Device-aware translation: GigabitEthernet0/0/0/3 with port_start_index=0
-    # Formula: eth{3 - 0 + 1} = eth4 (DOCKER_DATA_PORT_START=1, eth0=mgmt)
-    assert interface_mapping.vendor_to_linux_interface("GigabitEthernet0/0/0/3", "cisco_iosxr") == "eth4"
+    # Formula: eth{3 - 0 + 3} = eth6 (dps=3: mgmt(1) + reserved_nics(2))
+    assert interface_mapping.vendor_to_linux_interface("GigabitEthernet0/0/0/3", "cisco_iosxr") == "eth6"
     assert interface_mapping.vendor_to_linux_interface("weird0", "ceos") is None
 
 

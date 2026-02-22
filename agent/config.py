@@ -129,8 +129,9 @@ class Settings(BaseSettings):
 
     # === Docker OVS Plugin Settings ===
 
-    # Management network settings (eth0 for containers)
-    mgmt_network_subnet_base: str = "172.20.0.0/16"  # /24 allocated per lab
+    # DEPRECATED: Management now uses OVS (same as data ports). These settings
+    # are retained to avoid breaking existing .env files but are no longer read.
+    mgmt_network_subnet_base: str = "172.20.0.0/16"
     mgmt_network_enable_nat: bool = True
 
     # VXLAN settings for shared bridge (multi-host support)

@@ -1131,15 +1131,16 @@ event-handler IPTABLES_CLEANUP
     ) -> dict[str, str]:
         """Create Docker networks for lab interfaces via OVS plugin.
 
-        Creates one network per interface (eth1, eth2, ..., ethN).
+        Creates one network per interface (eth0, eth1, eth2, ..., ethN).
         All networks share the same OVS bridge (arch-ovs).
+        eth0 is the management interface (wireable via hot_connect like data ports).
 
         Args:
             lab_id: Lab identifier
-            max_interfaces: Maximum number of interfaces to create
+            max_interfaces: Maximum number of data interfaces to create
 
         Returns:
-            Dict mapping interface name (e.g., "eth1") to network name
+            Dict mapping interface name (e.g., "eth0") to network name
         """
         # Clean up any legacy lab networks that don't follow current naming/labels
         await self._prune_legacy_lab_networks(lab_id)
@@ -1148,7 +1149,7 @@ event-handler IPTABLES_CLEANUP
         errors: list[str] = []
         lab_prefix = self._lab_network_prefix(lab_id)
 
-        for i in range(1, max_interfaces + 1):
+        for i in range(0, max_interfaces + 1):
             interface_name = f"eth{i}"
             network_name = f"{lab_prefix}-{interface_name}"
 
@@ -1189,11 +1190,12 @@ event-handler IPTABLES_CLEANUP
                 errors.append(msg)
                 logger.error(msg)
 
-        if max_interfaces > 0 and len(networks) < max_interfaces:
-            missing = max_interfaces - len(networks)
+        expected = max_interfaces + 1  # eth0 through ethN
+        if expected > 0 and len(networks) < expected:
+            missing = expected - len(networks)
             err_detail = "; ".join(errors) if errors else "unknown error"
             raise RuntimeError(
-                f"Failed to create {missing}/{max_interfaces} Docker networks for lab {lab_id}: {err_detail}"
+                f"Failed to create {missing}/{expected} Docker networks for lab {lab_id}: {err_detail}"
             )
 
         logger.info(f"Created {len(networks)} Docker networks for lab {lab_id}")
@@ -1373,15 +1375,28 @@ event-handler IPTABLES_CLEANUP
                 # provision interfaces BEFORE container init runs (critical for cEOS).
                 # When disabled, we use "none" mode and provision interfaces post-start.
                 if self.use_ovs_plugin:
-                    # Use the pre-calculated required_interfaces count
-                    # This avoids creating 64 interfaces per node (vendor max_ports)
-                    # and only creates what's actually needed based on topology links
+                    # Determine NIC layout based on vendor config:
+                    #   eth0 = management (if management_interface set)
+                    #   eth1..ethR = reserved NICs (R = reserved_nics)
+                    #   eth(dps)+ = data ports (dps = data_port_start)
+                    vendor_config = get_config_by_device(node.kind)
+                    has_mgmt = vendor_config and vendor_config.management_interface
+                    reserved = vendor_config.reserved_nics if vendor_config else 0
 
-                    # Docker network names always use "eth" prefix for consistency
-                    # The OVS plugin handles renaming inside the container based on
-                    # the interface_name option passed during network creation
-                    first_network = f"{self._lab_network_prefix(lab_id)}-eth1"
-                    config["network"] = first_network
+                    lab_prefix = self._lab_network_prefix(lab_id)
+                    if has_mgmt:
+                        # Management on eth0, then reserved + data
+                        first_network = f"{lab_prefix}-eth0"
+                        config["network"] = first_network
+                        extra_count = reserved + node_interface_count
+                        extra_start = 1
+                    else:
+                        # No management — eth1 is first data port
+                        first_network = f"{lab_prefix}-eth1"
+                        config["network"] = first_network
+                        extra_count = max(node_interface_count - 1, 0)
+                        extra_start = 2
+
                     logger.info(f"Creating container {log_name} with image {config['image']}")
 
                     # Create container - run in thread pool to avoid blocking event loop
@@ -1392,14 +1407,14 @@ event-handler IPTABLES_CLEANUP
                     logger.debug(f"[{log_name}] container.create completed")
                     containers[node_name] = container
 
-                    # Attach to remaining interface networks (eth2, eth3, ...)
+                    # Attach to remaining interface networks
                     logger.debug(f"[{log_name}] Starting network attachments...")
                     await self._attach_container_to_networks(
                         container=container,
                         lab_id=lab_id,
-                        interface_count=max(node_interface_count - 1, 0),  # Already attached to eth1
+                        interface_count=extra_count,
                         interface_prefix="eth",
-                        start_index=2,  # Start from eth2
+                        start_index=extra_start,
                     )
                     logger.debug(f"[{log_name}] Network attachments completed")
 
@@ -2324,15 +2339,6 @@ event-handler IPTABLES_CLEANUP
         # Create directories
         await self._ensure_directories(parsed_topology, workspace)
 
-        # Create management network
-        try:
-            if self.use_ovs_plugin:
-                await self.ovs_plugin.create_management_network(lab_id)
-            else:
-                await self.local_network.create_management_network(lab_id)
-        except Exception as e:
-            logger.warning(f"Failed to create management network: {e}")
-
         # Create containers
         try:
             containers = await self._create_containers(parsed_topology, lab_id, workspace)
@@ -2437,13 +2443,6 @@ event-handler IPTABLES_CLEANUP
             if self.use_ovs_plugin:
                 networks_deleted = await self._delete_lab_networks(lab_id)
                 logger.info(f"Docker network cleanup: {networks_deleted} networks deleted")
-
-            # Clean up management network when plugin owns it
-            if self.use_ovs_plugin:
-                try:
-                    await self.ovs_plugin.delete_management_network(lab_id)
-                except Exception as e:
-                    logger.warning(f"Failed to delete management network for lab {lab_id}: {e}")
 
             # Clean up local networking
             cleanup_result = await self.local_network.cleanup_lab(lab_id)
@@ -3029,15 +3028,6 @@ event-handler IPTABLES_CLEANUP
                     self._setup_cjunos_directories, node_name, node, workspace
                 )
 
-            # Ensure management network exists
-            try:
-                if self.use_ovs_plugin:
-                    await self.ovs_plugin.create_management_network(lab_id)
-                else:
-                    await self.local_network.create_management_network(lab_id)
-            except Exception as e:
-                logger.warning(f"Failed to create management network: {e}")
-
             # Ensure lab Docker networks (idempotent)
             if self.use_ovs_plugin:
                 await self._create_lab_networks(lab_id, max_interfaces=iface_count)
@@ -3073,8 +3063,21 @@ event-handler IPTABLES_CLEANUP
 
             try:
                 if self.use_ovs_plugin:
-                    # Attach to first OVS network during creation
-                    first_network = f"{self._lab_network_prefix(lab_id)}-eth1"
+                    # Determine NIC layout based on vendor config
+                    vendor_config = get_config_by_device(kind)
+                    has_mgmt = vendor_config and vendor_config.management_interface
+                    reserved = vendor_config.reserved_nics if vendor_config else 0
+
+                    lab_prefix = self._lab_network_prefix(lab_id)
+                    if has_mgmt:
+                        first_network = f"{lab_prefix}-eth0"
+                        extra_count = reserved + iface_count
+                        extra_start = 1
+                    else:
+                        first_network = f"{lab_prefix}-eth1"
+                        extra_count = max(iface_count - 1, 0)
+                        extra_start = 2
+
                     container_config["network"] = first_network
                     logger.info(f"Creating container {log_name} with image {container_config['image']}")
 
@@ -3082,13 +3085,12 @@ event-handler IPTABLES_CLEANUP
                         lambda cfg=container_config: self.docker.containers.create(**cfg)
                     )
 
-                    # Attach to remaining interface networks (eth2, eth3, ...)
                     await self._attach_container_to_networks(
                         container=container,
                         lab_id=lab_id,
-                        interface_count=iface_count - 1,
+                        interface_count=extra_count,
                         interface_prefix="eth",
-                        start_index=2,
+                        start_index=extra_start,
                     )
 
                     await asyncio.sleep(0.5)
@@ -3162,13 +3164,7 @@ event-handler IPTABLES_CLEANUP
                 logger.info(f"Last container in lab {lab_id}, cleaning up networks")
                 await self._delete_lab_networks(lab_id)
 
-                if self.use_ovs_plugin:
-                    try:
-                        await self.ovs_plugin.delete_management_network(lab_id)
-                    except Exception as e:
-                        logger.warning(f"Failed to delete management network for lab {lab_id}: {e}")
-
-                # Clean up local networking (management network + local links)
+                # Clean up local networking
                 try:
                     await self.local_network.cleanup_lab(lab_id)
                 except Exception as e:

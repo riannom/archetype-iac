@@ -258,11 +258,22 @@ export function getAvailableInterfaces(
   const available: string[] = [];
   const maxIndex = pattern.startIndex + (pattern.maxInterfaces || 32);
 
+  // Data interfaces first
   for (let i = pattern.startIndex; i < maxIndex && available.length < count; i++) {
     const ifName = pattern.pattern.replace('{index}', String(i));
     if (!usedInterfaces.has(ifName)) {
       available.push(ifName);
     }
+  }
+
+  // Management interface last (opt-in wiring)
+  if (
+    pattern.managementInterface &&
+    !usedInterfaces.has(pattern.managementInterface) &&
+    !available.includes(pattern.managementInterface) &&
+    available.length < count
+  ) {
+    available.push(pattern.managementInterface);
   }
 
   return available;
@@ -288,6 +299,8 @@ export function getNextAvailableInterface(
  * Check if an interface name matches the expected pattern for a device.
  */
 export function isValidInterface(modelId: string, interfaceName: string): boolean {
+  const pattern = getPattern(modelId);
+  if (interfaceName === pattern.managementInterface) return true;
   return parseInterfaceIndex(modelId, interfaceName) !== null;
 }
 

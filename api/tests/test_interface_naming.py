@@ -7,6 +7,7 @@ from agent.vendors import VENDOR_CONFIGS
 from app.services.interface_naming import (
     normalize_interface,
     denormalize_interface,
+    get_data_port_start,
     _resolve_port_naming,
     _build_normalize_regex,
 )
@@ -32,9 +33,10 @@ NORMALIZE_CASES = [
     # SONiC: Ethernet, start=0 → eth{0-0+1}=eth1
     ("sonic-vs", "Ethernet0", "eth1"),
     ("sonic-vs", "Ethernet3", "eth4"),
-    # Cisco IOS-XR: GigabitEthernet0/0/0/{index}, start=0 → eth{0-0+1}=eth1
-    ("cisco_iosxr", "GigabitEthernet0/0/0/0", "eth1"),
-    ("cisco_iosxr", "GigabitEthernet0/0/0/3", "eth4"),
+    # Cisco IOS-XR: GigabitEthernet0/0/0/{index}, start=0, dps=3 (mgmt+2 reserved)
+    # Formula: eth{vendor_index - port_start_index + dps} = eth{0-0+3}=eth3
+    ("cisco_iosxr", "GigabitEthernet0/0/0/0", "eth3"),
+    ("cisco_iosxr", "GigabitEthernet0/0/0/3", "eth6"),
     # Cisco XRd: GigabitEthernet0/0/0/{index}, start=0
     ("cisco_xrd", "GigabitEthernet0/0/0/0", "eth1"),
     # Cisco IOSv: GigabitEthernet0/{index}, start=0
@@ -97,6 +99,11 @@ NORMALIZE_CASES = [
     ("ftdv", "GigabitEthernet0/2", "eth3"),
     # Juniper cRPD: eth, start=0 (identity)
     ("juniper_crpd", "eth0", "eth0"),
+    # Management interface → eth0
+    ("ceos", "Management0", "eth0"),
+    ("nokia_srlinux", "mgmt0", "eth0"),
+    ("cisco_iosxr", "MgmtEth0/RP0/CPU0/0", "eth0"),
+    ("cisco_n9kv", "mgmt0", "eth0"),
 ]
 
 
@@ -122,7 +129,7 @@ class TestNormalizeInterface:
 
     def test_unrecognized_passthrough(self):
         assert normalize_interface("loopback0", "ceos") == "loopback0"
-        assert normalize_interface("mgmt0", "cisco_n9kv") == "mgmt0"
+        assert normalize_interface("loopback0", "cisco_n9kv") == "loopback0"
 
     def test_fallback_no_device_type(self):
         """When device_type is None, common patterns should still work.
@@ -142,7 +149,7 @@ class TestNormalizeInterface:
         """Vendor names should be case-insensitive."""
         assert normalize_interface("ethernet1", "ceos") == "eth1"
         assert normalize_interface("ETHERNET1", "ceos") == "eth1"
-        assert normalize_interface("gigabitethernet0/0/0/0", "cisco_iosxr") == "eth1"
+        assert normalize_interface("gigabitethernet0/0/0/0", "cisco_iosxr") == "eth3"
 
 
 class TestDenormalizeInterface:
@@ -177,13 +184,15 @@ class TestDenormalizeInterface:
         assert denormalize_interface("loopback0", "ceos") == "loopback0"
         assert denormalize_interface("mgmt0", "ceos") == "mgmt0"
 
-    def test_eth0_management_passthrough(self):
-        """eth0 is Docker management — never denormalize to vendor data port."""
+    def test_eth0_denormalize(self):
+        """eth0 denormalizes to management interface name if device has one."""
+        # Devices with management_interface → vendor management name
+        assert denormalize_interface("eth0", "ceos") == "Management0"
+        assert denormalize_interface("eth0", "cisco_n9kv") == "mgmt0"
+        # Devices without management_interface → eth0 passthrough
         assert denormalize_interface("eth0", "juniper_cjunos") == "eth0"
         assert denormalize_interface("eth0", "juniper_vsrx3") == "eth0"
         assert denormalize_interface("eth0", "sonic_vs") == "eth0"
-        assert denormalize_interface("eth0", "ceos") == "eth0"
-        assert denormalize_interface("eth0", "cisco_n9kv") == "eth0"
 
 
 class TestRoundTrip:
@@ -252,8 +261,9 @@ class TestIosxrBugFix:
 
     def test_iosxr_gigabit_ethernet(self):
         """GigabitEthernet0/0/0/3 should normalize correctly with device_type."""
-        # With device_type, uses the device-aware pattern (0-indexed → +1)
-        assert normalize_interface("GigabitEthernet0/0/0/3", "cisco_iosxr") == "eth4"
+        # With device_type, uses device-aware pattern: eth{3 - 0 + 3} = eth6
+        # (dps=3 because mgmt(1) + reserved_nics(2))
+        assert normalize_interface("GigabitEthernet0/0/0/3", "cisco_iosxr") == "eth6"
 
     def test_iosxr_fallback(self):
         """Even without device_type, the fallback should get this right."""
@@ -302,3 +312,112 @@ class TestVendorRegistryRoundTrip:
         assert normalized == "eth4", (
             f"{key}: round-trip failed: eth4 → {vendor_name!r} → {normalized!r}"
         )
+
+
+# ---------------------------------------------------------------------------
+# New coverage: get_data_port_start, management interfaces, reserved NICs
+# ---------------------------------------------------------------------------
+
+
+class TestGetDataPortStart:
+    """Tests for per-device data port start offset."""
+
+    def test_none_fallback(self):
+        assert get_data_port_start(None) == 1
+
+    def test_unknown_device(self):
+        assert get_data_port_start("nonexistent") == 1
+
+    def test_no_management_interface(self):
+        """Devices without management_interface use default dps=1."""
+        assert get_data_port_start("linux") == 1
+
+    def test_management_no_reserved(self):
+        """Devices with management but no reserved NICs: dps = 1 + 0 = 1."""
+        assert get_data_port_start("ceos") == 1
+        assert get_data_port_start("nokia_srlinux") == 1
+        assert get_data_port_start("cisco_xrd") == 1
+        assert get_data_port_start("cisco_n9kv") == 1
+
+    def test_management_with_reserved(self):
+        """IOS-XR has 2 reserved NICs: dps = 1 + 2 = 3."""
+        assert get_data_port_start("cisco_iosxr") == 3
+
+
+class TestManagementNormalize:
+    """Tests for management interface → eth0 normalization."""
+
+    def test_ceos_management(self):
+        assert normalize_interface("Management0", "ceos") == "eth0"
+
+    def test_ceos_management_case_insensitive(self):
+        assert normalize_interface("management0", "ceos") == "eth0"
+
+    def test_srlinux_management(self):
+        assert normalize_interface("mgmt0", "nokia_srlinux") == "eth0"
+
+    def test_iosxr_management(self):
+        assert normalize_interface("MgmtEth0/RP0/CPU0/0", "cisco_iosxr") == "eth0"
+
+    def test_xrd_management(self):
+        assert normalize_interface("MgmtEth0/RP0/CPU0/0", "cisco_xrd") == "eth0"
+
+    def test_n9kv_management(self):
+        assert normalize_interface("mgmt0", "cisco_n9kv") == "eth0"
+
+    def test_ftdv_management(self):
+        assert normalize_interface("Management0/0", "ftdv") == "eth0"
+
+    def test_eth0_already_normalized(self):
+        """eth0 stays as eth0 for all devices."""
+        assert normalize_interface("eth0", "ceos") == "eth0"
+
+    def test_no_management_mapping_for_linux(self):
+        """linux has no management_interface — Management0 passes through."""
+        assert normalize_interface("Management0", "linux") == "Management0"
+
+
+class TestManagementDenormalize:
+    """Tests for eth0 → management interface denormalization."""
+
+    def test_ceos(self):
+        assert denormalize_interface("eth0", "ceos") == "Management0"
+
+    def test_srlinux(self):
+        assert denormalize_interface("eth0", "nokia_srlinux") == "mgmt0"
+
+    def test_iosxr(self):
+        assert denormalize_interface("eth0", "cisco_iosxr") == "MgmtEth0/RP0/CPU0/0"
+
+    def test_n9kv(self):
+        assert denormalize_interface("eth0", "cisco_n9kv") == "mgmt0"
+
+    def test_no_management_passthrough(self):
+        """Devices without management_interface return eth0 as-is."""
+        assert denormalize_interface("eth0", "linux") == "eth0"
+
+    def test_no_device_passthrough(self):
+        """No device_type → eth0 passthrough."""
+        assert denormalize_interface("eth0", None) == "eth0"
+
+
+class TestReservedNics:
+    """Tests for cisco_iosxr reserved NIC zone (reserved_nics=2)."""
+
+    def test_reserved_nics_passthrough(self):
+        """eth1 and eth2 are reserved — denormalize returns as-is."""
+        assert denormalize_interface("eth1", "cisco_iosxr") == "eth1"
+        assert denormalize_interface("eth2", "cisco_iosxr") == "eth2"
+
+    def test_first_data_port(self):
+        """Data ports start at eth3 for cisco_iosxr."""
+        assert denormalize_interface("eth3", "cisco_iosxr") == "GigabitEthernet0/0/0/0"
+
+    def test_higher_data_port(self):
+        assert denormalize_interface("eth6", "cisco_iosxr") == "GigabitEthernet0/0/0/3"
+
+    def test_round_trip_through_reserved_zone(self):
+        """Full round-trip: eth3 → vendor → eth3."""
+        vendor = denormalize_interface("eth3", "cisco_iosxr")
+        assert vendor == "GigabitEthernet0/0/0/0"
+        assert normalize_interface(vendor, "cisco_iosxr") == "eth3"

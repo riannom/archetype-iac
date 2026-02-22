@@ -18,10 +18,28 @@ import re
 from agent.vendors import get_config_by_device
 from app.image_store import find_custom_device, get_device_override
 
-# Docker reserves eth0 for management (default bridge network).
-# OVS plugin data networks start at eth1. This offset converts between
-# vendor port indices (which may start at 0) and Docker interface numbers.
+# Default data port start offset. Devices with management_interface and/or
+# reserved_nics use get_data_port_start() for per-device offset instead.
 DOCKER_DATA_PORT_START = 1
+
+
+def get_data_port_start(device_type: str | None) -> int:
+    """Compute the eth index where data ports begin for a device.
+
+    Matches libvirt NIC ordering: management(0/1) + reserved_nics + data.
+
+    Examples:
+        cEOS:    mgmt(1) + reserved(0) = 1  (data at eth1)
+        SRLinux: mgmt(1) + reserved(0) = 1  (data at eth1)
+        IOS-XR:  mgmt(1) + reserved(2) = 3  (data at eth3)
+        Generic: no mgmt, no reserved  = 1  (backward compat)
+    """
+    if not device_type:
+        return DOCKER_DATA_PORT_START
+    config = get_config_by_device(device_type)
+    if not config or not config.management_interface:
+        return DOCKER_DATA_PORT_START
+    return 1 + config.reserved_nics
 
 
 # ---------------------------------------------------------------------------
@@ -150,6 +168,12 @@ def normalize_interface(iface: str, device_type: str | None = None) -> str:
 
     # Device-aware normalization
     if device_type:
+        # Management interface → eth0
+        config = get_config_by_device(device_type)
+        if config and config.management_interface:
+            if iface.lower() == config.management_interface.lower():
+                return "eth0"
+
         port_naming, port_start_index = _resolve_port_naming(device_type)
         if port_naming != "eth":
             regex = _build_normalize_regex(port_naming)
@@ -157,12 +181,8 @@ def normalize_interface(iface: str, device_type: str | None = None) -> str:
                 m = regex.match(iface)
                 if m:
                     vendor_index = int(m.group(1))
-                    # Convert vendor index to Docker eth index:
-                    # eth1 = first data port (eth0 is Docker management).
-                    # Formula: eth{vendor_index - port_start_index + 1}
-                    # - cEOS (start=1): Ethernet1 → eth{1-1+1} = eth1 ✓
-                    # - Juniper (start=0): et-0/0/0 → eth{0-0+1} = eth1 ✓
-                    return f"eth{vendor_index - port_start_index + DOCKER_DATA_PORT_START}"
+                    dps = get_data_port_start(device_type)
+                    return f"eth{vendor_index - port_start_index + dps}"
 
     # Fallback: try common patterns (backward compat for device_type=None)
     for pattern, is_zero_indexed in _FALLBACK_PATTERNS:
@@ -203,13 +223,21 @@ def denormalize_interface(iface: str, device_type: str | None = None) -> str:
         return iface
 
     eth_index = int(m.group(1))
+    dps = get_data_port_start(device_type)
 
-    # eth0 is Docker management — not a data port, never denormalize it
-    if eth_index < DOCKER_DATA_PORT_START:
+    # eth0 → management interface name (if device has one)
+    if eth_index == 0:
+        config = get_config_by_device(device_type) if device_type else None
+        if config and config.management_interface:
+            return config.management_interface
         return iface
 
-    # Reverse the normalize formula: vendor_index = eth_index - 1 + port_start_index
-    vendor_index = eth_index - DOCKER_DATA_PORT_START + port_start_index
+    # eth1..eth(dps-1) → reserved NICs (no vendor name, return as-is)
+    if eth_index < dps:
+        return iface
+
+    # eth(dps)+ → data ports
+    vendor_index = eth_index - dps + port_start_index
 
     # Generate the vendor-specific interface name
     if "{index}" in port_naming:

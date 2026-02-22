@@ -25,10 +25,6 @@ from agent.schemas import (
     PluginExternalAttachResponse,
     PluginExternalInfo,
     PluginExternalListResponse,
-    PluginMgmtNetworkInfo,
-    PluginMgmtNetworkResponse,
-    PluginMgmtAttachRequest,
-    PluginMgmtAttachResponse,
 )
 
 logger = logging.getLogger(__name__)
@@ -433,75 +429,3 @@ async def list_plugin_external(lab_id: str) -> PluginExternalListResponse:
         return PluginExternalListResponse(lab_id=lab_id, interfaces=[])
 
 
-@router.post("/ovs-plugin/labs/{lab_id}/mgmt")
-async def create_plugin_mgmt_network(lab_id: str) -> PluginMgmtNetworkResponse:
-    """Create management network for a lab."""
-    if not settings.enable_ovs_plugin:
-        return PluginMgmtNetworkResponse(success=False, error="OVS plugin not enabled")
-
-    logger.info(f"Creating management network for lab {lab_id}")
-
-    try:
-        plugin = _get_docker_ovs_plugin()
-        mgmt_net = await plugin.create_management_network(lab_id)
-
-        return PluginMgmtNetworkResponse(
-            success=True,
-            network=PluginMgmtNetworkInfo(
-                lab_id=mgmt_net.lab_id,
-                network_id=mgmt_net.network_id,
-                network_name=mgmt_net.network_name,
-                subnet=mgmt_net.subnet,
-                gateway=mgmt_net.gateway,
-            ),
-        )
-
-    except Exception as e:
-        logger.error(f"Management network creation failed: {e}")
-        return PluginMgmtNetworkResponse(success=False, error=str(e))
-
-
-@router.post("/ovs-plugin/labs/{lab_id}/mgmt/attach")
-async def attach_to_plugin_mgmt(
-    lab_id: str, request: PluginMgmtAttachRequest
-) -> PluginMgmtAttachResponse:
-    """Attach container to management network."""
-    if not settings.enable_ovs_plugin:
-        return PluginMgmtAttachResponse(success=False, error="OVS plugin not enabled")
-
-    logger.info(f"Attaching {request.container_id} to management network for lab {lab_id}")
-
-    try:
-        plugin = _get_docker_ovs_plugin()
-        ip_address = await plugin.attach_to_management(request.container_id, lab_id)
-
-        if ip_address:
-            return PluginMgmtAttachResponse(success=True, ip_address=ip_address)
-        else:
-            return PluginMgmtAttachResponse(success=False, error="Failed to get IP address")
-
-    except Exception as e:
-        logger.error(f"Management network attachment failed: {e}")
-        return PluginMgmtAttachResponse(success=False, error=str(e))
-
-
-@router.delete("/ovs-plugin/labs/{lab_id}/mgmt")
-async def delete_plugin_mgmt_network(lab_id: str) -> PluginMgmtNetworkResponse:
-    """Delete management network for a lab."""
-    if not settings.enable_ovs_plugin:
-        return PluginMgmtNetworkResponse(success=False, error="OVS plugin not enabled")
-
-    logger.info(f"Deleting management network for lab {lab_id}")
-
-    try:
-        plugin = _get_docker_ovs_plugin()
-        success = await plugin.delete_management_network(lab_id)
-
-        if success:
-            return PluginMgmtNetworkResponse(success=True)
-        else:
-            return PluginMgmtNetworkResponse(success=False, error="Network not found")
-
-    except Exception as e:
-        logger.error(f"Management network deletion failed: {e}")
-        return PluginMgmtNetworkResponse(success=False, error=str(e))

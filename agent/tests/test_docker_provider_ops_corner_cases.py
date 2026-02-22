@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 from docker.errors import NotFound
@@ -31,49 +30,6 @@ def test_create_lab_networks_uses_sanitized_prefix_and_labels(monkeypatch):
     assert kwargs["labels"]["archetype.lab_id"] == lab_id
 
 
-def test_deploy_uses_plugin_mgmt_when_enabled(monkeypatch, tmp_path):
-    original_enable_ovs_plugin = settings.enable_ovs_plugin
-    original_enable_ovs = settings.enable_ovs
-    settings.enable_ovs_plugin = True
-    settings.enable_ovs = True
-
-    provider = DockerProvider()
-
-    plugin = MagicMock()
-    plugin.create_management_network = AsyncMock(return_value=SimpleNamespace())
-    monkeypatch.setattr(
-        "agent.providers.docker.get_docker_ovs_plugin",
-        lambda: plugin,
-    )
-
-    provider.local_network.create_management_network = AsyncMock(
-        side_effect=AssertionError("local management network should not be called")
-    )
-
-    provider._recover_stale_network = AsyncMock(return_value={})
-    provider._validate_images = MagicMock(return_value=[])
-    provider._ensure_directories = AsyncMock(return_value=None)
-    provider._create_containers = AsyncMock(return_value={})
-    provider._start_containers = AsyncMock(return_value=[])
-    provider._create_links = AsyncMock(return_value=0)
-    provider._capture_container_vlans = AsyncMock(return_value=None)
-    provider._wait_for_readiness = AsyncMock(return_value={})
-    provider.status = AsyncMock(return_value=StatusResult(lab_exists=True, nodes=[]))
-
-    topology = DeployTopology(
-        nodes=[DeployNode(name="n1", kind="linux", interface_count=1)],
-        links=[],
-    )
-
-    try:
-        _run(provider.deploy("lab1", topology, tmp_path))
-    finally:
-        settings.enable_ovs_plugin = original_enable_ovs_plugin
-        settings.enable_ovs = original_enable_ovs
-
-    plugin.create_management_network.assert_awaited_once_with("lab1")
-
-
 def test_local_cleanup_runs_orphan_veth_cleanup(monkeypatch):
     from agent.network import local as local_mod
 
@@ -87,7 +43,6 @@ def test_local_cleanup_runs_orphan_veth_cleanup(monkeypatch):
 
     mgr = local_mod.LocalNetworkManager()
     mgr._links = {}
-    mgr._networks = {}
 
     _run(mgr.cleanup_lab("lab1"))
     assert called["count"] == 1
@@ -172,13 +127,6 @@ def test_destroy_cleans_networks_before_local_and_ovs(monkeypatch, tmp_path):
     provider._ovs_manager = MagicMock()
     provider._ovs_manager._initialized = True
     provider._ovs_manager.cleanup_lab = AsyncMock(side_effect=lambda lab_id: calls.append("ovs") or {})
-
-    plugin = MagicMock()
-    plugin.delete_management_network = AsyncMock(return_value=True)
-    monkeypatch.setattr(
-        "agent.providers.docker.get_docker_ovs_plugin",
-        lambda: plugin,
-    )
 
     docker_client = MagicMock()
     docker_client.containers.list.return_value = []

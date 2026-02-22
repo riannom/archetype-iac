@@ -38,53 +38,6 @@ async def test_ip_link_exists(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_create_management_network_existing(monkeypatch):
-    mgr = LocalNetworkManager()
-
-    class FakeNetwork:
-        def __init__(self):
-            self.id = "net1"
-
-    async def fake_to_thread(fn, *args, **kwargs):
-        return fn(*args, **kwargs)
-
-    class FakeDocker:
-        class networks:
-            @staticmethod
-            def list(names=None):
-                return [FakeNetwork()]
-
-    monkeypatch.setattr(mgr, "_networks", {})
-    monkeypatch.setattr(mgr, "_docker", FakeDocker())
-    monkeypatch.setattr(asyncio, "to_thread", fake_to_thread)
-
-    network = await mgr.create_management_network("lab1")
-    assert network.lab_id == "lab1"
-
-
-@pytest.mark.asyncio
-async def test_delete_management_network_not_tracked(monkeypatch):
-    mgr = LocalNetworkManager()
-
-    class FakeNetwork:
-        def __init__(self):
-            self.removed = False
-
-        def remove(self):
-            self.removed = True
-
-    class FakeDocker:
-        class networks:
-            @staticmethod
-            def list(names=None):
-                return [FakeNetwork()]
-
-    monkeypatch.setattr(mgr, "_docker", FakeDocker())
-
-    assert await mgr.delete_management_network("lab1") is True
-
-
-@pytest.mark.asyncio
 async def test_create_link_happy_path(monkeypatch):
     mgr = LocalNetworkManager()
 

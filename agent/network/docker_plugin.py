@@ -43,7 +43,6 @@ Usage:
 from __future__ import annotations
 
 import asyncio
-import ipaddress
 import json
 import logging
 import os
@@ -124,15 +123,6 @@ class EndpointState:
     container_name: str | None = None
 
 
-@dataclass
-class ManagementNetwork:
-    """State for a lab's management network (eth0)."""
-
-    lab_id: str
-    network_id: str
-    network_name: str  # archetype-mgmt-{lab_id}
-    subnet: str  # e.g., "172.20.1.0/24"
-    gateway: str  # e.g., "172.20.1.1"
 
 
 class DockerOVSPlugin:
@@ -155,7 +145,6 @@ class DockerOVSPlugin:
         self.lab_bridges: dict[str, LabBridge] = {}  # lab_id -> LabBridge
         self.networks: dict[str, NetworkState] = {}  # network_id -> NetworkState
         self.endpoints: dict[str, EndpointState] = {}  # endpoint_id -> EndpointState
-        self.management_networks: dict[str, ManagementNetwork] = {}  # lab_id -> ManagementNetwork
         # Lazily initialized the first time we need mutual exclusion inside an
         # async context. Creating asyncio primitives in __init__ can bind them
         # to a non-running (or already closed) loop, which breaks under pytest
@@ -165,7 +154,6 @@ class DockerOVSPlugin:
         self._started_at = datetime.now(timezone.utc)
         self._cleanup_task: asyncio.Task | None = None
         self._binding_audit_task: asyncio.Task | None = None
-        self._next_mgmt_subnet_index = 1  # For allocating management subnets
         self._pending_endpoint_reconnects: list[tuple[str, str, str]] = []
         self._allocated_vlans: set[int] = set()
         self._global_next_vlan = VLAN_RANGE_START
@@ -505,7 +493,6 @@ class DockerOVSPlugin:
         return {
             "version": 1,
             "saved_at": datetime.now(timezone.utc).isoformat(),
-            "next_mgmt_subnet_index": self._next_mgmt_subnet_index,
             "global_next_vlan": self._global_next_vlan,
             "global_next_linked_vlan": self._global_next_linked_vlan,
             "lab_bridges": {
@@ -541,16 +528,6 @@ class DockerOVSPlugin:
                 }
                 for ep_id, ep in self.endpoints.items()
             },
-            "management_networks": {
-                lab_id: {
-                    "lab_id": mgmt.lab_id,
-                    "network_id": mgmt.network_id,
-                    "network_name": mgmt.network_name,
-                    "subnet": mgmt.subnet,
-                    "gateway": mgmt.gateway,
-                }
-                for lab_id, mgmt in self.management_networks.items()
-            },
         }
 
     def _deserialize_state(self, data: dict[str, Any]) -> None:
@@ -559,7 +536,6 @@ class DockerOVSPlugin:
         if version != 1:
             logger.warning(f"Unknown state file version {version}, attempting load anyway")
 
-        self._next_mgmt_subnet_index = data.get("next_mgmt_subnet_index", 1)
         self._global_next_vlan = data.get("global_next_vlan", VLAN_RANGE_START)
         self._global_next_linked_vlan = data.get("global_next_linked_vlan", LINKED_VLAN_START)
 
@@ -612,15 +588,6 @@ class DockerOVSPlugin:
                     next_vlan = VLAN_RANGE_START
                 self._global_next_vlan = next_vlan
 
-        # Load management networks
-        for lab_id, mgmt_data in data.get("management_networks", {}).items():
-            self.management_networks[lab_id] = ManagementNetwork(
-                lab_id=mgmt_data["lab_id"],
-                network_id=mgmt_data["network_id"],
-                network_name=mgmt_data["network_name"],
-                subnet=mgmt_data["subnet"],
-                gateway=mgmt_data["gateway"],
-            )
 
     async def _save_state(self) -> None:
         """Save plugin state to disk atomically.
@@ -1540,7 +1507,7 @@ class DockerOVSPlugin:
         checks["bridges_count"] = len(self.lab_bridges)
         checks["networks_count"] = len(self.networks)
         checks["endpoints_count"] = len(self.endpoints)
-        checks["management_networks_count"] = len(self.management_networks)
+        checks["management_networks_count"] = 0  # Deprecated: management on OVS now
 
         # State persistence status
         checks["state_file_exists"] = self._state_file.exists()
@@ -1766,248 +1733,13 @@ class DockerOVSPlugin:
             # Remove lab tracking (don't delete shared bridge)
             del self.lab_bridges[lab_id]
 
-            # Clean up management network if exists
-            if lab_id in self.management_networks:
-                await self.delete_management_network(lab_id)
-
             # Persist state after full lab cleanup
             await self._mark_dirty_and_save()
 
             logger.info(f"Cleaned up all resources for lab {lab_id}")
 
-    # =========================================================================
-    # Management Network (eth0 with DHCP/NAT)
-    # =========================================================================
 
-    def _allocate_mgmt_subnet(self) -> tuple[str, str]:
-        """Allocate next available /24 subnet from the management range.
 
-        Returns (subnet, gateway) tuple, e.g., ("172.20.1.0/24", "172.20.1.1")
-        """
-        base = ipaddress.ip_network(settings.mgmt_network_subnet_base)
-        # Each lab gets a /24 subnet from the base /16
-        subnet_index = self._next_mgmt_subnet_index
-        self._next_mgmt_subnet_index += 1
-
-        if self._next_mgmt_subnet_index > 255:
-            self._next_mgmt_subnet_index = 1
-
-        # Calculate the /24 subnet
-        # Base is like 172.20.0.0/16, we want 172.20.{index}.0/24
-        base_octets = str(base.network_address).split(".")
-        subnet_str = f"{base_octets[0]}.{base_octets[1]}.{subnet_index}.0/24"
-        gateway = f"{base_octets[0]}.{base_octets[1]}.{subnet_index}.1"
-
-        return subnet_str, gateway
-
-    async def create_management_network(
-        self, lab_id: str, subnet: str | None = None
-    ) -> ManagementNetwork:
-        """Create Docker bridge network for management (eth0).
-
-        This creates a standard Docker bridge network with NAT, providing:
-        - DHCP-assigned IP addresses for containers
-        - NAT for internet access
-        - DNS resolution
-
-        Args:
-            lab_id: Lab identifier
-            subnet: Optional subnet (auto-allocated if not provided)
-
-        Returns:
-            ManagementNetwork with network details
-        """
-        async with self._locked():
-            # Check if already exists
-            if lab_id in self.management_networks:
-                return self.management_networks[lab_id]
-
-            network_name = f"archetype-mgmt-{lab_id[:20]}"
-
-            # Allocate subnet if not provided
-            if subnet:
-                gateway = str(ipaddress.ip_network(subnet, strict=False).network_address + 1)
-            else:
-                subnet, gateway = self._allocate_mgmt_subnet()
-
-            # Wrap Docker operations in thread to avoid blocking event loop
-            def _sync_create_network():
-                import docker
-                client = docker.from_env()
-                nonlocal subnet, gateway
-
-                # Check if network already exists
-                needs_create = False
-                try:
-                    existing = client.networks.get(network_name)
-                    labels = existing.attrs.get("Labels") or {}
-                    containers = existing.attrs.get("Containers") or {}
-                    if labels.get("archetype.mgmt_owner") != "ovs_plugin" and not containers:
-                        try:
-                            existing.remove()
-                            logger.info(
-                                f"Recreating management network {network_name} for ownership update"
-                            )
-                            needs_create = True
-                        except Exception:
-                            pass
-                    else:
-                        # Get existing network info
-                        network_id = existing.id
-                        config = existing.attrs.get("IPAM", {}).get("Config", [{}])[0]
-                        subnet = config.get("Subnet", subnet)
-                        gateway = config.get("Gateway", gateway)
-                        logger.info(f"Management network {network_name} already exists")
-                        return network_id, subnet, gateway
-                    if not needs_create:
-                        return network_id, subnet, gateway
-                except docker.errors.NotFound:
-                    needs_create = True
-
-                # Create the network (new or recreated)
-                if needs_create:
-                    ipam_pool = docker.types.IPAMPool(
-                        subnet=subnet,
-                        gateway=gateway,
-                    )
-                    ipam_config = docker.types.IPAMConfig(pool_configs=[ipam_pool])
-
-                    network = client.networks.create(
-                        name=network_name,
-                        driver="bridge",
-                        ipam=ipam_config,
-                        options={
-                            "com.docker.network.bridge.enable_ip_masquerade": (
-                                "true" if settings.mgmt_network_enable_nat else "false"
-                            ),
-                        },
-                        labels={
-                            "archetype.lab_id": lab_id,
-                            "archetype.type": "management",
-                            "archetype.mgmt_owner": "ovs_plugin",
-                        },
-                    )
-                    logger.info(f"Created management network {network_name}: {subnet}")
-                    return network.id, subnet, gateway
-
-            try:
-                network_id, subnet, gateway = await asyncio.to_thread(_sync_create_network)
-
-                mgmt_net = ManagementNetwork(
-                    lab_id=lab_id,
-                    network_id=network_id,
-                    network_name=network_name,
-                    subnet=subnet,
-                    gateway=gateway,
-                )
-                self.management_networks[lab_id] = mgmt_net
-
-                # Persist state after management network creation
-                await self._mark_dirty_and_save()
-
-                return mgmt_net
-
-            except Exception as e:
-                logger.error(f"Failed to create management network: {e}")
-                raise
-
-    async def attach_to_management(self, container_id: str, lab_id: str) -> str | None:
-        """Attach container to management network, returns assigned IP.
-
-        Args:
-            container_id: Docker container ID or name
-            lab_id: Lab identifier
-
-        Returns:
-            Assigned IP address, or None if failed
-        """
-        mgmt_net = self.management_networks.get(lab_id)
-        if not mgmt_net:
-            # Create management network if it doesn't exist
-            mgmt_net = await self.create_management_network(lab_id)
-
-        # Wrap Docker operations in thread to avoid blocking event loop
-        def _sync_attach():
-            import docker
-            client = docker.from_env()
-
-            network = client.networks.get(mgmt_net.network_name)
-            container = client.containers.get(container_id)
-
-            # Check if already connected
-            connected_networks = container.attrs.get("NetworkSettings", {}).get("Networks", {})
-            if mgmt_net.network_name in connected_networks:
-                return connected_networks[mgmt_net.network_name].get("IPAddress")
-
-            # Connect to network
-            network.connect(container)
-
-            # Get the assigned IP
-            container.reload()
-            ip_addr = container.attrs["NetworkSettings"]["Networks"].get(
-                mgmt_net.network_name, {}
-            ).get("IPAddress")
-
-            logger.info(f"Attached {container_id[:12]} to management network, IP: {ip_addr}")
-            return ip_addr
-
-        try:
-            return await asyncio.to_thread(_sync_attach)
-
-        except Exception as e:
-            logger.error(f"Failed to attach to management network: {e}")
-            return None
-
-    async def delete_management_network(self, lab_id: str) -> bool:
-        """Remove management network for a lab.
-
-        Args:
-            lab_id: Lab identifier
-
-        Returns:
-            True if deleted, False otherwise
-        """
-        mgmt_net = self.management_networks.pop(lab_id, None)
-        if not mgmt_net:
-            return False
-
-        # Wrap Docker operations in thread to avoid blocking event loop
-        def _sync_delete() -> tuple[bool, bool]:
-            """Returns (success, needs_save)"""
-            import docker
-            client = docker.from_env()
-
-            try:
-                network = client.networks.get(mgmt_net.network_name)
-                network.remove()
-                logger.info(f"Deleted management network {mgmt_net.network_name}")
-                return True, True
-            except docker.errors.NotFound:
-                return True, False  # Already gone
-            except docker.errors.APIError as e:
-                if "has active endpoints" in str(e):
-                    # Force disconnect all containers first
-                    network = client.networks.get(mgmt_net.network_name)
-                    for container_id in list(network.attrs.get("Containers", {}).keys()):
-                        try:
-                            network.disconnect(container_id, force=True)
-                        except Exception:
-                            pass
-                    network.remove()
-                    return True, True
-                raise
-
-        try:
-            success, needs_save = await asyncio.to_thread(_sync_delete)
-            if success and needs_save:
-                await self._mark_dirty_and_save()
-            return success
-
-        except Exception as e:
-            logger.error(f"Failed to delete management network: {e}")
-            # Put it back in tracking since we failed
-            self.management_networks[lab_id] = mgmt_net
-            return False
 
     # =========================================================================
     # Multi-Host VXLAN Support
@@ -2330,7 +2062,7 @@ class DockerOVSPlugin:
             "labs_count": len(self.lab_bridges),
             "endpoints_count": len(self.endpoints),
             "networks_count": len(self.networks),
-            "management_networks_count": len(self.management_networks),
+            "management_networks_count": 0,
             "bridges": bridges_info,
             "uptime_seconds": (datetime.now(timezone.utc) - self._started_at).total_seconds(),
         }

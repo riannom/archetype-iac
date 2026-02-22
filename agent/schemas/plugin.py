@@ -101,29 +101,3 @@ class PluginExternalListResponse(BaseModel):
     interfaces: list[PluginExternalInfo] = Field(default_factory=list)
 
 
-class PluginMgmtNetworkInfo(BaseModel):
-    """Information about a management network."""
-    lab_id: str
-    network_id: str
-    network_name: str
-    subnet: str
-    gateway: str
-
-
-class PluginMgmtNetworkResponse(BaseModel):
-    """Response from management network operations."""
-    success: bool
-    network: PluginMgmtNetworkInfo | None = None
-    error: str | None = None
-
-
-class PluginMgmtAttachRequest(BaseModel):
-    """Request to attach container to management network."""
-    container_id: str
-
-
-class PluginMgmtAttachResponse(BaseModel):
-    """Response from management network attachment."""
-    success: bool
-    ip_address: str | None = None
-    error: str | None = None

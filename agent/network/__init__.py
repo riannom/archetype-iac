@@ -12,7 +12,6 @@ from agent.network.overlay import OverlayManager, VxlanTunnel, OverlayBridge
 from agent.network.local import (
     LocalNetworkManager,
     LocalLink,
-    ManagedNetwork,
     get_local_manager,
 )
 from agent.network.vlan import (
@@ -44,7 +43,6 @@ __all__ = [
     # Local networking (veth pairs for same-host)
     "LocalNetworkManager",
     "LocalLink",
-    "ManagedNetwork",
     "get_local_manager",
     # VLAN management
     "VlanManager",

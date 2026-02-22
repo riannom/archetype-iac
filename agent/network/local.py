@@ -4,7 +4,6 @@ This module provides local link management for containers on the same host,
 complementing the overlay.py module which handles cross-host VXLAN tunnels.
 
 Features:
-- Docker bridge network creation for management traffic
 - veth pair creation for direct container-to-container links
 - Interface namespace movement and configuration
 - IP address assignment within container namespaces
@@ -41,9 +40,6 @@ from agent.network.cmd import run_cmd as _shared_run_cmd, ip_link_exists as _sha
 logger = logging.getLogger(__name__)
 
 
-# Management network prefix
-MGMT_NETWORK_PREFIX = "archetype-mgmt"
-
 # Interface name prefix for veth pairs
 VETH_PREFIX = "arch"
 
@@ -67,29 +63,17 @@ class LocalLink:
         return f"{self.lab_id}:{self.link_id}"
 
 
-@dataclass
-class ManagedNetwork:
-    """Represents a Docker management network for a lab."""
-
-    lab_id: str
-    network_id: str
-    network_name: str
-
 
 class LocalNetworkManager:
     """Manages local (intra-host) networking for labs.
 
     This class handles:
-    - Management network creation (Docker bridge for OOB access)
     - veth pair creation for direct container links
     - Interface namespace manipulation
     - Lab-scoped cleanup
 
     Usage:
         manager = LocalNetworkManager()
-
-        # Create management network for a lab
-        network = await manager.create_management_network(lab_id)
 
         # Create link between two containers
         link = await manager.create_link(
@@ -118,7 +102,6 @@ class LocalNetworkManager:
         """Initialize manager state."""
         self._docker: docker.DockerClient | None = None
         self._links: dict[str, LocalLink] = {}  # key -> link
-        self._networks: dict[str, ManagedNetwork] = {}  # lab_id -> network
 
     @property
     def docker(self) -> docker.DockerClient:
@@ -173,184 +156,6 @@ class LocalNetworkManager:
         suffix = secrets.token_hex(4)  # 8 hex chars
         # arch = 4 chars, suffix = 8 chars, total = 12 chars (within 15 limit)
         return f"{VETH_PREFIX}{suffix}"
-
-    async def _check_subnet_conflict(self, requested_subnet: str) -> str | None:
-        """Check if a subnet conflicts with existing Docker networks.
-
-        Args:
-            requested_subnet: Subnet in CIDR format (e.g., "172.20.0.0/24")
-
-        Returns:
-            Name of conflicting network, or None if no conflict
-        """
-        def _sync_check() -> str | None:
-            try:
-                import ipaddress
-                requested_net = ipaddress.ip_network(requested_subnet, strict=False)
-
-                # Get all existing Docker networks
-                networks = self.docker.networks.list()
-
-                for network in networks:
-                    # Get IPAM config for this network
-                    ipam = network.attrs.get("IPAM", {})
-                    configs = ipam.get("Config", [])
-
-                    for config in configs:
-                        existing_subnet = config.get("Subnet")
-                        if not existing_subnet:
-                            continue
-
-                        existing_net = ipaddress.ip_network(existing_subnet, strict=False)
-
-                        # Check for overlap
-                        if requested_net.overlaps(existing_net):
-                            return network.name
-
-            except Exception as e:
-                logger.warning(f"Error checking subnet conflict: {e}")
-
-            return None
-
-        return await asyncio.to_thread(_sync_check)
-
-    async def create_management_network(
-        self,
-        lab_id: str,
-        subnet: str | None = None,
-    ) -> ManagedNetwork:
-        """Create a Docker bridge network for management traffic.
-
-        This network provides out-of-band management access to containers,
-        separate from the data plane links.
-
-        Args:
-            lab_id: Lab identifier
-            subnet: Optional CIDR subnet (e.g., "172.20.0.0/24")
-
-        Returns:
-            ManagedNetwork object
-
-        Raises:
-            RuntimeError: If network creation fails or subnet conflicts
-        """
-        # Check if network already exists
-        if lab_id in self._networks:
-            logger.debug(f"Management network already exists for lab {lab_id}")
-            return self._networks[lab_id]
-
-        network_name = f"{MGMT_NETWORK_PREFIX}-{lab_id[:20]}"
-
-        # Wrap Docker network operations to avoid blocking
-        def _sync_get_or_create_network():
-            # Check if Docker network already exists
-            existing_networks = self.docker.networks.list(names=[network_name])
-            if existing_networks:
-                return existing_networks[0], True  # network, is_existing
-            return None, False
-
-        try:
-            existing_network, is_existing = await asyncio.to_thread(_sync_get_or_create_network)
-
-            if existing_network:
-                logger.info(f"Using existing management network: {network_name}")
-                managed = ManagedNetwork(
-                    lab_id=lab_id,
-                    network_id=existing_network.id,
-                    network_name=network_name,
-                )
-                self._networks[lab_id] = managed
-                return managed
-
-            # Check for subnet conflicts before creating
-            if subnet:
-                conflicting_network = await self._check_subnet_conflict(subnet)
-                if conflicting_network:
-                    raise RuntimeError(
-                        f"Subnet {subnet} conflicts with existing network '{conflicting_network}'. "
-                        f"Choose a different subnet or delete the conflicting network."
-                    )
-
-            # Create network in thread to avoid blocking
-            def _sync_create_network():
-                # Create IPAM config if subnet specified
-                ipam_config = None
-                if subnet:
-                    ipam_pool = docker.types.IPAMPool(subnet=subnet)
-                    ipam_config = docker.types.IPAMConfig(pool_configs=[ipam_pool])
-
-                # Create Docker bridge network
-                return self.docker.networks.create(
-                    name=network_name,
-                    driver="bridge",
-                    ipam=ipam_config,
-                    labels={
-                        "archetype.lab_id": lab_id,
-                        "archetype.type": "management",
-                    },
-                )
-
-            network = await asyncio.to_thread(_sync_create_network)
-
-            managed = ManagedNetwork(
-                lab_id=lab_id,
-                network_id=network.id,
-                network_name=network_name,
-            )
-            self._networks[lab_id] = managed
-
-            logger.info(f"Created management network: {network_name} ({network.short_id})")
-            return managed
-
-        except APIError as e:
-            raise RuntimeError(f"Failed to create management network: {e}")
-
-    async def delete_management_network(self, lab_id: str) -> bool:
-        """Delete a lab's management network.
-
-        Args:
-            lab_id: Lab identifier
-
-        Returns:
-            True if deleted successfully
-        """
-        if lab_id not in self._networks:
-            network_name = f"{MGMT_NETWORK_PREFIX}-{lab_id[:20]}"
-
-            def _sync_delete_by_name():
-                try:
-                    networks = self.docker.networks.list(names=[network_name])
-                    for network in networks:
-                        try:
-                            network.remove()
-                            logger.info(f"Deleted management network: {network_name}")
-                        except Exception as e:
-                            logger.warning(f"Failed to delete network {network_name}: {e}")
-                    return True
-                except Exception as e:
-                    logger.warning(f"Error finding network {network_name}: {e}")
-                    return False
-
-            return await asyncio.to_thread(_sync_delete_by_name)
-
-        managed = self._networks[lab_id]
-
-        def _sync_delete_managed():
-            try:
-                network = self.docker.networks.get(managed.network_id)
-                network.remove()
-                logger.info(f"Deleted management network: {managed.network_name}")
-                return True, False  # success, not_found
-            except NotFound:
-                return True, True
-            except Exception as e:
-                logger.error(f"Failed to delete management network: {e}")
-                return False, False
-
-        success, not_found = await asyncio.to_thread(_sync_delete_managed)
-        if success:
-            del self._networks[lab_id]
-        return success
 
     async def create_link(
         self,
@@ -669,7 +474,6 @@ class LocalNetworkManager:
         """
         result = {
             "links_deleted": 0,
-            "networks_deleted": 0,
             "errors": [],
         }
 
@@ -681,13 +485,6 @@ class LocalNetworkManager:
                     result["links_deleted"] += 1
             except Exception as e:
                 result["errors"].append(f"Link {link.link_id}: {e}")
-
-        # Delete management network
-        try:
-            if await self.delete_management_network(lab_id):
-                result["networks_deleted"] += 1
-        except Exception as e:
-            result["errors"].append(f"Management network: {e}")
 
         # Best-effort cleanup of orphaned veths (handles agent restarts)
         try:
@@ -704,10 +501,6 @@ class LocalNetworkManager:
         """Get all local links for a lab."""
         return [lnk for lnk in self._links.values() if lnk.lab_id == lab_id]
 
-    def get_network_for_lab(self, lab_id: str) -> ManagedNetwork | None:
-        """Get management network for a lab."""
-        return self._networks.get(lab_id)
-
     def get_status(self) -> dict[str, Any]:
         """Get status of all managed local networks for debugging."""
         return {
@@ -721,14 +514,6 @@ class LocalNetworkManager:
                     "iface_b": lnk.iface_b,
                 }
                 for lnk in self._links.values()
-            ],
-            "networks": [
-                {
-                    "lab_id": n.lab_id,
-                    "network_id": n.network_id,
-                    "network_name": n.network_name,
-                }
-                for n in self._networks.values()
             ],
         }
 
