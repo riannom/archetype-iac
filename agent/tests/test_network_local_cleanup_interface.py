@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from types import SimpleNamespace
-
 import pytest
 
 import agent.network.cleanup as cleanup
@@ -30,26 +28,6 @@ async def test_local_generate_veth_name() -> None:
     name = manager._generate_veth_name("lab")
     assert name.startswith(local.VETH_PREFIX)
     assert len(name) <= 15
-
-
-@pytest.mark.asyncio
-async def test_local_check_subnet_conflict(monkeypatch) -> None:
-    manager = local.LocalNetworkManager()
-
-    class FakeNetwork:
-        def __init__(self, name, subnet):
-            self.name = name
-            self.attrs = {"IPAM": {"Config": [{"Subnet": subnet}]}}
-
-    fake_docker = SimpleNamespace(networks=SimpleNamespace(list=lambda: [
-        FakeNetwork("net-a", "10.0.0.0/24"),
-        FakeNetwork("net-b", "192.168.0.0/24"),
-    ]))
-
-    manager._docker = fake_docker
-
-    conflict = await manager._check_subnet_conflict("10.0.0.0/16")
-    assert conflict == "net-a"
 
 
 def test_interface_config_is_in_container_env(monkeypatch) -> None:

@@ -41,9 +41,12 @@ def test_poap_script_endpoint_includes_startup_config_url(client: TestClient, tm
     assert "copy bootflash:startup-config running-config" in resp.text
     assert "copy bootflash:startup-config startup-config" in resp.text
     assert "direct copy failed, using compatibility sequence" in resp.text
-    # Verify copy running-config startup-config is NOT in the script
-    # (it triggers bootvar_write_grub which clears boot variables to EMPTY)
-    assert "copy running-config startup-config" not in resp.text
+    # Verify the dangerous 'copy running-config startup-config' CLI command
+    # is NOT used as an actual _run() command in the script (it triggers
+    # bootvar_write_grub which clears boot variables to EMPTY).
+    # The comment mentions it but only to explain WHY it's avoided.
+    assert '_run("copy running-config startup-config")' not in resp.text
+    assert "_run('copy running-config startup-config')" not in resp.text
     assert "DEBUG_LOG = \"/bootflash/poap_archetype_debug.log\"" in resp.text
     assert "traceback.format_exc()" in resp.text
     assert "import urllib2 as _urlreq" in resp.text

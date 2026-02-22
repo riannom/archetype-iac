@@ -412,7 +412,7 @@ def test_n9kv_config_preamble_constant() -> None:
     assert "/bootflash/set_boot.py" in _N9KV_CONFIG_PREAMBLE
     # Credentials and EEM applet
     assert "no password strength-check" in _N9KV_CONFIG_PREAMBLE
-    assert "username admin password admin" in _N9KV_CONFIG_PREAMBLE
+    assert "username admin password cisco" in _N9KV_CONFIG_PREAMBLE
     assert "event manager applet BOOTCONFIG" in _N9KV_CONFIG_PREAMBLE
     # CML uses `python` not `python3`
     assert "python bootflash:set_boot.py" in _N9KV_CONFIG_PREAMBLE
@@ -565,7 +565,10 @@ def test_libvirt_generate_domain_xml(monkeypatch, tmp_path: Path) -> None:
     assert "arch-ovs-test" in xml
     assert "<tag id='100'/>" in xml
     assert "<archetype:kind>ceos</archetype:kind>" in xml
-    assert "<archetype:readiness_probe>log_pattern</archetype:readiness_probe>" in xml
+    # readiness_probe matches ceos vendor default ("log_pattern") so it's
+    # omitted from domain XML (prevents stale overrides).
+    assert "<archetype:readiness_probe>" not in xml
+    # Pattern and timeout differ from vendor defaults, so they appear.
     assert "<archetype:readiness_pattern>Press RETURN</archetype:readiness_pattern>" in xml
     assert "<archetype:readiness_timeout>2400</archetype:readiness_timeout>" in xml
 

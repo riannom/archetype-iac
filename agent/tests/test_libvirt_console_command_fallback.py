@@ -7,6 +7,7 @@ virsh console when SSH isn't actually usable (auth failure, device not ready).
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 from types import SimpleNamespace
 
 import pytest
@@ -25,6 +26,9 @@ def _make_provider() -> libvirt_provider.LibvirtProvider:
     provider._next_vlan = {}
     provider._conn = None
     provider._uri = "qemu:///system"
+    provider._libvirt_executor = concurrent.futures.ThreadPoolExecutor(
+        max_workers=1, thread_name_prefix="libvirt-test",
+    )
     return provider
 
 

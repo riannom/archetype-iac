@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock
+import json as _json
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -34,30 +35,46 @@ async def test_discover_existing_state_scans_containers_once():
     docker_client.containers.list.return_value = [c1, c2]
     mgr._docker = docker_client
 
+    # Batch JSON response for port tags (new batched query format)
+    batch_port_json = _json.dumps({
+        "data": [
+            ["vhport1", 2001],
+            ["vhport2", 2002],
+        ]
+    })
+
     async def ovs_vsctl_side_effect(*args: str):
         if args == ("list-ports", "arch-ovs"):
             return 0, "vhport1\nvhport2", ""
-        if args == ("get", "port", "vhport1", "tag"):
-            return 0, "2001", ""
-        if args == ("get", "port", "vhport2", "tag"):
-            return 0, "2002", ""
+        # Batched port tag query
+        if args == ("--format=json", "--", "--columns=name,tag", "list", "Port"):
+            return 0, batch_port_json, ""
         return 1, "", "unexpected call"
 
     async def run_cmd_side_effect(cmd: list[str]):
-        if cmd[:7] == ["nsenter", "-t", "111", "-n", "ip", "-o", "link"]:
+        if cmd[:8] == ["nsenter", "-t", "111", "-n", "ip", "-o", "link", "show"]:
             return 0, "1: lo: <LOOPBACK>\n2: eth1@if101: <BROADCAST>", ""
-        if cmd[:7] == ["nsenter", "-t", "222", "-n", "ip", "-o", "link"]:
+        if cmd[:8] == ["nsenter", "-t", "222", "-n", "ip", "-o", "link", "show"]:
             return 0, "1: lo: <LOOPBACK>\n2: eth2@if202: <BROADCAST>", ""
-        if cmd == ["cat", "/sys/class/net/vhport1/ifindex"]:
-            return 0, "101\n", ""
-        if cmd == ["cat", "/sys/class/net/vhport2/ifindex"]:
-            return 0, "202\n", ""
         return 1, "", "unexpected command"
 
     mgr._ovs_vsctl = AsyncMock(side_effect=ovs_vsctl_side_effect)
     mgr._run_cmd = AsyncMock(side_effect=run_cmd_side_effect)
 
-    await mgr._discover_existing_state()
+    # Mock asyncio.to_thread: sysfs reads return fake ifindexes,
+    # Docker container list calls execute synchronously.
+    _ifindex_map = {"vhport1": "101", "vhport2": "202"}
+
+    async def _fake_to_thread(fn, *args, **kwargs):
+        # Detect _read_ifindexes by checking if first arg is a list of port names
+        if args and isinstance(args[0], list) and all(isinstance(x, str) for x in args[0]):
+            # This is the _read_ifindexes call — return fake sysfs data
+            return {name: _ifindex_map[name] for name in args[0] if name in _ifindex_map}
+        # Everything else (Docker calls) runs synchronously
+        return fn(*args, **kwargs)
+
+    with patch("agent.network.ovs.asyncio.to_thread", side_effect=_fake_to_thread):
+        await mgr._discover_existing_state()
 
     assert "archetype-lab1-r1:eth1" in mgr._ports
     assert "archetype-lab1-r2:eth2" in mgr._ports

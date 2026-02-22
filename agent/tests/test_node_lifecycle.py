@@ -44,7 +44,13 @@ def provider(mock_docker_client):
                     p = DockerProvider()
                     p._docker = mock_docker_client
                     p._local_network = AsyncMock()
-                    yield p
+                    # Disable OVS plugin for unit tests — these test node
+                    # lifecycle, not OVS network provisioning.
+                    with patch.object(
+                        type(p), "use_ovs_plugin",
+                        new_callable=PropertyMock, return_value=False
+                    ):
+                        yield p
 
 
 @pytest.fixture

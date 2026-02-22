@@ -219,13 +219,11 @@ def test_n9kv_config_inject_path():
     assert config.config_inject_path == "/startup-config"
 
 
-def test_n9kv_post_boot_commands_disable_poap_and_save():
-    """N9Kv post-boot commands should disable POAP and save config (EEM handles boot var)."""
+def test_n9kv_post_boot_commands_empty():
+    """N9Kv should have no post-boot commands — ISO config handles credentials and POAP skip,
+    EEM applet handles boot variable, config save happens at extraction time."""
     config = VENDOR_CONFIGS["cisco_n9kv"]
-    assert "configure terminal ; system no poap ; end" in config.post_boot_commands
-    assert "copy running-config startup-config" in config.post_boot_commands
-    # Bootflash import no longer needed — ISO delivers config directly
-    assert "copy bootflash:startup-config running-config" not in config.post_boot_commands
+    assert config.post_boot_commands == []
 
 
 def test_default_device_has_no_config_injection():
@@ -256,10 +254,10 @@ def test_n9kv_efi_is_stateless():
 
 
 def test_n9kv_default_credentials():
-    """N9Kv should have admin/admin credentials matching ISO config preamble."""
+    """N9Kv should have admin/cisco credentials matching ISO config preamble."""
     config = VENDOR_CONFIGS["cisco_n9kv"]
     assert config.console_user == "admin"
-    assert config.console_password == "admin"
+    assert config.console_password == "cisco"
     assert config.default_credentials == "admin / admin"
 
 
@@ -302,7 +300,8 @@ def test_prime_console_answers_yes_to_poap_abort():
     def mock_expect(patterns, timeout=None):
         nonlocal poap_abort_idx
         for i, pat in enumerate(patterns):
-            if "Abort" in pat and "Power On Auto Provisioning" in pat:
+            # Match the POAP abort regex which uses \s+ between words
+            if "Abort" in pat and "Provisioning" in pat:
                 poap_abort_idx = i
                 return i
         raise pexpect.TIMEOUT("no match")
