@@ -1621,19 +1621,25 @@ class LibvirtProvider(Provider, VlanPersistenceMixin):
             nodes=deployed_nodes,
         )
 
-    def _deploy_node_pre_sync(
+    def _node_precheck_sync(
         self,
         lab_id: str,
         node_name: str,
         domain_name: str,
+        workspace: Path,
         disks_dir: Path,
-    ) -> NodeInfo | None:
-        """Pre-deploy: recover network state, check existing domain — libvirt thread.
+    ) -> tuple[bool, str | None, str | None]:
+        """Shared pre-deployment cleanup — libvirt thread.
 
-        Returns NodeInfo if domain already running, None to proceed with creation.
+        Recovers network state, checks for an existing domain, and tears down
+        stale (non-running) domains so the caller can proceed with fresh creation.
+
+        Returns ``(already_running, uuid_short, status)`` where:
+        - already_running=True, uuid_short=<id>, status=<NodeStatus> when running
+        - already_running=False, None, None after cleanup or when no domain exists
         """
         try:
-            self._recover_stale_network(lab_id, disks_dir.parent)
+            self._recover_stale_network(lab_id, workspace)
         except Exception:
             pass
 
@@ -1643,11 +1649,7 @@ class LibvirtProvider(Provider, VlanPersistenceMixin):
                 state = self._get_domain_status(existing)
                 if state == NodeStatus.RUNNING:
                     logger.info(f"Domain {domain_name} already running")
-                    return NodeInfo(
-                        name=node_name,
-                        status=state,
-                        container_id=existing.UUIDString()[:12],
-                    )
+                    return True, existing.UUIDString()[:12], state
                 logger.info(
                     "Undefining stale shut-off domain %s for fresh creation",
                     domain_name,
@@ -1663,9 +1665,31 @@ class LibvirtProvider(Provider, VlanPersistenceMixin):
                 lab_allocs = self._vlan_allocations.get(lab_id, {})
                 if node_name in lab_allocs:
                     del lab_allocs[node_name]
-                    self._save_vlan_allocations(lab_id, disks_dir.parent)
+                    self._save_vlan_allocations(lab_id, workspace)
         except libvirt.libvirtError:
             pass
+        return False, None, None
+
+    def _deploy_node_pre_sync(
+        self,
+        lab_id: str,
+        node_name: str,
+        domain_name: str,
+        disks_dir: Path,
+    ) -> NodeInfo | None:
+        """Pre-deploy: recover network state, check existing domain — libvirt thread.
+
+        Returns NodeInfo if domain already running, None to proceed with creation.
+        """
+        already_running, uuid_short, state = self._node_precheck_sync(
+            lab_id, node_name, domain_name, disks_dir.parent, disks_dir,
+        )
+        if already_running:
+            return NodeInfo(
+                name=node_name,
+                status=state,
+                container_id=uuid_short,
+            )
         return None
 
     def _deploy_node_define_start_sync(
@@ -2182,40 +2206,17 @@ class LibvirtProvider(Provider, VlanPersistenceMixin):
 
         Returns NodeActionResult if domain already running, None to proceed.
         """
-        try:
-            self._recover_stale_network(lab_id, workspace)
-        except Exception:
-            pass
-        try:
-            existing = self.conn.lookupByName(domain_name)
-            if existing:
-                state = self._get_domain_status(existing)
-                if state == NodeStatus.RUNNING:
-                    return NodeActionResult(
-                        success=True,
-                        node_name=node_name,
-                        new_status=state,
-                        stdout=f"Domain {domain_name} already running",
-                    )
-                logger.info(
-                    "Undefining stale shut-off domain %s for fresh creation",
-                    domain_name,
-                )
-                self._undefine_domain(existing, domain_name)
-                self._clear_vm_post_boot_commands_cache(domain_name)
-                self._teardown_n9kv_poap_network(lab_id, node_name)
-                disks_dir = self._disks_dir(workspace)
-                for suffix in ("", "-data"):
-                    disk = disks_dir / f"{node_name}{suffix}.qcow2"
-                    if disk.exists():
-                        disk.unlink()
-                        logger.info("Removed stale disk: %s", disk)
-                lab_allocs = self._vlan_allocations.get(lab_id, {})
-                if node_name in lab_allocs:
-                    del lab_allocs[node_name]
-                    self._save_vlan_allocations(lab_id, workspace)
-        except libvirt.libvirtError:
-            pass
+        disks_dir = self._disks_dir(workspace)
+        already_running, _, state = self._node_precheck_sync(
+            lab_id, node_name, domain_name, workspace, disks_dir,
+        )
+        if already_running:
+            return NodeActionResult(
+                success=True,
+                node_name=node_name,
+                new_status=state,
+                stdout=f"Domain {domain_name} already running",
+            )
         return None
 
     def _define_domain_sync(self, domain_name: str, xml: str) -> bool:
@@ -4163,61 +4164,22 @@ class LibvirtProvider(Provider, VlanPersistenceMixin):
         kind: str,
         node_name: str,
     ) -> str | None:
-        """Extract config from VM via SSH.
-
-        Args:
-            domain_name: Libvirt domain name
-            kind: Device kind for credential and command lookup
-            node_name: Node name for logging
-
-        Returns:
-            Config content string or None on failure
-        """
-        try:
-            # Get VM IP address
-            ip = await self._get_vm_management_ip(domain_name)
-            if not ip:
-                logger.warning(f"No IP address found for SSH extraction from {node_name}")
-                return None
-
-            # Get extraction settings
-            extraction_settings = get_config_extraction_settings(kind)
-            user = extraction_settings.user or "admin"
-            password = extraction_settings.password or "admin"
-            cmd = extraction_settings.command
-
-            if not cmd:
-                logger.warning(f"No extraction command for {kind}, skipping {node_name}")
-                return None
-
-            # Run SSH command with sshpass
-            proc = await asyncio.create_subprocess_exec(
-                "sshpass", "-p", password,
-                "ssh",
-                "-o", "StrictHostKeyChecking=no",
-                "-o", "UserKnownHostsFile=/dev/null",
-                "-o", "LogLevel=ERROR",
-                "-o", "ConnectTimeout=10",
-                f"{user}@{ip}",
-                cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            stdout, stderr = await proc.communicate()
-
-            if proc.returncode != 0:
-                stderr_str = stderr.decode("utf-8") if stderr else ""
-                logger.warning(
-                    f"SSH extraction failed for {node_name}: "
-                    f"exit={proc.returncode}, stderr={stderr_str}"
-                )
-                return None
-
-            return stdout.decode("utf-8") if stdout else None
-
-        except Exception as e:
-            logger.error(f"SSH extraction failed for {node_name}: {e}")
+        """Extract config from VM via SSH."""
+        ip = await self._get_vm_management_ip(domain_name)
+        if not ip:
+            logger.warning(f"No IP address found for SSH extraction from {node_name}")
             return None
+
+        extraction_settings = get_config_extraction_settings(kind)
+        user = extraction_settings.user or "admin"
+        password = extraction_settings.password or "admin"
+        cmd = extraction_settings.command
+
+        if not cmd:
+            logger.warning(f"No extraction command for {kind}, skipping {node_name}")
+            return None
+
+        return await self._run_ssh_command(ip, user, password, cmd, node_name)
 
     def _list_lab_vm_kinds_sync(self, lab_id: str) -> list[tuple[str, str]]:
         """List running VMs for a lab with their kinds — libvirt thread.
@@ -4325,13 +4287,7 @@ class LibvirtProvider(Provider, VlanPersistenceMixin):
         try:
             discovered = self._discover_labs_sync()
             for lab_id, nodes in discovered.items():
-                is_orphan = lab_id not in valid_lab_ids
-                if is_orphan:
-                    is_orphan = not any(
-                        vid.startswith(lab_id) or lab_id.startswith(vid[:20])
-                        for vid in valid_lab_ids
-                    )
-                if not is_orphan:
+                if not self._is_orphan_lab(lab_id, valid_lab_ids):
                     continue
 
                 logger.info(f"Cleaning up orphan lab: {lab_id} ({len(nodes)} VMs)")
@@ -4367,13 +4323,10 @@ class LibvirtProvider(Provider, VlanPersistenceMixin):
                         except Exception:
                             pass
 
-                if lab_id in self._vlan_allocations:
-                    del self._vlan_allocations[lab_id]
-                    logger.debug(f"Freed VLAN allocations for orphan lab: {lab_id}")
-                if lab_id in self._next_vlan:
-                    del self._next_vlan[lab_id]
-                if workspace_base:
-                    self._remove_vlan_file(lab_id, lab_workspace)
+                self._cleanup_orphan_vlans(
+                    lab_id,
+                    (workspace_base / lab_id) if workspace_base else None,
+                )
 
             if removed["domains"]:
                 logger.info(

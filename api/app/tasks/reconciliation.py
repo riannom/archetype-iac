@@ -30,8 +30,8 @@ from app.db import get_redis, get_session
 from collections import defaultdict
 
 from app.services.broadcaster import broadcast_node_state_change, broadcast_link_state_change
-from app.services.interface_naming import normalize_interface
 from app.services.link_reservations import release_link_endpoint_reservations
+from app.utils.link import canonicalize_link_endpoints, link_state_endpoint_key
 from app.services.topology import TopologyService
 from app.utils.job import is_job_within_timeout
 from app.utils.locks import acquire_link_ops_lock, release_link_ops_lock
@@ -133,39 +133,6 @@ def reconciliation_lock(lab_id: str, timeout: int = 60):
 
 
 
-def _canonicalize_link_endpoints(
-    source_node: str,
-    source_interface: str,
-    target_node: str,
-    target_interface: str,
-    source_device: str | None = None,
-    target_device: str | None = None,
-) -> tuple[str, str, str, str]:
-    """Normalize and sort endpoints into canonical source/target order."""
-    src_i = normalize_interface(source_interface, source_device) if source_interface else "eth0"
-    tgt_i = normalize_interface(target_interface, target_device) if target_interface else "eth0"
-    if f"{source_node}:{src_i}" <= f"{target_node}:{tgt_i}":
-        return source_node, src_i, target_node, tgt_i
-    return target_node, tgt_i, source_node, src_i
-
-
-def _link_state_endpoint_key(
-    link_state: models.LinkState,
-    node_device_map: dict[str, str | None],
-) -> tuple[str, str, str, str]:
-    """Return canonical endpoint tuple for an existing LinkState row."""
-    src_dev = node_device_map.get(link_state.source_node)
-    tgt_dev = node_device_map.get(link_state.target_node)
-    return _canonicalize_link_endpoints(
-        link_state.source_node,
-        link_state.source_interface,
-        link_state.target_node,
-        link_state.target_interface,
-        source_device=src_dev,
-        target_device=tgt_dev,
-    )
-
-
 def _ensure_link_states_for_lab(session, lab_id: str) -> int:
     """Ensure LinkState records exist for all links in a lab's topology.
 
@@ -200,7 +167,7 @@ def _ensure_link_states_for_lab(session, lab_id: str) -> int:
     # --- Dedup pass: consolidate existing duplicates by canonical key ---
     key_groups: dict[tuple, list[models.LinkState]] = defaultdict(list)
     for ls in existing:
-        key = _link_state_endpoint_key(ls, node_device_map)
+        key = link_state_endpoint_key(ls, node_device_map)
         key_groups[key].append(ls)
 
     dedup_deleted = 0
@@ -229,7 +196,7 @@ def _ensure_link_states_for_lab(session, lab_id: str) -> int:
         session.flush()
 
     # --- Build canonical key set from surviving rows ---
-    existing_keys = {_link_state_endpoint_key(ls, node_device_map) for ls in existing}
+    existing_keys = {link_state_endpoint_key(ls, node_device_map) for ls in existing}
 
     created_count = 0
     for link in db_links:
@@ -241,7 +208,7 @@ def _ensure_link_states_for_lab(session, lab_id: str) -> int:
 
         src_dev = node_device_map.get(source_node.container_name)
         tgt_dev = node_device_map.get(target_node.container_name)
-        canonical_key = _canonicalize_link_endpoints(
+        canonical_key = canonicalize_link_endpoints(
             source_node.container_name, link.source_interface,
             target_node.container_name, link.target_interface,
             src_dev, tgt_dev,

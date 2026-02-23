@@ -2,6 +2,8 @@
 
 from pydantic import BaseModel, Field
 
+from agent.schemas.base import BaseResponse
+
 
 class ConsoleRequest(BaseModel):
     """Request to open console to a node."""
@@ -30,20 +32,16 @@ class CliVerifyRequest(BaseModel):
     retries: int = Field(default=2, ge=0, le=5)
 
 
-class CliCommandOutput(BaseModel):
+class CliCommandOutput(BaseResponse):
     """Single CLI command capture result."""
     command: str
-    success: bool
     output: str = ""
-    error: str | None = None
 
 
-class CliVerifyResponse(BaseModel):
+class CliVerifyResponse(BaseResponse):
     """Response from node CLI verification command execution."""
-    success: bool
     provider: str
     node_name: str
     domain_name: str | None = None
     commands_run: int = 0
     outputs: list[CliCommandOutput] = Field(default_factory=list)
-    error: str | None = None

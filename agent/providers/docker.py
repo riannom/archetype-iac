@@ -3290,55 +3290,14 @@ event-handler IPTABLES_CLEANUP
         cmd: str,
         log_name: str,
     ) -> str | None:
-        """Extract config from container via SSH.
-
-        Args:
-            container: Docker container object
-            kind: Device kind for credential lookup
-            cmd: Command to run
-            log_name: Display name for logging
-
-        Returns:
-            Config content string or None on failure
-        """
-        try:
-            # Get container IP
-            ips = self._get_container_ips(container)
-            if not ips:
-                logger.warning(f"No IP address found for SSH extraction from {log_name}")
-                return None
-
-            ip = ips[0]
-            user, password = get_console_credentials(kind)
-
-            # Run SSH command with sshpass
-            proc = await asyncio.create_subprocess_exec(
-                "sshpass", "-p", password,
-                "ssh",
-                "-o", "StrictHostKeyChecking=no",
-                "-o", "UserKnownHostsFile=/dev/null",
-                "-o", "LogLevel=ERROR",
-                "-o", "ConnectTimeout=10",
-                f"{user}@{ip}",
-                cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            stdout, stderr = await proc.communicate()
-
-            if proc.returncode != 0:
-                stderr_str = stderr.decode("utf-8") if stderr else ""
-                logger.warning(
-                    f"SSH extraction failed for {log_name}: "
-                    f"exit={proc.returncode}, stderr={stderr_str}"
-                )
-                return None
-
-            return stdout.decode("utf-8") if stdout else None
-
-        except Exception as e:
-            logger.error(f"SSH extraction failed for {log_name}: {e}")
+        """Extract config from container via SSH."""
+        ips = self._get_container_ips(container)
+        if not ips:
+            logger.warning(f"No IP address found for SSH extraction from {log_name}")
             return None
+
+        user, password = get_console_credentials(kind)
+        return await self._run_ssh_command(ips[0], user, password, cmd, log_name)
 
     async def _extract_config_via_nvram(
         self,
@@ -3451,31 +3410,16 @@ event-handler IPTABLES_CLEANUP
                 if not lab_id:
                     continue
 
-                # Check if this lab_id is in the valid set
-                # Only allow prefix matching when the stored lab_id is truncated
-                is_orphan = lab_id not in valid_lab_ids
-                if is_orphan and len(lab_id) < 20:
-                    # Also check for prefix matches (lab IDs may be truncated)
-                    is_orphan = not any(
-                        vid.startswith(lab_id) or lab_id.startswith(vid[:20])
-                        for vid in valid_lab_ids
-                    )
+                if not self._is_orphan_lab(lab_id, valid_lab_ids):
+                    continue
 
-                if is_orphan:
-                    logger.info(f"Removing orphan container {container.name} (lab: {lab_id})")
-                    await asyncio.to_thread(container.remove, force=True)
-                    removed.append(container.name)
-                    await self.local_network.cleanup_lab(lab_id)
-
-                    # Clean up VLAN allocations for orphaned lab
-                    if lab_id in self._vlan_allocations:
-                        del self._vlan_allocations[lab_id]
-                    if lab_id in self._next_vlan:
-                        del self._next_vlan[lab_id]
-                    # Remove VLAN file if workspace exists
-                    lab_workspace = Path(settings.workspace_path) / lab_id
-                    if lab_workspace.exists():
-                        self._remove_vlan_file(lab_id, lab_workspace)
+                logger.info(f"Removing orphan container {container.name} (lab: {lab_id})")
+                await asyncio.to_thread(container.remove, force=True)
+                removed.append(container.name)
+                await self.local_network.cleanup_lab(lab_id)
+                self._cleanup_orphan_vlans(
+                    lab_id, Path(settings.workspace_path) / lab_id
+                )
 
         except Exception as e:
             logger.error(f"Error during orphan cleanup: {e}")

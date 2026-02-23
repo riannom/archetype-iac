@@ -18,6 +18,11 @@ Submodules:
     provisioning   - Endpoint repair, interface provisioning, transport config
 """
 
+from agent.schemas.base import (  # noqa: F401
+    BaseResponse,
+    HardwareSpecMixin,
+)
+
 from agent.schemas.enums import (  # noqa: F401
     AgentStatus,
     JobStatus,

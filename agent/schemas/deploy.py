@@ -2,10 +2,11 @@
 
 from pydantic import BaseModel, Field
 
+from agent.schemas.base import HardwareSpecMixin
 from agent.schemas.enums import Provider
 
 
-class DeployNode(BaseModel):
+class DeployNode(HardwareSpecMixin):
     """Node definition for JSON deploy request."""
     name: str                         # Container name (internal ID)
     display_name: str | None = None   # Human-readable name for logs
@@ -21,24 +22,6 @@ class DeployNode(BaseModel):
     ports: list[str] = Field(default_factory=list)
     startup_config: str | None = None
     exec_cmds: list[str] = Field(default_factory=list)
-    # Hardware spec overrides (controller-resolved, highest priority at runtime)
-    memory: int | None = Field(None, gt=0, description="RAM in MB")
-    cpu: int | None = Field(None, gt=0, description="vCPU count")
-    cpu_limit: int | None = Field(None, ge=1, le=100, description="CPU limit percentage")
-    disk_driver: str | None = Field(None, description="Disk bus: virtio, ide, sata")
-    nic_driver: str | None = Field(None, description="NIC model: virtio, e1000, rtl8139")
-    machine_type: str | None = Field(None, description="QEMU machine type")
-    libvirt_driver: str | None = Field(None, description="Libvirt domain driver: kvm or qemu")
-    readiness_probe: str | None = Field(None, description="Readiness probe type override")
-    readiness_pattern: str | None = Field(None, description="Readiness regex override")
-    readiness_timeout: int | None = Field(None, gt=0, description="Readiness timeout override")
-    efi_boot: bool | None = Field(None, description="Enable EFI firmware boot")
-    efi_vars: str | None = Field(None, description="EFI vars mode (e.g., stateless)")
-    data_volume_gb: int | None = Field(None, ge=0, description="Data volume size in GB (0 = none)")
-    # Readiness overrides (controller-resolved, used for custom/imported kinds)
-    readiness_probe: str | None = None
-    readiness_pattern: str | None = None
-    readiness_timeout: int | None = Field(None, gt=0, description="Boot readiness timeout in seconds")
 
 
 class DeployLink(BaseModel):

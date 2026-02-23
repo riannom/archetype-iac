@@ -4,6 +4,8 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
+from agent.schemas.base import BaseResponse
+
 
 class PluginHealthResponse(BaseModel):
     """Response from plugin health check."""
@@ -69,11 +71,9 @@ class PluginVxlanRequest(BaseModel):
     vlan_tag: int
 
 
-class PluginVxlanResponse(BaseModel):
+class PluginVxlanResponse(BaseResponse):
     """Response from VXLAN tunnel creation."""
-    success: bool
     port_name: str | None = None
-    error: str | None = None
 
 
 class PluginExternalAttachRequest(BaseModel):
@@ -82,11 +82,9 @@ class PluginExternalAttachRequest(BaseModel):
     vlan_tag: int | None = None
 
 
-class PluginExternalAttachResponse(BaseModel):
+class PluginExternalAttachResponse(BaseResponse):
     """Response from external interface attachment."""
-    success: bool
     vlan_tag: int = 0
-    error: str | None = None
 
 
 class PluginExternalInfo(BaseModel):

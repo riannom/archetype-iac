@@ -4,6 +4,7 @@ from datetime import datetime
 
 from pydantic import BaseModel, Field
 
+from agent.schemas.base import BaseResponse
 from agent.schemas.enums import LinkState
 
 
@@ -31,17 +32,13 @@ class LinkInfo(BaseModel):
     error: str | None = None
 
 
-class LinkCreateResponse(BaseModel):
+class LinkCreateResponse(BaseResponse):
     """Agent -> Controller: Link creation result."""
-    success: bool
     link: LinkInfo | None = None
-    error: str | None = None
 
 
-class LinkDeleteResponse(BaseModel):
+class LinkDeleteResponse(BaseResponse):
     """Agent -> Controller: Link deletion result."""
-    success: bool
-    error: str | None = None
 
 
 class LinkListResponse(BaseModel):
@@ -92,11 +89,9 @@ class ExternalConnectRequest(BaseModel):
     vlan_tag: int | None = None  # Optional VLAN for isolation
 
 
-class ExternalConnectResponse(BaseModel):
+class ExternalConnectResponse(BaseResponse):
     """Response from external connection request."""
-    success: bool
     vlan_tag: int | None = None
-    error: str | None = None
 
 
 class ExternalDisconnectRequest(BaseModel):
@@ -104,10 +99,8 @@ class ExternalDisconnectRequest(BaseModel):
     external_interface: str  # Host interface to disconnect
 
 
-class ExternalDisconnectResponse(BaseModel):
+class ExternalDisconnectResponse(BaseResponse):
     """Response from external disconnect request."""
-    success: bool
-    error: str | None = None
 
 
 class ExternalConnectionInfo(BaseModel):
@@ -128,11 +121,9 @@ class BridgePatchRequest(BaseModel):
     vlan_tag: int | None = None
 
 
-class BridgePatchResponse(BaseModel):
+class BridgePatchResponse(BaseResponse):
     """Response from bridge patch request."""
-    success: bool
     patch_port: str | None = None
-    error: str | None = None
 
 
 class BridgeDeletePatchRequest(BaseModel):
@@ -140,10 +131,8 @@ class BridgeDeletePatchRequest(BaseModel):
     target_bridge: str
 
 
-class BridgeDeletePatchResponse(BaseModel):
+class BridgeDeletePatchResponse(BaseResponse):
     """Response from bridge patch deletion request."""
-    success: bool
-    error: str | None = None
 
 
 # --- Carrier State Management ---
@@ -154,22 +143,18 @@ class CarrierStateRequest(BaseModel):
     state: str  # "on" or "off"
 
 
-class CarrierStateResponse(BaseModel):
+class CarrierStateResponse(BaseResponse):
     """Response from carrier state operation."""
-    success: bool
     container: str
     interface: str
     state: str
-    error: str | None = None
 
 
-class PortIsolateResponse(BaseModel):
+class PortIsolateResponse(BaseResponse):
     """Response from port isolation operation."""
-    success: bool
     container: str
     interface: str
     vlan_tag: int | None = None
-    error: str | None = None
 
 
 class PortRestoreRequest(BaseModel):
@@ -177,13 +162,11 @@ class PortRestoreRequest(BaseModel):
     target_vlan: int
 
 
-class PortRestoreResponse(BaseModel):
+class PortRestoreResponse(BaseResponse):
     """Response from port restore operation."""
-    success: bool
     container: str
     interface: str
     vlan_tag: int
-    error: str | None = None
 
 
 class PortVlanResponse(BaseModel):
@@ -221,15 +204,13 @@ class SetMtuRequest(BaseModel):
     persist: bool = True  # Whether to make persistent across reboots
 
 
-class SetMtuResponse(BaseModel):
+class SetMtuResponse(BaseResponse):
     """Response from setting interface MTU."""
-    success: bool
     interface: str
     previous_mtu: int
     new_mtu: int
     persisted: bool = False
     network_manager: str | None = None
-    error: str | None = None
 
 
 # --- Same-host Port Convergence (declare-state) ---

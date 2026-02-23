@@ -4,6 +4,8 @@ from datetime import datetime
 
 from pydantic import BaseModel, Field
 
+from agent.schemas.base import BaseResponse
+
 
 class DockerImageInfo(BaseModel):
     """Information about a Docker image on an agent."""
@@ -34,11 +36,9 @@ class ImageReceiveRequest(BaseModel):
     job_id: str | None = None  # Sync job ID for progress reporting
 
 
-class ImageReceiveResponse(BaseModel):
+class ImageReceiveResponse(BaseResponse):
     """Agent -> Controller: Result of receiving an image."""
-    success: bool
     loaded_images: list[str] = Field(default_factory=list)  # Tags of loaded images
-    error: str | None = None
 
 
 class ImagePullRequest(BaseModel):

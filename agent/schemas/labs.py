@@ -5,6 +5,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from agent.schemas.base import BaseResponse
 from agent.schemas.enums import NodeStatus
 
 
@@ -39,12 +40,10 @@ class NodeReconcileRequest(BaseModel):
     nodes: list[NodeReconcileTarget]
 
 
-class NodeReconcileResult(BaseModel):
+class NodeReconcileResult(BaseResponse):
     """Result of reconciling a single node."""
     container_name: str
     action: Literal["started", "stopped", "removed", "already_running", "already_stopped", "error"]
-    success: bool
-    error: str | None = None
 
 
 class NodeReconcileResponse(BaseModel):
@@ -110,20 +109,16 @@ class ExtractedConfig(BaseModel):
     content: str
 
 
-class ExtractConfigsResponse(BaseModel):
+class ExtractConfigsResponse(BaseResponse):
     """Agent -> Controller: Config extraction result."""
-    success: bool
     extracted_count: int = 0
     configs: list[ExtractedConfig] = Field(default_factory=list)
-    error: str | None = None
 
 
-class ExtractNodeConfigResponse(BaseModel):
+class ExtractNodeConfigResponse(BaseResponse):
     """Agent -> Controller: Single-node config extraction result."""
-    success: bool
     node_name: str
     content: str | None = None
-    error: str | None = None
 
 
 class UpdateConfigRequest(BaseModel):
@@ -131,7 +126,5 @@ class UpdateConfigRequest(BaseModel):
     content: str
 
 
-class UpdateConfigResponse(BaseModel):
+class UpdateConfigResponse(BaseResponse):
     """Agent -> Controller: Config update result."""
-    success: bool
-    error: str | None = None

@@ -4,6 +4,8 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
+from agent.schemas.base import BaseResponse
+
 
 class CreateTunnelRequest(BaseModel):
     """Controller -> Agent: Create VXLAN tunnel to another host."""
@@ -25,11 +27,9 @@ class TunnelInfo(BaseModel):
     vlan_tag: int | None = None
 
 
-class CreateTunnelResponse(BaseModel):
+class CreateTunnelResponse(BaseResponse):
     """Agent -> Controller: Tunnel creation result."""
-    success: bool
     tunnel: TunnelInfo | None = None
-    error: str | None = None
 
 
 class AttachContainerRequest(BaseModel):
@@ -41,10 +41,8 @@ class AttachContainerRequest(BaseModel):
     ip_address: str | None = None  # Optional IP address (CIDR format, e.g., "10.0.0.1/24")
 
 
-class AttachContainerResponse(BaseModel):
+class AttachContainerResponse(BaseResponse):
     """Agent -> Controller: Attachment result."""
-    success: bool
-    error: str | None = None
 
 
 class CleanupOverlayRequest(BaseModel):
@@ -103,12 +101,10 @@ class EnsureVtepRequest(BaseModel):
     remote_host_id: str | None = None  # Optional remote host identifier
 
 
-class EnsureVtepResponse(BaseModel):
+class EnsureVtepResponse(BaseResponse):
     """Agent -> Controller: VTEP creation/lookup result."""
-    success: bool
     vtep: VtepInfo | None = None
     created: bool = False  # True if newly created, False if already existed
-    error: str | None = None
 
 
 class AttachOverlayInterfaceRequest(BaseModel):
@@ -128,12 +124,10 @@ class AttachOverlayInterfaceRequest(BaseModel):
     tenant_mtu: int = 0  # Optional MTU (0 = auto-discover)
 
 
-class AttachOverlayInterfaceResponse(BaseModel):
+class AttachOverlayInterfaceResponse(BaseResponse):
     """Agent -> Controller: Attachment result."""
-    success: bool
     local_vlan: int | None = None  # The container's local VLAN used for access mode
     vni: int | None = None  # The VNI used for the tunnel
-    error: str | None = None
 
 
 class DetachOverlayInterfaceRequest(BaseModel):
@@ -149,13 +143,11 @@ class DetachOverlayInterfaceRequest(BaseModel):
     link_id: str  # Link identifier for tunnel lookup
 
 
-class DetachOverlayInterfaceResponse(BaseModel):
+class DetachOverlayInterfaceResponse(BaseResponse):
     """Agent -> Controller: Detach result."""
-    success: bool
     interface_isolated: bool = False  # True if interface was restored to isolated VLAN
     new_vlan: int | None = None  # The new isolated VLAN assigned
     tunnel_deleted: bool = False  # True if per-link VXLAN port was deleted
-    error: str | None = None
 
 
 class AttachOverlayExternalRequest(BaseModel):
@@ -174,11 +166,9 @@ class AttachOverlayExternalRequest(BaseModel):
     link_id: str  # Link identifier for tracking
 
 
-class AttachOverlayExternalResponse(BaseModel):
+class AttachOverlayExternalResponse(BaseResponse):
     """Agent -> Controller: External overlay attachment result."""
-    success: bool
     vni: int | None = None
-    error: str | None = None
 
 
 # --- MTU Testing ---
@@ -191,14 +181,12 @@ class MtuTestRequest(BaseModel):
     source_ip: str | None = None  # Optional source IP for bind address (data plane)
 
 
-class MtuTestResponse(BaseModel):
+class MtuTestResponse(BaseResponse):
     """Agent -> Controller: MTU test result."""
-    success: bool
     tested_mtu: int | None = None  # Verified working MTU
     link_type: str | None = None  # "direct", "routed", "unknown"
     latency_ms: float | None = None  # Round-trip time
     ttl: int | None = None  # TTL from ping response (for link type detection)
-    error: str | None = None
 
 
 # --- Overlay Convergence (declare-state) ---

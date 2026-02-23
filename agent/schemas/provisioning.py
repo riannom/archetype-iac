@@ -4,6 +4,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from agent.schemas.base import BaseResponse
+
 
 class RepairEndpointsRequest(BaseModel):
     """Controller -> Agent: Repair missing veth pairs and OVS ports."""
@@ -20,14 +22,12 @@ class EndpointRepairResult(BaseModel):
     message: str | None = None
 
 
-class RepairEndpointsResponse(BaseModel):
+class RepairEndpointsResponse(BaseResponse):
     """Agent -> Controller: Endpoint repair results."""
-    success: bool
     nodes_repaired: int = 0
     total_endpoints_repaired: int = 0
     results: dict[str, list[EndpointRepairResult]] = Field(default_factory=dict)
     """Map of node_name -> list of repair results per endpoint."""
-    error: str | None = None
 
 
 class InterfaceProvisionRequest(BaseModel):
@@ -49,13 +49,11 @@ class InterfaceProvisionRequest(BaseModel):
     ovs_vlan_tag: int | None = None
 
 
-class InterfaceProvisionResponse(BaseModel):
+class InterfaceProvisionResponse(BaseResponse):
     """Response from interface provisioning operation."""
-    success: bool
     interface_name: str | None = None
     mtu: int | None = None
     ip_address: str | None = None
-    error: str | None = None
 
 
 class TransportConfigResponse(BaseModel):

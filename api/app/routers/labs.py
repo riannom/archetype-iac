@@ -33,7 +33,7 @@ from app.utils.lab import get_lab_or_404, get_lab_with_role, get_lab_provider, u
 from app.utils.agents import get_online_agent_for_lab
 from app.utils.nodes import get_node_placement_mapping
 from app.utils.http import require_lab_owner, raise_not_found, raise_unavailable
-from app.utils.link import generate_link_name
+from app.utils.link import canonicalize_link_endpoints, generate_link_name, link_state_endpoint_key
 from app.services.interface_naming import normalize_interface
 from app.services.link_operational_state import recompute_link_oper_state
 from app.services.link_reservations import (
@@ -1538,37 +1538,6 @@ def export_inventory(
 # ============================================================================
 
 
-def _canonicalize_link_endpoints(
-    source_node: str,
-    source_interface: str,
-    target_node: str,
-    target_interface: str,
-    source_device: str | None = None,
-    target_device: str | None = None,
-) -> tuple[str, str, str, str]:
-    """Normalize and sort endpoints into canonical source/target order."""
-    src_i = normalize_interface(source_interface, source_device) if source_interface else "eth0"
-    tgt_i = normalize_interface(target_interface, target_device) if target_interface else "eth0"
-    if f"{source_node}:{src_i}" <= f"{target_node}:{tgt_i}":
-        return source_node, src_i, target_node, tgt_i
-    return target_node, tgt_i, source_node, src_i
-
-
-def _link_state_endpoint_key(
-    link_state: models.LinkState,
-    node_device_map: dict[str, str | None] | None = None,
-) -> tuple[str, str, str, str]:
-    """Return canonical endpoint tuple for an existing LinkState row."""
-    src_dev = (node_device_map or {}).get(link_state.source_node)
-    tgt_dev = (node_device_map or {}).get(link_state.target_node)
-    return _canonicalize_link_endpoints(
-        link_state.source_node,
-        link_state.source_interface,
-        link_state.target_node,
-        link_state.target_interface,
-        source_device=src_dev,
-        target_device=tgt_dev,
-    )
 
 
 def _choose_preferred_link_state(
@@ -1577,7 +1546,7 @@ def _choose_preferred_link_state(
 ) -> models.LinkState:
     """Choose one row to keep when duplicate endpoint records exist."""
     def _is_canonical_row(state: models.LinkState) -> bool:
-        src_n, src_i, tgt_n, tgt_i = _link_state_endpoint_key(state, node_device_map)
+        src_n, src_i, tgt_n, tgt_i = link_state_endpoint_key(state, node_device_map)
         canonical_name = generate_link_name(src_n, src_i, tgt_n, tgt_i)
         src_dev = (node_device_map or {}).get(state.source_node)
         tgt_dev = (node_device_map or {}).get(state.target_node)
@@ -1611,7 +1580,7 @@ def _find_matching_link_state(
 ) -> tuple[models.LinkState | None, list[models.LinkState]]:
     """Find matching LinkState rows by canonical endpoints."""
     key = (src_n, src_i, tgt_n, tgt_i)
-    matches = [s for s in states if _link_state_endpoint_key(s, node_device_map) == key]
+    matches = [s for s in states if link_state_endpoint_key(s, node_device_map) == key]
     if not matches:
         return None, []
     preferred = _choose_preferred_link_state(matches, node_device_map)
@@ -1629,7 +1598,7 @@ def _parse_link_id_endpoints(link_id: str) -> tuple[str, str, str, str] | None:
     tgt_n, tgt_i = right.rsplit(":", 1)
     if not src_n or not src_i or not tgt_n or not tgt_i:
         return None
-    return _canonicalize_link_endpoints(src_n, src_i, tgt_n, tgt_i)
+    return canonicalize_link_endpoints(src_n, src_i, tgt_n, tgt_i)
 
 
 def _sync_link_oper_state(database: Session, link_state: models.LinkState) -> None:
@@ -1711,7 +1680,7 @@ def _upsert_link_states(
         # Resolve node IDs to names and canonicalize endpoints
         source_node = node_id_to_name.get(ep_a.node, ep_a.node)
         target_node = node_id_to_name.get(ep_b.node, ep_b.node)
-        src_n, src_i, tgt_n, tgt_i = _canonicalize_link_endpoints(
+        src_n, src_i, tgt_n, tgt_i = canonicalize_link_endpoints(
             source_node,
             ep_a.ifname or "eth0",
             target_node,
@@ -2092,7 +2061,7 @@ async def hot_connect_link(
         .filter(models.Node.lab_id == lab_id, models.Node.container_name == request.target_node)
         .first()
     )
-    src_n, src_i, tgt_n, tgt_i = _canonicalize_link_endpoints(
+    src_n, src_i, tgt_n, tgt_i = canonicalize_link_endpoints(
         request.source_node,
         request.source_interface,
         request.target_node,

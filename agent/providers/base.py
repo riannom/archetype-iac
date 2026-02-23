@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from abc import ABC, abstractmethod
@@ -294,6 +295,55 @@ class Provider(ABC):
         """
         return {}
 
+    async def _run_ssh_command(
+        self,
+        ip: str,
+        user: str,
+        password: str,
+        command: str,
+        context_label: str,
+    ) -> str | None:
+        """Run a command on a remote host via sshpass+ssh.
+
+        Args:
+            ip: Target IP address
+            user: SSH username
+            password: SSH password
+            command: Command to execute
+            context_label: Label for log messages (e.g. node name)
+
+        Returns:
+            stdout as string, or None on failure
+        """
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "sshpass", "-p", password,
+                "ssh",
+                "-o", "StrictHostKeyChecking=no",
+                "-o", "UserKnownHostsFile=/dev/null",
+                "-o", "LogLevel=ERROR",
+                "-o", "ConnectTimeout=10",
+                f"{user}@{ip}",
+                command,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await proc.communicate()
+
+            if proc.returncode != 0:
+                stderr_str = stderr.decode("utf-8") if stderr else ""
+                logger.warning(
+                    f"SSH extraction failed for {context_label}: "
+                    f"exit={proc.returncode}, stderr={stderr_str}"
+                )
+                return None
+
+            return stdout.decode("utf-8") if stdout else None
+
+        except Exception as e:
+            logger.error(f"SSH extraction failed for {context_label}: {e}")
+            return None
+
 
 class VlanPersistenceMixin:
     """Shared VLAN allocation persistence for Docker and Libvirt providers.
@@ -428,3 +478,31 @@ class VlanPersistenceMixin:
             List of VLAN tags, or empty list if not found
         """
         return self._vlan_allocations.get(lab_id, {}).get(node_name, [])
+
+    # -- orphan helpers ------------------------------------------------------
+
+    @staticmethod
+    def _is_orphan_lab(lab_id: str, valid_lab_ids: set[str]) -> bool:
+        """Check whether a lab ID is orphaned (not in valid set).
+
+        Handles both exact matches and truncated-ID prefix matching
+        (Docker labels may store truncated lab IDs).
+        """
+        if lab_id in valid_lab_ids:
+            return False
+        if len(lab_id) < 20:
+            return not any(
+                vid.startswith(lab_id) or lab_id.startswith(vid[:20])
+                for vid in valid_lab_ids
+            )
+        return True
+
+    def _cleanup_orphan_vlans(self, lab_id: str, workspace: Path | None) -> None:
+        """Remove VLAN allocations and file for an orphaned lab."""
+        if lab_id in self._vlan_allocations:
+            del self._vlan_allocations[lab_id]
+            logger.debug(f"Freed VLAN allocations for orphan lab: {lab_id}")
+        if lab_id in self._next_vlan:
+            del self._next_vlan[lab_id]
+        if workspace and workspace.exists():
+            self._remove_vlan_file(lab_id, workspace)
