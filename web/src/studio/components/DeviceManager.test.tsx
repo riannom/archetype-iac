@@ -4,19 +4,28 @@ import userEvent from "@testing-library/user-event";
 import DeviceManager from "./DeviceManager";
 import { DeviceModel, DeviceType, ImageLibraryEntry } from "../types";
 import { DragProvider } from "../contexts/DragContext";
-import { apiRequest } from "../../api";
+import { apiRequest, rawApiRequest } from "../../api";
+
+const { mockAddNotification } = vi.hoisted(() => ({
+  mockAddNotification: vi.fn(),
+}));
 
 // Mock FontAwesome
 vi.mock("@fortawesome/react-fontawesome", () => ({
   FontAwesomeIcon: () => null,
 }));
 
+vi.mock("../../contexts/NotificationContext", () => ({
+  useNotifications: () => ({ addNotification: mockAddNotification }),
+}));
+
 // Mock API
 vi.mock("../../api", () => ({
-  API_BASE_URL: "http://localhost:8000",
   apiRequest: vi.fn(),
+  rawApiRequest: vi.fn(),
 }));
 const mockApiRequest = vi.mocked(apiRequest);
+const mockRawApiRequest = vi.mocked(rawApiRequest);
 
 const mockDeviceModels: DeviceModel[] = [
   {
@@ -103,6 +112,7 @@ describe("DeviceManager", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockApiRequest.mockResolvedValue({});
+    mockRawApiRequest.mockResolvedValue(new Response("{}"));
     localStorage.removeItem("archetype:image-management:logs");
     localStorage.removeItem("archetype:image-management:log-filter");
   });

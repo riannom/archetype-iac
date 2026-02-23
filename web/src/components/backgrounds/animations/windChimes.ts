@@ -167,7 +167,7 @@ export function useWindChimes(
       ctx.stroke();
     };
 
-    const drawChime = (chime: Chime, time: number) => {
+    const drawChime = (chime: Chime, _time: number) => {
       // Update swing
       chime.swingPhase += chime.swingSpeed;
       const swing = Math.sin(chime.swingPhase) * chime.swingAmplitude;

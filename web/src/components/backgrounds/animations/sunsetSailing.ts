@@ -306,7 +306,7 @@ export function useSunsetSailing(
       }
     };
 
-    const drawBirds = (time: number) => {
+    const drawBirds = (_time: number) => {
       birdsRef.current.forEach((bird) => {
         bird.x += bird.speed;
         bird.wingPhase += 0.1;

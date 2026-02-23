@@ -1,8 +1,9 @@
 
 import React, { useCallback, useMemo, useRef, useState } from 'react';
-import { DeviceModel, Node, isDeviceNode, DeviceNode } from '../types';
+import { DeviceModel, Node, isDeviceNode } from '../types';
 import { getAgentColor } from '../../utils/agentColors';
 import { NodeRuntimeStatus, NodeStateEntry } from '../../types/nodeState';
+import { useNotifications } from '../../contexts/NotificationContext';
 
 /** @deprecated Use NodeRuntimeStatus from types/nodeState instead */
 export type RuntimeStatus = NodeRuntimeStatus;
@@ -27,6 +28,7 @@ interface RuntimeControlProps {
 }
 
 const RuntimeControl: React.FC<RuntimeControlProps> = ({ labId, nodes, runtimeStates, nodeStates, deviceModels, onUpdateStatus, onSetRuntimeStatus, onRefreshStates, studioRequest, agents = [], onUpdateNode, pendingNodeOps = new Set(), onFlushTopologySave }) => {
+  const { addNotification } = useNotifications();
   const [isExtracting, setIsExtracting] = useState(false);
   const [pendingOps, setPendingOps] = useState<Set<PendingOp>>(new Set());
   const lastBulkActionRef = useRef<number>(0);
@@ -122,14 +124,18 @@ const RuntimeControl: React.FC<RuntimeControlProps> = ({ labId, nodes, runtimeSt
     setIsExtracting(true);
     try {
       await studioRequest(`/labs/${labId}/extract-configs`, { method: 'POST' });
-      alert('Configs extracted successfully!');
+      addNotification('success', 'Config extraction completed');
     } catch (error) {
       console.error('Extract configs failed:', error);
-      alert('Failed to extract configs. Check console for details.');
+      addNotification(
+        'error',
+        'Config extraction failed',
+        error instanceof Error ? error.message : 'Check console for details.'
+      );
     } finally {
       setIsExtracting(false);
     }
-  }, [labId, studioRequest]);
+  }, [addNotification, labId, studioRequest]);
 
   const handleStopAll = useCallback(async () => {
     const confirmed = window.confirm(

@@ -61,6 +61,13 @@ class TestGetContainerName:
 class TestRunAgentJob:
     """Tests for run_agent_job function."""
 
+    @pytest.fixture(autouse=True)
+    def _mock_preflight_checks(self):
+        """Bypass network preflight in unit tests focused on job execution paths."""
+        with patch("app.tasks.jobs._run_job_preflight_checks", new_callable=AsyncMock) as mock_preflight:
+            mock_preflight.return_value = (True, None)
+            yield mock_preflight
+
     @pytest.fixture
     def mock_db_session(self, test_db: Session):
         """Create a mock database session with test data."""
@@ -801,6 +808,13 @@ class TestSyncAgentJobParentTracking:
 
 class TestJobErrorHandling:
     """Tests for job error handling scenarios."""
+
+    @pytest.fixture(autouse=True)
+    def _mock_preflight_checks(self):
+        """Bypass network preflight in error-handling unit tests."""
+        with patch("app.tasks.jobs._run_job_preflight_checks", new_callable=AsyncMock) as mock_preflight:
+            mock_preflight.return_value = (True, None)
+            yield mock_preflight
 
     @pytest.mark.asyncio
     async def test_unexpected_exception(self, test_db: Session, test_user: models.User, sample_host: models.Host):

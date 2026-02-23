@@ -1,5 +1,4 @@
 import React, { useState } from 'react';
-import { isDeviceNode } from '../../types';
 import { useConfigManager } from '../../hooks/useConfigManager';
 import { NodeList } from './NodeList';
 import SnapshotList from './SnapshotList';
@@ -7,6 +6,7 @@ import ConfigViewer from './ConfigViewer';
 import { ConfigMapping } from './ConfigMapping';
 import { ConfigActions } from './ConfigActions';
 import type { ConfigsViewProps } from './types';
+import { useNotifications } from '../../../contexts/NotificationContext';
 
 type Tab = 'snapshots' | 'mapping';
 
@@ -18,6 +18,7 @@ const ConfigsView: React.FC<ConfigsViewProps> = ({
   onExtractConfigs,
 }) => {
   const [activeTab, setActiveTab] = useState<Tab>('snapshots');
+  const { addNotification } = useNotifications();
 
   const mgr = useConfigManager({ labId, nodes, studioRequest });
 
@@ -35,7 +36,11 @@ const ConfigsView: React.FC<ConfigsViewProps> = ({
     try {
       await mgr.bulkDeleteSnapshots({ orphanedOnly: true, force: true });
     } catch (err) {
-      alert(err instanceof Error ? err.message : 'Failed to delete orphaned configs');
+      addNotification(
+        'error',
+        'Failed to delete orphaned configs',
+        err instanceof Error ? err.message : undefined
+      );
     }
   };
 
@@ -43,7 +48,7 @@ const ConfigsView: React.FC<ConfigsViewProps> = ({
     try {
       await mgr.downloadConfigs({ all: true });
     } catch (err) {
-      alert(err instanceof Error ? err.message : 'Download failed');
+      addNotification('error', 'Download failed', err instanceof Error ? err.message : undefined);
     }
   };
 
@@ -51,7 +56,7 @@ const ConfigsView: React.FC<ConfigsViewProps> = ({
     try {
       await mgr.downloadConfigs({ nodeNames: [nodeName] });
     } catch (err) {
-      alert(err instanceof Error ? err.message : 'Download failed');
+      addNotification('error', 'Download failed', err instanceof Error ? err.message : undefined);
     }
   };
 
@@ -59,7 +64,7 @@ const ConfigsView: React.FC<ConfigsViewProps> = ({
     try {
       await mgr.deleteSnapshot(snapshotId);
     } catch (err) {
-      alert(err instanceof Error ? err.message : 'Failed to delete snapshot');
+      addNotification('error', 'Failed to delete snapshot', err instanceof Error ? err.message : undefined);
     }
   };
 

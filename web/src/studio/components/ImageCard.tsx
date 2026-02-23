@@ -1,8 +1,9 @@
 import React, { useState } from 'react';
-import { ImageLibraryEntry, ImageHostStatus, DeviceModel } from '../types';
+import { ImageLibraryEntry, DeviceModel } from '../types';
 import { useDragHandlers, useDragContext } from '../contexts/DragContext';
 import { formatSize, formatDate } from '../../utils/format';
 import { apiRequest } from '../../api';
+import { useNotifications } from '../../contexts/NotificationContext';
 
 interface ImageCardProps {
   image: ImageLibraryEntry;
@@ -30,6 +31,7 @@ const ImageCard: React.FC<ImageCardProps> = ({
   pendingMessage,
 }) => {
   const { dragState } = useDragContext();
+  const { addNotification } = useNotifications();
   const { handleDragStart, handleDragEnd } = useDragHandlers({
     id: image.id,
     kind: image.kind,
@@ -42,6 +44,7 @@ const ImageCard: React.FC<ImageCardProps> = ({
   });
 
   const [syncing, setSyncing] = useState(false);
+  void device;
 
   const isDragging = dragState.draggedImageId === image.id;
 
@@ -84,7 +87,7 @@ const ImageCard: React.FC<ImageCardProps> = ({
       onSync?.();
     } catch (err) {
       console.error('Failed to sync image:', err);
-      alert(err instanceof Error ? err.message : 'Sync failed');
+      addNotification('error', 'Image sync failed', err instanceof Error ? err.message : undefined);
     } finally {
       setSyncing(false);
     }

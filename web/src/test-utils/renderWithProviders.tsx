@@ -2,7 +2,6 @@ import React, { ReactElement } from "react";
 import { render, RenderOptions } from "@testing-library/react";
 import { BrowserRouter, MemoryRouter } from "react-router-dom";
 import { ThemeProvider } from "../theme/ThemeProvider";
-import { UserProvider } from "../contexts/UserContext";
 
 /**
  * User for testing purposes

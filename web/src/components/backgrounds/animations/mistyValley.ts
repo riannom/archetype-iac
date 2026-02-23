@@ -244,7 +244,7 @@ export function useMistyValley(
       });
     };
 
-    const drawBird = (bird: Bird, time: number) => {
+    const drawBird = (bird: Bird, _time: number) => {
       bird.x += bird.speed;
       bird.wingPhase += 0.1;
 

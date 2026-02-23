@@ -1,9 +1,8 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Navigate, useNavigate } from 'react-router-dom';
 import { useUser } from '../contexts/UserContext';
 import { canViewInfrastructure } from '../utils/permissions';
 import { apiRequest } from '../api';
-import { formatTimestamp } from '../utils/format';
 import AdminMenuButton from '../components/AdminMenuButton';
 
 interface AgentManagedInterface {

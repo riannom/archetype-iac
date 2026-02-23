@@ -1,6 +1,6 @@
 
 import React, { useState, useRef, useEffect } from 'react';
-import { Node, Link, Annotation, DeviceModel, isExternalNetworkNode, isDeviceNode, ExternalNetworkNode, DeviceNode } from '../types';
+import { Node, Link, Annotation, DeviceModel, isExternalNetworkNode, ExternalNetworkNode, DeviceNode } from '../types';
 import { RuntimeStatus } from './RuntimeControl';
 import InterfaceSelect from './InterfaceSelect';
 import { PortManager } from '../hooks/usePortManager';
@@ -143,8 +143,6 @@ const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
       />
     );
   }
-
-  const isNode = isNodeItem && !isAnnotation && isDeviceNode(selectedItem as Node);
 
   if (isAnnotation) {
     const ann = selectedItem as Annotation;

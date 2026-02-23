@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { ArchetypeIcon } from "../components/icons";
 import AdminMenuButton from "../components/AdminMenuButton";
@@ -9,6 +9,7 @@ import {
   createSupportBundle,
   getSupportBundle,
   listSupportBundles,
+  rawApiRequest,
   type SupportBundle,
 } from "../api";
 import { downloadBlob } from "../utils/download";
@@ -132,12 +133,7 @@ export default function SupportBundlesPage() {
 
   async function downloadBundle(bundleId: string) {
     try {
-      const token = localStorage.getItem("token");
-      const response = await fetch(`/api/support-bundles/${bundleId}/download`, {
-        headers: {
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
-      });
+      const response = await rawApiRequest(`/support-bundles/${bundleId}/download`);
       if (!response.ok) {
         throw new Error(`Download failed: HTTP ${response.status}`);
       }

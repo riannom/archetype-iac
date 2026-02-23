@@ -8,7 +8,7 @@ import { getCpuColor, getMemoryColor, getStorageColor } from '../../utils/status
 import { formatUptimeFromBoot, formatMemorySize } from '../../utils/format';
 import { useNotifications } from '../../contexts/NotificationContext';
 import { useTheme } from '../../theme';
-import type { SystemMetrics, PerHostMetrics } from '../types';
+import type { SystemMetrics } from '../types';
 
 interface SystemStatusStripProps {
   metrics: SystemMetrics | null;

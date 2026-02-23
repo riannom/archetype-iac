@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useEffect, useState, useCallback, useMemo } from 'react';
-import { API_BASE_URL } from '../api';
+import { rawApiRequest } from '../api';
 
 export type GlobalRole = 'super_admin' | 'admin' | 'operator' | 'viewer';
 
@@ -40,11 +40,7 @@ export function UserProvider({ children }: UserProviderProps) {
     }
 
     try {
-      const response = await fetch(`${API_BASE_URL}/auth/me`, {
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
-      });
+      const response = await rawApiRequest('/auth/me');
 
       if (!response.ok) {
         if (response.status === 401) {

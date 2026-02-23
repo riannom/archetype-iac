@@ -12,14 +12,12 @@
     "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
-    "immer": "^10.0.4",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-router-dom": "^6.26.1",
     "reactflow": "^11.11.4",
     "xterm": "^5.0.0",
-    "xterm-addon-fit": "^0.8.0",
-    "zustand": "^4.5.4"
+    "xterm-addon-fit": "^0.8.0"
   },
   "devDependencies": {
     "@testing-library/dom": "^10.4.1",

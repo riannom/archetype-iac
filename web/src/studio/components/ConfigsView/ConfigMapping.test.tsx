@@ -2,6 +2,10 @@ import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { ConfigMapping } from './ConfigMapping';
 
+vi.mock('../../../contexts/NotificationContext', () => ({
+  useNotifications: () => ({ addNotification: vi.fn() }),
+}));
+
 const snapshot = {
   id: 's1',
   lab_id: 'lab1',

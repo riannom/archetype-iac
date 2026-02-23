@@ -18,6 +18,10 @@ vi.mock('../contexts/UserContext', () => ({
   useUser: () => ({ user: { id: "user-1", username: "admin", email: "admin@example.com", is_active: true, global_role: "super_admin", created_at: "2024-01-01T00:00:00Z" }, loading: false }),
 }));
 
+vi.mock('../contexts/NotificationContext', () => ({
+  useNotifications: () => ({ addNotification: vi.fn() }),
+}));
+
 vi.mock('react-router-dom', async () => {
   const actual = await vi.importActual<typeof import('react-router-dom')>('react-router-dom');
   return {

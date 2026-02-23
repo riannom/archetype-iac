@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { API_BASE_URL } from '../api';
+import { rawApiRequest } from '../api';
 
 interface ISOFileInfo {
   name: string;
@@ -144,12 +144,7 @@ const ISOImportModal: React.FC<ISOImportModalProps> = ({
   const fetchAvailableISOs = useCallback(async () => {
     setLoadingISOs(true);
     try {
-      const token = localStorage.getItem('token');
-      const response = await fetch(`${API_BASE_URL}/iso/browse`, {
-        headers: {
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
-      });
+      const response = await rawApiRequest('/iso/browse');
       if (response.ok) {
         const data: BrowseResponse = await response.json();
         setAvailableISOs(data.files);
@@ -213,12 +208,10 @@ const ISOImportModal: React.FC<ISOImportModalProps> = ({
     });
 
     try {
-      const token = localStorage.getItem('token');
-      const response = await fetch(`${API_BASE_URL}/iso/scan`, {
+      const response = await rawApiRequest('/iso/scan', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
         body: JSON.stringify({ iso_path: isoPath.trim() }),
       });
@@ -271,12 +264,10 @@ const ISOImportModal: React.FC<ISOImportModalProps> = ({
     });
 
     try {
-      const token = localStorage.getItem('token');
-      const response = await fetch(`${API_BASE_URL}/iso/${scanResult.session_id}/import`, {
+      const response = await rawApiRequest(`/iso/${scanResult.session_id}/import`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
         body: JSON.stringify({
           image_ids: Array.from(selectedImages),
@@ -307,14 +298,9 @@ const ISOImportModal: React.FC<ISOImportModalProps> = ({
   const pollProgress = async () => {
     if (!scanResult) return;
 
-    const token = localStorage.getItem('token');
     const poll = async () => {
       try {
-        const response = await fetch(`${API_BASE_URL}/iso/${scanResult.session_id}/progress`, {
-          headers: {
-            ...(token ? { Authorization: `Bearer ${token}` } : {}),
-          },
-        });
+        const response = await rawApiRequest(`/iso/${scanResult.session_id}/progress`);
 
         if (!response.ok) return;
 
@@ -422,19 +408,12 @@ const ISOImportModal: React.FC<ISOImportModalProps> = ({
       details: `size=${selectedFile.size}`,
     });
 
-    const token = localStorage.getItem('token');
-    const headers: Record<string, string> = {};
-    if (token) {
-      headers['Authorization'] = `Bearer ${token}`;
-    }
-
     try {
       // Initialize upload
       setUploadStatus('Initializing upload...');
-      const initResponse = await fetch(`${API_BASE_URL}/iso/upload/init`, {
+      const initResponse = await rawApiRequest('/iso/upload/init', {
         method: 'POST',
         headers: {
-          ...headers,
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
@@ -477,14 +456,10 @@ const ISOImportModal: React.FC<ISOImportModalProps> = ({
         const formData = new FormData();
         formData.append('chunk', chunk);
 
-        const chunkResponse = await fetch(
-          `${API_BASE_URL}/iso/upload/${initData.upload_id}/chunk?index=${i}`,
-          {
-            method: 'POST',
-            headers,
-            body: formData,
-          }
-        );
+        const chunkResponse = await rawApiRequest(`/iso/upload/${initData.upload_id}/chunk?index=${i}`, {
+          method: 'POST',
+          body: formData,
+        });
 
         if (!chunkResponse.ok) {
           const data = await chunkResponse.json().catch(() => ({}));
@@ -498,13 +473,9 @@ const ISOImportModal: React.FC<ISOImportModalProps> = ({
 
       // Complete upload
       setUploadStatus('Finalizing upload...');
-      const completeResponse = await fetch(
-        `${API_BASE_URL}/iso/upload/${initData.upload_id}/complete`,
-        {
-          method: 'POST',
-          headers,
-        }
-      );
+      const completeResponse = await rawApiRequest(`/iso/upload/${initData.upload_id}/complete`, {
+        method: 'POST',
+      });
 
       if (!completeResponse.ok) {
         const data = await completeResponse.json().catch(() => ({}));
@@ -526,10 +497,9 @@ const ISOImportModal: React.FC<ISOImportModalProps> = ({
       setStep('scanning');
 
       // Now scan the ISO
-      const scanResponse = await fetch(`${API_BASE_URL}/iso/scan`, {
+      const scanResponse = await rawApiRequest('/iso/scan', {
         method: 'POST',
         headers: {
-          ...headers,
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({ iso_path: completeData.iso_path }),
@@ -570,13 +540,9 @@ const ISOImportModal: React.FC<ISOImportModalProps> = ({
     const cancelledUploadId = uploadId;
     const cancelledFilename = selectedFile?.name;
     if (uploadId) {
-      const token = localStorage.getItem('token');
       try {
-        await fetch(`${API_BASE_URL}/iso/upload/${uploadId}`, {
+        await rawApiRequest(`/iso/upload/${uploadId}`, {
           method: 'DELETE',
-          headers: {
-            ...(token ? { Authorization: `Bearer ${token}` } : {}),
-          },
         });
       } catch (err) {
         console.error('Failed to cancel upload:', err);

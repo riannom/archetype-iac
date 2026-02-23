@@ -22,6 +22,7 @@ from app import agent_client, models, webhooks
 from app.agent_client import AgentJobError, AgentUnavailableError
 from app.config import settings
 from app.db import get_redis, get_session
+from app.services.broadcaster import get_broadcaster as _get_broadcaster
 from app.services.topology import TopologyService
 from app.utils.job import broadcast_job_progress as _broadcast_job_progress
 from app.utils.lab import update_lab_state
@@ -36,6 +37,21 @@ from app.state import (
 from app.utils.time import utcnow
 
 logger = logging.getLogger(__name__)
+# Backward-compatible symbol for tests/patching call-sites that import directly.
+get_broadcaster = _get_broadcaster
+
+
+def _get_container_name(lab_id: str, node_name: str, provider: str = "docker") -> str:
+    """Return stable runtime name for a node based on provider.
+
+    Kept as a compatibility shim for tests/importers; naming logic is
+    centralized in app.utils.naming.
+    """
+    from app.utils.naming import docker_container_name, libvirt_domain_name
+
+    if provider in {"libvirt", "kvm"}:
+        return libvirt_domain_name(lab_id, node_name)
+    return docker_container_name(lab_id, node_name)
 
 
 def _normalized_job_action(action: str) -> str:
@@ -1504,23 +1520,3 @@ async def _create_cross_host_links_if_ready(
         except Exception as e:
             logger.error(f"Failed to create cross-host links for lab {lab_id}: {e}")
             log_parts.append(f"  Cross-host link creation failed: {e}")
-
-
-def _get_container_name(lab_id: str, node_name: str, provider: str = "docker") -> str:
-    """Get the container name for a node.
-
-    Container naming convention: archetype-{lab_id}-{node_name}
-
-    Lab ID is sanitized and truncated to ~20 chars.
-
-    Args:
-        lab_id: Lab identifier
-        node_name: Node name in the topology
-        provider: Infrastructure provider (unused, kept for compatibility)
-
-    Returns:
-        Full container name
-    """
-    from app.utils.naming import docker_container_name
-
-    return docker_container_name(lab_id, node_name)

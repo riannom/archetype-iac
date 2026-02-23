@@ -179,7 +179,7 @@ export function useAutumnWind(
       ctx.closePath();
     };
 
-    const drawOakLeaf = (ctx: CanvasRenderingContext2D, size: number, curl: number) => {
+    const drawOakLeaf = (ctx: CanvasRenderingContext2D, size: number, _curl: number) => {
       const s = size * 0.5;
 
       ctx.beginPath();
@@ -212,7 +212,7 @@ export function useAutumnWind(
       ctx.closePath();
     };
 
-    const drawGinkgoLeaf = (ctx: CanvasRenderingContext2D, size: number, curl: number) => {
+    const drawGinkgoLeaf = (ctx: CanvasRenderingContext2D, size: number, _curl: number) => {
       const s = size * 0.5;
 
       ctx.beginPath();
@@ -234,7 +234,7 @@ export function useAutumnWind(
       ctx.closePath();
     };
 
-    const drawElmLeaf = (ctx: CanvasRenderingContext2D, size: number, curl: number) => {
+    const drawElmLeaf = (ctx: CanvasRenderingContext2D, size: number, _curl: number) => {
       const s = size * 0.5;
 
       ctx.beginPath();

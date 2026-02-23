@@ -321,7 +321,7 @@ export function useDesertDunes(
       }
     };
 
-    const drawDune = (ctx: CanvasRenderingContext2D, dune: SandDune, width: number, height: number) => {
+    const drawDune = (ctx: CanvasRenderingContext2D, dune: SandDune, _width: number, height: number) => {
       // Calculate colors based on layer
       let baseColor: string, shadowColor: string, highlightColor: string;
 
@@ -409,9 +409,8 @@ export function useDesertDunes(
     };
 
     const drawCactus = (ctx: CanvasRenderingContext2D, plant: DesertPlant) => {
-      const sway = Math.sin(timeRef * 0.0008 + plant.swayPhase) * 1.5;
       const size = plant.size;
-
+      const sway = Math.sin(timeRef * 0.0008 + plant.swayPhase) * 1.5;
       ctx.save();
       ctx.translate(plant.x, plant.y);
 
@@ -561,8 +560,6 @@ export function useDesertDunes(
     };
 
     const drawDesertGrass = (ctx: CanvasRenderingContext2D, plant: DesertPlant) => {
-      const size = plant.size;
-
       ctx.save();
       ctx.translate(plant.x, plant.y);
 

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Node, isDeviceNode } from '../types';
 import type { ConfigSnapshot } from '../components/ConfigsView/types';
 import { downloadBlob } from '../../utils/download';
+import { rawApiRequest } from '../../api';
 
 interface UseConfigManagerOptions {
   labId: string;
@@ -256,13 +257,9 @@ export function useConfigManager({ labId, nodes, studioRequest }: UseConfigManag
       if (opts?.includeOrphaned) params.set('include_orphaned', 'true');
       if (opts?.all) params.set('all', 'true');
 
-      // Use fetch directly for binary download (apiRequest parses JSON, not suitable for blobs)
-      const token = localStorage.getItem('token');
-      const response = await fetch(
-        `/api/v1/labs/${labId}/config-snapshots/download?${params.toString()}`,
-        {
-          headers: token ? { Authorization: `Bearer ${token}` } : {},
-        }
+      // Use rawApiRequest for binary download (apiRequest parses JSON, not suitable for blobs).
+      const response = await rawApiRequest(
+        `/v1/labs/${labId}/config-snapshots/download?${params.toString()}`
       );
       if (!response.ok) {
         const err = await response.json().catch(() => ({ detail: 'Download failed' }));

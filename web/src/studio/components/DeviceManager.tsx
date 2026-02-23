@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { API_BASE_URL, apiRequest } from '../../api';
+import { apiRequest, rawApiRequest } from '../../api';
 import { DeviceModel, ImageLibraryEntry } from '../types';
 import { DragProvider, useDragContext } from '../contexts/DragContext';
 import DeviceCard from './DeviceCard';
@@ -12,6 +12,7 @@ import { Modal } from '../../components/ui/Modal';
 import { usePersistedState, usePersistedSet } from '../hooks/usePersistedState';
 import { usePolling } from '../hooks/usePolling';
 import { getImageDeviceIds, isImageDefaultForDevice, isInstantiableImageKind } from '../../utils/deviceModels';
+import { useNotifications } from '../../contexts/NotificationContext';
 
 interface DeviceManagerProps {
   deviceModels: DeviceModel[];
@@ -193,6 +194,7 @@ const DeviceManagerInner: React.FC<DeviceManagerProps> = ({
   mode = 'images',
 }) => {
   const { dragState, unassignImage, assignImageToDevice, deleteImage } = useDragContext();
+  const { addNotification } = useNotifications();
   const [uploadStatus, setUploadStatus] = useState<string | null>(null);
   const [uploadProgress, setUploadProgress] = useState<number | null>(null);
   const [qcow2Progress, setQcow2Progress] = useState<number | null>(null);
@@ -603,7 +605,6 @@ const DeviceManagerInner: React.FC<DeviceManagerProps> = ({
   const { unassignedImages, assignedImagesByDevice } = useMemo(() => {
     const unassigned: ImageLibraryEntry[] = [];
     const byDevice = new Map<string, ImageLibraryEntry[]>();
-    const seen = new Set<string>(); // avoid duplicating unassigned
 
     filteredImages.forEach((img) => {
       const deviceIds = resolveImageDeviceIds(img);
@@ -656,24 +657,16 @@ const DeviceManagerInner: React.FC<DeviceManagerProps> = ({
     }
   }
 
-  function getAuthHeaders(): Record<string, string> {
-    const token = localStorage.getItem('token');
-    return token ? { Authorization: `Bearer ${token}` } : {};
-  }
-
   async function uploadFileInChunks(
     kind: ChunkUploadKind,
     file: File,
     onProgress: (percent: number, message: string) => void,
     options?: { autoBuild?: boolean; autoConfirm?: boolean }
   ): Promise<ImageChunkUploadCompleteResponse> {
-    const headers = getAuthHeaders();
-
     onProgress(0, 'Initializing upload...');
-    const initResponse = await fetch(`${API_BASE_URL}/images/upload/init`, {
+    const initResponse = await rawApiRequest('/images/upload/init', {
       method: 'POST',
       headers: {
-        ...headers,
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
@@ -701,14 +694,10 @@ const DeviceManagerInner: React.FC<DeviceManagerProps> = ({
       const formData = new FormData();
       formData.append('chunk', chunk);
 
-      const chunkResponse = await fetch(
-        `${API_BASE_URL}/images/upload/${initData.upload_id}/chunk?index=${i}`,
-        {
-          method: 'POST',
-          headers,
-          body: formData,
-        }
-      );
+      const chunkResponse = await rawApiRequest(`/images/upload/${initData.upload_id}/chunk?index=${i}`, {
+        method: 'POST',
+        body: formData,
+      });
 
       if (!chunkResponse.ok) {
         const text = await chunkResponse.text();
@@ -723,9 +712,8 @@ const DeviceManagerInner: React.FC<DeviceManagerProps> = ({
     }
 
     onProgress(100, 'Upload complete. Finalizing...');
-    const completeResponse = await fetch(`${API_BASE_URL}/images/upload/${initData.upload_id}/complete`, {
+    const completeResponse = await rawApiRequest(`/images/upload/${initData.upload_id}/complete`, {
       method: 'POST',
-      headers,
     });
 
     if (!completeResponse.ok) {
@@ -743,7 +731,6 @@ const DeviceManagerInner: React.FC<DeviceManagerProps> = ({
     file: File,
     onProgress: (percent: number, message: string) => void
   ): Promise<{ output?: string; images?: string[] }> {
-    const headers = getAuthHeaders();
     const completeData = await uploadFileInChunks('docker', file, (percent, message) => {
       const scaled = Math.round(percent * 0.5);
       onProgress(Math.max(0, Math.min(50, scaled)), message);
@@ -763,9 +750,7 @@ const DeviceManagerInner: React.FC<DeviceManagerProps> = ({
     while (true) {
       await new Promise((resolve) => setTimeout(resolve, 500));
 
-      const progressResponse = await fetch(`${API_BASE_URL}/images/load/${completeData.upload_id}/progress`, {
-        headers,
-      });
+      const progressResponse = await rawApiRequest(`/images/load/${completeData.upload_id}/progress`);
 
       if (!progressResponse.ok) {
         if (progressResponse.status === 404) {
@@ -1050,9 +1035,8 @@ const DeviceManagerInner: React.FC<DeviceManagerProps> = ({
       prev.filter((item) => item.phase !== 'awaiting_confirmation')
     );
     // Cancel the upload session on the server
-    fetch(`${API_BASE_URL}/images/upload/${uploadId}`, {
+    rawApiRequest(`/images/upload/${uploadId}`, {
       method: 'DELETE',
-      headers: getAuthHeaders(),
     }).catch(() => {});
     setUploadStatus(null);
     addImageManagementLog({
@@ -1196,7 +1180,7 @@ const DeviceManagerInner: React.FC<DeviceManagerProps> = ({
       onRefresh();
     } catch (error) {
       console.error('Failed to delete image:', error);
-      alert(error instanceof Error ? error.message : 'Failed to delete image');
+      addNotification('error', 'Failed to delete image', error instanceof Error ? error.message : undefined);
     }
   };
 
@@ -1215,10 +1199,6 @@ const DeviceManagerInner: React.FC<DeviceManagerProps> = ({
 
   const hasDeviceFilters =
     deviceSearch.length > 0 || selectedDeviceVendors.size > 0 || deviceImageStatus !== 'all';
-
-  const selectedDevice = selectedDeviceId
-    ? deviceModels.find((d) => d.id === selectedDeviceId)
-    : null;
 
   const iolBuildRows = useMemo(() => {
     return iolSourceImages.map((img) => {

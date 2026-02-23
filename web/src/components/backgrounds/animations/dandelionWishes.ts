@@ -55,7 +55,7 @@ export function useDandelionWishes(
       initializeElements();
     };
 
-    const createSeed = (width: number, height: number, fromDandelion?: { x: number; y: number }): DandelionSeed => {
+    const createSeed = (width: number, _height: number, fromDandelion?: { x: number; y: number }): DandelionSeed => {
       const fluffCount = 8 + Math.floor(Math.random() * 6);
       const fluffAngles: number[] = [];
       for (let i = 0; i < fluffCount; i++) {

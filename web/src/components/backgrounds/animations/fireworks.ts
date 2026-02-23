@@ -180,7 +180,6 @@ export function useFireworks(
             break;
 
           case 5: // Star (5 points)
-            const starPoints = 5;
             const starAngle = (i / particleCount) * Math.PI * 2;
             const starRadius = (i % 2 === 0) ? 1 : 0.4;
             angle = starAngle;

@@ -23,6 +23,7 @@ from app.metrics import (
 from app.timing import AsyncTimedOperation
 from app.config import settings
 from app.services.broadcaster import broadcast_node_state_change
+from app.services.broadcaster import get_broadcaster as _get_broadcaster
 from app.services.state_machine import NodeStateMachine
 from app.image_store import get_image_provider, load_manifest
 from app.services.topology import TopologyService, resolve_node_image
@@ -37,6 +38,8 @@ from app.utils.job import broadcast_job_progress
 from app.utils.time import utcnow
 
 logger = logging.getLogger(__name__)
+# Backward-compatible symbol for tests/patching call-sites that import directly.
+get_broadcaster = _get_broadcaster
 
 
 # Seconds between cEOS container starts to avoid boot race conditions.

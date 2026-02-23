@@ -1,4 +1,4 @@
-import { Node, DeviceNode } from '../../types';
+import { Node } from '../../types';
 import { RuntimeStatus } from '../RuntimeControl';
 
 export interface ConfigSnapshot {

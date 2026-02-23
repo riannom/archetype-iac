@@ -77,7 +77,7 @@ export function useSatsSymbol(
     particlesRef.current = [];
 
     // Draw the Sats symbol (3 horizontal lines + 1 vertical line)
-    const drawSatsSymbol = (symbol: SatsSymbol, time: number) => {
+    const drawSatsSymbol = (symbol: SatsSymbol, _time: number) => {
       ctx.save();
       ctx.translate(symbol.x, symbol.y);
       ctx.rotate(symbol.rotation);

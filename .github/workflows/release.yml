@@ -95,6 +95,9 @@ jobs:
       - name: Run ruff on Agent
         run: ruff check agent/
 
+      - name: Enforce no unused Python symbols
+        run: ruff check api/ agent/ scripts/ tests/ --select F401,F841
+
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:

@@ -59,7 +59,6 @@ export function useTidalPatterns(
     resizeCanvas();
     window.addEventListener('resize', resizeCanvas);
 
-    const width = canvas.width;
     const height = canvas.height;
 
     // Initialize sand ripples

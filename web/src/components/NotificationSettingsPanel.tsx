@@ -1,4 +1,3 @@
-import React from 'react';
 import { useNotifications } from '../contexts/NotificationContext';
 
 interface NotificationSettingsPanelProps {

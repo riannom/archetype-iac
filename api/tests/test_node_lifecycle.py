@@ -133,7 +133,7 @@ def _make_manager(session, lab, job, node_ids, agent=None, monkeypatch=None):
         manager.target_agent_id = agent.id
     # Disable broadcasts by default in tests
     manager._broadcast_state = MagicMock()
-    manager._broadcast_job_progress = AsyncMock()
+    # broadcast_job_progress is a module-level function, not an instance method
     return manager
 
 
@@ -1336,7 +1336,8 @@ class TestExecuteOrchestration:
              patch("app.tasks.jobs._cleanup_orphan_containers", new_callable=AsyncMock), \
              patch("app.tasks.jobs._create_cross_host_links_if_ready", new_callable=AsyncMock), \
              patch("app.tasks.node_lifecycle.settings", mock_settings), \
-             patch("app.tasks.node_lifecycle_deploy.settings", mock_settings):
+             patch("app.tasks.node_lifecycle_deploy.settings", mock_settings), \
+             patch("app.tasks.node_lifecycle_agents.settings", mock_settings):
 
             result = await manager.execute()
 
@@ -1366,13 +1367,16 @@ class TestExecuteOrchestration:
         mock_settings.resource_validation_enabled = False
         mock_settings.image_sync_enabled = False
         mock_settings.image_sync_pre_deploy_check = False
+        mock_settings.per_node_lifecycle_enabled = False
 
         with patch.object(manager.topo_service, "get_nodes", return_value=[node_def]), \
+             patch("app.tasks.node_lifecycle.agent_client", mock_ac), \
              patch("app.tasks.node_lifecycle_agents.agent_client", mock_ac), \
              patch("app.tasks.node_lifecycle_deploy.agent_client", mock_ac), \
              patch("app.tasks.jobs._create_cross_host_links_if_ready", new_callable=AsyncMock), \
              patch("app.tasks.node_lifecycle.settings", mock_settings), \
-             patch("app.tasks.node_lifecycle_deploy.settings", mock_settings):
+             patch("app.tasks.node_lifecycle_deploy.settings", mock_settings), \
+             patch("app.tasks.node_lifecycle_agents.settings", mock_settings):
 
             result = await manager.execute()
 
@@ -1439,7 +1443,8 @@ class TestExecuteOrchestration:
              patch("app.tasks.jobs._cleanup_orphan_containers", new_callable=AsyncMock), \
              patch("app.tasks.jobs._create_cross_host_links_if_ready", new_callable=AsyncMock), \
              patch("app.tasks.node_lifecycle.settings", mock_settings), \
-             patch("app.tasks.node_lifecycle_deploy.settings", mock_settings):
+             patch("app.tasks.node_lifecycle_deploy.settings", mock_settings), \
+             patch("app.tasks.node_lifecycle_agents.settings", mock_settings):
 
             result = await manager.execute()
 
@@ -1472,12 +1477,17 @@ class TestExecuteOrchestration:
         mock_ac.get_healthy_agent = AsyncMock(return_value=None)
         mock_settings = MagicMock()
         mock_settings.resource_validation_enabled = True
+        mock_settings.image_sync_enabled = False
+        mock_settings.image_sync_pre_deploy_check = False
+        mock_settings.per_node_lifecycle_enabled = False
 
         with patch.object(manager.topo_service, "get_nodes", return_value=[node_def]), \
+             patch("app.tasks.node_lifecycle.agent_client", mock_ac), \
              patch("app.tasks.node_lifecycle_agents.agent_client", mock_ac), \
              patch("app.tasks.node_lifecycle_deploy.agent_client", mock_ac), \
              patch("app.tasks.node_lifecycle.settings", mock_settings), \
-             patch("app.tasks.node_lifecycle_deploy.settings", mock_settings):
+             patch("app.tasks.node_lifecycle_deploy.settings", mock_settings), \
+             patch("app.tasks.node_lifecycle_agents.settings", mock_settings):
 
             # Override phase methods to track call order
             manager._check_resources = mock_check_resources
@@ -1534,6 +1544,7 @@ class TestExecuteOrchestration:
         mock_settings.per_node_lifecycle_enabled = False
 
         with patch.object(manager.topo_service, "get_nodes", return_value=[node_def1, node_def2]), \
+             patch("app.tasks.node_lifecycle.agent_client", mock_ac), \
              patch("app.tasks.node_lifecycle_agents.agent_client", mock_ac), \
              patch("app.tasks.node_lifecycle_deploy.agent_client", mock_ac), \
              patch.object(manager.topo_service, "has_nodes", return_value=True), \
@@ -1545,7 +1556,8 @@ class TestExecuteOrchestration:
              patch("app.tasks.jobs._update_node_placements", new_callable=AsyncMock), \
              patch("app.tasks.jobs._create_cross_host_links_if_ready", new_callable=AsyncMock), \
              patch("app.tasks.node_lifecycle.settings", mock_settings), \
-             patch("app.tasks.node_lifecycle_deploy.settings", mock_settings):
+             patch("app.tasks.node_lifecycle_deploy.settings", mock_settings), \
+             patch("app.tasks.node_lifecycle_agents.settings", mock_settings):
 
             result = await manager.execute()
 

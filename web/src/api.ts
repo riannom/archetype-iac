@@ -11,14 +11,24 @@ function buildQueryString(params: Record<string, string | number | boolean | und
   return queryString ? `?${queryString}` : "";
 }
 
-export async function apiRequest<T>(path: string, options: RequestInit = {}): Promise<T> {
+export async function rawApiRequest(path: string, options: RequestInit = {}): Promise<Response> {
   const token = localStorage.getItem("token");
   const { headers: customHeaders, ...restOptions } = options;
-  const response = await fetch(`${API_BASE_URL}${path}`, {
+  return fetch(`${API_BASE_URL}${path}`, {
+    ...restOptions,
+    headers: {
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...((customHeaders as Record<string, string>) || {}),
+    },
+  });
+}
+
+export async function apiRequest<T>(path: string, options: RequestInit = {}): Promise<T> {
+  const { headers: customHeaders, ...restOptions } = options;
+  const response = await rawApiRequest(path, {
     ...restOptions,
     headers: {
       "Content-Type": "application/json",
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
       ...((customHeaders as Record<string, string>) || {}),
     },
   });

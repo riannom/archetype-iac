@@ -14,6 +14,10 @@ vi.mock("./ConfigDiffViewer", () => ({
   ),
 }));
 
+vi.mock("../../contexts/NotificationContext", () => ({
+  useNotifications: () => ({ addNotification: vi.fn() }),
+}));
+
 // Mock navigator.clipboard
 const mockClipboard = {
   writeText: vi.fn().mockResolvedValue(undefined),

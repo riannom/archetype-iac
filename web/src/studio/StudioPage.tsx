@@ -16,7 +16,7 @@ import TaskLogEntryModal from './components/TaskLogEntryModal';
 import ConfigsView from './components/ConfigsView';
 import LogsView from './components/LogsView';
 import { Annotation, AnnotationType, ConsoleWindow, DeviceModel, DeviceType, LabLayout, Link, Node, ExternalNetworkNode, DeviceNode, isExternalNetworkNode, isDeviceNode } from './types';
-import { API_BASE_URL, apiRequest } from '../api';
+import { API_BASE_URL, apiRequest, rawApiRequest } from '../api';
 import { TopologyGraph } from '../types';
 import { usePortManager } from './hooks/usePortManager';
 import { usePersistedState } from './hooks/usePersistedState';
@@ -58,7 +58,6 @@ interface NodeReadinessHint {
 // RuntimeStatus is an alias for NodeRuntimeStatus for backward compatibility
 type RuntimeStatus = NodeRuntimeStatus;
 
-const DEFAULT_ICON = 'fa-microchip';
 const IMAGE_COMPAT_ALIASES: Record<string, string[]> = {
   'cat9000v-uadp': ['cisco_cat9kv'],
   'cat9000v-q200': ['cisco_cat9kv'],
@@ -80,15 +79,6 @@ const generateContainerName = (displayName: string): string => {
     .replace(/^[^a-z_]/, 'n')     // Ensure starts with letter or underscore
     .replace(/_+/g, '_')          // Collapse multiple underscores
     .substring(0, 20);            // Limit length
-};
-
-const guessDeviceType = (id: string, label: string): DeviceType => {
-  const token = `${id} ${label}`.toLowerCase();
-  if (token.includes('switch')) return DeviceType.SWITCH;
-  if (token.includes('router')) return DeviceType.ROUTER;
-  if (token.includes('firewall')) return DeviceType.FIREWALL;
-  if (token.includes('linux') || token.includes('server') || token.includes('host')) return DeviceType.HOST;
-  return DeviceType.CONTAINER;
 };
 
 const buildGraphNodes = (graph: TopologyGraph, models: DeviceModel[]): Node[] => {
@@ -157,59 +147,6 @@ const buildGraphLinks = (graph: TopologyGraph): Link[] => {
       };
     })
     .filter(Boolean) as Link[];
-};
-
-const buildStatusMap = (jobs: any[], nodes: Node[], deployedNodeNames: Set<string>) => {
-  const map = new Map<string, RuntimeStatus>();
-  let globalStatus: RuntimeStatus | undefined;
-
-  // Build a name-to-id lookup for nodes
-  const nameToId = new Map<string, string>();
-  nodes.forEach((node) => nameToId.set(node.name, node.id));
-
-  for (const job of jobs) {
-    if (typeof job.action !== 'string') continue;
-    if (job.action.startsWith('node:')) {
-      const [, nodeAction, nodeName] = job.action.split(':', 3);
-      // Find the node ID for this node name
-      const nodeId = nameToId.get(nodeName);
-      if (!nodeId || map.has(nodeId)) continue;
-      const status = resolveNodeStatus(nodeAction, job.status);
-      if (status) {
-        map.set(nodeId, status);
-      }
-      continue;
-    }
-    if (!globalStatus && ['up', 'down', 'restart'].includes(job.action)) {
-      globalStatus = resolveNodeStatus(job.action, job.status);
-    }
-  }
-
-  // Only apply global status to nodes that are actually deployed
-  if (globalStatus) {
-    for (const node of nodes) {
-      if (!map.has(node.id) && deployedNodeNames.has(node.name)) {
-        map.set(node.id, globalStatus);
-      }
-    }
-  }
-
-  return map;
-};
-
-const resolveNodeStatus = (action: string, status: string): RuntimeStatus | undefined => {
-  if (status === 'failed') return 'error';
-  const isDone = status === 'completed';
-  if (action === 'start' || action === 'up') {
-    return isDone ? 'running' : 'booting';
-  }
-  if (action === 'stop' || action === 'down') {
-    return 'stopped';
-  }
-  if (action === 'restart') {
-    return isDone ? 'running' : 'booting';
-  }
-  return undefined;
 };
 
 const StudioPage: React.FC = () => {
@@ -754,6 +691,7 @@ const StudioPage: React.FC = () => {
   // Load node states from the backend (per-node desired/actual state)
   // runtimeStates are derived automatically via useMemo
   const loadNodeStates = useCallback(async (labId: string, currentNodes: Node[]) => {
+    void currentNodes;
     try {
       const data = await studioRequest<{ nodes: NodeStateEntry[] }>(`/labs/${labId}/nodes/states`);
       const statesByNodeId: Record<string, NodeStateEntry> = {};
@@ -790,6 +728,7 @@ const StudioPage: React.FC = () => {
   }, [studioRequest]);
 
   const loadJobs = useCallback(async (labId: string, currentNodes: Node[]) => {
+    void currentNodes;
     // Also load jobs for job log display
     const data = await studioRequest<{ jobs: any[] }>(`/labs/${labId}/jobs`);
     setJobs(data.jobs || []);
@@ -1722,12 +1661,7 @@ const StudioPage: React.FC = () => {
 
   const handleDownloadBundle = async (lab: LabSummary) => {
     try {
-      const token = localStorage.getItem('token');
-      const response = await fetch(`${API_BASE_URL}/labs/${lab.id}/download-bundle`, {
-        headers: {
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
-      });
+      const response = await rawApiRequest(`/labs/${lab.id}/download-bundle`);
       if (!response.ok) {
         let errorMessage = 'Bundle download failed';
         try {

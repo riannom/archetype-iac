@@ -93,7 +93,6 @@ export function useSmokeCalligraphy(
     };
 
     const drawSmoke = () => {
-      const { width, height } = canvas;
       const opacityMult = opacity / 50;
 
       // Draw each particle

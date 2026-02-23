@@ -1,4 +1,3 @@
-import React from 'react';
 import { createPortal } from 'react-dom';
 import { useNotifications } from '../../contexts/NotificationContext';
 import { Toast } from './Toast';

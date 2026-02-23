@@ -408,8 +408,6 @@ export function usePaperBoats(
         layer.phase += layer.speed;
 
         ctx.beginPath();
-        const baseY = currentHeight * (0.3 + layer.yOffset * 0.4);
-
         for (let x = 0; x <= currentWidth; x += 8) {
           const topY = getBankY(x, topBank, currentWidth);
           const bottomY = getBankY(x, bottomBank, currentWidth);

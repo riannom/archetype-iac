@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { DeviceNode } from '../../types';
 import type { ConfigSnapshot } from './types';
+import { useNotifications } from '../../../contexts/NotificationContext';
 
 interface ConfigMappingProps {
   labId: string;
@@ -19,6 +20,8 @@ export const ConfigMapping: React.FC<ConfigMappingProps> = ({
   onMapConfig,
   onSetActiveConfig,
 }) => {
+  void labId;
+  const { addNotification } = useNotifications();
   const [selectedOrphan, setSelectedOrphan] = useState<{
     deviceKind: string;
     nodeName: string;
@@ -95,7 +98,11 @@ export const ConfigMapping: React.FC<ConfigMappingProps> = ({
       setShowConfirmDialog(false);
     } catch (error) {
       console.error('Failed to map config:', error);
-      alert('Failed to map config. See console for details.');
+      addNotification(
+        'error',
+        'Failed to map config',
+        error instanceof Error ? error.message : 'See console for details.'
+      );
     } finally {
       setIsMapping(false);
     }

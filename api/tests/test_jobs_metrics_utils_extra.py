@@ -3,15 +3,13 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
-import pytest
-
 import app.jobs as jobs_module
 import app.metrics as metrics_module
 
 from app import models
 
 
-def test_has_conflicting_job(test_db, monkeypatch) -> None:
+def test_has_conflicting_job(test_db) -> None:
     job = models.Job(
         lab_id="lab",
         user_id=None,
@@ -25,19 +23,6 @@ def test_has_conflicting_job(test_db, monkeypatch) -> None:
     has_conflict, action = jobs_module.has_conflicting_job("lab", "down", session=test_db)
     assert has_conflict
     assert action == "up"
-
-
-def test_build_command_invalid_node(monkeypatch) -> None:
-    class FakeError(Exception):
-        pass
-
-    def fake_node_action_command(provider, lab_id, subaction, node):
-        raise jobs_module.ProviderActionError("bad")
-
-    monkeypatch.setattr(jobs_module, "node_action_command", fake_node_action_command)
-
-    with pytest.raises(ValueError):
-        jobs_module._build_command("lab", "node:start:node1")
 
 
 def test_metrics_dummy_when_no_prometheus(monkeypatch) -> None:

@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import { useUser } from './UserContext';
-import { API_BASE_URL } from '../api';
+import { rawApiRequest } from '../api';
 import type {
   Notification,
   NotificationLevel,
@@ -60,10 +60,7 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
 
     const fetchPreferences = async () => {
       try {
-        const token = localStorage.getItem('token');
-        const res = await fetch(`${API_BASE_URL}/auth/preferences`, {
-          headers: { Authorization: `Bearer ${token}` },
-        });
+        const res = await rawApiRequest('/auth/preferences');
         if (res.ok) {
           const data = await res.json();
           setPreferences(data);
@@ -184,18 +181,16 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
   const updateNotificationSettings = useCallback(
     async (settings: Partial<NotificationSettings>) => {
       if (!preferences) return;
-      const token = localStorage.getItem('token');
       const newSettings = {
         toasts: { ...preferences.notification_settings.toasts, ...settings.toasts },
         bell: { ...preferences.notification_settings.bell, ...settings.bell },
       };
 
       try {
-        const res = await fetch(`${API_BASE_URL}/auth/preferences`, {
+        const res = await rawApiRequest('/auth/preferences', {
           method: 'PATCH',
           headers: {
             'Content-Type': 'application/json',
-            Authorization: `Bearer ${token}`,
           },
           body: JSON.stringify({ notification_settings: newSettings }),
         });
@@ -213,7 +208,6 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
   const updateCanvasSettings = useCallback(
     async (settings: Partial<CanvasSettings>) => {
       if (!preferences) return;
-      const token = localStorage.getItem('token');
       const newSettings = {
         errorIndicator: {
           ...preferences.canvas_settings.errorIndicator,
@@ -238,11 +232,10 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
       });
 
       try {
-        const res = await fetch(`${API_BASE_URL}/auth/preferences`, {
+        const res = await rawApiRequest('/auth/preferences', {
           method: 'PATCH',
           headers: {
             'Content-Type': 'application/json',
-            Authorization: `Bearer ${token}`,
           },
           body: JSON.stringify({ canvas_settings: newSettings }),
         });

@@ -8,7 +8,7 @@ import {
 } from './backgrounds';
 import { getSuggestedBackgroundForTheme } from './backgroundPairs';
 import { AnimatedBackground } from '../components/backgrounds/AnimatedBackground';
-import { API_BASE_URL } from '../api';
+import { rawApiRequest } from '../api';
 
 // Storage keys
 const PREFS_KEY = 'archetype_theme_prefs';
@@ -301,9 +301,7 @@ export function ThemeProvider({ children }: ThemeProviderProps) {
     setServerSyncEnabled(true);
     const hydratePreferences = async () => {
       try {
-        const res = await fetch(`${API_BASE_URL}/auth/preferences`, {
-          headers: { Authorization: `Bearer ${token}` },
-        });
+        const res = await rawApiRequest('/auth/preferences');
         if (!res.ok) {
           return;
         }
@@ -363,11 +361,10 @@ export function ThemeProvider({ children }: ThemeProviderProps) {
     }
     syncTimeoutRef.current = window.setTimeout(async () => {
       try {
-        await fetch(`${API_BASE_URL}/auth/preferences`, {
+        await rawApiRequest('/auth/preferences', {
           method: 'PATCH',
           headers: {
             'Content-Type': 'application/json',
-            Authorization: `Bearer ${token}`,
           },
           body: JSON.stringify({
             theme_settings: {

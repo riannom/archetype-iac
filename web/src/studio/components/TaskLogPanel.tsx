@@ -130,6 +130,7 @@ const TaskLogPanel: React.FC<TaskLogPanelProps> = ({
 
   // Calculate the target index for reordering based on cursor position
   const calculateReorderIndex = useCallback((clientX: number, draggedNodeId: string): number => {
+    void draggedNodeId;
     let targetIndex = 0;
     for (let i = 0; i < consoleTabs.length; i++) {
       const tabEl = tabRefs.current.get(consoleTabs[i].nodeId);

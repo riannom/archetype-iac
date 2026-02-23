@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { Navigate, useNavigate, useSearchParams } from 'react-router-dom';
 import { useTheme, ThemeSelector } from '../theme/index';
 import { useUser } from '../contexts/UserContext';
+import { useNotifications } from '../contexts/NotificationContext';
 import { canViewInfrastructure } from '../utils/permissions';
 import { apiRequest } from '../api';
 import { ArchetypeIcon } from '../components/icons';
@@ -267,8 +268,13 @@ const SYNC_STRATEGY_OPTIONS: { value: SyncStrategy; label: string; description: 
 const InfrastructurePage: React.FC = () => {
   const { effectiveMode, toggleMode } = useTheme();
   const { user, loading: userLoading } = useUser();
+  const { addNotification } = useNotifications();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
+
+  const notifyError = useCallback((title: string, err: unknown) => {
+    addNotification('error', title, err instanceof Error ? err.message : undefined);
+  }, [addNotification]);
 
   // Tab state from URL
   const activeTab = (searchParams.get('tab') as TabType) || 'hosts';
@@ -524,7 +530,7 @@ const InfrastructurePage: React.FC = () => {
       setSettingsDirty(false);
       await loadMesh();
     } catch (err) {
-      alert(err instanceof Error ? err.message : 'Failed to save settings');
+      notifyError('Failed to save settings', err);
     } finally {
       setSavingSettings(false);
     }
@@ -538,10 +544,14 @@ const InfrastructurePage: React.FC = () => {
       });
       await loadMesh();
       if (result.failed > 0) {
-        alert(`MTU tests completed: ${result.successful} passed, ${result.failed} failed`);
+        addNotification(
+          'warning',
+          'MTU tests completed with failures',
+          `${result.successful} passed, ${result.failed} failed`
+        );
       }
     } catch (err) {
-      alert(err instanceof Error ? err.message : 'Failed to run MTU tests');
+      notifyError('Failed to run MTU tests', err);
     } finally {
       setTestingAll(false);
     }
@@ -561,7 +571,7 @@ const InfrastructurePage: React.FC = () => {
       });
       await loadMesh();
     } catch (err) {
-      alert(err instanceof Error ? err.message : 'Failed to test link');
+      notifyError('Failed to test link', err);
     } finally {
       setTestingLink(null);
     }
@@ -618,7 +628,7 @@ const InfrastructurePage: React.FC = () => {
       ));
     } catch (err) {
       console.error('Failed to update sync strategy:', err);
-      alert(err instanceof Error ? err.message : 'Failed to update sync strategy');
+      notifyError('Failed to update sync strategy', err);
     }
   };
 
@@ -642,12 +652,12 @@ const InfrastructurePage: React.FC = () => {
       );
 
       if (response.status === 'failed') {
-        alert(response.message || 'Update failed to start');
+        addNotification('error', 'Update failed to start', response.message || undefined);
         removeUpdatingAgent(hostId);
       }
     } catch (err) {
       console.error('Failed to trigger update:', err);
-      alert(err instanceof Error ? err.message : 'Failed to trigger update');
+      notifyError('Failed to trigger update', err);
       removeUpdatingAgent(hostId);
     }
   };
@@ -670,12 +680,12 @@ const InfrastructurePage: React.FC = () => {
           loadHosts();
         }, 5000);
       } else {
-        alert(response.message || 'Rebuild failed');
+        addNotification('error', 'Rebuild failed', response.message || undefined);
         removeUpdatingAgent(hostId);
       }
     } catch (err) {
       console.error('Failed to trigger rebuild:', err);
-      alert(err instanceof Error ? err.message : 'Failed to trigger rebuild');
+      notifyError('Failed to trigger rebuild', err);
       removeUpdatingAgent(hostId);
     }
   };
@@ -686,7 +696,7 @@ const InfrastructurePage: React.FC = () => {
     );
 
     if (outdatedAgents.length === 0) {
-      alert('All agents are already up to date');
+      addNotification('info', 'All agents are already up to date');
       return;
     }
 
@@ -716,7 +726,11 @@ const InfrastructurePage: React.FC = () => {
           .filter(r => !r.success)
           .map(r => `${r.agent_id}: ${r.error}`)
           .join('\n');
-        alert(`${response.success_count} updates started, ${response.failure_count} failed:\n${failures}`);
+        addNotification(
+          'warning',
+          'Bulk update partially failed',
+          `${response.success_count} updates started, ${response.failure_count} failed:\n${failures}`
+        );
       }
 
       response.results.filter(r => !r.success).forEach(r => {
@@ -724,7 +738,7 @@ const InfrastructurePage: React.FC = () => {
       });
     } catch (err) {
       console.error('Failed to trigger bulk update:', err);
-      alert(err instanceof Error ? err.message : 'Failed to trigger bulk update');
+      notifyError('Failed to trigger bulk update', err);
       setUpdatingAgents(new Set());
     }
   };
@@ -771,7 +785,7 @@ const InfrastructurePage: React.FC = () => {
       setDeregisterInfo(null);
       await loadHosts();
     } catch (err) {
-      alert(err instanceof Error ? err.message : 'Failed to deregister host');
+      notifyError('Failed to deregister host', err);
     } finally {
       setDeregistering(false);
     }
@@ -789,7 +803,7 @@ const InfrastructurePage: React.FC = () => {
   const openMtuConfigModal = async (agentId: string) => {
     const host = hosts.find(h => h.id === agentId);
     if (!host || host.status !== 'online') {
-      alert('Agent is offline');
+      addNotification('warning', 'Agent is offline');
       return;
     }
 
@@ -847,7 +861,7 @@ const InfrastructurePage: React.FC = () => {
         setSelectedTransportInterface('');
       }
     } catch (err) {
-      alert(err instanceof Error ? err.message : 'Failed to load interface details');
+      notifyError('Failed to load interface details', err);
     } finally {
       setConfiguringMtu(null);
     }
@@ -901,7 +915,7 @@ const InfrastructurePage: React.FC = () => {
       await loadNetworkConfigs();
       closeMtuConfigModal();
     } catch (err) {
-      alert(err instanceof Error ? err.message : 'Failed to save MTU configuration');
+      notifyError('Failed to save MTU configuration', err);
     } finally {
       setSavingMtuConfig(false);
     }
@@ -954,7 +968,7 @@ const InfrastructurePage: React.FC = () => {
       await loadNicGroups();
       closeNicGroupModal();
     } catch (err) {
-      alert(err instanceof Error ? err.message : 'Failed to create NIC group');
+      notifyError('Failed to create NIC group', err);
     } finally {
       setCreatingNicGroup(false);
     }
@@ -988,7 +1002,7 @@ const InfrastructurePage: React.FC = () => {
       await loadNicGroups();
       closeNicGroupMemberModal();
     } catch (err) {
-      alert(err instanceof Error ? err.message : 'Failed to add NIC group member');
+      notifyError('Failed to add NIC group member', err);
     } finally {
       setAddingNicGroupMember(false);
     }

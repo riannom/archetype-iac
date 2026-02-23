@@ -1,5 +1,5 @@
 import { useMemo, useCallback } from 'react';
-import { Node, Link, isDeviceNode, DeviceNode } from '../types';
+import { Node, Link, isDeviceNode } from '../types';
 import {
   getAvailableInterfaces,
   getNextAvailableInterface,

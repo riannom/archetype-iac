@@ -8,11 +8,6 @@ from pydantic import BaseModel, Field
 from agent.schemas.enums import NodeStatus
 
 
-class LabStatusRequest(BaseModel):
-    """Controller -> Agent: Get status of a lab."""
-    lab_id: str
-
-
 class NodeInfo(BaseModel):
     """Status of a single node."""
     name: str
@@ -107,11 +102,6 @@ class CleanupLabOrphansResponse(BaseModel):
 
 
 # --- Config Extraction ---
-
-
-class ExtractConfigsRequest(BaseModel):
-    """Controller -> Agent: Extract configs from running cEOS nodes."""
-    lab_id: str
 
 
 class ExtractedConfig(BaseModel):

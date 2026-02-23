@@ -3,9 +3,10 @@ import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import ISOImportModal from "./ISOImportModal";
 
-// Mock API_BASE_URL
+// Mock API helper
 vi.mock("../api", () => ({
-  API_BASE_URL: "http://localhost:8000",
+  rawApiRequest: (path: string, options: RequestInit = {}) =>
+    fetch(`http://localhost:8000${path}`, options),
 }));
 
 // Mock fetch globally

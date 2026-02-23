@@ -182,7 +182,7 @@ export function useGentleWaves(
       ctx.fill();
     };
 
-    const drawBubble = (bubble: Bubble, time: number) => {
+    const drawBubble = (bubble: Bubble, _time: number) => {
       bubble.y -= bubble.speed;
       bubble.wobblePhase += 0.02;
       const wobble = Math.sin(bubble.wobblePhase) * 2;
@@ -225,7 +225,7 @@ export function useGentleWaves(
       ctx.fill();
     };
 
-    const drawSparkle = (sparkle: Sparkle, time: number) => {
+    const drawSparkle = (sparkle: Sparkle, _time: number) => {
       sparkle.phase += sparkle.speed;
       const intensity = Math.sin(sparkle.phase);
 

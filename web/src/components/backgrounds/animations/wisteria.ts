@@ -88,7 +88,6 @@ export function useWisteria(
 
     const width = canvas.width;
     const height = canvas.height;
-    const waterLevel = height * 0.82;
 
     // Wisteria colors (purples and lavenders)
     const wisteriaColors = darkMode

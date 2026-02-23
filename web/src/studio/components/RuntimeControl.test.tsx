@@ -4,11 +4,17 @@ import userEvent from "@testing-library/user-event";
 import RuntimeControl, { RuntimeStatus } from "./RuntimeControl";
 import { DeviceNode, DeviceType, DeviceModel } from "../types";
 
-// Mock window.confirm and window.alert
+const { mockAddNotification } = vi.hoisted(() => ({
+  mockAddNotification: vi.fn(),
+}));
+
+vi.mock("../../contexts/NotificationContext", () => ({
+  useNotifications: () => ({ addNotification: mockAddNotification }),
+}));
+
+// Mock window.confirm
 const mockConfirm = vi.fn();
-const mockAlert = vi.fn();
 window.confirm = mockConfirm;
-window.alert = mockAlert;
 
 const mockDeviceModels: DeviceModel[] = [
   {
@@ -342,7 +348,7 @@ describe("RuntimeControl", () => {
       });
     });
 
-    it("shows success alert on successful extraction", async () => {
+    it("shows success notification on successful extraction", async () => {
       const user = userEvent.setup();
       const runtimeStates: Record<string, RuntimeStatus> = {
         "node-1": "running",
@@ -354,7 +360,10 @@ describe("RuntimeControl", () => {
       await user.click(screen.getByRole("button", { name: /extract configs/i }));
 
       await waitFor(() => {
-        expect(mockAlert).toHaveBeenCalledWith("Configs extracted successfully!");
+        expect(mockAddNotification).toHaveBeenCalledWith(
+          "success",
+          "Config extraction completed"
+        );
       });
     });
   });

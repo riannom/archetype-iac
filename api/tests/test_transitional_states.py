@@ -456,8 +456,8 @@ class TestCategorizationMatchesTransitionalStates:
 
         This test verifies categorization logic - a node in "starting" state
         (set by early transitional state logic) should be picked up for start action.
-        We verify by checking that deploy_to_agent was called (the start path
-        uses topology redeploy) or that the node ended up running.
+        We verify by checking that one of the start backends is used
+        (topology deploy or per-node create/start).
         """
         lab, node, host = lab_with_node
 
@@ -495,6 +495,7 @@ class TestCategorizationMatchesTransitionalStates:
         mock_ac.is_agent_online = MagicMock(return_value=True)
         mock_ac.get_healthy_agent = AsyncMock(return_value=None)
         mock_ac.start_node_on_agent = AsyncMock(return_value={"success": True})
+        mock_ac.create_node_on_agent = AsyncMock(return_value={"success": True})
         mock_ac.container_action = AsyncMock(return_value={"success": True})
         mock_ac.deploy_to_agent = AsyncMock(return_value={"status": "completed"})
         mock_ac.check_node_readiness = AsyncMock(return_value={"is_ready": True})
@@ -510,15 +511,19 @@ class TestCategorizationMatchesTransitionalStates:
              patch("app.tasks.node_lifecycle_agents.agent_client", mock_ac), \
              patch("app.tasks.node_lifecycle_deploy.agent_client", mock_ac), \
              patch("app.tasks.node_lifecycle.settings", mock_settings), \
-             patch("app.tasks.node_lifecycle_deploy.settings", mock_settings):
+             patch("app.tasks.node_lifecycle_deploy.settings", mock_settings), \
+             patch("app.tasks.node_lifecycle_agents.settings", mock_settings):
             await run_node_reconcile(job.id, lab.id, ["node-1"])
 
-        # Verify node was categorized for start action:
-        # deploy_to_agent is called by _start_nodes_topology when nodes are
-        # categorized as needing start
-        assert mock_ac.deploy_to_agent.called, (
+        # Verify node was categorized for start action via one of the backends.
+        start_path_called = (
+            mock_ac.deploy_to_agent.called
+            or mock_ac.create_node_on_agent.called
+            or mock_ac.start_node_on_agent.called
+        )
+        assert start_path_called, (
             "Node in 'starting' state should be categorized for start "
-            "(deploy_to_agent should be called)"
+            "(topology deploy or per-node start path should be called)"
         )
 
 

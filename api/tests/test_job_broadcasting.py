@@ -93,6 +93,13 @@ class TestBroadcastJobProgress:
 class TestRunAgentJobBroadcasts:
     """Tests for job progress broadcasting in run_agent_job."""
 
+    @pytest.fixture(autouse=True)
+    def _mock_preflight_checks(self):
+        """Bypass network preflight in broadcasting unit tests."""
+        with patch("app.tasks.jobs._run_job_preflight_checks", new_callable=AsyncMock) as mock_preflight:
+            mock_preflight.return_value = (True, None)
+            yield mock_preflight
+
     @pytest.mark.asyncio
     async def test_run_agent_job_broadcasts_running_status(
         self,
@@ -382,6 +389,13 @@ class TestMultihostDeployBroadcasts:
 
 class TestBroadcastSequence:
     """Tests for the sequence of broadcast events during job execution."""
+
+    @pytest.fixture(autouse=True)
+    def _mock_preflight_checks(self):
+        """Bypass network preflight in broadcast-sequence tests."""
+        with patch("app.tasks.jobs._run_job_preflight_checks", new_callable=AsyncMock) as mock_preflight:
+            mock_preflight.return_value = (True, None)
+            yield mock_preflight
 
     @pytest.mark.asyncio
     async def test_broadcast_sequence_running_then_completed(

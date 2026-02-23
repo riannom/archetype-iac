@@ -104,6 +104,55 @@ def resolve_device_kind(device: str | None) -> str:
     return device
 
 
+def resolve_effective_max_ports(
+    device_id: str | None,
+    kind: str | None,
+    image_reference: str | None = None,
+    version: str | None = None,
+) -> int:
+    """Resolve effective maxPorts including catalog, custom, and override layers."""
+    try:
+        from app.services.device_service import get_device_service
+
+        resolved = get_device_service().resolve_hardware_specs(
+            device_id or kind or "linux",
+            None,
+            image_reference,
+            version=version,
+        )
+        resolved_ports = resolved.get("max_ports")
+        if resolved_ports is not None:
+            return int(resolved_ports)
+    except Exception:
+        pass
+
+    base_ports: int | None = None
+
+    if device_id:
+        config = get_config_by_device(device_id)
+        if config:
+            base_ports = config.max_ports
+        else:
+            custom = find_custom_device(device_id)
+            if custom:
+                base_ports = custom.get("maxPorts")
+
+    if base_ports is None and kind:
+        config = get_config_by_device(kind)
+        if config:
+            base_ports = config.max_ports
+
+    override = None
+    if device_id:
+        override = get_device_override(device_id)
+    if not override and kind and kind != device_id:
+        override = get_device_override(kind)
+    if override and "maxPorts" in override:
+        base_ports = override["maxPorts"]
+
+    return int(base_ports or 0)
+
+
 @dataclass
 class NodePlacementInfo:
     """Placement of a node on a specific host."""
@@ -151,53 +200,6 @@ def graph_to_deploy_topology(graph: TopologyGraph) -> dict:
                         max_if_index.get(node_key, 0),
                         int(match.group(1)),
                     )
-
-    def _effective_max_ports(
-        device_id: str | None,
-        kind: str | None,
-        image_reference: str | None = None,
-        version: str | None = None,
-    ) -> int:
-        try:
-            from app.services.device_service import get_device_service
-
-            resolved = get_device_service().resolve_hardware_specs(
-                device_id or kind or "linux",
-                None,
-                image_reference,
-                version=version,
-            )
-            resolved_ports = resolved.get("max_ports")
-            if resolved_ports is not None:
-                return int(resolved_ports)
-        except Exception:
-            pass
-
-        base_ports: int | None = None
-
-        if device_id:
-            config = get_config_by_device(device_id)
-            if config:
-                base_ports = config.max_ports
-            else:
-                custom = find_custom_device(device_id)
-                if custom:
-                    base_ports = custom.get("maxPorts")
-
-        if base_ports is None and kind:
-            config = get_config_by_device(kind)
-            if config:
-                base_ports = config.max_ports
-
-        override = None
-        if device_id:
-            override = get_device_override(device_id)
-        if not override and kind and kind != device_id:
-            override = get_device_override(kind)
-        if override and "maxPorts" in override:
-            base_ports = override["maxPorts"]
-
-        return int(base_ports or 0)
 
     nodes = []
     for n in graph.nodes:
@@ -258,7 +260,7 @@ def graph_to_deploy_topology(graph: TopologyGraph) -> dict:
         else:
             # Use UI-configured maxPorts (vendor defaults/overrides), but ensure
             # we pre-provision enough interfaces for any referenced links.
-            device_ports = _effective_max_ports(n.device, kind, image, n.version)
+            device_ports = resolve_effective_max_ports(n.device, kind, image, n.version)
             max_index = max_if_index.get(n.id) or max_if_index.get(node_name) or 0
             interface_count = max(device_ports, max_index)
             if interface_count == 0:
@@ -424,46 +426,7 @@ class TopologyService:
         version: str | None = None,
     ) -> int:
         """Get effective maxPorts for a device, including overrides."""
-        try:
-            from app.services.device_service import get_device_service
-
-            resolved = get_device_service().resolve_hardware_specs(
-                device_id or kind or "linux",
-                None,
-                image_reference,
-                version=version,
-            )
-            resolved_ports = resolved.get("max_ports")
-            if resolved_ports is not None:
-                return int(resolved_ports)
-        except Exception:
-            pass
-
-        base_ports: int | None = None
-
-        if device_id:
-            config = get_config_by_device(device_id)
-            if config:
-                base_ports = config.max_ports
-            else:
-                custom = find_custom_device(device_id)
-                if custom:
-                    base_ports = custom.get("maxPorts")
-
-        if base_ports is None and kind:
-            config = get_config_by_device(kind)
-            if config:
-                base_ports = config.max_ports
-
-        override = None
-        if device_id:
-            override = get_device_override(device_id)
-        if not override and kind and kind != device_id:
-            override = get_device_override(kind)
-        if override and "maxPorts" in override:
-            base_ports = override["maxPorts"]
-
-        return int(base_ports or 0)
+        return resolve_effective_max_ports(device_id, kind, image_reference, version)
 
     def get_node_by_any_id(self, lab_id: str, identifier: str) -> models.Node | None:
         """Get a node by container_name or gui_id."""

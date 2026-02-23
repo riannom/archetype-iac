@@ -3,7 +3,7 @@ import { DeviceModel, ImageLibraryEntry } from '../types';
 import DeviceConfigCard from './DeviceConfigCard';
 import DeviceConfigPanel from './DeviceConfigPanel';
 import FilterChip from './FilterChip';
-import { usePersistedState, usePersistedSet } from '../hooks/usePersistedState';
+import { usePersistedSet } from '../hooks/usePersistedState';
 
 interface CustomDevice {
   id: string;

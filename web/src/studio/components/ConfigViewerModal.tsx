@@ -26,6 +26,7 @@ const ConfigViewerModal: React.FC<ConfigViewerModalProps> = ({
   nodeName,
   studioRequest,
 }) => {
+  void nodeId;
   const [configs, setConfigs] = useState<SavedConfig[]>([]);
   const [activeTab, setActiveTab] = useState<string>('');
   const [loading, setLoading] = useState(false);

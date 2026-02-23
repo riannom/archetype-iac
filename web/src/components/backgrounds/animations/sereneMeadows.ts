@@ -121,7 +121,7 @@ export function useSereneMeadows(
       ? { top: [25, 30, 50], bottom: [50, 55, 80] }
       : { top: [180, 200, 230], bottom: [240, 220, 210] };
 
-    const createTree = (x: number, hillY: number, layerIndex: number): TreeSilhouette => {
+    const createTree = (x: number, _hillY: number, layerIndex: number): TreeSilhouette => {
       const types: TreeSilhouette['type'][] = ['round', 'pine', 'willow'];
       return {
         x,
@@ -462,7 +462,7 @@ export function useSereneMeadows(
       drawSky(opacityMultiplier);
 
       // Draw clouds
-      cloudsRef.current.forEach((cloud, i) => {
+      cloudsRef.current.forEach((cloud) => {
         cloud.x += cloud.speed;
         if (cloud.x > canvas.width + cloud.width) {
           cloud.x = -cloud.width;

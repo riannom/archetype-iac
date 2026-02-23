@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState, useRef } from 'react';
 import { TaskLogEntry } from './TaskLogPanel';
-import { LabLogEntry, LabLogJob, LabLogsResponse, LabLogsQueryParams } from '../../api';
+import { LabLogEntry, LabLogsResponse, LabLogsQueryParams } from '../../api';
 import { usePolling } from '../hooks/usePolling';
 import { downloadBlob } from '../../utils/download';
 

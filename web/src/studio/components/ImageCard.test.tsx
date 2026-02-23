@@ -4,6 +4,10 @@ import userEvent from "@testing-library/user-event";
 import ImageCard from "./ImageCard";
 import { ImageLibraryEntry, ImageHostStatus } from "../types";
 
+const { mockAddNotification } = vi.hoisted(() => ({
+  mockAddNotification: vi.fn(),
+}));
+
 // Mock the DragContext
 const mockStartDrag = vi.fn();
 const mockEndDrag = vi.fn();
@@ -27,15 +31,17 @@ vi.mock("../contexts/DragContext", () => ({
   }),
 }));
 
+vi.mock("../../contexts/NotificationContext", () => ({
+  useNotifications: () => ({ addNotification: mockAddNotification }),
+}));
+
 // Mock the api module
 vi.mock("../../api", () => ({
   apiRequest: vi.fn(),
 }));
 
-// Mock window.alert and window.confirm
-const mockAlert = vi.fn();
+// Mock window.confirm
 const mockConfirm = vi.fn();
-window.alert = mockAlert;
 window.confirm = mockConfirm;
 
 // Import the mocked apiRequest after mocking
@@ -419,7 +425,7 @@ describe("ImageCard", () => {
       });
     });
 
-    it("shows alert on sync failure", async () => {
+    it("shows notification on sync failure", async () => {
       const user = userEvent.setup();
       mockApiRequest.mockRejectedValue(new Error("Sync failed"));
       render(<ImageCard image={defaultImage} showSyncStatus />);
@@ -427,7 +433,11 @@ describe("ImageCard", () => {
       await user.click(screen.getByTitle("Sync to all agents"));
 
       await waitFor(() => {
-        expect(mockAlert).toHaveBeenCalledWith("Sync failed");
+        expect(mockAddNotification).toHaveBeenCalledWith(
+          "error",
+          "Image sync failed",
+          "Sync failed"
+        );
       });
     });
 
