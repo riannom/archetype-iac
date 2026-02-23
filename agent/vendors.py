@@ -1009,10 +1009,14 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         readiness_pattern=r"EVO FLAVORS|login:",
         readiness_timeout=600,
         config_extract_method="docker",
-        config_extract_command="cli -c 'show configuration'",
+        # The outer container's `cli` script SSHes into the inner QEMU VM but
+        # doesn't pass -c args through, so we SSH directly to extract config.
+        config_extract_command="ssh -o StrictHostKeyChecking=no -i /root/.ssh/sshkey root@176.1.1.1 \"cli -c 'show configuration'\"",
         config_extract_timeout=30,
         environment={
             "CPTX_COSIM": "BT|BX",
+            # Required by entrypoint.sh to read /config/startup-config.cfg
+            "CLAB_LABEL_CLAB_NODE_KIND": "juniper_cjunos",
         },
         capabilities=["NET_ADMIN", "SYS_ADMIN", "NET_RAW"],
         privileged=True,
@@ -2518,6 +2522,10 @@ def get_config_extraction_settings(kind: str) -> ConfigExtractionSettings:
         ConfigExtractionSettings for this device type
     """
     config = _get_config_by_kind(kind)
+    if not config:
+        # Try alias lookup (e.g., "cjunos" -> "juniper_cjunos")
+        canonical_kind = get_kind_for_device(kind)
+        config = _get_config_by_kind(canonical_kind)
     if not config:
         # Try direct key lookup
         config = VENDOR_CONFIGS.get(kind)
