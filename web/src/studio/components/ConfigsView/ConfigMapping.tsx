@@ -13,14 +13,13 @@ interface ConfigMappingProps {
 }
 
 export const ConfigMapping: React.FC<ConfigMappingProps> = ({
-  labId,
+  labId: _labId,
   orphanedByDeviceKind,
   deviceNodes,
   getDisplayName,
   onMapConfig,
   onSetActiveConfig,
 }) => {
-  void labId;
   const { addNotification } = useNotifications();
   const [selectedOrphan, setSelectedOrphan] = useState<{
     deviceKind: string;

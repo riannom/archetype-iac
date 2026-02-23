@@ -690,8 +690,7 @@ const StudioPage: React.FC = () => {
 
   // Load node states from the backend (per-node desired/actual state)
   // runtimeStates are derived automatically via useMemo
-  const loadNodeStates = useCallback(async (labId: string, currentNodes: Node[]) => {
-    void currentNodes;
+  const loadNodeStates = useCallback(async (labId: string, _currentNodes: Node[]) => {
     try {
       const data = await studioRequest<{ nodes: NodeStateEntry[] }>(`/labs/${labId}/nodes/states`);
       const statesByNodeId: Record<string, NodeStateEntry> = {};
@@ -727,8 +726,7 @@ const StudioPage: React.FC = () => {
     }
   }, [studioRequest]);
 
-  const loadJobs = useCallback(async (labId: string, currentNodes: Node[]) => {
-    void currentNodes;
+  const loadJobs = useCallback(async (labId: string, _currentNodes: Node[]) => {
     // Also load jobs for job log display
     const data = await studioRequest<{ jobs: any[] }>(`/labs/${labId}/jobs`);
     setJobs(data.jobs || []);
