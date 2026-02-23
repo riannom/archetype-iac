@@ -20,7 +20,7 @@ interface ImageCardProps {
 
 const ImageCard: React.FC<ImageCardProps> = ({
   image,
-  device,
+  device: _device,
   onUnassign,
   onSetDefault,
   onDelete,
@@ -44,7 +44,6 @@ const ImageCard: React.FC<ImageCardProps> = ({
   });
 
   const [syncing, setSyncing] = useState(false);
-  void device;
 
   const isDragging = dragState.draggedImageId === image.id;
 

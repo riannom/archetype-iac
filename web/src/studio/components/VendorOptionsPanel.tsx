@@ -61,11 +61,10 @@ const VendorOptionsPanel: React.FC<VendorOptionsPanelProps> = ({
   deviceId,
   vendorName,
   options,
-  baseOptions,
+  baseOptions: _baseOptions,
   overriddenOptions,
   onChange,
 }) => {
-  void baseOptions;
   const isOverridden = (key: string): boolean => {
     return key in overriddenOptions;
   };
