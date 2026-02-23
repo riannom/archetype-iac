@@ -262,6 +262,8 @@ def graph_to_yaml(graph: TopologyGraph) -> str:
         topology["defaults"] = graph.defaults
     topology["nodes"] = nodes
     topology["links"] = links
+    if graph.tests:
+        topology["tests"] = graph.tests
 
     return yaml.safe_dump(topology, sort_keys=False)
 
@@ -320,6 +322,7 @@ def yaml_to_graph(content: str) -> TopologyGraph:
     # Handle both graph format (nodes at top level) and nested format (topology.nodes)
     topology = data.get("topology", {})
     defaults = data.get("defaults", {})
+    tests = data.get("tests") or topology.get("tests")
     nodes_data = data.get("nodes") or topology.get("nodes", {})
     links_data = data.get("links") or topology.get("links", [])
 
@@ -414,7 +417,7 @@ def yaml_to_graph(content: str) -> TopologyGraph:
                 # Translate container name to GUI ID
                 endpoint.node = container_to_gui_id[endpoint.node]
 
-    return TopologyGraph(nodes=nodes, links=links, defaults=defaults)
+    return TopologyGraph(nodes=nodes, links=links, defaults=defaults, tests=tests)
 
 
 def analyze_topology(graph: TopologyGraph, default_host: str | None = None) -> TopologyAnalysis:

@@ -301,3 +301,42 @@ export interface SystemMetrics {
   per_host?: PerHostMetrics[];
   is_multi_host?: boolean;
 }
+
+// ── Lab verification framework ──
+
+export type TestSpecType = 'ping' | 'command' | 'link_state' | 'node_state';
+
+export interface TestSpec {
+  type: TestSpecType;
+  name?: string;
+  // ping
+  source?: string;
+  target?: string;
+  count?: number;
+  // command
+  node?: string;
+  cmd?: string;
+  expect?: string;
+  // state checks
+  link_name?: string;
+  node_name?: string;
+  expected_state?: string;
+}
+
+export interface TestResult {
+  spec_index: number;
+  spec_name: string;
+  status: 'passed' | 'failed' | 'error' | 'skipped';
+  duration_ms: number;
+  output?: string | null;
+  error?: string | null;
+}
+
+export interface TestRunResult {
+  job_id: string;
+  total: number;
+  passed: number;
+  failed: number;
+  errors: number;
+  results: TestResult[];
+}

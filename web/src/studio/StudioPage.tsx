@@ -15,6 +15,7 @@ import JobLogModal from './components/JobLogModal';
 import TaskLogEntryModal from './components/TaskLogEntryModal';
 import ConfigsView from './components/ConfigsView';
 import LogsView from './components/LogsView';
+import VerificationPanel from './components/VerificationPanel';
 import { Annotation, AnnotationType, ConsoleWindow, DeviceModel, DeviceType, LabLayout, Link, Node, ExternalNetworkNode, DeviceNode, isExternalNetworkNode, isDeviceNode } from './types';
 import { API_BASE_URL, apiRequest, rawApiRequest } from '../api';
 import { TopologyGraph } from '../types';
@@ -158,7 +159,7 @@ const StudioPage: React.FC = () => {
   const showAdminStrip = canViewInfrastructure(user ?? null);
   const [labs, setLabs] = useState<LabSummary[]>([]);
   const [activeLab, setActiveLab] = useState<LabSummary | null>(null);
-  const [view, setView] = useState<'designer' | 'configs' | 'logs' | 'runtime'>('designer');
+  const [view, setView] = useState<'designer' | 'configs' | 'logs' | 'runtime' | 'tests'>('designer');
   const isDesignerView = view === 'designer';
   const [nodes, setNodes] = useState<Node[]>([]);
   const [links, setLinks] = useState<Link[]>([]);
@@ -185,6 +186,9 @@ const StudioPage: React.FC = () => {
   const [showAgentIndicators, setShowAgentIndicators] = useState<boolean>(() => {
     return localStorage.getItem('archetype_show_agent_indicators') !== 'false';
   });
+  const [showXRayView, setShowXRayView] = useState<boolean>(() => {
+    return localStorage.getItem('archetype_show_xray_view') === 'true';
+  });
   const [authRequired, setAuthRequired] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
   const [authLoading, setAuthLoading] = useState(false);
@@ -209,6 +213,10 @@ const StudioPage: React.FC = () => {
   // Task log entry modal (for non-job entries)
   const [taskLogEntryModalOpen, setTaskLogEntryModalOpen] = useState(false);
   const [taskLogEntryModalEntry, setTaskLogEntryModalEntry] = useState<TaskLogEntry | null>(null);
+  // Lab verification test state
+  const [testResults, setTestResults] = useState<import('../studio/types').TestResult[]>([]);
+  const [testSummary, setTestSummary] = useState<{ total: number; passed: number; failed: number; errors: number } | null>(null);
+  const [testRunning, setTestRunning] = useState(false);
   // Track pending node operations to prevent race conditions from rapid clicks
   const [pendingNodeOps, setPendingNodeOps] = useState<Set<string>>(new Set());
   // Tracks optimistic updates: nodeId -> expiry timestamp. Prevents polling/WS from
@@ -350,12 +358,23 @@ const StudioPage: React.FC = () => {
     }
   }, [addNotification]);
 
+  // Handle WebSocket test results
+  const handleWSTestResult = useCallback((data: import('./hooks/useLabStateWS').TestResultData) => {
+    setTestResults(prev => [...prev, data.result]);
+    setTestSummary(data.summary);
+    if (data.summary.passed + data.summary.failed + data.summary.errors >= data.summary.total) {
+      setTestRunning(false);
+    }
+  }, []);
+
   const {
     isConnected: wsConnected,
     reconnectAttempts: wsReconnectAttempts,
+    linkStates,
   } = useLabStateWS(activeLab?.id || null, {
     onNodeStateChange: handleWSNodeStateChange,
     onJobProgress: handleWSJobProgress,
+    onTestResult: handleWSTestResult,
     enabled: !!activeLab,
   });
 
@@ -1449,6 +1468,27 @@ const StudioPage: React.FC = () => {
     });
   }, []);
 
+  const handleToggleXRayView = useCallback(() => {
+    setShowXRayView(prev => {
+      const next = !prev;
+      localStorage.setItem('archetype_show_xray_view', next ? 'true' : 'false');
+      return next;
+    });
+  }, []);
+
+  const handleStartTests = useCallback(async () => {
+    if (!activeLab?.id || testRunning) return;
+    setTestResults([]);
+    setTestSummary(null);
+    setTestRunning(true);
+    try {
+      await apiRequest(`/labs/${activeLab.id}/tests/run`, { method: 'POST' });
+    } catch (e: any) {
+      setTestRunning(false);
+      addNotification('error', 'Test run failed', e.message || 'Failed to start tests');
+    }
+  }, [activeLab?.id, testRunning, addNotification]);
+
   const handleCloseConfigViewer = useCallback(() => {
     setConfigViewerOpen(false);
     setConfigViewerNode(null);
@@ -1806,6 +1846,16 @@ const StudioPage: React.FC = () => {
             onFlushTopologySave={flushTopologySave}
           />
         );
+      case 'tests':
+        return (
+          <VerificationPanel
+            labId={activeLab?.id || ''}
+            testResults={testResults}
+            testSummary={testSummary}
+            isRunning={testRunning}
+            onStartTests={handleStartTests}
+          />
+        );
       default:
         return (
           <>
@@ -1816,11 +1866,14 @@ const StudioPage: React.FC = () => {
               annotations={annotations}
               runtimeStates={runtimeStates}
               nodeStates={nodeStates}
+              linkStates={linkStates}
               deviceModels={deviceModels}
               labId={activeLab?.id}
               agents={agents}
               showAgentIndicators={showAgentIndicators}
               onToggleAgentIndicators={handleToggleAgentIndicators}
+              showXRayView={showXRayView}
+              onToggleXRayView={handleToggleXRayView}
               onNodeMove={handleNodeMove}
               onAnnotationMove={handleAnnotationMove}
               onConnect={handleConnect}
@@ -1934,6 +1987,16 @@ const StudioPage: React.FC = () => {
           }`}
         >
           Logs
+        </button>
+        <button
+          onClick={() => setView('tests')}
+          className={`h-full px-4 text-[10px] font-black uppercase border-b-2 transition-all ${
+            view === 'tests'
+              ? 'text-sage-700 dark:text-sage-500 border-sage-700 dark:border-sage-500'
+              : 'text-stone-700 dark:text-stone-500 border-transparent hover:text-stone-900 dark:hover:text-stone-300'
+          }`}
+        >
+          Tests
         </button>
       </div>
       {showAdminStrip && <SystemStatusStrip metrics={systemMetrics} />}

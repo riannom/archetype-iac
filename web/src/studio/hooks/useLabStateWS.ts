@@ -29,6 +29,12 @@ export interface LinkStateData {
   source_node: string;
   target_node: string;
   error_message?: string | null;
+  is_cross_host?: boolean;
+  vni?: number | null;
+  source_host_id?: string | null;
+  target_host_id?: string | null;
+  source_vlan_tag?: number | null;
+  target_vlan_tag?: number | null;
 }
 
 export interface LabStateData {
@@ -45,8 +51,26 @@ export interface JobProgressData {
   error_message?: string | null;
 }
 
+export interface TestResultData {
+  job_id: string;
+  result: {
+    spec_index: number;
+    spec_name: string;
+    status: 'passed' | 'failed' | 'error' | 'skipped';
+    duration_ms: number;
+    output?: string | null;
+    error?: string | null;
+  };
+  summary: {
+    total: number;
+    passed: number;
+    failed: number;
+    errors: number;
+  };
+}
+
 interface WSMessage {
-  type: 'node_state' | 'link_state' | 'lab_state' | 'job_progress' | 'initial_state' | 'initial_links' | 'heartbeat' | 'pong' | 'error';
+  type: 'node_state' | 'link_state' | 'lab_state' | 'job_progress' | 'test_result' | 'initial_state' | 'initial_links' | 'heartbeat' | 'pong' | 'error';
   timestamp: string;
   data: unknown;
 }
@@ -60,6 +84,8 @@ export interface UseLabStateWSOptions {
   onLabStateChange?: (state: LabStateData) => void;
   /** Callback when job progress updates */
   onJobProgress?: (job: JobProgressData) => void;
+  /** Callback when a test result arrives */
+  onTestResult?: (data: TestResultData) => void;
   /** Whether to enable the WebSocket connection (default: true) */
   enabled?: boolean;
   /** Fallback polling interval in ms when WebSocket fails (default: 4000) */
@@ -97,6 +123,7 @@ export function useLabStateWS(
     onLinkStateChange,
     onLabStateChange,
     onJobProgress,
+    onTestResult,
     enabled = true,
   } = options;
 
@@ -116,10 +143,12 @@ export function useLabStateWS(
   const onLinkStateChangeRef = useRef(onLinkStateChange);
   const onLabStateChangeRef = useRef(onLabStateChange);
   const onJobProgressRef = useRef(onJobProgress);
+  const onTestResultRef = useRef(onTestResult);
   onNodeStateChangeRef.current = onNodeStateChange;
   onLinkStateChangeRef.current = onLinkStateChange;
   onLabStateChangeRef.current = onLabStateChange;
   onJobProgressRef.current = onJobProgress;
+  onTestResultRef.current = onTestResult;
 
   // Build WebSocket URL from API URL
   const getWSUrl = useCallback(() => {
@@ -199,6 +228,12 @@ export function useLabStateWS(
         case 'job_progress': {
           const data = message.data as JobProgressData;
           onJobProgressRef.current?.(data);
+          break;
+        }
+
+        case 'test_result': {
+          const data = message.data as TestResultData;
+          onTestResultRef.current?.(data);
           break;
         }
 

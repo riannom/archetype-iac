@@ -122,6 +122,7 @@ class TopologyGraph(BaseModel):
     nodes: list[GraphNode]
     links: list[GraphLink]
     defaults: dict | None = None
+    tests: list[dict] | None = None
 
 
 class NodePlacement(BaseModel):
@@ -1397,3 +1398,45 @@ class LinkReconciliationResponse(BaseModel):
     repaired: int
     errors: int
     skipped: int
+
+
+# ── Lab verification framework ──
+
+
+class TestSpec(BaseModel):
+    """A single test specification for lab verification."""
+    type: Literal["ping", "command", "link_state", "node_state"]
+    name: str | None = None
+    # ping fields
+    source: str | None = None
+    target: str | None = None
+    count: int = 3
+    # command fields
+    node: str | None = None
+    cmd: str | None = None
+    expect: str | None = None
+    # state check fields
+    link_name: str | None = None
+    node_name: str | None = None
+    expected_state: str | None = None
+
+
+class RunTestsRequest(BaseModel):
+    """Request to run lab verification tests."""
+    specs: list[TestSpec] | None = None
+
+
+class TestResultItem(BaseModel):
+    """Result of a single test."""
+    spec_index: int
+    spec_name: str
+    status: Literal["passed", "failed", "error", "skipped"]
+    duration_ms: float
+    output: str | None = None
+    error: str | None = None
+
+
+class TestRunResponse(BaseModel):
+    """Response from starting a test run."""
+    job_id: str
+    message: str

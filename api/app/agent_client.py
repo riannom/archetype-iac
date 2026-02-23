@@ -2741,3 +2741,23 @@ async def repair_endpoints_on_agent(
     except Exception as e:
         logger.error(f"Endpoint repair failed on agent {agent.id}: {e}")
         return {"success": False, "error": str(e)}
+
+
+async def exec_node_on_agent(
+    agent: models.Host,
+    lab_id: str,
+    node_name: str,
+    cmd: str,
+    timeout: float = 30.0,
+) -> dict:
+    """Execute a command inside a node on an agent.
+
+    Uses the existing POST /labs/{lab_id}/nodes/{node_name}/exec endpoint.
+
+    Returns:
+        dict with keys: exit_code (int), output (str)
+    """
+    url = f"{get_agent_url(agent)}/labs/{lab_id}/nodes/{node_name}/exec"
+    return await _agent_request(
+        "POST", url, json_body={"cmd": cmd}, timeout=timeout
+    )

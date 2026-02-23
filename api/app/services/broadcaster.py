@@ -165,6 +165,12 @@ class StateBroadcaster:
         source_oper_reason: str | None = None,
         target_oper_reason: str | None = None,
         oper_epoch: int | None = None,
+        is_cross_host: bool | None = None,
+        vni: int | None = None,
+        source_host_id: str | None = None,
+        target_host_id: str | None = None,
+        source_vlan_tag: int | None = None,
+        target_vlan_tag: int | None = None,
     ) -> int:
         """Publish a link state change event.
 
@@ -196,6 +202,12 @@ class StateBroadcaster:
                     "source_oper_reason": source_oper_reason,
                     "target_oper_reason": target_oper_reason,
                     "oper_epoch": oper_epoch,
+                    "is_cross_host": is_cross_host,
+                    "vni": vni,
+                    "source_host_id": source_host_id,
+                    "target_host_id": target_host_id,
+                    "source_vlan_tag": source_vlan_tag,
+                    "target_vlan_tag": target_vlan_tag,
                 },
             }
             channel = self._channel_name(lab_id)
@@ -286,6 +298,34 @@ class StateBroadcaster:
         except Exception as e:
             logger.warning(f"Failed to publish job progress for {job_id}: {e}")
             record_broadcast("job_progress", False)
+            return 0
+
+    async def publish_test_result(
+        self,
+        lab_id: str,
+        job_id: str,
+        result: dict,
+        summary: dict,
+    ) -> int:
+        """Publish a test result event."""
+        try:
+            message = {
+                "type": "test_result",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "data": {
+                    "job_id": job_id,
+                    "result": result,
+                    "summary": summary,
+                },
+            }
+            channel = self._channel_name(lab_id)
+            count = await self._publish(channel, json.dumps(message))
+            logger.debug(f"Published test result to {channel}: {result.get('spec_name')}")
+            record_broadcast("test_result", True)
+            return count
+        except Exception as e:
+            logger.warning(f"Failed to publish test result: {e}")
+            record_broadcast("test_result", False)
             return 0
 
     async def subscribe(self, lab_id: str) -> AsyncGenerator[dict, None]:
@@ -406,6 +446,12 @@ async def broadcast_link_state_change(
     source_oper_reason: str | None = None,
     target_oper_reason: str | None = None,
     oper_epoch: int | None = None,
+    is_cross_host: bool | None = None,
+    vni: int | None = None,
+    source_host_id: str | None = None,
+    target_host_id: str | None = None,
+    source_vlan_tag: int | None = None,
+    target_vlan_tag: int | None = None,
 ) -> None:
     """Convenience function to broadcast a link state change.
 
@@ -425,4 +471,10 @@ async def broadcast_link_state_change(
         source_oper_reason=source_oper_reason,
         target_oper_reason=target_oper_reason,
         oper_epoch=oper_epoch,
+        is_cross_host=is_cross_host,
+        vni=vni,
+        source_host_id=source_host_id,
+        target_host_id=target_host_id,
+        source_vlan_tag=source_vlan_tag,
+        target_vlan_tag=target_vlan_tag,
     )

@@ -36,4 +36,5 @@ export interface TopologyGraph {
   nodes: GraphNode[];
   links: GraphLink[];
   defaults?: Record<string, unknown> | null;
+  tests?: Record<string, unknown>[];
 }

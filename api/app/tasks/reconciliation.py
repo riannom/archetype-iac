@@ -1503,6 +1503,12 @@ async def _do_reconcile_lab(session, lab, lab_id: str) -> int:
                         source_oper_reason=ls.source_oper_reason,
                         target_oper_reason=ls.target_oper_reason,
                         oper_epoch=ls.oper_epoch,
+                        is_cross_host=ls.is_cross_host,
+                        vni=ls.vni,
+                        source_host_id=ls.source_host_id,
+                        target_host_id=ls.target_host_id,
+                        source_vlan_tag=ls.source_vlan_tag,
+                        target_vlan_tag=ls.target_vlan_tag,
                     )
                 )
 

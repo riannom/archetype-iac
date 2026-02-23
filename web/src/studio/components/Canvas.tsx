@@ -6,6 +6,7 @@ import { useTheme } from '../../theme/index';
 import { getAgentColor, getAgentInitials } from '../../utils/agentColors';
 import { useNotifications } from '../../contexts/NotificationContext';
 import { NodeStateEntry } from '../../types/nodeState';
+import { LinkStateData } from '../hooks/useLabStateWS';
 import { computeLinkLabelPlacements } from '../utils/linkLabelPlacement';
 
 interface CanvasProps {
@@ -14,11 +15,14 @@ interface CanvasProps {
   annotations: Annotation[];
   runtimeStates: Record<string, RuntimeStatus>;
   nodeStates?: Record<string, NodeStateEntry>;
+  linkStates?: Map<string, LinkStateData>;
   deviceModels: DeviceModel[];
   labId?: string;
   agents?: { id: string; name: string }[];
   showAgentIndicators?: boolean;
   onToggleAgentIndicators?: () => void;
+  showXRayView?: boolean;
+  onToggleXRayView?: () => void;
   onNodeMove: (id: string, x: number, y: number) => void;
   onAnnotationMove: (id: string, x: number, y: number) => void;
   onConnect: (sourceId: string, targetId: string) => void;
@@ -68,7 +72,7 @@ function readStoredViewport(labId?: string): { zoom: number; x: number; y: numbe
 }
 
 const Canvas: React.FC<CanvasProps> = ({
-  nodes, links, annotations, runtimeStates, nodeStates = {}, deviceModels, labId, agents = [], showAgentIndicators = false, onToggleAgentIndicators, onNodeMove, onAnnotationMove, onConnect, selectedId, onSelect, onOpenConsole, onExtractConfig, onUpdateStatus, onDelete, onDropDevice, onDropExternalNetwork, onUpdateAnnotation
+  nodes, links, annotations, runtimeStates, nodeStates = {}, linkStates, deviceModels, labId, agents = [], showAgentIndicators = false, onToggleAgentIndicators, showXRayView = false, onToggleXRayView, onNodeMove, onAnnotationMove, onConnect, selectedId, onSelect, onOpenConsole, onExtractConfig, onUpdateStatus, onDelete, onDropDevice, onDropExternalNetwork, onUpdateAnnotation
 }) => {
   const { effectiveMode } = useTheme();
   const { preferences } = useNotifications();
@@ -146,6 +150,53 @@ const Canvas: React.FC<CanvasProps> = ({
   }, [nodes]);
 
   const linkLabelPlacements = useMemo(() => computeLinkLabelPlacements(nodes, links), [nodes, links]);
+
+  // X-Ray: compute host zone bounding boxes for multi-host visualization
+  const hostZones = useMemo(() => {
+    if (!showXRayView || agents.length <= 1) return new Map<string, { hostName: string; minX: number; minY: number; maxX: number; maxY: number }>();
+    const zones = new Map<string, { hostName: string; minX: number; minY: number; maxX: number; maxY: number }>();
+    const agentNameMap = new Map(agents.map(a => [a.id, a.name]));
+    nodes.forEach(node => {
+      const ns = nodeStates[node.id];
+      const hostId = ns?.host_id;
+      if (!hostId) return;
+      const existing = zones.get(hostId);
+      if (existing) {
+        existing.minX = Math.min(existing.minX, node.x);
+        existing.minY = Math.min(existing.minY, node.y);
+        existing.maxX = Math.max(existing.maxX, node.x);
+        existing.maxY = Math.max(existing.maxY, node.y);
+      } else {
+        zones.set(hostId, {
+          hostName: agentNameMap.get(hostId) || hostId.slice(0, 8),
+          minX: node.x,
+          minY: node.y,
+          maxX: node.x,
+          maxY: node.y,
+        });
+      }
+    });
+    return zones;
+  }, [showXRayView, agents, nodes, nodeStates]);
+
+  // X-Ray: build link→LinkState lookup by matching frontend Link to backend link_name
+  const linkStateMap = useMemo(() => {
+    if (!showXRayView || !linkStates || linkStates.size === 0) return new Map<string, LinkStateData>();
+    const result = new Map<string, LinkStateData>();
+    links.forEach(link => {
+      const sourceNode = nodeMap.get(link.source);
+      const targetNode = nodeMap.get(link.target);
+      if (!sourceNode || !targetNode) return;
+      // Construct possible link_name patterns to match backend format "node:iface-node:iface"
+      const srcName = ('container_name' in sourceNode && sourceNode.container_name) || sourceNode.name;
+      const tgtName = ('container_name' in targetNode && targetNode.container_name) || targetNode.name;
+      const fwd = `${srcName}:${link.sourceInterface}-${tgtName}:${link.targetInterface}`;
+      const rev = `${tgtName}:${link.targetInterface}-${srcName}:${link.sourceInterface}`;
+      const ls = linkStates.get(fwd) || linkStates.get(rev);
+      if (ls) result.set(link.id, ls);
+    });
+    return result;
+  }, [showXRayView, linkStates, links, nodeMap]);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -598,6 +649,40 @@ const Canvas: React.FC<CanvasProps> = ({
             );
           })}
 
+          {/* X-Ray: Host zone backgrounds */}
+          {showXRayView && Array.from(hostZones.entries()).map(([hostId, zone]) => {
+            const padding = 60;
+            const color = getAgentColor(hostId);
+            return (
+              <g key={`zone-${hostId}`} className="pointer-events-none">
+                <rect
+                  x={zone.minX - padding}
+                  y={zone.minY - padding}
+                  width={zone.maxX - zone.minX + padding * 2}
+                  height={zone.maxY - zone.minY + padding * 2}
+                  fill={color}
+                  fillOpacity={0.08}
+                  stroke={color}
+                  strokeOpacity={0.35}
+                  strokeWidth="1.5"
+                  strokeDasharray="6 4"
+                  rx="12"
+                />
+                <text
+                  x={zone.minX - padding + 10}
+                  y={zone.minY - padding + 18}
+                  fill={color}
+                  fillOpacity={0.7}
+                  fontSize="10"
+                  className="select-none"
+                  style={{ fontFamily: 'ui-monospace, monospace' }}
+                >
+                  {zone.hostName} · arch-ovs
+                </text>
+              </g>
+            );
+          })}
+
           {links.map(link => {
             const source = nodeMap.get(link.source);
             const target = nodeMap.get(link.target);
@@ -608,9 +693,18 @@ const Canvas: React.FC<CanvasProps> = ({
             // Check if either endpoint is an external network node
             const isExternalLink = isExternalNetworkNode(source) || isExternalNetworkNode(target);
 
+            // X-Ray link state coloring
+            const xrayLinkState = showXRayView ? linkStateMap.get(link.id) : undefined;
+
             // Use blue colors for external links, green/gray for regular links
             let linkColor: string;
-            if (isExternalLink) {
+            if (showXRayView && xrayLinkState) {
+              // X-Ray mode: color by actual_state
+              const stateColors: Record<string, string> = effectiveMode === 'dark'
+                ? { up: '#22C55E', error: '#EF4444', pending: '#F59E0B', creating: '#F59E0B', down: '#6B7280', unknown: '#6B7280' }
+                : { up: '#16A34A', error: '#DC2626', pending: '#D97706', creating: '#D97706', down: '#9CA3AF', unknown: '#9CA3AF' };
+              linkColor = stateColors[xrayLinkState.actual_state] || stateColors.unknown;
+            } else if (isExternalLink) {
               linkColor = isSelected
                 ? (effectiveMode === 'dark' ? '#3B82F6' : '#2563EB')
                 : (isHovered ? (effectiveMode === 'dark' ? '#60A5FA' : '#3B82F6') : (effectiveMode === 'dark' ? '#6366F1' : '#A5B4FC'));
@@ -679,6 +773,70 @@ const Canvas: React.FC<CanvasProps> = ({
                   >
                     {link.targetInterface}
                   </text>
+                )}
+                {/* X-Ray: VLAN tag annotations near endpoints */}
+                {showXRayView && xrayLinkState && (
+                  <>
+                    {xrayLinkState.source_vlan_tag != null && sourceLabelX !== undefined && sourceLabelY !== undefined && (
+                      <text
+                        x={sourceLabelX}
+                        y={sourceLabelY + 14}
+                        fill={effectiveMode === 'dark' ? '#A8A29E' : '#78716C'}
+                        fontSize="9"
+                        textAnchor="middle"
+                        dominantBaseline="middle"
+                        className="pointer-events-none select-none"
+                        style={{ fontFamily: 'ui-monospace, monospace' }}
+                      >
+                        v{xrayLinkState.source_vlan_tag}
+                      </text>
+                    )}
+                    {xrayLinkState.target_vlan_tag != null && targetLabelX !== undefined && targetLabelY !== undefined && (
+                      <text
+                        x={targetLabelX}
+                        y={targetLabelY + 14}
+                        fill={effectiveMode === 'dark' ? '#A8A29E' : '#78716C'}
+                        fontSize="9"
+                        textAnchor="middle"
+                        dominantBaseline="middle"
+                        className="pointer-events-none select-none"
+                        style={{ fontFamily: 'ui-monospace, monospace' }}
+                      >
+                        v{xrayLinkState.target_vlan_tag}
+                      </text>
+                    )}
+                    {/* Cross-host: dashed amber overlay + VNI badge at midpoint */}
+                    {xrayLinkState.is_cross_host && (() => {
+                      const midX = (source.x + target.x) / 2;
+                      const midY = (source.y + target.y) / 2;
+                      return (
+                        <>
+                          <line
+                            x1={source.x} y1={source.y} x2={target.x} y2={target.y}
+                            stroke="#F59E0B" strokeWidth="2" strokeDasharray="4 3" strokeOpacity={0.6}
+                            className="pointer-events-none"
+                          />
+                          {xrayLinkState.vni != null && (
+                            <g className="pointer-events-none">
+                              <rect
+                                x={midX - 26} y={midY - 10} width={52} height={20} rx={4}
+                                fill={effectiveMode === 'dark' ? '#292524' : '#FFFBEB'}
+                                stroke="#F59E0B" strokeWidth="1" strokeOpacity={0.7}
+                              />
+                              <text
+                                x={midX} y={midY + 1}
+                                fill="#F59E0B" fontSize="9" fontWeight="700"
+                                textAnchor="middle" dominantBaseline="middle"
+                                style={{ fontFamily: 'ui-monospace, monospace' }}
+                              >
+                                VNI {xrayLinkState.vni}
+                              </text>
+                            </g>
+                          )}
+                        </>
+                      );
+                    })()}
+                  </>
                 )}
               </g>
             );
@@ -888,6 +1046,18 @@ const Canvas: React.FC<CanvasProps> = ({
               title={showAgentIndicators ? 'Hide agent indicators' : 'Show agent indicators'}
             >
               <i className="fa-solid fa-server"></i>
+            </button>
+          </div>
+        )}
+        {/* X-Ray view toggle - only show when multiple agents */}
+        {agents.length > 1 && onToggleXRayView && (
+          <div className="bg-white/80 dark:bg-stone-900/80 backdrop-blur-md border border-stone-200 dark:border-stone-700 rounded-lg flex flex-col overflow-hidden shadow-lg">
+            <button
+              onClick={onToggleXRayView}
+              className={`p-3 transition-colors ${showXRayView ? 'text-amber-500 dark:text-amber-400 bg-amber-500/10' : 'text-stone-500 dark:text-stone-400 hover:text-amber-500 dark:hover:text-white hover:bg-stone-100 dark:hover:bg-stone-800'}`}
+              title={showXRayView ? 'Hide X-Ray view' : 'Show X-Ray view (hosts, VLANs, VXLAN tunnels)'}
+            >
+              <i className="fa-solid fa-layer-group"></i>
             </button>
           </div>
         )}
