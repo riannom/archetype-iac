@@ -48,8 +48,9 @@ class MonitoredPort:
 def build_managed_ports(
     ovs_mgr: Any | None = None,
     docker_plugin: Any | None = None,
+    libvirt_provider: Any | None = None,
 ) -> dict[str, MonitoredPort]:
-    """Merge ports from OVSNetworkManager and DockerOVSPlugin.
+    """Merge ports from OVSNetworkManager, DockerOVSPlugin, and LibvirtProvider.
 
     Returns ``{port_name: MonitoredPort}`` keyed by OVS port name.
     Docker plugin endpoints take precedence over OVS manager ports when
@@ -87,6 +88,13 @@ def build_managed_ports(
                 interface_name=ep.interface_name,
                 lab_id=lab_id,
             )
+
+    # 3. LibvirtProvider VM tap ports (pre-built cache, sync read).
+    if libvirt_provider is not None:
+        try:
+            result.update(libvirt_provider.get_vm_monitored_ports())
+        except Exception:
+            pass
 
     return result
 

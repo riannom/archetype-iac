@@ -474,3 +474,84 @@ class TestBuildManagedPorts:
 
         result = build_managed_ports(ovs_mgr=None, docker_plugin=None)
         assert result == {}
+
+    def test_libvirt_ports_included(self):
+        """LibvirtProvider VM ports are merged into the result."""
+        from agent.network.carrier_monitor import MonitoredPort, build_managed_ports
+
+        class FakeLibvirt:
+            def get_vm_monitored_ports(self):
+                return {
+                    "vnet0": MonitoredPort(
+                        port_name="vnet0",
+                        container_name="arch-lab1-vm1",
+                        interface_name="eth1",
+                        lab_id="lab1",
+                    ),
+                }
+
+        result = build_managed_ports(libvirt_provider=FakeLibvirt())
+        assert "vnet0" in result
+        assert result["vnet0"].container_name == "arch-lab1-vm1"
+        assert result["vnet0"].lab_id == "lab1"
+
+    def test_all_three_sources_merged(self):
+        """OVS, Docker, and libvirt ports all appear in result."""
+        from agent.network.carrier_monitor import MonitoredPort, build_managed_ports
+
+        class OVSPort:
+            port_name = "vh1111e1ab"
+            container_name = "archetype-lab1-r1"
+            interface_name = "eth1"
+            lab_id = "lab1"
+
+        class FakeOVSMgr:
+            _ports = {"archetype-lab1-r1:eth1": OVSPort()}
+
+        class FakeNet:
+            network_id = "net-2"
+            lab_id = "lab2"
+            interface_name = "eth1"
+
+        class FakeEP:
+            endpoint_id = "ep-2"
+            network_id = "net-2"
+            interface_name = "eth1"
+            host_veth = "vh2222e1ab"
+            container_name = "archetype-lab2-r2"
+
+        class FakePlugin:
+            networks = {"net-2": FakeNet()}
+            endpoints = {"ep-2": FakeEP()}
+
+        class FakeLibvirt:
+            def get_vm_monitored_ports(self):
+                return {
+                    "vnet0": MonitoredPort(
+                        port_name="vnet0",
+                        container_name="arch-lab3-vm1",
+                        interface_name="eth1",
+                        lab_id="lab3",
+                    ),
+                }
+
+        result = build_managed_ports(
+            ovs_mgr=FakeOVSMgr(),
+            docker_plugin=FakePlugin(),
+            libvirt_provider=FakeLibvirt(),
+        )
+        assert len(result) == 3
+        assert "vh1111e1ab" in result
+        assert "vh2222e1ab" in result
+        assert "vnet0" in result
+
+    def test_libvirt_exception_swallowed(self):
+        """LibvirtProvider raising an exception doesn't break other sources."""
+        from agent.network.carrier_monitor import build_managed_ports
+
+        class BrokenLibvirt:
+            def get_vm_monitored_ports(self):
+                raise RuntimeError("libvirt connection lost")
+
+        result = build_managed_ports(libvirt_provider=BrokenLibvirt())
+        assert result == {}

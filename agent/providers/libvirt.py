@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
+import json
 import time
 from functools import partial
 import hashlib
@@ -243,6 +244,8 @@ class LibvirtProvider(Provider, VlanPersistenceMixin):
         self._n9kv_panic_recovery_attempts: dict[str, int] = {}
         self._n9kv_panic_recovery_last_at: dict[str, float] = {}
         self._n9kv_panic_last_log_size: dict[str, int] = {}
+        # Carrier monitor: cached VM port -> MonitoredPort mapping.
+        self._vm_port_cache: dict = {}
 
     async def _run_libvirt(self, func, *args, **kwargs):
         """Run a blocking function on the dedicated libvirt thread."""
@@ -3130,15 +3133,18 @@ class LibvirtProvider(Provider, VlanPersistenceMixin):
             return False
         return False
 
-    def _get_vm_interface_port_sync(
+    def _resolve_data_interface_mac_sync(
         self,
         lab_id: str,
         node_name: str,
         interface_index: int,
-    ) -> str | None:
-        """Find OVS port for a VM interface — runs on libvirt thread.
+    ) -> str:
+        """Compute the guest MAC for a data interface — runs on libvirt thread.
 
-        Uses libvirt for MAC offset detection and OVS CLI for port lookup.
+        Accounts for dedicated management NIC offset (+1) and reserved NICs
+        (e.g. XRv9k ``reserved_nics=2``).
+
+        Returns the deterministic guest MAC (52:54:00:XX:XX:XX).
         """
         domain_name = self._domain_name(lab_id, node_name)
         mac_index = interface_index
@@ -3156,7 +3162,21 @@ class LibvirtProvider(Provider, VlanPersistenceMixin):
         except Exception:
             pass
 
-        guest_mac = self._generate_mac_address(domain_name, mac_index)
+        return self._generate_mac_address(domain_name, mac_index)
+
+    def _get_vm_interface_port_sync(
+        self,
+        lab_id: str,
+        node_name: str,
+        interface_index: int,
+    ) -> str | None:
+        """Find OVS port for a VM interface — runs on libvirt thread.
+
+        Uses libvirt for MAC offset detection and OVS CLI for port lookup.
+        """
+        guest_mac = self._resolve_data_interface_mac_sync(
+            lab_id, node_name, interface_index,
+        )
         tap_mac = "fe" + guest_mac[2:]
         expected_macs = {guest_mac.lower(), tap_mac.lower()}
 
@@ -3196,6 +3216,122 @@ class LibvirtProvider(Provider, VlanPersistenceMixin):
         """Get the OVS port name for a VM interface."""
         return await self._run_libvirt(
             self._get_vm_interface_port_sync, lab_id, node_name, interface_index,
+        )
+
+    async def set_vm_link_state(
+        self,
+        lab_id: str,
+        node_name: str,
+        interface_index: int,
+        link_state: str,
+    ) -> tuple[bool, str | None]:
+        """Set VM interface link state via ``virsh domif-setlink``.
+
+        Args:
+            lab_id: Lab identifier.
+            node_name: VM node name.
+            interface_index: 0-based data interface index.
+            link_state: ``"up"`` or ``"down"``.
+
+        Returns:
+            ``(success, error_message)`` tuple.
+        """
+        domain_name = self._domain_name(lab_id, node_name)
+        try:
+            guest_mac = await self._run_libvirt(
+                self._resolve_data_interface_mac_sync,
+                lab_id, node_name, interface_index,
+            )
+        except Exception as e:
+            return False, f"MAC resolution failed: {e}"
+
+        proc = await asyncio.create_subprocess_exec(
+            "virsh", "-c", self._uri,
+            "domif-setlink", domain_name, guest_mac, link_state,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout_bytes, stderr_bytes = await proc.communicate()
+        if proc.returncode != 0:
+            err = stderr_bytes.decode(errors="replace").strip()
+            return False, f"virsh domif-setlink failed: {err}"
+
+        logger.info(
+            "Set VM link %s on %s mac=%s (%s:eth%d)",
+            link_state, domain_name, guest_mac, node_name, interface_index + 1,
+        )
+        return True, None
+
+    # ------------------------------------------------------------------
+    # Carrier monitor: VM tap port discovery
+    # ------------------------------------------------------------------
+
+    def _build_vm_monitored_ports_sync(self) -> dict:
+        """Build ``{port_name: MonitoredPort}`` for all deployed VM interfaces.
+
+        Runs on the libvirt thread (accesses ``self.conn`` for MAC offsets).
+        Uses a single batch OVS query to resolve port MACs.
+        """
+        from agent.network.carrier_monitor import MonitoredPort
+
+        # Batch OVS query: get all interface names and their MACs.
+        try:
+            result = subprocess.run(
+                [
+                    "ovs-vsctl", "--format=json",
+                    "--columns=name,mac_in_use", "list", "Interface",
+                ],
+                capture_output=True, text=True,
+            )
+            if result.returncode != 0:
+                return {}
+            ovs_data = json.loads(result.stdout)
+        except Exception:
+            logger.debug("Failed to batch-query OVS interfaces for VM port cache")
+            return {}
+
+        # Build MAC -> port_name lookup from OVS data.
+        mac_to_port: dict[str, str] = {}
+        for row in ovs_data.get("data", []):
+            port_name = row[0]
+            mac = row[1]
+            if isinstance(port_name, str) and isinstance(mac, str) and mac:
+                mac_to_port[mac.lower().strip('"')] = port_name
+
+        ports: dict = {}
+        for lab_id, lab_allocs in self._vlan_allocations.items():
+            for node_name, vlans in lab_allocs.items():
+                domain_name = self._domain_name(lab_id, node_name)
+                for iface_idx in range(len(vlans)):
+                    guest_mac = self._resolve_data_interface_mac_sync(
+                        lab_id, node_name, iface_idx,
+                    )
+                    tap_mac = "fe" + guest_mac[2:]
+                    # Match either guest or tap MAC in the batch results.
+                    port_name = (
+                        mac_to_port.get(guest_mac.lower())
+                        or mac_to_port.get(tap_mac.lower())
+                    )
+                    if port_name:
+                        ports[port_name] = MonitoredPort(
+                            port_name=port_name,
+                            container_name=domain_name,
+                            interface_name=f"eth{iface_idx + 1}",
+                            lab_id=lab_id,
+                        )
+        return ports
+
+    def get_vm_monitored_ports(self) -> dict:
+        """Return cached VM port map (sync, non-blocking)."""
+        return self._vm_port_cache
+
+    async def refresh_vm_monitored_ports(self) -> None:
+        """Rebuild the VM port cache on the libvirt thread."""
+        self._vm_port_cache = await self._run_libvirt(
+            self._build_vm_monitored_ports_sync,
+        )
+        logger.debug(
+            "Refreshed VM monitored ports cache: %d ports", len(self._vm_port_cache),
         )
 
     async def hot_connect(

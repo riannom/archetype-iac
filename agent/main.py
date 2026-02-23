@@ -196,6 +196,7 @@ async def lifespan(app: FastAPI):
 
     # Start carrier state monitor (OVS link_state polling)
     _carrier_monitor = None
+    _vm_port_refresh_task = None
     if settings.enable_ovs:
         try:
             from agent.network.carrier_monitor import CarrierMonitor, build_managed_ports
@@ -204,12 +205,36 @@ async def lifespan(app: FastAPI):
             ovs_mgr = get_ovs_manager()
             # Include Docker OVS plugin endpoints when the plugin is enabled
             plugin = _get_docker_ovs_plugin() if settings.enable_ovs_plugin else None
+            libvirt_prov = get_provider("libvirt")
+
+            # Seed VM port cache before monitor start so existing VMs are tracked.
+            if libvirt_prov is not None:
+                try:
+                    await libvirt_prov.refresh_vm_monitored_ports()
+                except Exception as e:
+                    logger.warning(f"Initial VM port cache refresh failed: {e}")
+
             _carrier_monitor = CarrierMonitor(
                 ovs_bridge=settings.ovs_bridge_name,
-                get_managed_ports=lambda: build_managed_ports(ovs_mgr, plugin),
+                get_managed_ports=lambda: build_managed_ports(ovs_mgr, plugin, libvirt_prov),
                 notifier=report_carrier_state_change,
             )
             await _carrier_monitor.start(interval=settings.carrier_monitor_interval)
+
+            # Periodic VM port cache refresh (tap devices appear/disappear on deploy/destroy).
+            if libvirt_prov is not None:
+                async def _vm_port_refresh_loop():
+                    while True:
+                        try:
+                            await asyncio.sleep(30)
+                            await libvirt_prov.refresh_vm_monitored_ports()
+                        except asyncio.CancelledError:
+                            break
+                        except Exception:
+                            logger.debug("VM port cache refresh failed", exc_info=True)
+
+                _vm_port_refresh_task = asyncio.create_task(_vm_port_refresh_loop())
+
         except Exception as e:
             logger.error(f"Failed to start carrier monitor: {e}")
 
@@ -243,6 +268,14 @@ async def lifespan(app: FastAPI):
             pass
         finally:
             _state.set_fix_interfaces_task(None)
+
+    # Stop VM port refresh task
+    if _vm_port_refresh_task is not None:
+        _vm_port_refresh_task.cancel()
+        try:
+            await _vm_port_refresh_task
+        except asyncio.CancelledError:
+            pass
 
     # Stop carrier monitor
     if _carrier_monitor is not None:

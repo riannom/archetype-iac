@@ -44,9 +44,8 @@ async def set_interface_carrier(
 ) -> CarrierStateResponse:
     """Set the carrier state of a container or VM interface.
 
-    Uses ``ip link set carrier on/off`` to simulate physical link up/down.
-    Supports Docker containers (nsenter into namespace) and libvirt VMs
-    (host-side tap interface).
+    For Docker containers: ``nsenter`` + ``ip link set carrier on/off``.
+    For libvirt VMs: ``virsh domif-setlink`` to toggle guest NIC link state.
     """
     logger.info(f"Set carrier {request.state}: lab={lab_id}, node={node}, interface={interface}")
 
@@ -57,40 +56,23 @@ async def set_interface_carrier(
     is_libvirt_node = False
     if libvirt_provider is not None:
         try:
-            is_libvirt_node = libvirt_provider.get_node_kind(lab_id, node) is not None
+            is_libvirt_node = await libvirt_provider.get_node_kind_async(lab_id, node) is not None
         except Exception:
             is_libvirt_node = False
 
     try:
         if is_libvirt_node:
-            # Libvirt VM: set carrier on the host-side tap interface
+            # Libvirt VM: use virsh domif-setlink for guest-visible carrier
             iface_index = _interface_name_to_index(interface)
-            tap_name = await libvirt_provider.get_vm_interface_port(
-                lab_id, node, iface_index,
+            link_state = "up" if state == "on" else "down"
+            success, error = await libvirt_provider.set_vm_link_state(
+                lab_id, node, iface_index, link_state,
             )
-            if not tap_name:
-                return CarrierStateResponse(
-                    success=False, container=node, interface=interface,
-                    state=state,
-                    error=f"Cannot find tap interface for {node}:{interface}",
-                )
-            proc = await asyncio.create_subprocess_exec(
-                "ip", "link", "set", tap_name, "carrier", state,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            _, stderr_bytes = await proc.communicate()
-            success = proc.returncode == 0
             if not success:
-                err = stderr_bytes.decode(errors="replace").strip()
-                logger.error(f"Failed to set carrier on tap {tap_name}: {err}")
-                return CarrierStateResponse(
-                    success=False, container=node, interface=interface,
-                    state=state, error=f"ip link set carrier failed: {err}",
-                )
-            logger.info(f"Set carrier {state} on VM tap {tap_name} ({node}:{interface})")
+                logger.error(f"Failed to set VM link state for {node}:{interface}: {error}")
             return CarrierStateResponse(
-                success=True, container=node, interface=interface, state=state,
+                success=success, container=node, interface=interface,
+                state=state, error=error,
             )
         else:
             # Docker container: use OVS plugin nsenter approach
@@ -273,7 +255,7 @@ async def get_interface_vlan(
         is_libvirt_node = False
         if libvirt_provider is not None:
             try:
-                is_libvirt_node = libvirt_provider.get_node_kind(lab_id, node) is not None
+                is_libvirt_node = await libvirt_provider.get_node_kind_async(lab_id, node) is not None
             except Exception:
                 is_libvirt_node = False
 
