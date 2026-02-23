@@ -11,7 +11,6 @@ import concurrent.futures
 import time
 from functools import partial
 import hashlib
-import json
 import logging
 import os
 import re
@@ -39,6 +38,7 @@ from agent.providers.base import (
     NodeStatus,
     Provider,
     StatusResult,
+    VlanPersistenceMixin,
 )
 from agent.readiness import ReadinessResult, get_libvirt_probe, get_readiness_timeout
 from agent.vendors import (
@@ -185,16 +185,13 @@ def _coalesce(node_val, default):
     return node_val if node_val is not None else default
 
 
-class LibvirtProvider(Provider):
+class LibvirtProvider(Provider, VlanPersistenceMixin):
     """Provider for libvirt/QEMU-based virtual machine labs.
 
     Uses libvirt API for VM lifecycle management and QEMU for
     disk overlay creation and console access.
     """
 
-    # VLAN range for VM interfaces (separate from Docker's 100-2999 range)
-    VLAN_RANGE_START = 100
-    VLAN_RANGE_END = 2049
     ALLOWED_DOMAIN_DRIVERS = {"kvm", "qemu"}
 
     # Whitelisted values for domain XML generation
@@ -230,10 +227,7 @@ class LibvirtProvider(Provider):
             raise ImportError("libvirt-python package is not installed")
         self._conn: libvirt.virConnect | None = None
         self._uri = getattr(settings, 'libvirt_uri', 'qemu:///system')
-        # Track VLAN allocations per lab: {lab_id: {node_name: [vlan_tags]}}
-        self._vlan_allocations: dict[str, dict[str, list[int]]] = {}
-        # Next VLAN to allocate per lab
-        self._next_vlan: dict[str, int] = {}
+        self.__init_vlan_state__()
         # Single-thread executor for all libvirt calls.
         # Libvirt Python bindings are NOT thread-safe — serializing all
         # conn.* calls to one dedicated thread avoids races without locks
@@ -348,41 +342,6 @@ class LibvirtProvider(Provider):
         disks.mkdir(parents=True, exist_ok=True)
         return disks
 
-    def _vlans_dir(self, workspace: Path) -> Path:
-        """Get directory for VLAN allocation files."""
-        vlans = workspace / "vlans"
-        vlans.mkdir(parents=True, exist_ok=True)
-        return vlans
-
-    def _save_vlan_allocations(self, lab_id: str, workspace: Path) -> None:
-        """Persist VLAN allocations to file for recovery after agent restart.
-
-        Saves the current VLAN allocations for a lab to a JSON file.
-        This enables recovery of network state when the agent restarts
-        or when a lab is redeployed.
-
-        Args:
-            lab_id: Lab identifier
-            workspace: Lab workspace path
-        """
-        allocations = self._vlan_allocations.get(lab_id, {})
-        next_vlan = self._next_vlan.get(lab_id, self.VLAN_RANGE_START)
-
-        vlan_data = {
-            "allocations": allocations,
-            "next_vlan": next_vlan,
-        }
-
-        vlans_dir = self._vlans_dir(workspace)
-        vlan_file = vlans_dir / f"{lab_id}.json"
-
-        try:
-            with open(vlan_file, "w") as f:
-                json.dump(vlan_data, f, indent=2)
-            logger.debug(f"Saved VLAN allocations for lab {lab_id} to {vlan_file}")
-        except Exception as e:
-            logger.warning(f"Failed to save VLAN allocations for lab {lab_id}: {e}")
-
     def _get_used_vlan_tags_on_ovs_bridge(self) -> set[int]:
         """Return VLAN tags currently in use on the OVS bridge.
 
@@ -464,64 +423,6 @@ class LibvirtProvider(Provider):
         except Exception:
             return {}
         return discovered
-
-    def _load_vlan_allocations(self, lab_id: str, workspace: Path) -> bool:
-        """Load VLAN allocations from file.
-
-        Restores VLAN allocation state from a previously saved JSON file.
-        Used during stale network recovery to restore state after agent restart.
-
-        Args:
-            lab_id: Lab identifier
-            workspace: Lab workspace path
-
-        Returns:
-            True if allocations were loaded, False if file doesn't exist or load failed
-        """
-        vlans_dir = self._vlans_dir(workspace)
-        vlan_file = vlans_dir / f"{lab_id}.json"
-
-        if not vlan_file.exists():
-            return False
-
-        try:
-            with open(vlan_file) as f:
-                vlan_data = json.load(f)
-
-            allocations = vlan_data.get("allocations", {})
-            next_vlan = vlan_data.get("next_vlan", self.VLAN_RANGE_START)
-
-            self._vlan_allocations[lab_id] = allocations
-            self._next_vlan[lab_id] = next_vlan
-
-            logger.info(
-                f"Loaded VLAN allocations for lab {lab_id}: "
-                f"{len(allocations)} nodes, next_vlan={next_vlan}"
-            )
-            return True
-
-        except Exception as e:
-            logger.warning(f"Failed to load VLAN allocations for lab {lab_id}: {e}")
-            return False
-
-    def _remove_vlan_file(self, lab_id: str, workspace: Path) -> None:
-        """Remove VLAN allocation file for a lab.
-
-        Called during destroy to clean up the VLAN file when a lab is removed.
-
-        Args:
-            lab_id: Lab identifier
-            workspace: Lab workspace path
-        """
-        vlans_dir = self._vlans_dir(workspace)
-        vlan_file = vlans_dir / f"{lab_id}.json"
-
-        if vlan_file.exists():
-            try:
-                vlan_file.unlink()
-                logger.debug(f"Removed VLAN file for lab {lab_id}")
-            except Exception as e:
-                logger.warning(f"Failed to remove VLAN file for lab {lab_id}: {e}")
 
     def _ovs_port_exists(self, port_name: str) -> bool:
         """Check if an OVS port exists on the bridge.
@@ -728,18 +629,6 @@ class LibvirtProvider(Provider):
                         logger.warning(f"Failed to set MTU on {port_name}: {stderr_bytes.decode()}")
                 except Exception as e:
                     logger.warning(f"Failed to set MTU on {port_name}: {e}")
-
-    def get_node_vlans(self, lab_id: str, node_name: str) -> list[int]:
-        """Get the VLAN tags allocated to a VM's interfaces.
-
-        Args:
-            lab_id: Lab identifier
-            node_name: Node name
-
-        Returns:
-            List of VLAN tags, or empty list if not found
-        """
-        return self._vlan_allocations.get(lab_id, {}).get(node_name, [])
 
     def _get_base_image(self, node_config: dict) -> str | None:
         """Get the base image path for a node.

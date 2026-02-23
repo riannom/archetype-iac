@@ -331,6 +331,116 @@ async def with_retry(
     raise AgentUnavailableError("Agent request failed for unknown reason")
 
 
+async def _safe_agent_request(
+    agent: models.Host,
+    method: str,
+    path: str,
+    *,
+    fallback: dict | None = None,
+    description: str = "",
+    json_body: dict | None = None,
+    timeout: float | None = None,
+    max_retries: int = 0,
+    metric_operation: str | None = None,
+    log_level: str = "warning",
+) -> dict:
+    """Make an agent request with automatic error handling and fallback.
+
+    Builds the full URL from agent, calls _agent_request(), catches
+    exceptions, logs at the specified level, and returns the fallback dict.
+    """
+    url = f"{get_agent_url(agent)}/{path.lstrip('/')}"
+    try:
+        return await _agent_request(
+            method,
+            url,
+            json_body=json_body,
+            timeout=timeout,
+            max_retries=max_retries,
+            metric_operation=metric_operation,
+            metric_host_id=agent.id if metric_operation else None,
+        )
+    except Exception as e:
+        getattr(logger, log_level)(
+            f"{description or path} failed on agent {agent.id}: {e}"
+        )
+        return dict(fallback) if fallback else {}
+
+
+async def _timed_node_operation(
+    agent: models.Host,
+    method: str,
+    url: str,
+    operation: str,
+    lab_id: str,
+    node_name: str,
+    *,
+    json_body: dict | None = None,
+    timeout: float = 120.0,
+) -> dict:
+    """Execute a node operation with timing, metrics, and structured logging."""
+    logger.info(
+        "Agent request",
+        extra={
+            "event": "agent_request",
+            "method": operation,
+            "agent_id": agent.id,
+            "agent_name": agent.name,
+            "lab_id": lab_id,
+            "node_name": node_name,
+        },
+    )
+
+    import time as _time
+    _t0 = _time.monotonic()
+    try:
+        result = await _agent_request(
+            method,
+            url,
+            json_body=json_body,
+            timeout=timeout,
+            max_retries=0,
+        )
+        elapsed_ms = int((_time.monotonic() - _t0) * 1000)
+        agent_operation_duration.labels(
+            operation=operation, host_id=agent.id, status="success",
+        ).observe(elapsed_ms / 1000)
+        logger.info(
+            "Agent response",
+            extra={
+                "event": "agent_response",
+                "method": operation,
+                "agent_id": agent.id,
+                "lab_id": lab_id,
+                "node_name": node_name,
+                "status": "success" if result.get("success") else "error",
+                "duration_ms": elapsed_ms,
+                "agent_duration_ms": result.get("duration_ms"),
+                "error": result.get("error") if not result.get("success") else None,
+            },
+        )
+        return result
+    except Exception as e:
+        elapsed_ms = int((_time.monotonic() - _t0) * 1000)
+        agent_operation_duration.labels(
+            operation=operation, host_id=agent.id, status="error",
+        ).observe(elapsed_ms / 1000)
+        logger.info(
+            "Agent response",
+            extra={
+                "event": "agent_response",
+                "method": operation,
+                "agent_id": agent.id,
+                "lab_id": lab_id,
+                "node_name": node_name,
+                "status": "error",
+                "duration_ms": elapsed_ms,
+                "error": str(e),
+            },
+        )
+        return {"success": False, "error": str(e)}
+
+
 def get_agent_providers(agent: models.Host) -> list[str]:
     """Get list of providers supported by an agent."""
     caps = agent.get_capabilities()
@@ -1027,50 +1137,24 @@ async def destroy_container_on_agent(
 # --- Lock Management Functions ---
 
 async def get_agent_lock_status(agent: models.Host) -> dict:
-    """Get lock status from an agent.
-
-    Returns:
-        Dict with 'locks' list and 'timestamp'
-    """
-    url = f"{get_agent_url(agent)}/locks/status"
-
-    try:
-        return await _agent_request(
-            "GET",
-            url,
-            timeout=10.0,
-            max_retries=0,
-        )
-    except Exception as e:
-        logger.error(f"Failed to get lock status from agent {agent.id}: {e}")
-        return {"locks": [], "error": str(e)}
+    """Get lock status from an agent."""
+    return await _safe_agent_request(
+        agent, "GET", "/locks/status",
+        fallback={"locks": []}, timeout=10.0,
+        description="Get lock status", log_level="error",
+    )
 
 
 async def release_agent_lock(agent: models.Host, lab_id: str) -> dict:
-    """Release a stuck lock on an agent.
-
-    Args:
-        agent: The agent holding the lock
-        lab_id: Lab whose lock should be released
-
-    Returns:
-        Dict with 'status' indicating success/failure
-    """
-    url = f"{get_agent_url(agent)}/locks/{lab_id}/release"
-
-    try:
-        result = await _agent_request(
-            "POST",
-            url,
-            timeout=10.0,
-            max_retries=0,
-        )
-        if result.get("status") == "cleared":
-            logger.info(f"Released stuck lock for lab {lab_id} on agent {agent.id}")
-        return result
-    except Exception as e:
-        logger.error(f"Failed to release lock for lab {lab_id} on agent {agent.id}: {e}")
-        return {"status": "error", "error": str(e)}
+    """Release a stuck lock on an agent."""
+    result = await _safe_agent_request(
+        agent, "POST", f"/locks/{lab_id}/release",
+        fallback={"status": "error"}, timeout=10.0,
+        description=f"Release lock for lab {lab_id}", log_level="error",
+    )
+    if result.get("status") == "cleared":
+        logger.info(f"Released stuck lock for lab {lab_id} on agent {agent.id}")
+    return result
 
 
 # Alias for clarity - force_release emphasizes this is for stuck recovery
@@ -1113,64 +1197,32 @@ async def ping_agent(agent: models.Host, timeout: float = 5.0) -> bool:
 
 
 async def query_agent_capacity(agent: models.Host, timeout: float = 5.0) -> dict:
-    """Query real-time capacity from an agent's /capacity endpoint.
-
-    Returns dict with memory_total_gb, cpu_count, allocated_vcpus,
-    allocated_memory_mb, etc. Falls back to empty dict on failure.
-    """
-    url = f"{get_agent_url(agent)}/capacity"
-    try:
-        return await _agent_request("GET", url, timeout=timeout, max_retries=0)
-    except Exception as e:
-        logger.warning(
-            f"Capacity query failed for agent {agent.name or agent.id}: {e}"
-        )
-        return {}
+    """Query real-time capacity from an agent's /capacity endpoint."""
+    return await _safe_agent_request(
+        agent, "GET", "/capacity",
+        timeout=timeout, description="Capacity query",
+    )
 
 
 # --- Reconciliation Functions ---
 
 async def discover_labs_on_agent(agent: models.Host) -> dict:
-    """Discover all running labs on an agent.
-
-    Returns dict with 'labs' key containing list of discovered labs.
-    """
-    url = f"{get_agent_url(agent)}/discover-labs"
-
-    try:
-        return await _agent_request(
-            "GET",
-            url,
-            timeout=30.0,
-            max_retries=0,
-        )
-    except Exception as e:
-        logger.error(f"Failed to discover labs on agent {agent.id}: {e}")
-        return {"labs": [], "error": str(e)}
+    """Discover all running labs on an agent."""
+    return await _safe_agent_request(
+        agent, "GET", "/discover-labs",
+        fallback={"labs": []}, timeout=30.0,
+        description="Discover labs", log_level="error",
+    )
 
 
 async def cleanup_orphans_on_agent(agent: models.Host, valid_lab_ids: list[str]) -> dict:
-    """Tell agent to clean up orphan containers.
-
-    Args:
-        agent: The agent to clean up
-        valid_lab_ids: List of lab IDs that should be kept
-
-    Returns dict with 'removed_containers' key listing what was cleaned up.
-    """
-    url = f"{get_agent_url(agent)}/cleanup-orphans"
-
-    try:
-        return await _agent_request(
-            "POST",
-            url,
-            json_body={"valid_lab_ids": valid_lab_ids},
-            timeout=120.0,
-            max_retries=0,
-        )
-    except Exception as e:
-        logger.error(f"Failed to cleanup orphans on agent {agent.id}: {e}")
-        return {"removed_containers": [], "errors": [str(e)]}
+    """Tell agent to clean up orphan containers."""
+    return await _safe_agent_request(
+        agent, "POST", "/cleanup-orphans",
+        json_body={"valid_lab_ids": valid_lab_ids},
+        fallback={"removed_containers": [], "errors": []},
+        timeout=120.0, description="Cleanup orphans", log_level="error",
+    )
 
 
 def compute_vxlan_port_name(lab_id: str, link_name: str) -> str:
@@ -1764,23 +1816,12 @@ async def setup_cross_host_link_v2(
 
 
 async def get_overlay_status_from_agent(agent: models.Host) -> dict:
-    """Get overlay status from an agent.
-
-    Returns:
-        Dict with 'tunnels' and 'bridges' lists, or empty on error.
-    """
-    url = f"{get_agent_url(agent)}/overlay/status"
-
-    try:
-        return await _agent_request(
-            "GET",
-            url,
-            timeout=10.0,
-            max_retries=0,
-        )
-    except Exception as e:
-        logger.error(f"Overlay status failed on agent {agent.id}: {e}")
-        return {"tunnels": [], "bridges": [], "error": str(e)}
+    """Get overlay status from an agent."""
+    return await _safe_agent_request(
+        agent, "GET", "/overlay/status",
+        fallback={"tunnels": [], "bridges": []},
+        timeout=10.0, description="Overlay status", log_level="error",
+    )
 
 
 def agent_supports_vxlan(agent: models.Host) -> bool:
@@ -1791,27 +1832,12 @@ def agent_supports_vxlan(agent: models.Host) -> bool:
 
 
 async def get_agent_images(agent: models.Host) -> dict:
-    """Get list of Docker images on an agent.
-
-    Args:
-        agent: The agent to query
-
-    Returns:
-        Dict with 'images' list containing DockerImageInfo objects
-        Each image has: id, tags, size_bytes, created
-    """
-    url = f"{get_agent_url(agent)}/images"
-
-    try:
-        return await _agent_request(
-            "GET",
-            url,
-            timeout=30.0,
-            max_retries=0,
-        )
-    except Exception as e:
-        logger.error(f"Failed to get images from agent {agent.id}: {e}")
-        return {"images": []}
+    """Get list of Docker images on an agent."""
+    return await _safe_agent_request(
+        agent, "GET", "/images",
+        fallback={"images": []}, timeout=30.0,
+        description="Get images", log_level="error",
+    )
 
 
 async def container_action(
@@ -1924,23 +1950,8 @@ async def create_node_on_agent(
     data_volume_gb: int | None = None,
     image_sha256: str | None = None,
 ) -> dict:
-    """Create a single node container on an agent without starting it.
-
-    Returns:
-        Dict with 'success', 'container_name', 'status', and optionally 'error' keys.
-    """
+    """Create a single node container on an agent without starting it."""
     url = f"{get_agent_url(agent)}/labs/{lab_id}/nodes/{node_name}/create?provider={provider}"
-    logger.info(
-        "Agent request",
-        extra={
-            "event": "agent_request",
-            "method": "create_node",
-            "agent_id": agent.id,
-            "agent_name": agent.name,
-            "lab_id": lab_id,
-            "node_name": node_name,
-        },
-    )
 
     payload: dict = {"node_name": node_name, "kind": kind}
     if image:
@@ -1984,54 +1995,10 @@ async def create_node_on_agent(
     if image_sha256:
         payload["image_sha256"] = image_sha256
 
-    import time as _time
-    _t0 = _time.monotonic()
-    try:
-        result = await _agent_request(
-            "POST",
-            url,
-            json_body=payload,
-            timeout=120.0,
-            max_retries=0,
-        )
-        elapsed_ms = int((_time.monotonic() - _t0) * 1000)
-        agent_operation_duration.labels(
-            operation="create_node", host_id=agent.id, status="success",
-        ).observe(elapsed_ms / 1000)
-        logger.info(
-            "Agent response",
-            extra={
-                "event": "agent_response",
-                "method": "create_node",
-                "agent_id": agent.id,
-                "lab_id": lab_id,
-                "node_name": node_name,
-                "status": "success" if result.get("success") else "error",
-                "duration_ms": elapsed_ms,
-                "agent_duration_ms": result.get("duration_ms"),
-                "error": result.get("error") if not result.get("success") else None,
-            },
-        )
-        return result
-    except Exception as e:
-        elapsed_ms = int((_time.monotonic() - _t0) * 1000)
-        agent_operation_duration.labels(
-            operation="create_node", host_id=agent.id, status="error",
-        ).observe(elapsed_ms / 1000)
-        logger.info(
-            "Agent response",
-            extra={
-                "event": "agent_response",
-                "method": "create_node",
-                "agent_id": agent.id,
-                "lab_id": lab_id,
-                "node_name": node_name,
-                "status": "error",
-                "duration_ms": elapsed_ms,
-                "error": str(e),
-            },
-        )
-        return {"success": False, "error": str(e)}
+    return await _timed_node_operation(
+        agent, "POST", url, "create_node", lab_id, node_name,
+        json_body=payload, timeout=120.0,
+    )
 
 
 async def start_node_on_agent(
@@ -2043,76 +2010,13 @@ async def start_node_on_agent(
     fix_interfaces: bool = True,
     provider: str = "docker",
 ) -> dict:
-    """Start a node on an agent with optional veth repair.
-
-    Returns:
-        Dict with 'success', 'status', 'endpoints_repaired', 'interfaces_fixed',
-        and optionally 'error' keys.
-    """
+    """Start a node on an agent with optional veth repair."""
     url = f"{get_agent_url(agent)}/labs/{lab_id}/nodes/{node_name}/start?provider={provider}"
-    logger.info(
-        "Agent request",
-        extra={
-            "event": "agent_request",
-            "method": "start_node",
-            "agent_id": agent.id,
-            "agent_name": agent.name,
-            "lab_id": lab_id,
-            "node_name": node_name,
-        },
+    return await _timed_node_operation(
+        agent, "POST", url, "start_node", lab_id, node_name,
+        json_body={"repair_endpoints": repair_endpoints, "fix_interfaces": fix_interfaces},
+        timeout=120.0,
     )
-
-    import time as _time
-    _t0 = _time.monotonic()
-    try:
-        result = await _agent_request(
-            "POST",
-            url,
-            json_body={
-                "repair_endpoints": repair_endpoints,
-                "fix_interfaces": fix_interfaces,
-            },
-            timeout=120.0,
-            max_retries=0,
-        )
-        elapsed_ms = int((_time.monotonic() - _t0) * 1000)
-        agent_operation_duration.labels(
-            operation="start_node", host_id=agent.id, status="success",
-        ).observe(elapsed_ms / 1000)
-        logger.info(
-            "Agent response",
-            extra={
-                "event": "agent_response",
-                "method": "start_node",
-                "agent_id": agent.id,
-                "lab_id": lab_id,
-                "node_name": node_name,
-                "status": "success" if result.get("success") else "error",
-                "duration_ms": elapsed_ms,
-                "agent_duration_ms": result.get("duration_ms"),
-                "error": result.get("error") if not result.get("success") else None,
-            },
-        )
-        return result
-    except Exception as e:
-        elapsed_ms = int((_time.monotonic() - _t0) * 1000)
-        agent_operation_duration.labels(
-            operation="start_node", host_id=agent.id, status="error",
-        ).observe(elapsed_ms / 1000)
-        logger.info(
-            "Agent response",
-            extra={
-                "event": "agent_response",
-                "method": "start_node",
-                "agent_id": agent.id,
-                "lab_id": lab_id,
-                "node_name": node_name,
-                "status": "error",
-                "duration_ms": elapsed_ms,
-                "error": str(e),
-            },
-        )
-        return {"success": False, "error": str(e)}
 
 
 async def stop_node_on_agent(
@@ -2122,71 +2026,12 @@ async def stop_node_on_agent(
     *,
     provider: str = "docker",
 ) -> dict:
-    """Stop a node on an agent.
-
-    Returns:
-        Dict with 'success', 'status', and optionally 'error' keys.
-    """
+    """Stop a node on an agent."""
     url = f"{get_agent_url(agent)}/labs/{lab_id}/nodes/{node_name}/stop?provider={provider}"
-    logger.info(
-        "Agent request",
-        extra={
-            "event": "agent_request",
-            "method": "stop_node",
-            "agent_id": agent.id,
-            "agent_name": agent.name,
-            "lab_id": lab_id,
-            "node_name": node_name,
-        },
+    return await _timed_node_operation(
+        agent, "POST", url, "stop_node", lab_id, node_name,
+        timeout=60.0,
     )
-
-    import time as _time
-    _t0 = _time.monotonic()
-    try:
-        result = await _agent_request(
-            "POST",
-            url,
-            timeout=60.0,
-            max_retries=0,
-        )
-        elapsed_ms = int((_time.monotonic() - _t0) * 1000)
-        agent_operation_duration.labels(
-            operation="stop_node", host_id=agent.id, status="success",
-        ).observe(elapsed_ms / 1000)
-        logger.info(
-            "Agent response",
-            extra={
-                "event": "agent_response",
-                "method": "stop_node",
-                "agent_id": agent.id,
-                "lab_id": lab_id,
-                "node_name": node_name,
-                "status": "success" if result.get("success") else "error",
-                "duration_ms": elapsed_ms,
-                "agent_duration_ms": result.get("duration_ms"),
-                "error": result.get("error") if not result.get("success") else None,
-            },
-        )
-        return result
-    except Exception as e:
-        elapsed_ms = int((_time.monotonic() - _t0) * 1000)
-        agent_operation_duration.labels(
-            operation="stop_node", host_id=agent.id, status="error",
-        ).observe(elapsed_ms / 1000)
-        logger.info(
-            "Agent response",
-            extra={
-                "event": "agent_response",
-                "method": "stop_node",
-                "agent_id": agent.id,
-                "lab_id": lab_id,
-                "node_name": node_name,
-                "status": "error",
-                "duration_ms": elapsed_ms,
-                "error": str(e),
-            },
-        )
-        return {"success": False, "error": str(e)}
 
 
 async def destroy_node_on_agent(
@@ -2196,106 +2041,29 @@ async def destroy_node_on_agent(
     *,
     provider: str = "docker",
 ) -> dict:
-    """Destroy a node container on an agent.
-
-    Returns:
-        Dict with 'success', 'container_removed', and optionally 'error' keys.
-    """
+    """Destroy a node container on an agent."""
     url = f"{get_agent_url(agent)}/labs/{lab_id}/nodes/{node_name}?provider={provider}"
-    logger.info(
-        "Agent request",
-        extra={
-            "event": "agent_request",
-            "method": "destroy_node",
-            "agent_id": agent.id,
-            "agent_name": agent.name,
-            "lab_id": lab_id,
-            "node_name": node_name,
-        },
+    return await _timed_node_operation(
+        agent, "DELETE", url, "destroy_node", lab_id, node_name,
+        timeout=60.0,
     )
-
-    import time as _time
-    _t0 = _time.monotonic()
-    try:
-        result = await _agent_request(
-            "DELETE",
-            url,
-            timeout=60.0,
-            max_retries=0,
-        )
-        elapsed_ms = int((_time.monotonic() - _t0) * 1000)
-        agent_operation_duration.labels(
-            operation="destroy_node", host_id=agent.id, status="success",
-        ).observe(elapsed_ms / 1000)
-        logger.info(
-            "Agent response",
-            extra={
-                "event": "agent_response",
-                "method": "destroy_node",
-                "agent_id": agent.id,
-                "lab_id": lab_id,
-                "node_name": node_name,
-                "status": "success" if result.get("success") else "error",
-                "duration_ms": elapsed_ms,
-                "agent_duration_ms": result.get("duration_ms"),
-                "error": result.get("error") if not result.get("success") else None,
-            },
-        )
-        return result
-    except Exception as e:
-        elapsed_ms = int((_time.monotonic() - _t0) * 1000)
-        agent_operation_duration.labels(
-            operation="destroy_node", host_id=agent.id, status="error",
-        ).observe(elapsed_ms / 1000)
-        logger.info(
-            "Agent response",
-            extra={
-                "event": "agent_response",
-                "method": "destroy_node",
-                "agent_id": agent.id,
-                "lab_id": lab_id,
-                "node_name": node_name,
-                "status": "error",
-                "duration_ms": elapsed_ms,
-                "error": str(e),
-            },
-        )
-        return {"success": False, "error": str(e)}
 
 
 async def extract_configs_on_agent(
     agent: models.Host,
     lab_id: str,
 ) -> dict:
-    """Extract running configs from all cEOS nodes in a lab.
-
-    Args:
-        agent: The agent managing the lab
-        lab_id: Lab identifier
-
-    Returns:
-        Dict with 'success', 'extracted_count', and optionally 'error' keys
-    """
-    url = f"{get_agent_url(agent)}/labs/{lab_id}/extract-configs"
+    """Extract running configs from all nodes in a lab."""
     logger.info(f"Extracting configs for lab {lab_id} via agent {agent.id}")
-
-    try:
-        result = await _agent_request(
-            "POST",
-            url,
-            timeout=120.0,
-            max_retries=0,
-            metric_operation="extract_configs",
-            metric_host_id=agent.id,
-        )
-        if result.get("success"):
-            logger.info(f"Extracted {result.get('extracted_count', 0)} configs for lab {lab_id}")
-        else:
-            logger.warning(f"Config extraction failed for lab {lab_id}: {result.get('error')}")
-        return result
-    except Exception as e:
-        logger.error(f"Failed to extract configs for lab {lab_id} on agent {agent.id}: {e}")
-        return {"success": False, "extracted_count": 0, "error": str(e)}
+    result = await _safe_agent_request(
+        agent, "POST", f"/labs/{lab_id}/extract-configs",
+        fallback={"success": False, "extracted_count": 0},
+        timeout=120.0, metric_operation="extract_configs",
+        description=f"Extract configs for lab {lab_id}", log_level="error",
+    )
+    if result.get("success"):
+        logger.info(f"Extracted {result.get('extracted_count', 0)} configs for lab {lab_id}")
+    return result
 
 
 async def extract_node_config_on_agent(
@@ -2304,33 +2072,16 @@ async def extract_node_config_on_agent(
     node_name: str,
 ) -> dict:
     """Extract running config from one node on an agent."""
-    url = f"{get_agent_url(agent)}/labs/{lab_id}/nodes/{node_name}/extract-config"
-    logger.info(
-        f"Extracting config for node {node_name} in lab {lab_id} via agent {agent.id}"
+    logger.info(f"Extracting config for node {node_name} in lab {lab_id} via agent {agent.id}")
+    result = await _safe_agent_request(
+        agent, "POST", f"/labs/{lab_id}/nodes/{node_name}/extract-config",
+        fallback={"success": False, "node_name": node_name},
+        timeout=120.0, metric_operation="extract_configs",
+        description=f"Extract config for {node_name} in lab {lab_id}", log_level="error",
     )
-
-    try:
-        result = await _agent_request(
-            "POST",
-            url,
-            timeout=120.0,
-            max_retries=0,
-            metric_operation="extract_configs",
-            metric_host_id=agent.id,
-        )
-        if result.get("success"):
-            logger.info(f"Extracted config for {node_name} in lab {lab_id}")
-        else:
-            logger.warning(
-                f"Node config extraction failed for {node_name} in lab {lab_id}: "
-                f"{result.get('error')}"
-            )
-        return result
-    except Exception as e:
-        logger.error(
-            f"Failed to extract config for {node_name} in lab {lab_id} on agent {agent.id}: {e}"
-        )
-        return {"success": False, "node_name": node_name, "error": str(e)}
+    if result.get("success"):
+        logger.info(f"Extracted config for {node_name} in lab {lab_id}")
+    return result
 
 
 async def update_config_on_agent(
@@ -2339,41 +2090,18 @@ async def update_config_on_agent(
     node_name: str,
     content: str,
 ) -> dict:
-    """Push a startup config to an agent for a specific node.
-
-    This syncs the API's extracted config to the agent's workspace so
-    it will be used on next container restart/redeploy.
-
-    Args:
-        agent: The agent managing the node
-        lab_id: Lab identifier
-        node_name: Node name (container name without lab prefix)
-        content: The config content to save
-
-    Returns:
-        Dict with 'success' and optionally 'error' keys
-    """
-    url = f"{get_agent_url(agent)}/labs/{lab_id}/nodes/{node_name}/config"
+    """Push a startup config to an agent for a specific node."""
     logger.debug(f"Pushing config for {node_name} to agent {agent.id}")
-
-    try:
-        result = await _agent_request(
-            "PUT",
-            url,
-            json_body={"content": content},
-            timeout=30.0,
-            max_retries=0,
-            metric_operation="update_config",
-            metric_host_id=agent.id,
-        )
-        if result.get("success"):
-            logger.debug(f"Pushed config for {node_name} to agent {agent.id}")
-        else:
-            logger.warning(f"Config push failed for {node_name}: {result.get('error')}")
-        return result
-    except Exception as e:
-        logger.error(f"Failed to push config for {node_name} on agent {agent.id}: {e}")
-        return {"success": False, "error": str(e)}
+    result = await _safe_agent_request(
+        agent, "PUT", f"/labs/{lab_id}/nodes/{node_name}/config",
+        json_body={"content": content},
+        fallback={"success": False}, timeout=30.0,
+        metric_operation="update_config",
+        description=f"Push config for {node_name}", log_level="error",
+    )
+    if result.get("success"):
+        logger.debug(f"Pushed config for {node_name} to agent {agent.id}")
+    return result
 
 
 async def prune_docker_on_agent(
@@ -2385,51 +2113,24 @@ async def prune_docker_on_agent(
     prune_stopped_containers: bool = False,
     prune_unused_networks: bool = False,
 ) -> dict:
-    """Request an agent to prune Docker resources.
-
-    Args:
-        agent: The agent to clean up
-        valid_lab_ids: List of lab IDs whose resources should be protected
-        prune_dangling_images: Whether to prune dangling images
-        prune_build_cache: Whether to prune build cache
-        prune_unused_volumes: Whether to prune unused volumes (conservative)
-        prune_stopped_containers: Whether to prune stopped containers (conservative)
-        prune_unused_networks: Whether to prune unused networks (conservative)
-
-    Returns:
-        Dict with 'success', 'images_removed', 'build_cache_removed',
-        'volumes_removed', 'containers_removed', 'networks_removed',
-        'space_reclaimed', and 'errors' keys
-    """
-    url = f"{get_agent_url(agent)}/prune-docker"
-
-    try:
-        return await _agent_request(
-            "POST",
-            url,
-            json_body={
-                "valid_lab_ids": valid_lab_ids,
-                "prune_dangling_images": prune_dangling_images,
-                "prune_build_cache": prune_build_cache,
-                "prune_unused_volumes": prune_unused_volumes,
-                "prune_stopped_containers": prune_stopped_containers,
-                "prune_unused_networks": prune_unused_networks,
-            },
-            timeout=120.0,  # Docker prune can take a while
-            max_retries=0,
-        )
-    except Exception as e:
-        logger.error(f"Failed to prune Docker on agent {agent.id}: {e}")
-        return {
-            "success": False,
-            "images_removed": 0,
-            "build_cache_removed": 0,
-            "volumes_removed": 0,
-            "containers_removed": 0,
-            "networks_removed": 0,
-            "space_reclaimed": 0,
-            "errors": [str(e)],
-        }
+    """Request an agent to prune Docker resources."""
+    return await _safe_agent_request(
+        agent, "POST", "/prune-docker",
+        json_body={
+            "valid_lab_ids": valid_lab_ids,
+            "prune_dangling_images": prune_dangling_images,
+            "prune_build_cache": prune_build_cache,
+            "prune_unused_volumes": prune_unused_volumes,
+            "prune_stopped_containers": prune_stopped_containers,
+            "prune_unused_networks": prune_unused_networks,
+        },
+        fallback={
+            "success": False, "images_removed": 0, "build_cache_removed": 0,
+            "volumes_removed": 0, "containers_removed": 0, "networks_removed": 0,
+            "space_reclaimed": 0, "errors": [],
+        },
+        timeout=120.0, description="Prune Docker", log_level="error",
+    )
 
 
 # --- Workspace Cleanup Functions ---
@@ -2437,27 +2138,21 @@ async def prune_docker_on_agent(
 
 async def cleanup_agent_workspace(agent: models.Host, lab_id: str) -> dict:
     """Tell an agent to remove workspace for a specific lab."""
-    url = f"{get_agent_url(agent)}/labs/{lab_id}/workspace"
-    try:
-        return await _agent_request("DELETE", url, timeout=30.0, max_retries=0)
-    except Exception as e:
-        logger.warning(f"Failed to cleanup workspace on agent {agent.id} for lab {lab_id}: {e}")
-        return {"success": False, "error": str(e)}
+    return await _safe_agent_request(
+        agent, "DELETE", f"/labs/{lab_id}/workspace",
+        fallback={"success": False}, timeout=30.0,
+        description=f"Cleanup workspace for lab {lab_id}",
+    )
 
 
 async def cleanup_workspaces_on_agent(agent: models.Host, valid_lab_ids: list[str]) -> dict:
     """Tell an agent to remove orphaned workspace directories."""
-    url = f"{get_agent_url(agent)}/cleanup-workspaces"
-    try:
-        return await _agent_request(
-            "POST", url,
-            json_body={"valid_lab_ids": valid_lab_ids},
-            timeout=60.0,
-            max_retries=0,
-        )
-    except Exception as e:
-        logger.warning(f"Failed to cleanup workspaces on agent {agent.id}: {e}")
-        return {"success": False, "removed": [], "errors": [str(e)]}
+    return await _safe_agent_request(
+        agent, "POST", "/cleanup-workspaces",
+        json_body={"valid_lab_ids": valid_lab_ids},
+        fallback={"success": False, "removed": [], "errors": []},
+        timeout=60.0, description="Cleanup workspaces",
+    )
 
 
 # --- MTU Testing Functions ---

@@ -28,7 +28,6 @@ Architecture:
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import os
 import re
@@ -53,6 +52,7 @@ from agent.providers.base import (
     NodeStatus,
     Provider,
     StatusResult,
+    VlanPersistenceMixin,
 )
 from agent.schemas import DeployTopology
 from agent.vendors import (
@@ -72,10 +72,6 @@ logger = logging.getLogger(__name__)
 
 # Container name prefix for Archetype-managed containers
 CONTAINER_PREFIX = "archetype"
-
-# VLAN range for container interfaces (same as OVS plugin)
-VLAN_RANGE_START = 100
-VLAN_RANGE_END = 2049
 
 # Interface wait script for cEOS (adapted from containerlab)
 #
@@ -312,7 +308,7 @@ def _parse_iol_nvram(data: bytes) -> str | None:
     return config_text
 
 
-class DockerProvider(Provider):
+class DockerProvider(Provider, VlanPersistenceMixin):
     """Native Docker container management provider.
 
     This provider manages containers directly using the Docker SDK,
@@ -329,11 +325,7 @@ class DockerProvider(Provider):
         self._docker: docker.DockerClient | None = None
         self._local_network: LocalNetworkManager | None = None
         self._ovs_manager: OVSNetworkManager | None = None
-        # VLAN tracking for persistence (matches LibvirtProvider pattern)
-        # {lab_id: {node_name: [vlan_tags]}}
-        self._vlan_allocations: dict[str, dict[str, list[int]]] = {}
-        # Next VLAN to allocate per lab
-        self._next_vlan: dict[str, int] = {}
+        self.__init_vlan_state__()
 
     @property
     def name(self) -> str:
@@ -402,115 +394,6 @@ class DockerProvider(Provider):
         current_prefix = self._lab_network_prefix(lab_id)
         legacy_prefix = sanitize_id(lab_id, max_len=20)
         return current_prefix, legacy_prefix
-
-    # =========================================================================
-    # VLAN Persistence (matches LibvirtProvider pattern for feature parity)
-    # =========================================================================
-
-    def _vlans_dir(self, workspace: Path) -> Path:
-        """Get directory for VLAN allocation files."""
-        vlans = workspace / "vlans"
-        vlans.mkdir(parents=True, exist_ok=True)
-        return vlans
-
-    def _save_vlan_allocations(self, lab_id: str, workspace: Path) -> None:
-        """Persist VLAN allocations to file for recovery after agent restart.
-
-        Saves the current VLAN allocations for a lab to a JSON file.
-        This enables recovery of network state when the agent restarts
-        or when a lab is redeployed.
-
-        Args:
-            lab_id: Lab identifier
-            workspace: Lab workspace path
-        """
-        allocations = self._vlan_allocations.get(lab_id, {})
-        next_vlan = self._next_vlan.get(lab_id, VLAN_RANGE_START)
-
-        vlan_data = {
-            "allocations": allocations,
-            "next_vlan": next_vlan,
-        }
-
-        vlans_dir = self._vlans_dir(workspace)
-        vlan_file = vlans_dir / f"{lab_id}.json"
-
-        try:
-            with open(vlan_file, "w") as f:
-                json.dump(vlan_data, f, indent=2)
-            logger.debug(f"Saved VLAN allocations for lab {lab_id} to {vlan_file}")
-        except Exception as e:
-            logger.warning(f"Failed to save VLAN allocations for lab {lab_id}: {e}")
-
-    def _load_vlan_allocations(self, lab_id: str, workspace: Path) -> bool:
-        """Load VLAN allocations from file.
-
-        Restores VLAN allocation state from a previously saved JSON file.
-        Used during stale network recovery to restore state after agent restart.
-
-        Args:
-            lab_id: Lab identifier
-            workspace: Lab workspace path
-
-        Returns:
-            True if allocations were loaded, False if file doesn't exist or load failed
-        """
-        vlans_dir = self._vlans_dir(workspace)
-        vlan_file = vlans_dir / f"{lab_id}.json"
-
-        if not vlan_file.exists():
-            return False
-
-        try:
-            with open(vlan_file) as f:
-                vlan_data = json.load(f)
-
-            allocations = vlan_data.get("allocations", {})
-            next_vlan = vlan_data.get("next_vlan", VLAN_RANGE_START)
-
-            self._vlan_allocations[lab_id] = allocations
-            self._next_vlan[lab_id] = next_vlan
-
-            logger.info(
-                f"Loaded VLAN allocations for lab {lab_id}: "
-                f"{len(allocations)} nodes, next_vlan={next_vlan}"
-            )
-            return True
-
-        except Exception as e:
-            logger.warning(f"Failed to load VLAN allocations for lab {lab_id}: {e}")
-            return False
-
-    def _remove_vlan_file(self, lab_id: str, workspace: Path) -> None:
-        """Remove VLAN allocation file for a lab.
-
-        Called during destroy to clean up the VLAN file when a lab is removed.
-
-        Args:
-            lab_id: Lab identifier
-            workspace: Lab workspace path
-        """
-        vlans_dir = self._vlans_dir(workspace)
-        vlan_file = vlans_dir / f"{lab_id}.json"
-
-        if vlan_file.exists():
-            try:
-                vlan_file.unlink()
-                logger.debug(f"Removed VLAN file for lab {lab_id}")
-            except Exception as e:
-                logger.warning(f"Failed to remove VLAN file for lab {lab_id}: {e}")
-
-    def get_node_vlans(self, lab_id: str, node_name: str) -> list[int]:
-        """Get the VLAN tags allocated to a container's interfaces.
-
-        Args:
-            lab_id: Lab identifier
-            node_name: Node name
-
-        Returns:
-            List of VLAN tags, or empty list if not found
-        """
-        return self._vlan_allocations.get(lab_id, {}).get(node_name, [])
 
     async def _recover_stale_network(
         self,
@@ -615,9 +498,9 @@ class DockerProvider(Provider):
         if lab_id not in self._vlan_allocations:
             self._vlan_allocations[lab_id] = {}
         if lab_id not in self._next_vlan:
-            self._next_vlan[lab_id] = VLAN_RANGE_START
+            self._next_vlan[lab_id] = self.VLAN_RANGE_START
 
-        max_vlan_seen = VLAN_RANGE_START
+        max_vlan_seen = self.VLAN_RANGE_START
 
         for node_name, node in topology.nodes.items():
             container_name = self._container_name(lab_id, node_name)
