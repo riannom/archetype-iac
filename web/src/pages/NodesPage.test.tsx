@@ -47,6 +47,24 @@ vi.mock("../contexts/ImageLibraryContext", () => ({
   ImageLibraryProvider: ({ children }: { children: React.ReactNode }) => children,
 }));
 
+// Mock useNotifications hook
+vi.mock("../contexts/NotificationContext", () => ({
+  useNotifications: () => ({
+    notifications: [],
+    unreadCount: 0,
+    addNotification: vi.fn(),
+    markAsRead: vi.fn(),
+    markAllAsRead: vi.fn(),
+    clearNotifications: vi.fn(),
+    toasts: [],
+    dismissToast: vi.fn(),
+    preferences: null,
+    updatePreferences: vi.fn(),
+    loading: false,
+  }),
+  NotificationProvider: ({ children }: { children: React.ReactNode }) => children,
+}));
+
 // Mock useDeviceCatalog hook
 vi.mock("../contexts/DeviceCatalogContext", () => ({
   useDeviceCatalog: () => ({

@@ -98,21 +98,23 @@ def stopped_container(docker_client):
 
 
 class TestContainerEndpointsUnit:
-    """Unit tests with mocked Docker client."""
+    """Unit tests with mocked Docker client.
+
+    The container endpoints use asyncio.to_thread() wrapping sync closures
+    that call get_docker_client() internally. We mock get_docker_client
+    so the real closure runs and returns proper dicts.
+    """
 
     def test_delete_container_success(self, test_client):
         """Should successfully remove container."""
         mock_container = MagicMock()
         mock_container.status = "exited"
 
-        with patch("agent.routers.labs.docker.from_env") as mock_docker:
-            mock_client = MagicMock()
-            mock_docker.return_value = mock_client
+        mock_client = MagicMock()
+        mock_client.containers.get.return_value = mock_container
 
-            with patch("agent.routers.labs.asyncio.to_thread", new_callable=AsyncMock) as mock_thread:
-                mock_thread.side_effect = [mock_container, None]
-
-                response = test_client.delete("/containers/archetype-test-container")
+        with patch("agent.routers.labs.get_docker_client", return_value=mock_client):
+            response = test_client.delete("/containers/archetype-test-container")
 
         assert response.status_code == 200
         result = response.json()
@@ -120,14 +122,11 @@ class TestContainerEndpointsUnit:
 
     def test_delete_container_not_found(self, test_client):
         """Should return 404 for missing container."""
-        with patch("agent.routers.labs.docker.from_env") as mock_docker:
-            mock_client = MagicMock()
-            mock_docker.return_value = mock_client
+        mock_client = MagicMock()
+        mock_client.containers.get.side_effect = docker.errors.NotFound("not found")
 
-            with patch("agent.routers.labs.asyncio.to_thread", new_callable=AsyncMock) as mock_thread:
-                mock_thread.side_effect = docker.errors.NotFound("not found")
-
-                response = test_client.delete("/containers/archetype-missing")
+        with patch("agent.routers.labs.get_docker_client", return_value=mock_client):
+            response = test_client.delete("/containers/archetype-missing")
 
         assert response.status_code == 404
 
@@ -137,14 +136,11 @@ class TestContainerEndpointsUnit:
         mock_container.status = "exited"
         mock_container.labels = {"archetype.lab_id": "test-lab"}
 
-        with patch("agent.routers.labs.docker.from_env") as mock_docker:
-            mock_client = MagicMock()
-            mock_docker.return_value = mock_client
+        mock_client = MagicMock()
+        mock_client.containers.get.return_value = mock_container
 
-            with patch("agent.routers.labs.asyncio.to_thread", new_callable=AsyncMock) as mock_thread:
-                mock_thread.side_effect = [mock_container, None]
-
-                response = test_client.delete("/containers/test-lab/archetype-test-container")
+        with patch("agent.routers.labs.get_docker_client", return_value=mock_client):
+            response = test_client.delete("/containers/test-lab/archetype-test-container")
 
         assert response.status_code == 200
         result = response.json()
@@ -152,14 +148,11 @@ class TestContainerEndpointsUnit:
 
     def test_delete_container_for_lab_not_found_is_idempotent(self, test_client):
         """Lab container removal is idempotent - returns success for missing container."""
-        with patch("agent.routers.labs.docker.from_env") as mock_docker:
-            mock_client = MagicMock()
-            mock_docker.return_value = mock_client
+        mock_client = MagicMock()
+        mock_client.containers.get.side_effect = docker.errors.NotFound("not found")
 
-            with patch("agent.routers.labs.asyncio.to_thread", new_callable=AsyncMock) as mock_thread:
-                mock_thread.side_effect = docker.errors.NotFound("not found")
-
-                response = test_client.delete("/containers/test-lab/archetype-missing")
+        with patch("agent.routers.labs.get_docker_client", return_value=mock_client):
+            response = test_client.delete("/containers/test-lab/archetype-missing")
 
         assert response.status_code == 200
         result = response.json()
@@ -170,14 +163,11 @@ class TestContainerEndpointsUnit:
         mock_container = MagicMock()
         mock_container.status = "exited"
 
-        with patch("agent.routers.labs.docker.from_env") as mock_docker:
-            mock_client = MagicMock()
-            mock_docker.return_value = mock_client
+        mock_client = MagicMock()
+        mock_client.containers.get.return_value = mock_container
 
-            with patch("agent.routers.labs.asyncio.to_thread", new_callable=AsyncMock) as mock_thread:
-                mock_thread.side_effect = [mock_container, None]
-
-                response = test_client.post("/containers/archetype-test-container/start")
+        with patch("agent.routers.labs.get_docker_client", return_value=mock_client):
+            response = test_client.post("/containers/archetype-test-container/start")
 
         assert response.status_code == 200
         result = response.json()
@@ -188,14 +178,11 @@ class TestContainerEndpointsUnit:
         mock_container = MagicMock()
         mock_container.status = "running"
 
-        with patch("agent.routers.labs.docker.from_env") as mock_docker:
-            mock_client = MagicMock()
-            mock_docker.return_value = mock_client
+        mock_client = MagicMock()
+        mock_client.containers.get.return_value = mock_container
 
-            with patch("agent.routers.labs.asyncio.to_thread", new_callable=AsyncMock) as mock_thread:
-                mock_thread.return_value = mock_container
-
-                response = test_client.post("/containers/archetype-test-container/start")
+        with patch("agent.routers.labs.get_docker_client", return_value=mock_client):
+            response = test_client.post("/containers/archetype-test-container/start")
 
         assert response.status_code == 200
         result = response.json()
@@ -207,14 +194,11 @@ class TestContainerEndpointsUnit:
         mock_container = MagicMock()
         mock_container.status = "running"
 
-        with patch("agent.routers.labs.docker.from_env") as mock_docker:
-            mock_client = MagicMock()
-            mock_docker.return_value = mock_client
+        mock_client = MagicMock()
+        mock_client.containers.get.return_value = mock_container
 
-            with patch("agent.routers.labs.asyncio.to_thread", new_callable=AsyncMock) as mock_thread:
-                mock_thread.side_effect = [mock_container, None]
-
-                response = test_client.post("/containers/archetype-test-container/stop")
+        with patch("agent.routers.labs.get_docker_client", return_value=mock_client):
+            response = test_client.post("/containers/archetype-test-container/stop")
 
         assert response.status_code == 200
         result = response.json()
@@ -225,14 +209,11 @@ class TestContainerEndpointsUnit:
         mock_container = MagicMock()
         mock_container.status = "exited"
 
-        with patch("agent.routers.labs.docker.from_env") as mock_docker:
-            mock_client = MagicMock()
-            mock_docker.return_value = mock_client
+        mock_client = MagicMock()
+        mock_client.containers.get.return_value = mock_container
 
-            with patch("agent.routers.labs.asyncio.to_thread", new_callable=AsyncMock) as mock_thread:
-                mock_thread.return_value = mock_container
-
-                response = test_client.post("/containers/archetype-test-container/stop")
+        with patch("agent.routers.labs.get_docker_client", return_value=mock_client):
+            response = test_client.post("/containers/archetype-test-container/stop")
 
         assert response.status_code == 200
         result = response.json()
