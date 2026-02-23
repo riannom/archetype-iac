@@ -7,6 +7,7 @@ set -e
 # Options:
 #   --name NAME           Agent name (required for install)
 #   --controller URL      Controller URL (required for install)
+#   --secret SECRET       Agent auth secret (must match AGENT_SECRET on controller)
 #   --redis URL           Redis URL for distributed locks (required for multi-host)
 #   --ip IP               Local IP for multi-host networking (auto-detected if not set)
 #   --port PORT           Agent port (default: 8001)
@@ -42,6 +43,7 @@ log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 # Default values
 AGENT_NAME=""
 CONTROLLER_URL=""
+AGENT_SECRET=""
 REDIS_URL=""
 LOCAL_IP=""
 AGENT_PORT="8001"
@@ -61,6 +63,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --controller)
             CONTROLLER_URL="$2"
+            shift 2
+            ;;
+        --secret)
+            AGENT_SECRET="$2"
             shift 2
             ;;
         --redis)
@@ -551,6 +557,7 @@ cat > $INSTALL_DIR/agent.env << EOF
 # Archetype Agent Configuration
 ARCHETYPE_AGENT_AGENT_NAME=$AGENT_NAME
 ARCHETYPE_AGENT_CONTROLLER_URL=$CONTROLLER_URL
+ARCHETYPE_AGENT_CONTROLLER_SECRET=$AGENT_SECRET
 ARCHETYPE_AGENT_REDIS_URL=$REDIS_URL
 ARCHETYPE_AGENT_LOCAL_IP=$LOCAL_IP
 ARCHETYPE_AGENT_AGENT_PORT=$AGENT_PORT

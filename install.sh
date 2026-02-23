@@ -43,6 +43,7 @@ INSTALL_CONTROLLER=false
 INSTALL_AGENT=false
 AGENT_NAME=""
 CONTROLLER_URL=""
+AGENT_SECRET_OVERRIDE=""
 LOCAL_IP=""
 AGENT_PORT="8001"
 INSTALL_LIBVIRT=true
@@ -72,6 +73,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --controller-url)
             CONTROLLER_URL="$2"
+            shift 2
+            ;;
+        --secret)
+            AGENT_SECRET_OVERRIDE="$2"
             shift 2
             ;;
         --ip)
@@ -128,6 +133,7 @@ while [[ $# -gt 0 ]]; do
             echo "                       Install host cron jobs for observability maintenance"
             echo "  --name NAME          Agent name (default: hostname)"
             echo "  --controller-url URL Controller URL for remote agents"
+            echo "  --secret SECRET      Agent auth secret (must match controller)"
             echo "  --ip IP              Local IP for VXLAN (auto-detected)"
             echo "  --port PORT          Agent port (default: 8001)"
             echo "  --no-libvirt         Disable libvirt/KVM for standalone agents"
@@ -545,6 +551,7 @@ if [ "$INSTALL_CONTROLLER" = true ]; then
         ADMIN_PASS=$(openssl rand -base64 12 | tr -d '/+=' | cut -c1-16)
         JWT_SECRET=$(openssl rand -hex 32)
         SESSION_SECRET=$(openssl rand -hex 32)
+        AGENT_SECRET=$(openssl rand -hex 32)
 
         cat > .env << EOF
 # Archetype Controller Configuration
@@ -557,6 +564,7 @@ ADMIN_PASSWORD=$ADMIN_PASS
 # Security (change in production)
 JWT_SECRET=$JWT_SECRET
 SESSION_SECRET=$SESSION_SECRET
+AGENT_SECRET=$AGENT_SECRET
 
 # Ports
 API_PORT=8000
@@ -660,17 +668,29 @@ if [ "$INSTALL_AGENT" = true ] && [ "$INSTALL_CONTROLLER" = false ]; then
 
     # Config
     AGENT_COMMIT=$(cd $AGENT_INSTALL_DIR/repo && git rev-parse HEAD 2>/dev/null || echo "unknown")
+
+    # Extract host from controller URL for default Redis URL
+    CONTROLLER_HOST=$(echo "$CONTROLLER_URL" | sed -E 's|https?://([^:/]+).*|\1|')
+    STANDALONE_REDIS_URL="redis://${CONTROLLER_HOST}:16379/0"
+
     cat > $AGENT_INSTALL_DIR/agent.env << EOF
 ARCHETYPE_AGENT_AGENT_NAME=$AGENT_NAME
 ARCHETYPE_AGENT_CONTROLLER_URL=$CONTROLLER_URL
+ARCHETYPE_AGENT_REDIS_URL=$STANDALONE_REDIS_URL
 ARCHETYPE_AGENT_LOCAL_IP=$LOCAL_IP
 ARCHETYPE_AGENT_AGENT_PORT=$AGENT_PORT
-ARCHETYPE_AGENT_ENABLE_CONTAINERLAB=true
 ARCHETYPE_AGENT_ENABLE_DOCKER=true
 ARCHETYPE_AGENT_ENABLE_LIBVIRT=$INSTALL_LIBVIRT
 ARCHETYPE_AGENT_ENABLE_VXLAN=true
 ARCHETYPE_AGENT_WORKSPACE_PATH=/var/lib/archetype-agent
 ARCHETYPE_GIT_SHA=$AGENT_COMMIT
+
+# Agent auth (must match AGENT_SECRET on the controller)
+ARCHETYPE_AGENT_CONTROLLER_SECRET=$AGENT_SECRET_OVERRIDE
+
+# Logging
+ARCHETYPE_AGENT_LOG_FORMAT=json
+ARCHETYPE_AGENT_LOG_LEVEL=INFO
 EOF
     chmod 644 $AGENT_INSTALL_DIR/agent.env
 
@@ -770,7 +790,7 @@ if [ "$INSTALL_CONTROLLER" = true ]; then
     echo ""
     echo -e "${GREEN}Add Remote Agents:${NC}"
     echo "  curl -fsSL https://raw.githubusercontent.com/riannom/archetype-iac/main/install.sh | \\"
-    echo "    sudo bash -s -- --agent --controller-url http://$LOCAL_IP:8000 --name agent-name"
+    echo "    sudo bash -s -- --agent --controller-url http://$LOCAL_IP:8000 --secret $AGENT_SECRET --name agent-name"
     echo ""
     echo -e "${GREEN}Reinstall Fresh (if needed):${NC}"
     echo "  curl -fsSL https://raw.githubusercontent.com/riannom/archetype-iac/main/install.sh | \\"

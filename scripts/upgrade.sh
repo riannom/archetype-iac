@@ -224,10 +224,11 @@ else
 fi
 
 # Check web frontend
-if curl -sf http://localhost:8090 > /dev/null 2>&1; then
+WEB_PORT=$(grep -oP '^WEB_PORT=\K\d+' "$ROOT_DIR/.env" 2>/dev/null || echo "8080")
+if curl -sf "http://localhost:$WEB_PORT" > /dev/null 2>&1; then
     echo -e "${GREEN}✓ Web frontend is accessible${NC}"
 else
-    echo -e "${YELLOW}⚠ Web frontend not responding on port 8090${NC}"
+    echo -e "${YELLOW}⚠ Web frontend not responding on port $WEB_PORT${NC}"
 fi
 
 echo ""

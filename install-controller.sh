@@ -198,6 +198,7 @@ fi
 # Generate secrets
 JWT_SECRET=$(openssl rand -hex 32)
 SESSION_SECRET=$(openssl rand -hex 32)
+AGENT_SECRET=$(openssl rand -hex 32)
 ADMIN_PASSWORD=$(openssl rand -base64 12 | tr -d '/+=' | head -c 16)
 
 # Get local IP for display
@@ -225,6 +226,7 @@ MAX_CONCURRENT_JOBS_PER_USER=2
 # Security - Auto-generated secrets (keep these safe!)
 JWT_SECRET=$JWT_SECRET
 SESSION_SECRET=$SESSION_SECRET
+AGENT_SECRET=$AGENT_SECRET
 
 # Admin account
 ADMIN_EMAIL=admin@localhost
@@ -312,7 +314,7 @@ echo -e "${CYAN}Agent Installation:${NC}"
 echo "  On each agent host, run:"
 echo ""
 echo "  curl -fsSL https://raw.githubusercontent.com/riannom/archetype-iac/main/agent/install.sh | \\"
-echo "    sudo bash -s -- --name <agent-name> --controller http://$LOCAL_IP:$API_PORT"
+echo "    sudo bash -s -- --name <agent-name> --controller http://$LOCAL_IP:$API_PORT --secret $AGENT_SECRET"
 echo ""
 echo -e "${CYAN}Useful Commands:${NC}"
 echo "  View logs:       cd $INSTALL_DIR && docker compose -f docker-compose.gui.yml logs -f"
