@@ -320,6 +320,15 @@ class OverlayManager:
             "id", str(vni), "local", local_ip, "remote", remote_ip,
             "dstport", str(VXLAN_PORT), "df", "unset",
         ])
+        if code != 0 and "already exists" in (stderr or ""):
+            # Stale Linux device from a previous failed cleanup — delete and retry
+            logger.warning(f"VXLAN device {name} already exists, deleting stale device and retrying")
+            await self._run_cmd(["ip", "link", "delete", name])
+            code, _, stderr = await self._run_cmd([
+                "ip", "link", "add", name, "type", "vxlan",
+                "id", str(vni), "local", local_ip, "remote", remote_ip,
+                "dstport", str(VXLAN_PORT), "df", "unset",
+            ])
         if code != 0:
             raise RuntimeError(f"Failed to create VXLAN device {name}: {stderr}")
 

@@ -435,7 +435,7 @@ async def refresh_states_from_agents():
                 session.query(models.Lab)
                 .filter(
                     models.Lab.state.in_([LabState.STARTING.value, LabState.STOPPING.value, LabState.UNKNOWN.value]),
-                    models.Lab.updated_at < transitional_threshold,
+                    models.Lab.state_updated_at < transitional_threshold,
                 )
                 .all()
             )

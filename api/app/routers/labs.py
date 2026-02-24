@@ -13,7 +13,7 @@ from typing import Literal
 import yaml
 from fastapi import APIRouter, Depends, HTTPException
 
-from sqlalchemy import func
+from sqlalchemy import and_, func, or_
 from sqlalchemy.orm import Session
 
 from app import agent_client, db, models, schemas
@@ -1910,6 +1910,121 @@ def get_link_state(
     return schemas.LinkStateOut.model_validate(state)
 
 
+@router.get("/labs/{lab_id}/links/{link_name}/detail")
+def get_link_detail(
+    lab_id: str,
+    link_name: str,
+    database: Session = Depends(db.get_db),
+    current_user: models.User = Depends(get_current_user),
+) -> schemas.LinkPathDetail:
+    """Get full logical path detail for a link including tunnel and interface mappings."""
+    lab = get_lab_or_404(lab_id, database, current_user)
+    _ensure_link_states_exist(database, lab.id)
+
+    link_state = (
+        database.query(models.LinkState)
+        .filter(
+            models.LinkState.lab_id == lab_id,
+            models.LinkState.link_name == link_name,
+        )
+        .first()
+    )
+    if not link_state:
+        raise_not_found(f"Link '{link_name}' not found")
+
+    # Look up tunnel if cross-host
+    tunnel_detail = None
+    if link_state.is_cross_host:
+        tunnel = (
+            database.query(models.VxlanTunnel)
+            .filter(models.VxlanTunnel.link_state_id == link_state.id)
+            .first()
+        )
+        if tunnel:
+            tunnel_detail = schemas.VxlanTunnelDetail(
+                vni=tunnel.vni,
+                vlan_tag=tunnel.vlan_tag,
+                agent_a_ip=tunnel.agent_a_ip,
+                agent_b_ip=tunnel.agent_b_ip,
+                port_name=tunnel.port_name,
+                status=tunnel.status,
+                error_message=tunnel.error_message,
+            )
+
+    # Look up host names
+    host_names: dict[str, str] = {}
+    host_ids = [h for h in [link_state.source_host_id, link_state.target_host_id] if h]
+    if host_ids:
+        hosts = database.query(models.Host).filter(models.Host.id.in_(host_ids)).all()
+        host_names = {h.id: h.name for h in hosts}
+
+    # Look up interface mappings via Node table (link_state stores node names, InterfaceMapping uses node_id)
+    def _get_interface_mapping(node_name: str, interface: str):
+        node = (
+            database.query(models.Node)
+            .filter(
+                models.Node.lab_id == lab_id,
+                models.Node.container_name == node_name,
+            )
+            .first()
+        )
+        if not node:
+            return None
+        return (
+            database.query(models.InterfaceMapping)
+            .filter(
+                models.InterfaceMapping.lab_id == lab_id,
+                models.InterfaceMapping.node_id == node.id,
+                models.InterfaceMapping.linux_interface == interface,
+            )
+            .first()
+        )
+
+    src_mapping = _get_interface_mapping(link_state.source_node, link_state.source_interface)
+    tgt_mapping = _get_interface_mapping(link_state.target_node, link_state.target_interface)
+
+    source = schemas.LinkEndpointDetail(
+        node_name=link_state.source_node,
+        interface=link_state.source_interface,
+        vendor_interface=src_mapping.vendor_interface if src_mapping else None,
+        ovs_port=src_mapping.ovs_port if src_mapping else None,
+        ovs_bridge=src_mapping.ovs_bridge if src_mapping else None,
+        vlan_tag=link_state.source_vlan_tag,
+        host_id=link_state.source_host_id,
+        host_name=host_names.get(link_state.source_host_id) if link_state.source_host_id else None,
+        oper_state=link_state.source_oper_state,
+        oper_reason=link_state.source_oper_reason,
+        carrier_state=link_state.source_carrier_state,
+        vxlan_attached=link_state.source_vxlan_attached if link_state.is_cross_host else None,
+    )
+
+    target = schemas.LinkEndpointDetail(
+        node_name=link_state.target_node,
+        interface=link_state.target_interface,
+        vendor_interface=tgt_mapping.vendor_interface if tgt_mapping else None,
+        ovs_port=tgt_mapping.ovs_port if tgt_mapping else None,
+        ovs_bridge=tgt_mapping.ovs_bridge if tgt_mapping else None,
+        vlan_tag=link_state.target_vlan_tag,
+        host_id=link_state.target_host_id,
+        host_name=host_names.get(link_state.target_host_id) if link_state.target_host_id else None,
+        oper_state=link_state.target_oper_state,
+        oper_reason=link_state.target_oper_reason,
+        carrier_state=link_state.target_carrier_state,
+        vxlan_attached=link_state.target_vxlan_attached if link_state.is_cross_host else None,
+    )
+
+    return schemas.LinkPathDetail(
+        link_name=link_state.link_name,
+        actual_state=link_state.actual_state,
+        desired_state=link_state.desired_state,
+        error_message=link_state.error_message,
+        is_cross_host=link_state.is_cross_host,
+        source=source,
+        target=target,
+        tunnel=tunnel_detail,
+    )
+
+
 @router.put("/labs/{lab_id}/links/{link_name}/state")
 def set_link_state(
     lab_id: str,
@@ -2765,6 +2880,107 @@ async def sync_interface_mappings(
         errors=result["errors"],
         agents_queried=result["agents_queried"],
     )
+
+
+@router.get("/labs/{lab_id}/infra/notifications")
+def get_infra_notifications(
+    lab_id: str,
+    database: Session = Depends(db.get_db),
+    current_user: models.User = Depends(get_current_user),
+) -> schemas.InfraNotificationsResponse:
+    """Return infrastructure notifications for a lab.
+
+    Surfaces tunnel cleanup deferrals, link errors, and node errors
+    relevant to the lab's multi-host infrastructure.
+    """
+    get_lab_or_404(lab_id, database, current_user)
+    notifications: list[schemas.InfraNotification] = []
+
+    # 1. VxlanTunnel records with issues (cleanup/failed status OR non-null error_message)
+    tunnels = (
+        database.query(models.VxlanTunnel)
+        .filter(
+            models.VxlanTunnel.lab_id == lab_id,
+            or_(
+                models.VxlanTunnel.status.in_(["cleanup", "failed"]),
+                and_(
+                    models.VxlanTunnel.error_message.isnot(None),
+                    models.VxlanTunnel.error_message != "",
+                ),
+            ),
+        )
+        .all()
+    )
+    for t in tunnels:
+        has_error_msg = bool(t.error_message)
+        if t.status in ("cleanup", "failed"):
+            severity = "warning" if t.status == "cleanup" else "error"
+            category = "tunnel_cleanup" if t.status == "cleanup" else "tunnel_failed"
+            title = (
+                f"Tunnel cleanup deferred (VNI {t.vni})"
+                if t.status == "cleanup"
+                else f"Tunnel failed (VNI {t.vni})"
+            )
+        elif has_error_msg:
+            severity = "warning"
+            category = "tunnel_cleanup"
+            title = f"Tunnel issue (VNI {t.vni})"
+        else:
+            continue
+        notifications.append(schemas.InfraNotification(
+            id=f"tunnel:{t.id}",
+            severity=severity,
+            category=category,
+            title=title,
+            detail=t.error_message,
+            entity_type="tunnel",
+            entity_name=f"VNI {t.vni}",
+            timestamp=t.updated_at if hasattr(t, "updated_at") else None,
+        ))
+
+    # 2. LinkState records with errors
+    error_links = (
+        database.query(models.LinkState)
+        .filter(
+            models.LinkState.lab_id == lab_id,
+            models.LinkState.actual_state == "error",
+        )
+        .all()
+    )
+    for ls in error_links:
+        notifications.append(schemas.InfraNotification(
+            id=f"link:{ls.id}",
+            severity="error",
+            category="link_error",
+            title=f"Link error: {ls.link_name}",
+            detail=ls.error_message,
+            entity_type="link",
+            entity_name=ls.link_name,
+            timestamp=ls.updated_at if hasattr(ls, "updated_at") else None,
+        ))
+
+    # 3. NodeState records with errors (infra-relevant)
+    error_nodes = (
+        database.query(models.NodeState)
+        .filter(
+            models.NodeState.lab_id == lab_id,
+            models.NodeState.actual_state == "error",
+        )
+        .all()
+    )
+    for ns in error_nodes:
+        notifications.append(schemas.InfraNotification(
+            id=f"node:{ns.id}",
+            severity="error",
+            category="node_error",
+            title=f"Node error: {ns.node_name}",
+            detail=ns.error_message,
+            entity_type="node",
+            entity_name=ns.node_name,
+            timestamp=ns.updated_at if hasattr(ns, "updated_at") else None,
+        ))
+
+    return schemas.InfraNotificationsResponse(notifications=notifications)
 
 
 @router.post("/labs/{lab_id}/links/reconcile")
