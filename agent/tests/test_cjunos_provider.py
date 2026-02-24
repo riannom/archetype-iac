@@ -86,10 +86,14 @@ class TestCjunosVendorConfig:
     """Tests for cJunOS vendor configuration."""
 
     def test_extraction_command_hierarchical(self):
-        """Verify extraction uses hierarchical format (not display set)."""
+        """Verify extraction uses hierarchical format via SSH into inner VM."""
         config = get_config_by_device("juniper_cjunos")
         assert config is not None
-        assert config.config_extract_command == "cli -c 'show configuration'"
+        # cJunOS SSHes into the inner QEMU VM because the outer cli doesn't pass -c args
+        assert config.config_extract_command == (
+            "ssh -o StrictHostKeyChecking=no -i /root/.ssh/sshkey "
+            "root@176.1.1.1 \"cli -c 'show configuration'\""
+        )
         assert "display set" not in config.config_extract_command
 
     def test_bind_mount_includes_config(self):
