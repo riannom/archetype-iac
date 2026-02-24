@@ -80,6 +80,29 @@ def run_lab_tests(
     return schemas.TestRunResponse(job_id=job.id, message=f"Running {len(specs)} tests")
 
 
+@router.get("/labs/{lab_id}/tests")
+def get_lab_tests(
+    lab_id: str,
+    database: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    """Get test specs from the lab's topology YAML."""
+    lab = get_lab_or_404(database, lab_id)
+
+    from app.topology import yaml_to_graph
+    workspace = Path(settings.workspace) / lab.id
+    topo_file = workspace / "topology.yml"
+
+    if not topo_file.exists():
+        return {"tests": []}
+
+    try:
+        graph = yaml_to_graph(topo_file.read_text())
+        return {"tests": graph.tests or []}
+    except Exception:
+        return {"tests": []}
+
+
 @router.get("/labs/{lab_id}/tests/results/{job_id}")
 def get_test_results(
     lab_id: str,

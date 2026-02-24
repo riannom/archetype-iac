@@ -1467,13 +1467,17 @@ const StudioPage: React.FC = () => {
   }, []);
 
 
-  const handleStartTests = useCallback(async () => {
+  const handleStartTests = useCallback(async (specs?: import('./types').TestSpec[]) => {
     if (!activeLab?.id || testRunning) return;
     setTestResults([]);
     setTestSummary(null);
     setTestRunning(true);
     try {
-      await apiRequest(`/labs/${activeLab.id}/tests/run`, { method: 'POST' });
+      const options: RequestInit = { method: 'POST' };
+      if (specs && specs.length > 0) {
+        options.body = JSON.stringify({ specs });
+      }
+      await apiRequest(`/labs/${activeLab.id}/tests/run`, options);
     } catch (e: any) {
       setTestRunning(false);
       addNotification('error', 'Test run failed', e.message || 'Failed to start tests');
@@ -1845,6 +1849,8 @@ const StudioPage: React.FC = () => {
             testSummary={testSummary}
             isRunning={testRunning}
             onStartTests={handleStartTests}
+            nodes={nodes}
+            links={links}
           />
         );
       case 'infra':
@@ -1920,8 +1926,8 @@ const StudioPage: React.FC = () => {
 
   const backgroundGradient =
     effectiveMode === 'dark'
-      ? 'bg-gradient-to-br from-stone-950/58 via-stone-900/48 to-stone-950/58 bg-gradient-animate backdrop-blur-[1px]'
-      : 'bg-gradient-to-br from-stone-50/56 via-white/50 to-stone-100/56 bg-gradient-animate backdrop-blur-[1px]';
+      ? 'bg-gradient-to-br from-stone-950/20 via-stone-900/12 to-stone-950/20 bg-gradient-animate'
+      : 'bg-gradient-to-br from-stone-50/20 via-white/15 to-stone-100/20 bg-gradient-animate';
 
   if (authRequired) {
     return <Auth onLogin={handleLogin} error={authError} loading={authLoading} />;
@@ -1952,7 +1958,7 @@ const StudioPage: React.FC = () => {
           className={`h-full px-4 text-[10px] font-black uppercase border-b-2 transition-all ${
             view === 'designer'
               ? 'text-sage-700 dark:text-sage-500 border-sage-700 dark:border-sage-500'
-              : 'text-stone-700 dark:text-stone-500 border-transparent hover:text-stone-900 dark:hover:text-stone-300'
+              : 'text-stone-700 dark:text-stone-400 border-transparent hover:text-stone-900 dark:hover:text-stone-200'
           }`}
         >
           Designer
@@ -1962,7 +1968,7 @@ const StudioPage: React.FC = () => {
           className={`h-full px-4 text-[10px] font-black uppercase border-b-2 transition-all ${
             view === 'runtime'
               ? 'text-sage-700 dark:text-sage-500 border-sage-700 dark:border-sage-500'
-              : 'text-stone-700 dark:text-stone-500 border-transparent hover:text-stone-900 dark:hover:text-stone-300'
+              : 'text-stone-700 dark:text-stone-400 border-transparent hover:text-stone-900 dark:hover:text-stone-200'
           }`}
         >
           Runtime
@@ -1972,7 +1978,7 @@ const StudioPage: React.FC = () => {
           className={`h-full px-4 text-[10px] font-black uppercase border-b-2 transition-all ${
             view === 'configs'
               ? 'text-sage-700 dark:text-sage-500 border-sage-700 dark:border-sage-500'
-              : 'text-stone-700 dark:text-stone-500 border-transparent hover:text-stone-900 dark:hover:text-stone-300'
+              : 'text-stone-700 dark:text-stone-400 border-transparent hover:text-stone-900 dark:hover:text-stone-200'
           }`}
         >
           Configs
@@ -1982,7 +1988,7 @@ const StudioPage: React.FC = () => {
           className={`h-full px-4 text-[10px] font-black uppercase border-b-2 transition-all ${
             view === 'logs'
               ? 'text-sage-700 dark:text-sage-500 border-sage-700 dark:border-sage-500'
-              : 'text-stone-700 dark:text-stone-500 border-transparent hover:text-stone-900 dark:hover:text-stone-300'
+              : 'text-stone-700 dark:text-stone-400 border-transparent hover:text-stone-900 dark:hover:text-stone-200'
           }`}
         >
           Logs
@@ -1992,7 +1998,7 @@ const StudioPage: React.FC = () => {
           className={`h-full px-4 text-[10px] font-black uppercase border-b-2 transition-all ${
             view === 'tests'
               ? 'text-sage-700 dark:text-sage-500 border-sage-700 dark:border-sage-500'
-              : 'text-stone-700 dark:text-stone-500 border-transparent hover:text-stone-900 dark:hover:text-stone-300'
+              : 'text-stone-700 dark:text-stone-400 border-transparent hover:text-stone-900 dark:hover:text-stone-200'
           }`}
         >
           Tests
@@ -2003,7 +2009,7 @@ const StudioPage: React.FC = () => {
             className={`h-full px-4 text-[10px] font-black uppercase border-b-2 transition-all ${
               view === 'infra'
                 ? 'text-sage-700 dark:text-sage-500 border-sage-700 dark:border-sage-500'
-                : 'text-stone-700 dark:text-stone-500 border-transparent hover:text-stone-900 dark:hover:text-stone-300'
+                : 'text-stone-700 dark:text-stone-400 border-transparent hover:text-stone-900 dark:hover:text-stone-200'
             }`}
           >
             Infra
