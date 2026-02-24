@@ -836,6 +836,9 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         config_extract_timeout=60,  # CSR can be slower
         config_extract_prompt_pattern=r"[\w\-]+[>#]\s*$",
         config_extract_paging_disable="terminal length 0",
+        # Config injection via ISO (IOS-XE CVAC)
+        config_inject_method="iso",
+        config_inject_iso_filename="iosxe_config.txt",
         # Post-boot commands to run after VM is ready
         post_boot_commands=[
             "terminal length 0",  # Disable paging for CLI sessions
@@ -1721,6 +1724,9 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         config_extract_timeout=60,
         config_extract_prompt_pattern=r"[\w\-]+[>#]\s*$",
         config_extract_paging_disable="terminal length 0",
+        # Config injection via ISO (IOS-XE CVAC)
+        config_inject_method="iso",
+        config_inject_iso_filename="iosxe_config.txt",
         # Post-boot commands to run after VM is ready
         post_boot_commands=[
             "terminal length 0",  # Disable paging for CLI sessions
@@ -1952,6 +1958,9 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         readiness_probe="log_pattern",
         readiness_pattern=r"Press RETURN to get started!",
         readiness_timeout=300,
+        # Config injection via ISO (IOS-XE CVAC)
+        config_inject_method="iso",
+        config_inject_iso_filename="iosxe_config.txt",
     ),
     "cat9000v-q200": VendorConfig(
         kind="cisco_cat9000v_q200",
@@ -1995,6 +2004,9 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         config_extract_password="admin",
         config_extract_timeout=60,
         config_extract_paging_disable="terminal length 0",
+        # Config injection via ISO (IOS-XE CVAC)
+        config_inject_method="iso",
+        config_inject_iso_filename="iosxe_config.txt",
     ),
     "cat9000v-uadp": VendorConfig(
         kind="cisco_cat9000v_uadp",
@@ -2038,6 +2050,9 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         config_extract_password="admin",
         config_extract_timeout=60,
         config_extract_paging_disable="terminal length 0",
+        # Config injection via ISO (IOS-XE CVAC)
+        config_inject_method="iso",
+        config_inject_iso_filename="iosxe_config.txt",
     ),
 }
 
