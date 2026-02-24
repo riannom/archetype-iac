@@ -186,7 +186,7 @@ async def healthz(request: StarletteRequest) -> StarletteJSONResponse:
 
 app = FastAPI(
     title="Archetype API",
-    version="0.4.0",
+    version="0.5.0-rc1",
     lifespan=lifespan,
     routes=[Route("/healthz", healthz)],  # Bypass all middleware
 )
