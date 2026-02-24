@@ -1,0 +1,141 @@
+{
+  "version": 1,
+  "doc_globs": [
+    "*.md",
+    "assets/**",
+    "reports/**",
+    "screenshots/**",
+    "tasks/**"
+  ],
+  "default_checks": [],
+  "fallback_checks": [
+    "audit"
+  ],
+  "checks": {
+    "audit": {
+      "description": "Dry-run cleanup audit and baseline safety checks",
+      "command": [
+        "make",
+        "audit"
+      ],
+      "required": true
+    },
+    "test-api": {
+      "description": "API unit/integration suite",
+      "command": [
+        "make",
+        "test-api"
+      ],
+      "required": true
+    },
+    "test-agent": {
+      "description": "Agent unit/integration suite",
+      "command": [
+        "make",
+        "test-agent"
+      ],
+      "required": true
+    },
+    "test-web-container": {
+      "description": "Web vitest suite in containerized runner",
+      "command": [
+        "make",
+        "test-web-container"
+      ],
+      "required": true
+    },
+    "observability-canary": {
+      "description": "Read-only observability canary verification",
+      "command": [
+        "make",
+        "observability-canary"
+      ],
+      "required": false
+    }
+  },
+  "rules": [
+    {
+      "name": "api",
+      "areas": [
+        "api"
+      ],
+      "globs": [
+        "api/**"
+      ],
+      "checks": [
+        "test-api"
+      ]
+    },
+    {
+      "name": "agent",
+      "areas": [
+        "agent"
+      ],
+      "globs": [
+        "agent/**"
+      ],
+      "checks": [
+        "test-agent"
+      ]
+    },
+    {
+      "name": "web",
+      "areas": [
+        "web"
+      ],
+      "globs": [
+        "web/**"
+      ],
+      "checks": [
+        "test-web-container"
+      ]
+    },
+    {
+      "name": "tooling",
+      "areas": [
+        "tooling"
+      ],
+      "globs": [
+        ".github/**",
+        "Makefile",
+        "scripts/**",
+        "tests/scripts/**"
+      ],
+      "checks": [
+        "audit"
+      ]
+    },
+    {
+      "name": "runtime-compose",
+      "areas": [
+        "runtime"
+      ],
+      "globs": [
+        "docker-compose*.yml",
+        "Dockerfile*"
+      ],
+      "checks": [
+        "test-api",
+        "test-web-container",
+        "audit"
+      ]
+    },
+    {
+      "name": "observability",
+      "areas": [
+        "observability"
+      ],
+      "globs": [
+        "grafana/**",
+        "prometheus*.yml",
+        "promtail-config.yml",
+        "scripts/observability_*",
+        "scripts/run_observability_*",
+        "scripts/install_observability_*"
+      ],
+      "checks": [
+        "observability-canary"
+      ]
+    }
+  ]
+}

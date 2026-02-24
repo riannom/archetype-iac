@@ -148,6 +148,23 @@ Nightly gate recommendation for hot-connect reliability:
 2. Require `missing_reservations=0`, `orphaned_reservations=0`, and `conflicting_endpoints=0`.
 3. If gate fails, run link reservation health inspection via `GET /system/link-reservations/health` and triage before business-hours changes.
 
+## Confidence Gate (Build/Test Progress)
+
+The repository includes a scaffolded impact-aware confidence gate that is focused on code-build/test progression rather than product behavior.
+
+- Plan checks only:
+  - `make confidence-gate BASE=origin/main`
+- Execute selected checks:
+  - `make confidence-gate-run BASE=origin/main`
+- Enforce minimum confidence score:
+  - `make confidence-gate-run BASE=origin/main CONFIDENCE_MIN_SCORE=90`
+- Force explicit file set instead of git diff:
+  - `make confidence-gate CONFIDENCE_FILES="api/app/main.py web/src/main.tsx"`
+- JSON output for CI wiring:
+  - `make confidence-gate-json BASE=origin/main`
+
+Rules are defined in `scripts/confidence_gate_rules.json` (local/dev) and `scripts/confidence_gate_rules_ci.json` (CI), and the engine is `scripts/confidence_gate.py`.
+
 ## Supported Vendors and Device Kinds
 
 The supported device catalog is served dynamically from the API (`/vendors`) and sourced from `agent/vendors.py`. Current vendor coverage includes:

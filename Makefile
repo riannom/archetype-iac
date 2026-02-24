@@ -1,9 +1,14 @@
-.PHONY: audit audit-ovs test-agent test-api test-api-container test-web-container test-web-container-down observability-canary observability-db-report observability-canary-nonprod observability-maintenance-nonprod observability-cron-install iso-metadata-parity install-gitleaks install-hooks scan-secrets
+.PHONY: audit audit-ovs test-agent test-api test-api-container test-web-container test-web-container-down observability-canary observability-db-report observability-canary-nonprod observability-maintenance-nonprod observability-cron-install iso-metadata-parity confidence-gate confidence-gate-run confidence-gate-json install-gitleaks install-hooks scan-secrets
 
 API_TEST ?= tests
 WEB_TEST ?=
 ISO ?=
 JSON_OUT ?=
+BASE ?= origin/main
+CONFIDENCE_FILES ?=
+CONFIDENCE_REPORT ?= reports/confidence-gate/latest.json
+CONFIDENCE_RULES ?= scripts/confidence_gate_rules.json
+CONFIDENCE_MIN_SCORE ?= 0
 
 audit:
 	python3 scripts/cleanup_audit.py
@@ -70,6 +75,27 @@ iso-metadata-parity:
 		python3 scripts/iso_metadata_parity_report.py --iso "$(ISO)" --json-out "$(JSON_OUT)"; \
 	else \
 		python3 scripts/iso_metadata_parity_report.py --iso "$(ISO)"; \
+	fi
+
+confidence-gate:
+	@if [ -n "$(CONFIDENCE_FILES)" ]; then \
+		python3 scripts/confidence_gate.py --rules "$(CONFIDENCE_RULES)" --min-score "$(CONFIDENCE_MIN_SCORE)" --files $(CONFIDENCE_FILES) --report-path "$(CONFIDENCE_REPORT)"; \
+	else \
+		python3 scripts/confidence_gate.py --rules "$(CONFIDENCE_RULES)" --min-score "$(CONFIDENCE_MIN_SCORE)" --base "$(BASE)" --report-path "$(CONFIDENCE_REPORT)"; \
+	fi
+
+confidence-gate-run:
+	@if [ -n "$(CONFIDENCE_FILES)" ]; then \
+		python3 scripts/confidence_gate.py --run --rules "$(CONFIDENCE_RULES)" --min-score "$(CONFIDENCE_MIN_SCORE)" --files $(CONFIDENCE_FILES) --report-path "$(CONFIDENCE_REPORT)"; \
+	else \
+		python3 scripts/confidence_gate.py --run --rules "$(CONFIDENCE_RULES)" --min-score "$(CONFIDENCE_MIN_SCORE)" --base "$(BASE)" --report-path "$(CONFIDENCE_REPORT)"; \
+	fi
+
+confidence-gate-json:
+	@if [ -n "$(CONFIDENCE_FILES)" ]; then \
+		python3 scripts/confidence_gate.py --json --rules "$(CONFIDENCE_RULES)" --min-score "$(CONFIDENCE_MIN_SCORE)" --files $(CONFIDENCE_FILES); \
+	else \
+		python3 scripts/confidence_gate.py --json --rules "$(CONFIDENCE_RULES)" --min-score "$(CONFIDENCE_MIN_SCORE)" --base "$(BASE)"; \
 	fi
 
 install-gitleaks:

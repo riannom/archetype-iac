@@ -1,0 +1,141 @@
+{
+  "version": 1,
+  "doc_globs": [
+    "*.md",
+    "assets/**",
+    "reports/**",
+    "screenshots/**",
+    "tasks/**"
+  ],
+  "default_checks": [],
+  "fallback_checks": [
+    "audit"
+  ],
+  "checks": {
+    "audit": {
+      "description": "Compile-time sanity for Python-owned code paths",
+      "command": [
+        "python3",
+        "-m",
+        "compileall",
+        "-q",
+        "scripts",
+        "api/app",
+        "agent"
+      ],
+      "required": true
+    },
+    "test-api": {
+      "description": "API pytest suite in CI",
+      "command": [
+        "/bin/bash",
+        "-lc",
+        "cd api && DATABASE_URL=sqlite:///test.db REDIS_URL=redis://localhost:6379/0 WORKSPACE=/tmp/archetype-test PYTHONPATH=\"${PYTHONPATH}:$(pwd)/..\" pytest -q tests"
+      ],
+      "required": true
+    },
+    "test-agent": {
+      "description": "Agent pytest suite in CI",
+      "command": [
+        "/bin/bash",
+        "-lc",
+        "cd agent && pytest -q tests"
+      ],
+      "required": true
+    },
+    "test-web-container": {
+      "description": "Web vitest suite in CI",
+      "command": [
+        "/bin/bash",
+        "-lc",
+        "cd web && NODE_OPTIONS=\"--max-old-space-size=8192\" npm test -- --run --pool=threads --poolOptions.threads.minThreads=1 --poolOptions.threads.maxThreads=1 --dangerouslyIgnoreUnhandledErrors"
+      ],
+      "required": true
+    }
+  },
+  "rules": [
+    {
+      "name": "api",
+      "areas": [
+        "api"
+      ],
+      "globs": [
+        "api/**"
+      ],
+      "checks": [
+        "test-api"
+      ]
+    },
+    {
+      "name": "agent",
+      "areas": [
+        "agent"
+      ],
+      "globs": [
+        "agent/**"
+      ],
+      "checks": [
+        "test-agent"
+      ]
+    },
+    {
+      "name": "web",
+      "areas": [
+        "web"
+      ],
+      "globs": [
+        "web/**"
+      ],
+      "checks": [
+        "test-web-container"
+      ]
+    },
+    {
+      "name": "tooling",
+      "areas": [
+        "tooling"
+      ],
+      "globs": [
+        ".github/**",
+        "Makefile",
+        "scripts/**",
+        "tests/scripts/**"
+      ],
+      "checks": [
+        "audit"
+      ]
+    },
+    {
+      "name": "runtime-compose",
+      "areas": [
+        "runtime"
+      ],
+      "globs": [
+        "docker-compose*.yml",
+        "Dockerfile*"
+      ],
+      "checks": [
+        "test-api",
+        "test-web-container",
+        "audit"
+      ]
+    },
+    {
+      "name": "observability",
+      "areas": [
+        "observability"
+      ],
+      "globs": [
+        "grafana/**",
+        "prometheus*.yml",
+        "promtail-config.yml",
+        "scripts/observability_*",
+        "scripts/run_observability_*",
+        "scripts/install_observability_*"
+      ],
+      "checks": [
+        "audit"
+      ]
+    }
+  ]
+}
