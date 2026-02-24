@@ -1350,7 +1350,7 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         config_inject_method="iso",
         config_inject_iso_volume_label="disk",
         config_inject_iso_filename="nxos_config.txt",
-        default_credentials="admin / admin",
+        default_credentials="admin / cisco",
         # Minimal default config ensures ISO is always created (preamble adds credentials + EEM)
         default_startup_config="hostname {hostname}\n",
     ),

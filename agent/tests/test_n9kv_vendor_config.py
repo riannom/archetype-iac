@@ -258,7 +258,7 @@ def test_n9kv_default_credentials():
     config = VENDOR_CONFIGS["cisco_n9kv"]
     assert config.console_user == "admin"
     assert config.console_password == "cisco"
-    assert config.default_credentials == "admin / admin"
+    assert config.default_credentials == "admin / cisco"
 
 
 # ---------------------------------------------------------------------------
