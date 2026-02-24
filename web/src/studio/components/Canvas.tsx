@@ -95,8 +95,12 @@ const Canvas: React.FC<CanvasProps> = ({
   const [resizing, setResizing] = useState<ResizeState | null>(null);
   const [drawStart, setDrawStart] = useState<{ x: number; y: number } | null>(null);
   const [drawEnd, setDrawEnd] = useState<{ x: number; y: number } | null>(null);
+  const drawStartRef = useRef<{ x: number; y: number } | null>(null);
   const panStartRef = useRef<{ x: number; y: number } | null>(null);
   const didPanRef = useRef(false);
+  const [editingText, setEditingText] = useState<{ id: string; x: number; y: number } | null>(null);
+  const pendingTextEditRef = useRef(false);
+  const textInputRef = useRef<HTMLInputElement>(null);
 
   // Track latest viewport for unmount save
   const viewportRef = useRef({ zoom, x: offset.x, y: offset.y });
@@ -182,6 +186,7 @@ const Canvas: React.FC<CanvasProps> = ({
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      if (editingText) return; // Don't delete while editing text
       if ((e.key === 'Delete' || e.key === 'Backspace') && selectedId) {
         const target = e.target as HTMLElement;
         if (target.tagName !== 'INPUT' && target.tagName !== 'TEXTAREA') {
@@ -191,7 +196,17 @@ const Canvas: React.FC<CanvasProps> = ({
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [selectedId, onDelete]);
+  }, [selectedId, onDelete, editingText]);
+
+  // Enter inline edit mode when a text annotation is just created
+  useEffect(() => {
+    if (!pendingTextEditRef.current || !selectedId) return;
+    const ann = annotations.find(a => a.id === selectedId && a.type === 'text');
+    if (ann) {
+      pendingTextEditRef.current = false;
+      setEditingText({ id: ann.id, x: ann.x, y: ann.y });
+    }
+  }, [selectedId, annotations]);
 
   useEffect(() => {
     const handleClickOutside = () => setContextMenu(null);
@@ -266,7 +281,7 @@ const Canvas: React.FC<CanvasProps> = ({
       return;
     }
 
-    if (drawStart && activeTool !== 'pointer' && activeTool !== 'text') {
+    if (drawStartRef.current && activeTool !== 'pointer' && activeTool !== 'text') {
       setDrawEnd({ x, y });
       return;
     }
@@ -276,7 +291,7 @@ const Canvas: React.FC<CanvasProps> = ({
     } else if (draggingAnnotation) {
       onAnnotationMove(draggingAnnotation, x, y);
     }
-  }, [offset, zoom, isPanning, draggingNode, draggingAnnotation, resizing, annotations, drawStart, activeTool, onNodeMove, onAnnotationMove, onUpdateAnnotation]);
+  }, [offset, zoom, isPanning, draggingNode, draggingAnnotation, resizing, annotations, activeTool, onNodeMove, onAnnotationMove, onUpdateAnnotation]);
 
   const handleWheel = useCallback((e: React.WheelEvent) => {
     if (e.ctrlKey || e.metaKey) {
@@ -312,13 +327,16 @@ const Canvas: React.FC<CanvasProps> = ({
         const y = (e.clientY - rect.top - offset.y) / zoom;
 
         if (activeTool === 'text') {
-          // Text: single click places immediately
+          // Text: single click places and enters edit mode
+          pendingTextEditRef.current = true;
           onToolCreate('text', x, y);
           return;
         }
         // Rect/circle/arrow: start drag gesture
+        drawStartRef.current = { x, y };
         setDrawStart({ x, y });
         setDrawEnd({ x, y });
+        e.preventDefault();
         return;
       }
       // Default pointer: pan
@@ -331,26 +349,29 @@ const Canvas: React.FC<CanvasProps> = ({
 
   const handleMouseUp = useCallback(() => {
     // Complete draw gesture for tool mode
-    if (drawStart && drawEnd && activeTool !== 'pointer' && activeTool !== 'text' && onToolCreate) {
-      const dx = drawEnd.x - drawStart.x;
-      const dy = drawEnd.y - drawStart.y;
+    const start = drawStartRef.current;
+    if (start && drawEnd && activeTool !== 'pointer' && activeTool !== 'text' && onToolCreate) {
+      const dx = drawEnd.x - start.x;
+      const dy = drawEnd.y - start.y;
       const dist = Math.sqrt(dx * dx + dy * dy);
       if (dist >= 10) {
         if (activeTool === 'rect') {
-          const x = Math.min(drawStart.x, drawEnd.x);
-          const y = Math.min(drawStart.y, drawEnd.y);
+          const x = Math.min(start.x, drawEnd.x);
+          const y = Math.min(start.y, drawEnd.y);
           onToolCreate('rect', x, y, { width: Math.abs(dx), height: Math.abs(dy) });
         } else if (activeTool === 'circle') {
           const diameter = dist * 2;
-          onToolCreate('circle', drawStart.x, drawStart.y, { width: diameter });
+          onToolCreate('circle', start.x, start.y, { width: diameter });
         } else if (activeTool === 'arrow') {
-          onToolCreate('arrow', drawStart.x, drawStart.y, { targetX: drawEnd.x, targetY: drawEnd.y });
+          onToolCreate('arrow', start.x, start.y, { targetX: drawEnd.x, targetY: drawEnd.y });
         }
       }
+      drawStartRef.current = null;
       setDrawStart(null);
       setDrawEnd(null);
       return;
     }
+    drawStartRef.current = null;
     setDrawStart(null);
     setDrawEnd(null);
 
@@ -363,7 +384,7 @@ const Canvas: React.FC<CanvasProps> = ({
     panStartRef.current = null;
     setLinkingNode(null);
     setResizing(null);
-  }, [isPanning, onSelect, drawStart, drawEnd, activeTool, onToolCreate]);
+  }, [isPanning, onSelect, drawEnd, activeTool, onToolCreate]);
 
   const handleNodeMouseDown = (e: React.MouseEvent, id: string) => {
     if (e.button === 2) return;
@@ -744,11 +765,18 @@ const Canvas: React.FC<CanvasProps> = ({
               );
             };
 
+            const handleTextDoubleClick = (e: React.MouseEvent) => {
+              if (ann.type === 'text') {
+                e.stopPropagation();
+                setEditingText({ id: ann.id, x: ann.x, y: ann.y });
+              }
+            };
+
             return (
-              <g key={ann.id} className="pointer-events-auto cursor-move" onMouseDown={(e) => handleAnnotationMouseDown(e, ann.id)}>
+              <g key={ann.id} className="pointer-events-auto cursor-move" onMouseDown={(e) => handleAnnotationMouseDown(e, ann.id)} onDoubleClick={handleTextDoubleClick}>
                 {ann.type === 'rect' && <rect x={ann.x} y={ann.y} width={ann.width || 100} height={ann.height || 60} fill={effectiveMode === 'dark' ? "rgba(68, 64, 60, 0.2)" : "rgba(214, 211, 209, 0.2)"} stroke={stroke} strokeWidth="2" strokeDasharray={isSelected ? "4" : "0"} rx="4" />}
                 {ann.type === 'circle' && <circle cx={ann.x} cy={ann.y} r={ann.width ? ann.width / 2 : 40} fill={effectiveMode === 'dark' ? "rgba(68, 64, 60, 0.2)" : "rgba(214, 211, 209, 0.2)"} stroke={stroke} strokeWidth="2" strokeDasharray={isSelected ? "4" : "0"} />}
-                {ann.type === 'text' && <text x={ann.x} y={ann.y} fill={ann.color || (effectiveMode === 'dark' ? 'white' : '#1C1917')} fontSize={ann.fontSize || 14} className="font-black tracking-tight select-none">{ann.text || 'New Text'}</text>}
+                {ann.type === 'text' && !(editingText?.id === ann.id) && <text x={ann.x} y={ann.y} fill={ann.color || (effectiveMode === 'dark' ? 'white' : '#1C1917')} fontSize={ann.fontSize || 14} className="font-black tracking-tight select-none">{ann.text || 'New Text'}</text>}
                 {renderArrow()}
                 {renderRectHandles()}
                 {renderCircleHandles()}
@@ -937,6 +965,56 @@ const Canvas: React.FC<CanvasProps> = ({
             );
           })()}
         </svg>
+
+        {/* Inline text editing overlay */}
+        {editingText && (() => {
+          const ann = annotations.find(a => a.id === editingText.id);
+          if (!ann) return null;
+          const fontSize = ann.fontSize || 14;
+          return (
+            <input
+              ref={textInputRef}
+              type="text"
+              defaultValue={ann.text || ''}
+              autoFocus
+              className="absolute bg-transparent outline-none font-black tracking-tight"
+              style={{
+                left: ann.x,
+                top: ann.y - fontSize,
+                fontSize,
+                color: ann.color || (effectiveMode === 'dark' ? 'white' : '#1C1917'),
+                minWidth: 60,
+                caretColor: effectiveMode === 'dark' ? '#84CC16' : '#65A30D',
+                border: 'none',
+                padding: 0,
+                margin: 0,
+                lineHeight: 1,
+              }}
+              onBlur={(e) => {
+                const val = e.target.value.trim();
+                if (val && onUpdateAnnotation) {
+                  onUpdateAnnotation(editingText.id, { text: val });
+                } else if (!val) {
+                  onDelete(editingText.id);
+                }
+                setEditingText(null);
+              }}
+              onKeyDown={(e) => {
+                e.stopPropagation();
+                if (e.key === 'Enter') {
+                  (e.target as HTMLInputElement).blur();
+                } else if (e.key === 'Escape') {
+                  const ann = annotations.find(a => a.id === editingText.id);
+                  if (!ann?.text) {
+                    onDelete(editingText.id);
+                  }
+                  setEditingText(null);
+                }
+              }}
+              onMouseDown={(e) => e.stopPropagation()}
+            />
+          );
+        })()}
 
         {nodes.map(node => {
           // Check if this is an external network node

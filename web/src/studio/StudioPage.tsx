@@ -1197,7 +1197,7 @@ const StudioPage: React.FC = () => {
       type,
       x,
       y,
-      text: type === 'text' ? 'New Label' : '',
+      text: '',
       color: effectiveMode === 'dark' ? '#3b82f6' : '#2563eb',
       width: opts?.width ?? (type === 'rect' || type === 'circle' ? 100 : undefined),
       height: opts?.height ?? (type === 'rect' ? 60 : undefined),
