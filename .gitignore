@@ -25,3 +25,7 @@ node_modules/
 *.pfx
 id_rsa*
 id_ed25519*
+
+# Local generated reports
+reports/confidence-gate/
+reports/observability/
