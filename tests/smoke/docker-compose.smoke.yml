@@ -24,6 +24,8 @@ services:
       dockerfile: Dockerfile.api
       args:
         GIT_SHA: smoke-test
+    ports:
+      - "8000"
     depends_on:
       postgres:
         condition: service_healthy
