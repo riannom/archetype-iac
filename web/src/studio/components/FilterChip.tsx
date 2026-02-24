@@ -6,7 +6,7 @@ interface FilterChipProps {
   onClick: () => void;
   count?: number;
   variant?: 'default' | 'status';
-  statusColor?: 'green' | 'blue' | 'amber';
+  statusColor?: 'green' | 'blue' | 'amber' | 'red' | 'gray';
 }
 
 const FilterChip: React.FC<FilterChipProps> = ({
@@ -23,6 +23,8 @@ const FilterChip: React.FC<FilterChipProps> = ({
       green: 'bg-emerald-500',
       blue: 'bg-blue-500',
       amber: 'bg-amber-500',
+      red: 'bg-red-500',
+      gray: 'bg-stone-400',
     };
     return (
       <span className={`w-2 h-2 rounded-full ${colors[statusColor]} mr-1.5`} />

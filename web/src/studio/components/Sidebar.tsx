@@ -1,7 +1,9 @@
 
 import React, { useMemo, useState, useEffect, useRef, useCallback } from 'react';
-import { DeviceModel, CanvasTool, ImageLibraryEntry } from '../types';
+import { Node, DeviceModel, CanvasTool, ImageLibraryEntry, isDeviceNode } from '../types';
+import { RuntimeStatus } from './RuntimeControl';
 import SidebarFilters, { ImageStatus } from './SidebarFilters';
+import NodeListPanel from './NodeListPanel';
 import { useNotifications } from '../../contexts/NotificationContext';
 import {
   getAllowedInstantiableImageKinds,
@@ -11,6 +13,8 @@ import {
   requiresRunnableImage,
 } from '../../utils/deviceModels';
 
+export type SidebarTab = 'library' | 'nodes';
+
 interface SidebarProps {
   categories: { name: string; models?: DeviceModel[]; subCategories?: { name: string; models: DeviceModel[] }[] }[];
   onAddDevice: (model: DeviceModel) => void;
@@ -18,6 +22,17 @@ interface SidebarProps {
   activeTool: CanvasTool;
   onAddExternalNetwork?: () => void;
   imageLibrary?: ImageLibraryEntry[];
+  activeTab?: SidebarTab;
+  onTabChange?: (tab: SidebarTab) => void;
+  nodes?: Node[];
+  runtimeStates?: Record<string, RuntimeStatus>;
+  deviceModels?: DeviceModel[];
+  selectedId?: string | null;
+  onFocusNode?: (nodeId: string) => void;
+  onOpenConsole?: (nodeId: string) => void;
+  onSelectNode?: (nodeId: string) => void;
+  collapsed?: boolean;
+  onToggleCollapse?: () => void;
 }
 
 const IMAGE_COMPAT_ALIASES: Record<string, string[]> = {
@@ -29,7 +44,11 @@ const IMAGE_COMPAT_ALIASES: Record<string, string[]> = {
   ftdv: ['cisco_ftdv'],
 };
 
-const Sidebar: React.FC<SidebarProps> = ({ categories, onAddDevice, onSelectTool, activeTool, onAddExternalNetwork, imageLibrary = [] }) => {
+const Sidebar: React.FC<SidebarProps> = ({
+  categories, onAddDevice, onSelectTool, activeTool, onAddExternalNetwork, imageLibrary = [],
+  activeTab = 'library', onTabChange, nodes = [], runtimeStates = {}, deviceModels = [],
+  selectedId = null, onFocusNode, onOpenConsole, onSelectNode, onToggleCollapse,
+}) => {
   const { preferences, updateCanvasSettings } = useNotifications();
   const [expandedCategories, setExpandedCategories] = useState<Set<string>>(
     new Set(categories.map(c => c.name))
@@ -384,15 +403,62 @@ const Sidebar: React.FC<SidebarProps> = ({ categories, onAddDevice, onSelectTool
     label: 'External Network',
   };
 
+  const deviceNodeCount = useMemo(() => nodes.filter(isDeviceNode).length, [nodes]);
+
   return (
     <div className="w-64 bg-white/80 dark:bg-stone-900/80 backdrop-blur-md border-r border-stone-200 dark:border-stone-800 flex flex-col h-full overflow-hidden">
-      <div className="p-4 border-b border-stone-200 dark:border-stone-800 bg-stone-50/80 dark:bg-stone-800/60">
-        <h2 className="text-sm font-bold uppercase tracking-wider text-stone-700 dark:text-stone-200 flex items-center gap-2">
-          <i className="fa-solid fa-boxes-stacked text-sage-600 dark:text-sage-400"></i>
+      {/* Tab bar + collapse */}
+      <div className="flex items-center border-b border-stone-200 dark:border-stone-800 bg-stone-50/80 dark:bg-stone-800/60">
+        <button
+          onClick={() => onTabChange?.('library')}
+          className={`flex-1 h-10 text-[10px] font-black uppercase tracking-wider border-b-2 transition-all ${
+            activeTab === 'library'
+              ? 'text-sage-700 dark:text-sage-400 border-sage-600 dark:border-sage-500'
+              : 'text-stone-500 dark:text-stone-400 border-transparent hover:text-stone-700 dark:hover:text-stone-200'
+          }`}
+        >
           Library
-        </h2>
+        </button>
+        <button
+          onClick={() => onTabChange?.('nodes')}
+          className={`flex-1 h-10 text-[10px] font-black uppercase tracking-wider border-b-2 transition-all flex items-center justify-center gap-1.5 ${
+            activeTab === 'nodes'
+              ? 'text-sage-700 dark:text-sage-400 border-sage-600 dark:border-sage-500'
+              : 'text-stone-500 dark:text-stone-400 border-transparent hover:text-stone-700 dark:hover:text-stone-200'
+          }`}
+        >
+          Nodes
+          {deviceNodeCount > 0 && (
+            <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold ${
+              activeTab === 'nodes'
+                ? 'bg-sage-600/20 text-sage-700 dark:text-sage-400'
+                : 'bg-stone-200 dark:bg-stone-700 text-stone-500 dark:text-stone-400'
+            }`}>
+              {deviceNodeCount}
+            </span>
+          )}
+        </button>
+        <button
+          onClick={() => onToggleCollapse?.()}
+          className="px-3 h-10 text-stone-400 hover:text-stone-600 dark:hover:text-stone-200 transition-colors border-b-2 border-transparent"
+          title="Collapse sidebar"
+        >
+          <i className="fa-solid fa-chevron-left text-[10px]" />
+        </button>
       </div>
 
+      {activeTab === 'nodes' ? (
+        <NodeListPanel
+          nodes={nodes}
+          runtimeStates={runtimeStates}
+          deviceModels={deviceModels}
+          selectedId={selectedId}
+          onFocusNode={onFocusNode || (() => {})}
+          onOpenConsole={onOpenConsole || (() => {})}
+          onSelectNode={onSelectNode || (() => {})}
+        />
+      ) : (
+      <>
       {/* Filters */}
       <SidebarFilters
         devices={allDevices}
@@ -564,6 +630,8 @@ const Sidebar: React.FC<SidebarProps> = ({ categories, onAddDevice, onSelectTool
           </p>
         </div>
       </div>
+      </>
+      )}
     </div>
   );
 };

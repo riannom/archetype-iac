@@ -38,6 +38,8 @@ interface CanvasProps {
   onUpdateAnnotation?: (id: string, updates: Partial<Annotation>) => void;
   selectedIds?: Set<string>;
   onSelectMultiple?: (ids: Set<string>) => void;
+  focusNodeId?: string | null;
+  onFocusHandled?: () => void;
 }
 
 type ResizeHandle = 'nw' | 'n' | 'ne' | 'e' | 'se' | 's' | 'sw' | 'w';
@@ -75,7 +77,7 @@ function readStoredViewport(labId?: string): { zoom: number; x: number; y: numbe
 }
 
 const Canvas: React.FC<CanvasProps> = ({
-  nodes, links, annotations, runtimeStates, nodeStates = {}, linkStates, scenarioHighlights, deviceModels, labId, agents = [], showAgentIndicators = false, onToggleAgentIndicators, activeTool = 'pointer', onToolCreate, onNodeMove, onAnnotationMove, onConnect, selectedId, onSelect, onOpenConsole, onExtractConfig, onUpdateStatus, onDelete, onDropDevice, onDropExternalNetwork, onUpdateAnnotation, selectedIds, onSelectMultiple
+  nodes, links, annotations, runtimeStates, nodeStates = {}, linkStates, scenarioHighlights, deviceModels, labId, agents = [], showAgentIndicators = false, onToggleAgentIndicators, activeTool = 'pointer', onToolCreate, onNodeMove, onAnnotationMove, onConnect, selectedId, onSelect, onOpenConsole, onExtractConfig, onUpdateStatus, onDelete, onDropDevice, onDropExternalNetwork, onUpdateAnnotation, selectedIds, onSelectMultiple, focusNodeId, onFocusHandled
 }) => {
   const { effectiveMode } = useTheme();
   const { preferences } = useNotifications();
@@ -140,6 +142,19 @@ const Canvas: React.FC<CanvasProps> = ({
     }, 300);
     return () => clearTimeout(timer);
   }, [labId, zoom, offset]);
+
+  // Pan canvas to center a specific node when focusNodeId changes
+  useEffect(() => {
+    if (!focusNodeId || !containerRef.current) return;
+    const node = nodes.find(n => n.id === focusNodeId);
+    if (!node) return;
+    const rect = containerRef.current.getBoundingClientRect();
+    setOffset({
+      x: rect.width / 2 - node.x * zoom,
+      y: rect.height / 2 - node.y * zoom,
+    });
+    onFocusHandled?.();
+  }, [focusNodeId]);
 
   // Elapsed timer: re-render every second when any node is in a transitional state
   const hasTransitionalNodes = useMemo(() => {

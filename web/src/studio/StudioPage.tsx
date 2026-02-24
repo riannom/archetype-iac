@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState, useRef } from 'react';
-import Sidebar from './components/Sidebar';
+import Sidebar, { SidebarTab } from './components/Sidebar';
 import Canvas from './components/Canvas';
 import TopBar from './components/TopBar';
 import PropertiesPanel from './components/PropertiesPanel';
@@ -181,6 +181,9 @@ const StudioPage: React.FC = () => {
   const [activeBottomTabId, setActiveBottomTabId] = useState<string>('log');
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [sidebarTab, setSidebarTab] = useState<SidebarTab>('library');
+  const [focusNodeId, setFocusNodeId] = useState<string | null>(null);
   const [activeTool, setActiveTool] = useState<CanvasTool>('pointer');
   const [showYamlModal, setShowYamlModal] = useState(false);
   const [yamlContent, setYamlContent] = useState('');
@@ -1977,7 +1980,36 @@ const StudioPage: React.FC = () => {
       default:
         return (
           <>
-            <Sidebar categories={deviceCategories} onAddDevice={handleAddDevice} onSelectTool={handleSelectTool} activeTool={activeTool} onAddExternalNetwork={handleAddExternalNetwork} imageLibrary={imageLibrary} />
+            <div className={`shrink-0 transition-all duration-300 ease-in-out overflow-hidden ${sidebarCollapsed ? 'w-0' : 'w-64'}`}>
+              <Sidebar
+                categories={deviceCategories}
+                onAddDevice={handleAddDevice}
+                onSelectTool={handleSelectTool}
+                activeTool={activeTool}
+                onAddExternalNetwork={handleAddExternalNetwork}
+                imageLibrary={imageLibrary}
+                activeTab={sidebarTab}
+                onTabChange={setSidebarTab}
+                nodes={nodes}
+                runtimeStates={runtimeStates}
+                deviceModels={deviceModels}
+                selectedId={selectedId}
+                onFocusNode={(id) => { setFocusNodeId(id); }}
+                onOpenConsole={handleOpenConsole}
+                onSelectNode={(id) => { setSelectedId(id); setSelectedIds(new Set()); }}
+                collapsed={sidebarCollapsed}
+                onToggleCollapse={() => setSidebarCollapsed(c => !c)}
+              />
+            </div>
+            {sidebarCollapsed && (
+              <button
+                onClick={() => setSidebarCollapsed(false)}
+                className="absolute left-2 top-2 z-20 w-8 h-8 rounded-lg bg-white/80 dark:bg-stone-800/80 backdrop-blur border border-stone-200 dark:border-stone-700 flex items-center justify-center text-stone-500 hover:text-stone-700 dark:hover:text-stone-200 shadow-sm transition-colors"
+                title="Expand sidebar"
+              >
+                <i className="fa-solid fa-chevron-right text-[10px]" />
+              </button>
+            )}
             <Canvas
               nodes={nodes}
               links={links}
@@ -2007,6 +2039,8 @@ const StudioPage: React.FC = () => {
               onUpdateAnnotation={handleUpdateAnnotation}
               selectedIds={selectedIds}
               onSelectMultiple={handleSelectMultiple}
+              focusNodeId={focusNodeId}
+              onFocusHandled={() => setFocusNodeId(null)}
             />
             <div
               className={`shrink-0 transition-all duration-300 ease-in-out overflow-hidden ${
