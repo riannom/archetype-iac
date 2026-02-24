@@ -558,12 +558,12 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         # Config extraction via TCP serial console (immune to user SSH/password changes)
         config_extract_method="serial",
         config_extract_command="show running-config",
-        config_extract_user="cisco",
+        config_extract_user="admin",
         config_extract_password="cisco",
         config_extract_timeout=60,
         config_extract_prompt_pattern=r"RP/\d+/RP\d+/CPU\d+:[\w\-]+#",
         config_extract_paging_disable="terminal length 0",
-        console_user="cisco",
+        console_user="admin",
         console_password="cisco",
         documentation_url="https://www.cisco.com/c/en/us/td/docs/iosxr/",
         license_required=True,
@@ -577,12 +577,12 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         # Default config prevents the Administrative User Dialog on first boot
         default_startup_config=(
             "hostname {hostname}\n"
-            "username cisco\n"
+            "username admin\n"
             " group root-lr\n"
             " group cisco-support\n"
             " secret cisco\n"
             "!\n"
-            "username admin\n"
+            "username cisco\n"
             " group root-lr\n"
             " group cisco-support\n"
             " secret cisco\n"
@@ -594,7 +594,7 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
             "!\n"
             "end\n"
         ),
-        default_credentials="cisco / cisco",
+        default_credentials="admin / cisco",
     ),
     "cisco_xrd": VendorConfig(
         kind="cisco_xrd",
