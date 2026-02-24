@@ -228,6 +228,8 @@ services:
       - /etc/docker/plugins:/etc/docker/plugins
       # Shared images directory for qcow2/IOL images
       - archetype_workspaces:/var/lib/archetype:ro
+      # OVMF firmware for EFI-booting VMs (QEMU runs on host, needs host path)
+      - /usr/share/OVMF:/usr/share/OVMF:ro
     logging:
       driver: "json-file"
       options:

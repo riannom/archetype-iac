@@ -20,6 +20,10 @@ from agent.vendors import get_console_credentials, get_console_method, get_conso
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["console"])
 
+# Per-port asyncio locks for TCP serial console sessions.
+# Prevents concurrent sessions from racing on chardev reset.
+_tcp_console_locks: dict[int, asyncio.Lock] = {}
+
 
 # --- Helper functions ---
 
@@ -563,8 +567,22 @@ async def _console_websocket_libvirt(
             await websocket.close(code=1011)
             return
 
-    # For TCP telnet consoles, reset QEMU chardev if stale connections exist
+    # For TCP telnet consoles, acquire per-port lock and reset chardev
+    _tcp_lock = None
     if _is_tcp_telnet and _tcp_port:
+        if _tcp_port not in _tcp_console_locks:
+            _tcp_console_locks[_tcp_port] = asyncio.Lock()
+        _tcp_lock = _tcp_console_locks[_tcp_port]
+        try:
+            await asyncio.wait_for(_tcp_lock.acquire(), timeout=10)
+        except asyncio.TimeoutError:
+            await websocket.send_text(
+                "\r\nError: Another session is using this console. "
+                "Please try again shortly.\r\n"
+            )
+            await websocket.close(code=1011)
+            return
+        # Reset stale chardev while holding lock
         domain_name = libvirt_domain_name(lab_id, node_name)
         await _reset_tcp_chardev(domain_name, _tcp_port)
 
@@ -794,6 +812,10 @@ async def _console_websocket_libvirt(
                 _lock_ctx.__exit__(None, None, None)
             except Exception:
                 pass
+
+        # Release TCP serial port lock if held
+        if _tcp_lock is not None and _tcp_lock.locked():
+            _tcp_lock.release()
 
         try:
             await websocket.close()

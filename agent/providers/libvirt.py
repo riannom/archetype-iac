@@ -77,16 +77,28 @@ except ImportError:
 # Spawned as a subprocess with PTY like virsh console — the existing
 # _console_websocket_libvirt handler works without modification.
 _TCP_TELNET_CONSOLE_SCRIPT = r'''
-import sys, os, socket, select, struct, tty, termios
+import sys, os, socket, select, struct, tty, termios, time
 
 port = int(sys.argv[1])
 sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 sock.settimeout(10)
-try:
-    sock.connect(("127.0.0.1", port))
-except Exception as e:
-    sys.stderr.write(f"Failed to connect to TCP serial port {port}: {e}\n")
-    sys.exit(1)
+# Retry connection — chardev reset may briefly take the port offline
+for attempt in range(6):
+    try:
+        sock.connect(("127.0.0.1", port))
+        break
+    except ConnectionRefusedError:
+        if attempt < 5:
+            time.sleep(0.5)
+            sock.close()
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(10)
+        else:
+            sys.stderr.write(f"Failed to connect to TCP serial port {port} after retries\n")
+            sys.exit(1)
+    except Exception as e:
+        sys.stderr.write(f"Failed to connect to TCP serial port {port}: {e}\n")
+        sys.exit(1)
 sock.setblocking(False)
 
 fd = sys.stdin.fileno()
