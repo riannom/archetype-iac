@@ -1,0 +1,131 @@
+# Multi-agent smoke test compose stack.
+# Extends single-host smoke by adding a second agent to validate
+# multi-agent registration. Both agents run in degraded mode.
+#
+# Limitation: No VXLAN/OVS testing — requires real hosts with kernel support.
+
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: archetype
+      POSTGRES_PASSWORD: archetype
+      POSTGRES_DB: archetype
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U archetype"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  redis:
+    image: redis:7
+
+  api:
+    build:
+      context: ../..
+      dockerfile: Dockerfile.api
+      args:
+        GIT_SHA: smoke-test
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    environment:
+      DATABASE_URL: postgresql+psycopg://archetype:archetype@postgres:5432/archetype
+      REDIS_URL: redis://redis:6379/0
+      WORKSPACE: /var/lib/archetype
+      PROVIDER: docker
+      LOCAL_AUTH_ENABLED: "true"
+      JWT_SECRET: smoke-test-jwt-secret-not-for-production
+      SESSION_SECRET: smoke-test-session-secret-not-for-production
+      AGENT_SECRET: smoke-test-agent-secret
+      ADMIN_EMAIL: admin@localhost
+      ADMIN_PASSWORD: smoketest123
+      INTERNAL_URL: http://api:8000
+      LOG_FORMAT: json
+      LOG_LEVEL: INFO
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8000/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 15s
+
+  scheduler:
+    build:
+      context: ../..
+      dockerfile: Dockerfile.api
+      args:
+        GIT_SHA: smoke-test
+    command: python -m app.scheduler
+    depends_on:
+      api:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    environment:
+      DATABASE_URL: postgresql+psycopg://archetype:archetype@postgres:5432/archetype
+      REDIS_URL: redis://redis:6379/0
+      WORKSPACE: /var/lib/archetype
+      AGENT_SECRET: smoke-test-agent-secret
+      INTERNAL_URL: http://api:8000
+      LOG_FORMAT: json
+      LOG_LEVEL: INFO
+
+  agent:
+    build:
+      context: ../..
+      dockerfile: Dockerfile.agent
+      args:
+        GIT_SHA: smoke-test
+    depends_on:
+      api:
+        condition: service_healthy
+    environment:
+      ARCHETYPE_AGENT_AGENT_NAME: smoke-agent
+      ARCHETYPE_AGENT_AGENT_PORT: "8001"
+      ARCHETYPE_AGENT_CONTROLLER_URL: http://api:8000
+      ARCHETYPE_AGENT_CONTROLLER_SECRET: smoke-test-agent-secret
+      ARCHETYPE_AGENT_ENABLE_DOCKER: "false"
+      ARCHETYPE_AGENT_ENABLE_OVS: "false"
+      ARCHETYPE_AGENT_ENABLE_VXLAN: "false"
+      ARCHETYPE_AGENT_ENABLE_LIBVIRT: "false"
+      ARCHETYPE_AGENT_WORKSPACE_PATH: /var/lib/archetype-agent
+      ARCHETYPE_AGENT_LOG_FORMAT: json
+      ARCHETYPE_AGENT_LOG_LEVEL: INFO
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8001/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 30s
+
+  remote-agent:
+    build:
+      context: ../..
+      dockerfile: Dockerfile.agent
+      args:
+        GIT_SHA: smoke-test
+    depends_on:
+      api:
+        condition: service_healthy
+    environment:
+      ARCHETYPE_AGENT_AGENT_NAME: remote-agent
+      ARCHETYPE_AGENT_AGENT_PORT: "8001"
+      ARCHETYPE_AGENT_IS_LOCAL: "false"
+      ARCHETYPE_AGENT_CONTROLLER_URL: http://api:8000
+      ARCHETYPE_AGENT_CONTROLLER_SECRET: smoke-test-agent-secret
+      ARCHETYPE_AGENT_ENABLE_DOCKER: "false"
+      ARCHETYPE_AGENT_ENABLE_OVS: "false"
+      ARCHETYPE_AGENT_ENABLE_VXLAN: "false"
+      ARCHETYPE_AGENT_ENABLE_LIBVIRT: "false"
+      ARCHETYPE_AGENT_WORKSPACE_PATH: /var/lib/archetype-agent
+      ARCHETYPE_AGENT_LOG_FORMAT: json
+      ARCHETYPE_AGENT_LOG_LEVEL: INFO
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8001/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 30s

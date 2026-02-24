@@ -157,9 +157,35 @@ jobs:
           fi
           echo "Version check passed: v$VERSION"
 
+  smoke-test:
+    name: Smoke Test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run single-host smoke test
+        run: bash tests/smoke/smoke_test.sh
+
+      - name: Dump compose logs on failure
+        if: failure()
+        run: |
+          for proj in $(docker compose ls -q 2>/dev/null | grep archetype-smoke || true); do
+            docker compose -p "$proj" logs --no-color > "/tmp/smoke-compose-logs.txt" 2>&1 || true
+          done
+
+      - name: Upload compose logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-release-compose-logs
+          path: /tmp/smoke-compose-logs.txt
+          retention-days: 7
+
   create-release:
     name: Create Release
-    needs: [backend-tests, frontend-tests, lint, version-check, script-tests]
+    needs: [backend-tests, frontend-tests, lint, version-check, script-tests, smoke-test]
     runs-on: ubuntu-latest
     permissions:
       contents: write

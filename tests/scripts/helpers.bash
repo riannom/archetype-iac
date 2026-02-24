@@ -121,3 +121,127 @@ esac
 ENDMOCK
     chmod +x "$MOCK_BIN/hostname"
 }
+
+# ---------------------------------------------------------------------------
+# sleep / polling mocks
+# ---------------------------------------------------------------------------
+
+# No-op sleep for testing polling loops without delays.
+mock_sleep() {
+    cat > "$MOCK_BIN/sleep" <<'ENDMOCK'
+#!/bin/bash
+exit 0
+ENDMOCK
+    chmod +x "$MOCK_BIN/sleep"
+}
+
+# Mock curl that returns different responses on successive calls.
+# Usage: mock_curl_sequence '200:{"status":"ok"}' '500:' '200:{"status":"ok"}'
+# Each arg is "exit_code:body". Counter persists across calls.
+mock_curl_sequence() {
+    local i=0
+    for entry in "$@"; do
+        local code="${entry%%:*}"
+        local body="${entry#*:}"
+        printf '%s\n' "$body" > "$TEST_TMPDIR/curl_seq_body_$i"
+        printf '%s\n' "$code" > "$TEST_TMPDIR/curl_seq_code_$i"
+        i=$((i + 1))
+    done
+    printf '%s\n' "$i" > "$TEST_TMPDIR/curl_seq_total"
+    printf '0\n' > "$TEST_TMPDIR/curl_seq_counter"
+
+    cat > "$MOCK_BIN/curl" <<ENDMOCK
+#!/bin/bash
+COUNTER_FILE="$TEST_TMPDIR/curl_seq_counter"
+TOTAL=\$(cat "$TEST_TMPDIR/curl_seq_total")
+IDX=\$(cat "\$COUNTER_FILE")
+if [ "\$IDX" -ge "\$TOTAL" ]; then
+    IDX=\$((\$TOTAL - 1))
+fi
+cat "$TEST_TMPDIR/curl_seq_body_\$IDX"
+CODE=\$(cat "$TEST_TMPDIR/curl_seq_code_\$IDX")
+echo \$((\$IDX + 1)) > "\$COUNTER_FILE"
+exit \$CODE
+ENDMOCK
+    chmod +x "$MOCK_BIN/curl"
+}
+
+# ---------------------------------------------------------------------------
+# OS release mocking
+# ---------------------------------------------------------------------------
+
+# Write a fake /etc/os-release to $TEST_TMPDIR/etc/os-release and set up
+# the test to source it instead of the real one.
+# Usage: mock_os_release ubuntu 22.04
+mock_os_release() {
+    local id="$1" version="${2:-}"
+    mkdir -p "$TEST_TMPDIR/etc"
+    cat > "$TEST_TMPDIR/etc/os-release" <<EOF
+ID=$id
+VERSION_ID=$version
+NAME="Mock OS"
+EOF
+}
+
+# ---------------------------------------------------------------------------
+# systemctl / docker / git recorders
+# ---------------------------------------------------------------------------
+
+# Mock systemctl — logs all invocations to systemctl.log, returns success.
+mock_systemctl() {
+    cat > "$MOCK_BIN/systemctl" <<ENDMOCK
+#!/bin/bash
+echo "systemctl \$*" >> "$TEST_TMPDIR/systemctl.log"
+# is-active checks: return success by default
+if [ "\$1" = "is-active" ]; then
+    exit 0
+fi
+exit 0
+ENDMOCK
+    chmod +x "$MOCK_BIN/systemctl"
+}
+
+# Mock docker — logs all invocations to docker.log, returns success.
+mock_docker() {
+    cat > "$MOCK_BIN/docker" <<ENDMOCK
+#!/bin/bash
+echo "docker \$*" >> "$TEST_TMPDIR/docker.log"
+if [ "\$1" = "--version" ]; then
+    echo "Docker version 24.0.0, build abc123"
+fi
+if [ "\$1" = "compose" ]; then
+    echo "docker compose executed"
+fi
+exit 0
+ENDMOCK
+    chmod +x "$MOCK_BIN/docker"
+}
+
+# Mock git — logs all invocations to git.log, returns success.
+mock_git() {
+    cat > "$MOCK_BIN/git" <<ENDMOCK
+#!/bin/bash
+echo "git \$*" >> "$TEST_TMPDIR/git.log"
+if [ "\$1" = "rev-parse" ] && [ "\$2" = "--short" ]; then
+    echo "abc1234"
+fi
+exit 0
+ENDMOCK
+    chmod +x "$MOCK_BIN/git"
+}
+
+# ---------------------------------------------------------------------------
+# Generic command mock
+# ---------------------------------------------------------------------------
+
+# Create a simple pass/fail mock for any command.
+# Usage: mock_command <name> [exit_code] [stdout]
+mock_command() {
+    local name="$1" exit_code="${2:-0}" stdout="${3:-}"
+    cat > "$MOCK_BIN/$name" <<ENDMOCK
+#!/bin/bash
+echo "$stdout"
+exit $exit_code
+ENDMOCK
+    chmod +x "$MOCK_BIN/$name"
+}
