@@ -100,6 +100,7 @@ const Canvas: React.FC<CanvasProps> = ({
   const didPanRef = useRef(false);
   const [editingText, setEditingText] = useState<{ id: string; x: number; y: number } | null>(null);
   const pendingTextEditRef = useRef(false);
+  const textEditCommittedRef = useRef(false);
   const textInputRef = useRef<HTMLInputElement>(null);
 
   // Track latest viewport for unmount save
@@ -204,6 +205,7 @@ const Canvas: React.FC<CanvasProps> = ({
     const ann = annotations.find(a => a.id === selectedId && a.type === 'text');
     if (ann) {
       pendingTextEditRef.current = false;
+      textEditCommittedRef.current = false;
       setEditingText({ id: ann.id, x: ann.x, y: ann.y });
     }
   }, [selectedId, annotations]);
@@ -647,7 +649,7 @@ const Canvas: React.FC<CanvasProps> = ({
         className="absolute inset-0 origin-top-left"
         style={{ transform: `translate(${offset.x}px, ${offset.y}px) scale(${zoom})` }}
       >
-        <svg className="absolute inset-0 w-[5000px] h-[5000px] pointer-events-none">
+        <svg className="absolute inset-0 w-[5000px] h-[5000px] pointer-events-none" style={{ overflow: 'visible' }}>
           {[...annotations].sort((a, b) => (a.zIndex ?? 0) - (b.zIndex ?? 0)).map(ann => {
             const isSelected = selectedId === ann.id;
             const stroke = isSelected ? (effectiveMode === 'dark' ? '#65A30D' : '#4D7C0F') : (ann.color || (effectiveMode === 'dark' ? '#57534E' : '#D6D3D1'));
@@ -768,6 +770,7 @@ const Canvas: React.FC<CanvasProps> = ({
             const handleTextDoubleClick = (e: React.MouseEvent) => {
               if (ann.type === 'text') {
                 e.stopPropagation();
+                textEditCommittedRef.current = false;
                 setEditingText({ id: ann.id, x: ann.x, y: ann.y });
               }
             };
@@ -991,6 +994,8 @@ const Canvas: React.FC<CanvasProps> = ({
                 lineHeight: 1,
               }}
               onBlur={(e) => {
+                if (textEditCommittedRef.current) return;
+                textEditCommittedRef.current = true;
                 const val = e.target.value.trim();
                 if (val && onUpdateAnnotation) {
                   onUpdateAnnotation(editingText.id, { text: val });
@@ -1004,6 +1009,7 @@ const Canvas: React.FC<CanvasProps> = ({
                 if (e.key === 'Enter') {
                   (e.target as HTMLInputElement).blur();
                 } else if (e.key === 'Escape') {
+                  textEditCommittedRef.current = true;
                   const ann = annotations.find(a => a.id === editingText.id);
                   if (!ann?.text) {
                     onDelete(editingText.id);
