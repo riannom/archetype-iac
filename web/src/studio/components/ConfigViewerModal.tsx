@@ -16,6 +16,10 @@ interface ConfigViewerModalProps {
   nodeId?: string;
   nodeName?: string;
   studioRequest: <T>(path: string, options?: RequestInit) => Promise<T>;
+  /** If provided, display this content directly instead of fetching from API. */
+  snapshotContent?: string;
+  /** Label for the snapshot being displayed (e.g. "Manual — 5m ago"). */
+  snapshotLabel?: string;
 }
 
 const ConfigViewerModal: React.FC<ConfigViewerModalProps> = ({
@@ -25,6 +29,8 @@ const ConfigViewerModal: React.FC<ConfigViewerModalProps> = ({
   nodeId: _nodeId,
   nodeName,
   studioRequest,
+  snapshotContent,
+  snapshotLabel,
 }) => {
   const [configs, setConfigs] = useState<SavedConfig[]>([]);
   const [activeTab, setActiveTab] = useState<string>('');
@@ -35,6 +41,15 @@ const ConfigViewerModal: React.FC<ConfigViewerModalProps> = ({
 
   useEffect(() => {
     if (!isOpen || !labId) return;
+
+    // If snapshot content is provided directly, use it instead of fetching
+    if (snapshotContent !== undefined) {
+      const label = nodeName || 'Snapshot';
+      setConfigs([{ node_name: label, config: snapshotContent, last_modified: Date.now() / 1000, exists: true }]);
+      setActiveTab(label);
+      setLoading(false);
+      return;
+    }
 
     const fetchConfigs = async () => {
       setLoading(true);
@@ -67,7 +82,7 @@ const ConfigViewerModal: React.FC<ConfigViewerModalProps> = ({
     };
 
     fetchConfigs();
-  }, [isOpen, labId, nodeName, studioRequest]);
+  }, [isOpen, labId, nodeName, snapshotContent, studioRequest]);
 
   useEffect(() => {
     return () => {
@@ -134,7 +149,9 @@ const ConfigViewerModal: React.FC<ConfigViewerModalProps> = ({
 
   const activeConfig = configs.find(c => c.node_name === activeTab);
 
-  const title = nodeName ? `Config: ${nodeName}` : 'Saved Configurations';
+  const title = snapshotLabel
+    ? `${nodeName}: ${snapshotLabel}`
+    : nodeName ? `Config: ${nodeName}` : 'Saved Configurations';
 
   return (
     <DetailPopup isOpen={isOpen} onClose={onClose} title={title} width="max-w-4xl">
@@ -187,10 +204,14 @@ const ConfigViewerModal: React.FC<ConfigViewerModalProps> = ({
           {/* Config header with metadata */}
           {activeConfig && (
             <div className="flex items-center justify-between mb-3">
-              <div className="text-xs text-stone-500 dark:text-stone-400">
-                <i className="fa-solid fa-clock mr-1" />
-                Last modified: {formatTimestamp(activeConfig.last_modified)}
-              </div>
+              {snapshotContent === undefined ? (
+                <div className="text-xs text-stone-500 dark:text-stone-400">
+                  <i className="fa-solid fa-clock mr-1" />
+                  Last modified: {formatTimestamp(activeConfig.last_modified)}
+                </div>
+              ) : (
+                <div />
+              )}
               <button
                 onClick={handleCopy}
                 className="flex items-center gap-2 px-3 py-1.5 text-xs font-medium glass-control text-stone-700 dark:text-stone-300 rounded-lg transition-colors"

@@ -21,7 +21,7 @@ interface ConfigSnapshotSelectorProps {
   nodeName: string;
   nodeId: string;
   studioRequest: <T>(path: string, options?: RequestInit) => Promise<T>;
-  onOpenConfigViewer?: (nodeId: string, nodeName: string) => void;
+  onOpenConfigViewer?: (nodeId: string, nodeName: string, snapshotContent?: string, snapshotLabel?: string) => void;
   onUpdateStatus: (nodeId: string, status: RuntimeStatus) => void;
   nodeState?: NodeStateEntry;
 }
@@ -76,8 +76,10 @@ const ConfigSnapshotSelector: React.FC<ConfigSnapshotSelectorProps> = ({
     description: string;
   }>({ open: false, snapshotId: null, description: '' });
   const [apiLoading, setApiLoading] = useState(false);
+  const [selectedSnapshotId, setSelectedSnapshotId] = useState<string | null>(null);
 
   const activeSnapshot = snapshots.find(s => s.is_active);
+  const selectedSnapshot = snapshots.find(s => s.id === selectedSnapshotId);
 
   const fetchSnapshots = useCallback(async () => {
     try {
@@ -181,9 +183,17 @@ const ConfigSnapshotSelector: React.FC<ConfigSnapshotSelectorProps> = ({
           )}
           {onOpenConfigViewer && (
             <button
-              onClick={() => onOpenConfigViewer(nodeId, nodeName)}
+              onClick={() => {
+                const snap = selectedSnapshot || activeSnapshot;
+                if (snap) {
+                  const label = `${typeLabel(snap.snapshot_type)} — ${relativeTime(snap.created_at)}`;
+                  onOpenConfigViewer(nodeId, nodeName, snap.content, label);
+                } else {
+                  onOpenConfigViewer(nodeId, nodeName);
+                }
+              }}
               className="flex items-center gap-1.5 px-2 py-1 text-[9px] font-bold uppercase text-sage-600 dark:text-sage-400 hover:bg-sage-500/10 rounded transition-colors"
-              title="View saved config in larger window"
+              title={selectedSnapshot ? `View selected snapshot` : 'View saved config in larger window'}
             >
               <i className="fa-solid fa-expand" />
               Expand
@@ -225,10 +235,13 @@ const ConfigSnapshotSelector: React.FC<ConfigSnapshotSelectorProps> = ({
           {snapshots.map(snap => (
             <div
               key={snap.id}
-              className={`group relative p-2.5 rounded-lg border transition-all ${
-                snap.is_active
-                  ? 'bg-amber-500/5 border-amber-500/30 dark:border-amber-500/20'
-                  : 'glass-control border-stone-200 dark:border-stone-700 hover:border-stone-300 dark:hover:border-stone-600'
+              onClick={() => setSelectedSnapshotId(prev => prev === snap.id ? null : snap.id)}
+              className={`group relative p-2.5 rounded-lg border transition-all cursor-pointer ${
+                snap.id === selectedSnapshotId
+                  ? 'bg-sage-500/10 border-sage-500/40 dark:border-sage-500/30 ring-1 ring-sage-500/20'
+                  : snap.is_active
+                    ? 'bg-amber-500/5 border-amber-500/30 dark:border-amber-500/20'
+                    : 'glass-control border-stone-200 dark:border-stone-700 hover:border-stone-300 dark:hover:border-stone-600'
               }`}
             >
               <div className="flex items-center justify-between">
@@ -247,7 +260,7 @@ const ConfigSnapshotSelector: React.FC<ConfigSnapshotSelectorProps> = ({
                 <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                   {!snap.is_active && (
                     <button
-                      onClick={() => handleSetActive(snap.id)}
+                      onClick={(e) => { e.stopPropagation(); handleSetActive(snap.id); }}
                       className="p-1 text-stone-400 hover:text-amber-500 transition-colors"
                       title="Set as active config"
                     >
@@ -255,7 +268,7 @@ const ConfigSnapshotSelector: React.FC<ConfigSnapshotSelectorProps> = ({
                     </button>
                   )}
                   <button
-                    onClick={() => handleDelete(snap.id)}
+                    onClick={(e) => { e.stopPropagation(); handleDelete(snap.id); }}
                     className="p-1 text-stone-400 hover:text-red-500 transition-colors"
                     title="Delete snapshot"
                   >
@@ -268,12 +281,17 @@ const ConfigSnapshotSelector: React.FC<ConfigSnapshotSelectorProps> = ({
         </div>
       )}
 
-      {/* Active config preview */}
+      {/* Config preview */}
       <div className="mt-auto">
         <div className="flex items-center justify-between mb-1.5">
           <span className="text-[9px] font-bold text-stone-500 uppercase tracking-widest">
             {activeSnapshot ? 'Active Config' : 'Startup Config'}
           </span>
+          {activeSnapshot && (
+            <span className="text-[8px] text-stone-400 dark:text-stone-600">
+              {activeSnapshot.id.slice(0, 8)}
+            </span>
+          )}
         </div>
         <pre className="bg-stone-50 dark:bg-black text-sage-700 dark:text-sage-400 font-mono text-[10px] p-3 rounded-xl border border-stone-200 dark:border-stone-800 max-h-[200px] overflow-y-auto custom-scrollbar whitespace-pre-wrap break-all">
           {activeSnapshot

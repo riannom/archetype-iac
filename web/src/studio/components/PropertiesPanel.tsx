@@ -23,7 +23,7 @@ interface PropertiesPanelProps {
   onUpdateStatus: (nodeId: string, status: RuntimeStatus) => void;
   deviceModels: DeviceModel[];
   portManager: PortManager;
-  onOpenConfigViewer?: (nodeId: string, nodeName: string) => void;
+  onOpenConfigViewer?: (nodeId: string, nodeName: string, snapshotContent?: string, snapshotLabel?: string) => void;
   labId?: string;
   studioRequest?: <T>(path: string, options?: RequestInit) => Promise<T>;
   agents?: { id: string; name: string }[];

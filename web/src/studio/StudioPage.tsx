@@ -211,6 +211,7 @@ const StudioPage: React.FC = () => {
   // Config viewer modal state
   const [configViewerOpen, setConfigViewerOpen] = useState(false);
   const [configViewerNode, setConfigViewerNode] = useState<{ id: string; name: string } | null>(null);
+  const [configViewerSnapshot, setConfigViewerSnapshot] = useState<{ content: string; label: string } | null>(null);
   // Job log modal state
   const [jobLogModalOpen, setJobLogModalOpen] = useState(false);
   const [jobLogModalJobId, setJobLogModalJobId] = useState<string | null>(null);
@@ -1531,11 +1532,16 @@ const StudioPage: React.FC = () => {
     });
   }, []);
 
-  const handleOpenConfigViewer = useCallback((nodeId?: string, nodeName?: string) => {
+  const handleOpenConfigViewer = useCallback((nodeId?: string, nodeName?: string, snapshotContent?: string, snapshotLabel?: string) => {
     if (nodeId && nodeName) {
       setConfigViewerNode({ id: nodeId, name: nodeName });
     } else {
       setConfigViewerNode(null);
+    }
+    if (snapshotContent !== undefined && snapshotLabel) {
+      setConfigViewerSnapshot({ content: snapshotContent, label: snapshotLabel });
+    } else {
+      setConfigViewerSnapshot(null);
     }
     setConfigViewerOpen(true);
   }, []);
@@ -1580,6 +1586,7 @@ const StudioPage: React.FC = () => {
   const handleCloseConfigViewer = useCallback(() => {
     setConfigViewerOpen(false);
     setConfigViewerNode(null);
+    setConfigViewerSnapshot(null);
   }, []);
 
   const handleTaskLogEntryClick = useCallback((entry: TaskLogEntry) => {
@@ -2248,6 +2255,8 @@ const StudioPage: React.FC = () => {
         nodeId={configViewerNode?.id}
         nodeName={configViewerNode?.name}
         studioRequest={studioRequest}
+        snapshotContent={configViewerSnapshot?.content}
+        snapshotLabel={configViewerSnapshot?.label}
       />
       <JobLogModal
         isOpen={jobLogModalOpen}
