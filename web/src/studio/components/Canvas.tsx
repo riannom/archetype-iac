@@ -36,6 +36,8 @@ interface CanvasProps {
   onDropDevice?: (model: DeviceModel, x: number, y: number) => void;
   onDropExternalNetwork?: (x: number, y: number) => void;
   onUpdateAnnotation?: (id: string, updates: Partial<Annotation>) => void;
+  selectedIds?: Set<string>;
+  onSelectMultiple?: (ids: Set<string>) => void;
 }
 
 type ResizeHandle = 'nw' | 'n' | 'ne' | 'e' | 'se' | 's' | 'sw' | 'w';
@@ -73,7 +75,7 @@ function readStoredViewport(labId?: string): { zoom: number; x: number; y: numbe
 }
 
 const Canvas: React.FC<CanvasProps> = ({
-  nodes, links, annotations, runtimeStates, nodeStates = {}, linkStates, scenarioHighlights, deviceModels, labId, agents = [], showAgentIndicators = false, onToggleAgentIndicators, activeTool = 'pointer', onToolCreate, onNodeMove, onAnnotationMove, onConnect, selectedId, onSelect, onOpenConsole, onExtractConfig, onUpdateStatus, onDelete, onDropDevice, onDropExternalNetwork, onUpdateAnnotation
+  nodes, links, annotations, runtimeStates, nodeStates = {}, linkStates, scenarioHighlights, deviceModels, labId, agents = [], showAgentIndicators = false, onToggleAgentIndicators, activeTool = 'pointer', onToolCreate, onNodeMove, onAnnotationMove, onConnect, selectedId, onSelect, onOpenConsole, onExtractConfig, onUpdateStatus, onDelete, onDropDevice, onDropExternalNetwork, onUpdateAnnotation, selectedIds, onSelectMultiple
 }) => {
   const { effectiveMode } = useTheme();
   const { preferences } = useNotifications();
@@ -102,6 +104,9 @@ const Canvas: React.FC<CanvasProps> = ({
   const pendingTextEditRef = useRef(false);
   const textEditCommittedRef = useRef(false);
   const textInputRef = useRef<HTMLInputElement>(null);
+  const [marqueeStart, setMarqueeStart] = useState<{ x: number; y: number } | null>(null);
+  const [marqueeEnd, setMarqueeEnd] = useState<{ x: number; y: number } | null>(null);
+  const marqueeRef = useRef<{ x: number; y: number } | null>(null);
 
   // Track latest viewport for unmount save
   const viewportRef = useRef({ zoom, x: offset.x, y: offset.y });
@@ -188,16 +193,20 @@ const Canvas: React.FC<CanvasProps> = ({
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (editingText) return; // Don't delete while editing text
-      if ((e.key === 'Delete' || e.key === 'Backspace') && selectedId) {
+      if (e.key === 'Delete' || e.key === 'Backspace') {
         const target = e.target as HTMLElement;
         if (target.tagName !== 'INPUT' && target.tagName !== 'TEXTAREA') {
-          onDelete(selectedId);
+          if (selectedIds && selectedIds.size > 0) {
+            selectedIds.forEach(id => onDelete(id));
+          } else if (selectedId) {
+            onDelete(selectedId);
+          }
         }
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [selectedId, onDelete, editingText]);
+  }, [selectedId, selectedIds, onDelete, editingText]);
 
   // Enter inline edit mode when a text annotation is just created
   useEffect(() => {
@@ -231,6 +240,21 @@ const Canvas: React.FC<CanvasProps> = ({
         if (Math.abs(dx) > 3 || Math.abs(dy) > 3) {
           didPanRef.current = true;
         }
+      }
+      return;
+    }
+
+    // Marquee selection tracking (pointer tool, empty canvas drag)
+    if (marqueeRef.current) {
+      if (!didPanRef.current && panStartRef.current) {
+        const dx = e.clientX - panStartRef.current.x;
+        const dy = e.clientY - panStartRef.current.y;
+        if (Math.abs(dx) > 3 || Math.abs(dy) > 3) {
+          didPanRef.current = true;
+        }
+      }
+      if (didPanRef.current) {
+        setMarqueeEnd({ x, y });
       }
       return;
     }
@@ -341,8 +365,15 @@ const Canvas: React.FC<CanvasProps> = ({
         e.preventDefault();
         return;
       }
-      // Default pointer: pan
-      setIsPanning(true);
+      // Pointer: start marquee tracking (pan via middle-click or scroll)
+      if (containerRef.current) {
+        const rect = containerRef.current.getBoundingClientRect();
+        const cx = (e.clientX - rect.left - offset.x) / zoom;
+        const cy = (e.clientY - rect.top - offset.y) / zoom;
+        marqueeRef.current = { x: cx, y: cy };
+        setMarqueeStart({ x: cx, y: cy });
+        setMarqueeEnd({ x: cx, y: cy });
+      }
       panStartRef.current = { x: e.clientX, y: e.clientY };
       didPanRef.current = false;
       return;
@@ -377,6 +408,85 @@ const Canvas: React.FC<CanvasProps> = ({
     setDrawStart(null);
     setDrawEnd(null);
 
+    // Marquee selection completion
+    if (marqueeRef.current) {
+      const mStart = marqueeRef.current;
+      const mEnd = marqueeEnd;
+      marqueeRef.current = null;
+      setMarqueeStart(null);
+      setMarqueeEnd(null);
+      panStartRef.current = null;
+
+      if (didPanRef.current && mEnd) {
+        const dx = mEnd.x - mStart.x;
+        const dy = mEnd.y - mStart.y;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        if (dist >= 10) {
+          const left = Math.min(mStart.x, mEnd.x);
+          const right = Math.max(mStart.x, mEnd.x);
+          const mTop = Math.min(mStart.y, mEnd.y);
+          const mBottom = Math.max(mStart.y, mEnd.y);
+          const ids = new Set<string>();
+
+          nodes.forEach(n => {
+            if (n.x >= left && n.x <= right && n.y >= mTop && n.y <= mBottom) {
+              ids.add(n.id);
+            }
+          });
+
+          annotations.forEach(ann => {
+            if (ann.type === 'rect') {
+              const w = ann.width || 100;
+              const h = ann.height || 60;
+              if (ann.x + w >= left && ann.x <= right && ann.y + h >= mTop && ann.y <= mBottom) {
+                ids.add(ann.id);
+              }
+            } else if (ann.type === 'circle') {
+              const r = ann.width ? ann.width / 2 : 40;
+              if (ann.x + r >= left && ann.x - r <= right && ann.y + r >= mTop && ann.y - r <= mBottom) {
+                ids.add(ann.id);
+              }
+            } else if (ann.type === 'text') {
+              const text = ann.text || 'New Text';
+              const fontSize = ann.fontSize || 14;
+              const approxW = Math.max(20, text.length * fontSize * 0.6);
+              const approxH = fontSize * 1.2;
+              if (ann.x + approxW >= left && ann.x <= right && ann.y >= mTop && ann.y - approxH <= mBottom) {
+                ids.add(ann.id);
+              }
+            } else if (ann.type === 'arrow') {
+              const tx = ann.targetX ?? ann.x + 100;
+              const ty = ann.targetY ?? ann.y + 100;
+              if ((ann.x >= left && ann.x <= right && ann.y >= mTop && ann.y <= mBottom) ||
+                  (tx >= left && tx <= right && ty >= mTop && ty <= mBottom)) {
+                ids.add(ann.id);
+              }
+            }
+          });
+
+          if (ids.size > 0 && onSelectMultiple) {
+            onSelectMultiple(ids);
+          } else {
+            onSelect(null);
+          }
+          setDraggingNode(null);
+          setDraggingAnnotation(null);
+          setIsPanning(false);
+          setLinkingNode(null);
+          setResizing(null);
+          return;
+        }
+      }
+      // Small movement or click — deselect
+      onSelect(null);
+      setDraggingNode(null);
+      setDraggingAnnotation(null);
+      setIsPanning(false);
+      setLinkingNode(null);
+      setResizing(null);
+      return;
+    }
+
     if (isPanning && !didPanRef.current) {
       onSelect(null);
     }
@@ -386,7 +496,7 @@ const Canvas: React.FC<CanvasProps> = ({
     panStartRef.current = null;
     setLinkingNode(null);
     setResizing(null);
-  }, [isPanning, onSelect, drawEnd, activeTool, onToolCreate]);
+  }, [isPanning, onSelect, drawEnd, activeTool, onToolCreate, marqueeEnd, onSelectMultiple, nodes, annotations]);
 
   const handleNodeMouseDown = (e: React.MouseEvent, id: string) => {
     if (e.button === 2) return;
@@ -651,7 +761,7 @@ const Canvas: React.FC<CanvasProps> = ({
       >
         <svg className="absolute inset-0 w-[5000px] h-[5000px] pointer-events-none" style={{ overflow: 'visible' }}>
           {[...annotations].sort((a, b) => (a.zIndex ?? 0) - (b.zIndex ?? 0)).map(ann => {
-            const isSelected = selectedId === ann.id;
+            const isSelected = selectedId === ann.id || selectedIds?.has(ann.id) === true;
             const stroke = isSelected ? (effectiveMode === 'dark' ? '#65A30D' : '#4D7C0F') : (ann.color || (effectiveMode === 'dark' ? '#57534E' : '#D6D3D1'));
             const handleSize = 8;
             const handleFill = effectiveMode === 'dark' ? '#65A30D' : '#4D7C0F';
@@ -979,6 +1089,21 @@ const Canvas: React.FC<CanvasProps> = ({
               </>
             );
           })()}
+
+          {/* Marquee selection preview */}
+          {marqueeStart && marqueeEnd && activeTool === 'pointer' && (
+            <rect
+              x={Math.min(marqueeStart.x, marqueeEnd.x)}
+              y={Math.min(marqueeStart.y, marqueeEnd.y)}
+              width={Math.abs(marqueeEnd.x - marqueeStart.x)}
+              height={Math.abs(marqueeEnd.y - marqueeStart.y)}
+              fill="rgba(59, 130, 246, 0.08)"
+              stroke="#3B82F6"
+              strokeWidth="1.5"
+              strokeDasharray="6 3"
+              rx="2"
+            />
+          )}
         </svg>
 
         {/* Inline text editing overlay */}
@@ -1053,7 +1178,7 @@ const Canvas: React.FC<CanvasProps> = ({
                 onMouseUp={(e) => handleNodeMouseUp(e, node.id)}
                 onContextMenu={(e) => handleNodeContextMenu(e, node.id)}
                 className={`absolute w-14 h-10 flex items-center justify-center cursor-pointer shadow-md transition-[box-shadow,background-color,border-color,transform] duration-150 rounded-2xl
-                  ${selectedId === node.id
+                  ${(selectedId === node.id || selectedIds?.has(node.id))
                     ? 'ring-2 ring-blue-500 bg-gradient-to-br from-blue-100 to-purple-100 dark:from-blue-900/60 dark:to-purple-900/60 shadow-lg shadow-blue-500/20'
                     : 'bg-gradient-to-br from-blue-50 to-purple-50 dark:from-blue-950/40 dark:to-purple-950/40 border border-blue-300 dark:border-blue-700'}
                   ${linkingNode === node.id ? 'ring-2 ring-blue-400 scale-110' : ''}
@@ -1181,7 +1306,7 @@ const Canvas: React.FC<CanvasProps> = ({
               onMouseUp={(e) => handleNodeMouseUp(e, node.id)}
               onContextMenu={(e) => handleNodeContextMenu(e, node.id)}
               className={`absolute w-12 h-12 flex items-center justify-center cursor-pointer shadow-sm transition-[box-shadow,background-color,border-color,transform] duration-150
-                ${selectedId === node.id ? 'ring-2 ring-sage-500 bg-sage-500/10 dark:bg-sage-900/40 shadow-lg shadow-sage-500/20' : 'bg-white dark:bg-stone-800 border border-stone-200 dark:border-stone-600'}
+                ${(selectedId === node.id || selectedIds?.has(node.id)) ? 'ring-2 ring-sage-500 bg-sage-500/10 dark:bg-sage-900/40 shadow-lg shadow-sage-500/20' : 'bg-white dark:bg-stone-800 border border-stone-200 dark:border-stone-600'}
                 ${status === 'running' ? 'border-green-500/50 shadow-md shadow-green-500/10' : ''}
                 ${linkingNode === node.id ? 'ring-2 ring-sage-400 scale-110' : ''}
                 ${errorBorderClass}

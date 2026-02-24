@@ -180,6 +180,7 @@ const StudioPage: React.FC = () => {
   const [dockedConsoles, setDockedConsoles] = useState<DockedConsole[]>([]);
   const [activeBottomTabId, setActiveBottomTabId] = useState<string>('log');
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [activeTool, setActiveTool] = useState<CanvasTool>('pointer');
   const [showYamlModal, setShowYamlModal] = useState(false);
   const [yamlContent, setYamlContent] = useState('');
@@ -1756,6 +1757,16 @@ const StudioPage: React.FC = () => {
     triggerLayoutSave();
   };
 
+  const handleCanvasSelect = useCallback((id: string | null) => {
+    setSelectedId(id);
+    setSelectedIds(new Set());
+  }, []);
+
+  const handleSelectMultiple = useCallback((ids: Set<string>) => {
+    setSelectedIds(ids);
+    setSelectedId(null);
+  }, []);
+
   const handleDelete = (id: string) => {
     const isAnnotation = annotations.some((ann) => ann.id === id);
     const isNode = nodes.some((node) => node.id === id);
@@ -1764,6 +1775,7 @@ const StudioPage: React.FC = () => {
     setLinks((prev) => prev.filter((link) => link.id !== id && link.source !== id && link.target !== id));
     setAnnotations((prev) => prev.filter((ann) => ann.id !== id));
     setSelectedId(null);
+    setSelectedIds(new Set());
     // Trigger layout save if an annotation was deleted
     if (isAnnotation) {
       triggerLayoutSave();
@@ -1985,7 +1997,7 @@ const StudioPage: React.FC = () => {
               onAnnotationMove={handleAnnotationMove}
               onConnect={handleConnect}
               selectedId={selectedId}
-              onSelect={setSelectedId}
+              onSelect={handleCanvasSelect}
               onOpenConsole={handleOpenConsole}
               onExtractConfig={handleExtractNodeConfig}
               onUpdateStatus={handleUpdateStatus}
@@ -1993,6 +2005,8 @@ const StudioPage: React.FC = () => {
               onDropDevice={handleAddDevice}
               onDropExternalNetwork={handleAddExternalNetwork}
               onUpdateAnnotation={handleUpdateAnnotation}
+              selectedIds={selectedIds}
+              onSelectMultiple={handleSelectMultiple}
             />
             <div
               className={`shrink-0 transition-all duration-300 ease-in-out overflow-hidden ${
