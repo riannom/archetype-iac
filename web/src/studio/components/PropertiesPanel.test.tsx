@@ -976,13 +976,13 @@ describe("PropertiesPanel", () => {
       expect(mockOnDelete).toHaveBeenCalledWith("ann-1");
     });
 
-    it("handles caption annotations", () => {
-      const annotation = createAnnotation({ type: "caption", text: "Caption" });
+    it("handles text annotations with custom content", () => {
+      const annotation = createAnnotation({ type: "text", text: "My Note" });
 
       render(<PropertiesPanel {...defaultProps} selectedItem={annotation} />);
 
       expect(screen.getByText("Text Content")).toBeInTheDocument();
-      expect(screen.getByDisplayValue("Caption")).toBeInTheDocument();
+      expect(screen.getByDisplayValue("My Note")).toBeInTheDocument();
     });
 
     it("does not show text content for rect annotations", () => {

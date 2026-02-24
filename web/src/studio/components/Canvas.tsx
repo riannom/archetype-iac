@@ -1,6 +1,6 @@
 
 import React, { useRef, useState, useEffect, useCallback, useMemo, memo } from 'react';
-import { Node, Link, DeviceType, Annotation, DeviceModel, isExternalNetworkNode, isDeviceNode } from '../types';
+import { Node, Link, DeviceType, Annotation, AnnotationType, CanvasTool, DeviceModel, isExternalNetworkNode, isDeviceNode } from '../types';
 import { RuntimeStatus } from './RuntimeControl';
 import { useTheme } from '../../theme/index';
 import { getAgentColor, getAgentInitials } from '../../utils/agentColors';
@@ -22,6 +22,8 @@ interface CanvasProps {
   agents?: { id: string; name: string }[];
   showAgentIndicators?: boolean;
   onToggleAgentIndicators?: () => void;
+  activeTool?: CanvasTool;
+  onToolCreate?: (type: AnnotationType, x: number, y: number, opts?: { width?: number; height?: number; targetX?: number; targetY?: number }) => void;
   onNodeMove: (id: string, x: number, y: number) => void;
   onAnnotationMove: (id: string, x: number, y: number) => void;
   onConnect: (sourceId: string, targetId: string) => void;
@@ -71,7 +73,7 @@ function readStoredViewport(labId?: string): { zoom: number; x: number; y: numbe
 }
 
 const Canvas: React.FC<CanvasProps> = ({
-  nodes, links, annotations, runtimeStates, nodeStates = {}, linkStates, scenarioHighlights, deviceModels, labId, agents = [], showAgentIndicators = false, onToggleAgentIndicators, onNodeMove, onAnnotationMove, onConnect, selectedId, onSelect, onOpenConsole, onExtractConfig, onUpdateStatus, onDelete, onDropDevice, onDropExternalNetwork, onUpdateAnnotation
+  nodes, links, annotations, runtimeStates, nodeStates = {}, linkStates, scenarioHighlights, deviceModels, labId, agents = [], showAgentIndicators = false, onToggleAgentIndicators, activeTool = 'pointer', onToolCreate, onNodeMove, onAnnotationMove, onConnect, selectedId, onSelect, onOpenConsole, onExtractConfig, onUpdateStatus, onDelete, onDropDevice, onDropExternalNetwork, onUpdateAnnotation
 }) => {
   const { effectiveMode } = useTheme();
   const { preferences } = useNotifications();
@@ -91,6 +93,8 @@ const Canvas: React.FC<CanvasProps> = ({
   });
   const [isPanning, setIsPanning] = useState(false);
   const [resizing, setResizing] = useState<ResizeState | null>(null);
+  const [drawStart, setDrawStart] = useState<{ x: number; y: number } | null>(null);
+  const [drawEnd, setDrawEnd] = useState<{ x: number; y: number } | null>(null);
   const panStartRef = useRef<{ x: number; y: number } | null>(null);
   const didPanRef = useRef(false);
 
@@ -225,7 +229,15 @@ const Canvas: React.FC<CanvasProps> = ({
       let newX = resizing.startAnnX;
       let newY = resizing.startAnnY;
 
-      if (ann.type === 'circle') {
+      if (ann.type === 'arrow') {
+        // Arrow: 'n' handle moves start, 's' handle moves end
+        if (resizing.handle === 'n') {
+          onUpdateAnnotation(resizing.id, { x, y });
+        } else {
+          onUpdateAnnotation(resizing.id, { targetX: x, targetY: y });
+        }
+        return;
+      } else if (ann.type === 'circle') {
         // For circles, resize uniformly based on drag distance
         const delta = Math.max(Math.abs(dx), Math.abs(dy));
         const sign = (resizing.handle.includes('e') || resizing.handle.includes('s')) ? 1 : -1;
@@ -254,12 +266,17 @@ const Canvas: React.FC<CanvasProps> = ({
       return;
     }
 
+    if (drawStart && activeTool !== 'pointer' && activeTool !== 'text') {
+      setDrawEnd({ x, y });
+      return;
+    }
+
     if (draggingNode) {
       onNodeMove(draggingNode, x, y);
     } else if (draggingAnnotation) {
       onAnnotationMove(draggingAnnotation, x, y);
     }
-  }, [offset, zoom, isPanning, draggingNode, draggingAnnotation, resizing, annotations, onNodeMove, onAnnotationMove, onUpdateAnnotation]);
+  }, [offset, zoom, isPanning, draggingNode, draggingAnnotation, resizing, annotations, drawStart, activeTool, onNodeMove, onAnnotationMove, onUpdateAnnotation]);
 
   const handleWheel = useCallback((e: React.WheelEvent) => {
     if (e.ctrlKey || e.metaKey) {
@@ -279,17 +296,64 @@ const Canvas: React.FC<CanvasProps> = ({
   }, [zoom, offset]);
 
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
-    if (e.button === 1 || e.button === 0) {
+    setContextMenu(null);
+    // Middle-button pan always works regardless of tool
+    if (e.button === 1) {
       setIsPanning(true);
       panStartRef.current = { x: e.clientX, y: e.clientY };
       didPanRef.current = false;
-      setContextMenu(null);
       return;
     }
-    setContextMenu(null);
-  }, []);
+    if (e.button === 0) {
+      // Tool mode: left-click starts tool gesture
+      if (activeTool !== 'pointer' && onToolCreate && containerRef.current) {
+        const rect = containerRef.current.getBoundingClientRect();
+        const x = (e.clientX - rect.left - offset.x) / zoom;
+        const y = (e.clientY - rect.top - offset.y) / zoom;
+
+        if (activeTool === 'text') {
+          // Text: single click places immediately
+          onToolCreate('text', x, y);
+          return;
+        }
+        // Rect/circle/arrow: start drag gesture
+        setDrawStart({ x, y });
+        setDrawEnd({ x, y });
+        return;
+      }
+      // Default pointer: pan
+      setIsPanning(true);
+      panStartRef.current = { x: e.clientX, y: e.clientY };
+      didPanRef.current = false;
+      return;
+    }
+  }, [activeTool, onToolCreate, offset, zoom]);
 
   const handleMouseUp = useCallback(() => {
+    // Complete draw gesture for tool mode
+    if (drawStart && drawEnd && activeTool !== 'pointer' && activeTool !== 'text' && onToolCreate) {
+      const dx = drawEnd.x - drawStart.x;
+      const dy = drawEnd.y - drawStart.y;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      if (dist >= 10) {
+        if (activeTool === 'rect') {
+          const x = Math.min(drawStart.x, drawEnd.x);
+          const y = Math.min(drawStart.y, drawEnd.y);
+          onToolCreate('rect', x, y, { width: Math.abs(dx), height: Math.abs(dy) });
+        } else if (activeTool === 'circle') {
+          const diameter = dist * 2;
+          onToolCreate('circle', drawStart.x, drawStart.y, { width: diameter });
+        } else if (activeTool === 'arrow') {
+          onToolCreate('arrow', drawStart.x, drawStart.y, { targetX: drawEnd.x, targetY: drawEnd.y });
+        }
+      }
+      setDrawStart(null);
+      setDrawEnd(null);
+      return;
+    }
+    setDrawStart(null);
+    setDrawEnd(null);
+
     if (isPanning && !didPanRef.current) {
       onSelect(null);
     }
@@ -299,7 +363,7 @@ const Canvas: React.FC<CanvasProps> = ({
     panStartRef.current = null;
     setLinkingNode(null);
     setResizing(null);
-  }, [isPanning, onSelect]);
+  }, [isPanning, onSelect, drawStart, drawEnd, activeTool, onToolCreate]);
 
   const handleNodeMouseDown = (e: React.MouseEvent, id: string) => {
     if (e.button === 2) return;
@@ -431,6 +495,16 @@ const Canvas: React.FC<CanvasProps> = ({
         return;
       }
 
+      if (ann.type === 'arrow') {
+        const tx = ann.targetX ?? ann.x + 100;
+        const ty = ann.targetY ?? ann.y + 100;
+        minX = Math.min(minX, ann.x, tx);
+        maxX = Math.max(maxX, ann.x, tx);
+        minY = Math.min(minY, ann.y, ty);
+        maxY = Math.max(maxY, ann.y, ty);
+        return;
+      }
+
       // Unknown annotation type: treat as a small point.
       minX = Math.min(minX, ann.x - 20);
       maxX = Math.max(maxX, ann.x + 20);
@@ -539,7 +613,7 @@ const Canvas: React.FC<CanvasProps> = ({
       ref={containerRef}
       className={`flex-1 relative overflow-hidden canvas-grid ${
         effectiveMode === 'dark' ? 'bg-stone-950' : 'bg-stone-50'
-      } ${isPanning ? 'cursor-grabbing' : 'cursor-crosshair'}`}
+      } ${isPanning ? 'cursor-grabbing' : activeTool === 'text' ? 'cursor-text' : activeTool !== 'pointer' ? 'cursor-crosshair' : 'cursor-default'}`}
       onMouseMove={handleMouseMove}
       onMouseUp={handleMouseUp}
       onMouseDown={handleMouseDown}
@@ -616,13 +690,69 @@ const Canvas: React.FC<CanvasProps> = ({
               ));
             };
 
+            // Render arrow endpoint handles (start = 'n', end = 's')
+            const renderArrowHandles = () => {
+              if (!isSelected || ann.type !== 'arrow') return null;
+              const tx = ann.targetX ?? ann.x + 100;
+              const ty = ann.targetY ?? ann.y + 100;
+              const endpoints: { handle: ResizeHandle; cx: number; cy: number }[] = [
+                { handle: 'n', cx: ann.x, cy: ann.y },
+                { handle: 's', cx: tx, cy: ty },
+              ];
+              return endpoints.map(({ handle, cx, cy }) => (
+                <circle
+                  key={handle}
+                  cx={cx}
+                  cy={cy}
+                  r={handleSize / 2 + 1}
+                  fill={handleFill}
+                  stroke={effectiveMode === 'dark' ? '#1C1917' : 'white'}
+                  strokeWidth="1"
+                  style={{ cursor: 'move' }}
+                  onMouseDown={(e) => handleResizeMouseDown(e, ann, handle)}
+                />
+              ));
+            };
+
+            // Render arrow SVG
+            const renderArrow = () => {
+              if (ann.type !== 'arrow') return null;
+              const tx = ann.targetX ?? ann.x + 100;
+              const ty = ann.targetY ?? ann.y + 100;
+              const dx = tx - ann.x;
+              const dy = ty - ann.y;
+              const len = Math.sqrt(dx * dx + dy * dy);
+              if (len < 1) return null;
+              const ux = dx / len;
+              const uy = dy / len;
+              const headLen = 12;
+              const headW = 6;
+              // Arrowhead at target end
+              const tipX = tx;
+              const tipY = ty;
+              const baseX = tx - ux * headLen;
+              const baseY = ty - uy * headLen;
+              const leftX = baseX - uy * headW;
+              const leftY = baseY + ux * headW;
+              const rightX = baseX + uy * headW;
+              const rightY = baseY - ux * headW;
+              return (
+                <>
+                  <line x1={ann.x} y1={ann.y} x2={baseX} y2={baseY} stroke={stroke} strokeWidth="2" strokeDasharray={isSelected ? "4" : "0"} />
+                  <polygon points={`${tipX},${tipY} ${leftX},${leftY} ${rightX},${rightY}`} fill={stroke} />
+                </>
+              );
+            };
+
             return (
               <g key={ann.id} className="pointer-events-auto cursor-move" onMouseDown={(e) => handleAnnotationMouseDown(e, ann.id)}>
                 {ann.type === 'rect' && <rect x={ann.x} y={ann.y} width={ann.width || 100} height={ann.height || 60} fill={effectiveMode === 'dark' ? "rgba(68, 64, 60, 0.2)" : "rgba(214, 211, 209, 0.2)"} stroke={stroke} strokeWidth="2" strokeDasharray={isSelected ? "4" : "0"} rx="4" />}
                 {ann.type === 'circle' && <circle cx={ann.x} cy={ann.y} r={ann.width ? ann.width / 2 : 40} fill={effectiveMode === 'dark' ? "rgba(68, 64, 60, 0.2)" : "rgba(214, 211, 209, 0.2)"} stroke={stroke} strokeWidth="2" strokeDasharray={isSelected ? "4" : "0"} />}
                 {ann.type === 'text' && <text x={ann.x} y={ann.y} fill={ann.color || (effectiveMode === 'dark' ? 'white' : '#1C1917')} fontSize={ann.fontSize || 14} className="font-black tracking-tight select-none">{ann.text || 'New Text'}</text>}
+                {renderArrow()}
                 {renderRectHandles()}
                 {renderCircleHandles()}
+                {renderArrowHandles()}
               </g>
             );
           })}
@@ -759,6 +889,53 @@ const Canvas: React.FC<CanvasProps> = ({
               strokeDasharray="4"
             />
           )}
+
+          {/* Draw preview during tool gesture */}
+          {drawStart && drawEnd && activeTool === 'rect' && (
+            <rect
+              x={Math.min(drawStart.x, drawEnd.x)}
+              y={Math.min(drawStart.y, drawEnd.y)}
+              width={Math.abs(drawEnd.x - drawStart.x)}
+              height={Math.abs(drawEnd.y - drawStart.y)}
+              fill="rgba(101, 163, 13, 0.1)"
+              stroke="#65A30D"
+              strokeWidth="2"
+              strokeDasharray="6 3"
+              rx="4"
+            />
+          )}
+          {drawStart && drawEnd && activeTool === 'circle' && (() => {
+            const r = Math.sqrt(Math.pow(drawEnd.x - drawStart.x, 2) + Math.pow(drawEnd.y - drawStart.y, 2));
+            return (
+              <circle
+                cx={drawStart.x}
+                cy={drawStart.y}
+                r={r}
+                fill="rgba(101, 163, 13, 0.1)"
+                stroke="#65A30D"
+                strokeWidth="2"
+                strokeDasharray="6 3"
+              />
+            );
+          })()}
+          {drawStart && drawEnd && activeTool === 'arrow' && (() => {
+            const dx = drawEnd.x - drawStart.x;
+            const dy = drawEnd.y - drawStart.y;
+            const len = Math.sqrt(dx * dx + dy * dy);
+            if (len < 1) return null;
+            const ux = dx / len;
+            const uy = dy / len;
+            const headLen = 12;
+            const headW = 6;
+            const baseX = drawEnd.x - ux * headLen;
+            const baseY = drawEnd.y - uy * headLen;
+            return (
+              <>
+                <line x1={drawStart.x} y1={drawStart.y} x2={baseX} y2={baseY} stroke="#65A30D" strokeWidth="2" strokeDasharray="6 3" />
+                <polygon points={`${drawEnd.x},${drawEnd.y} ${baseX - uy * headW},${baseY + ux * headW} ${baseX + uy * headW},${baseY - ux * headW}`} fill="#65A30D" opacity="0.6" />
+              </>
+            );
+          })()}
         </svg>
 
         {nodes.map(node => {

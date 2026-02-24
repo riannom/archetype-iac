@@ -129,7 +129,7 @@ const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
 
   const isLink = 'source' in selectedItem && 'target' in selectedItem;
   const isNodeItem = 'x' in selectedItem && 'y' in selectedItem && !isLink;
-  const isAnnotation = isNodeItem && 'type' in selectedItem && typeof (selectedItem as Annotation).type === 'string' && ['text', 'rect', 'circle', 'arrow', 'caption'].includes((selectedItem as Annotation).type as string);
+  const isAnnotation = isNodeItem && 'type' in selectedItem && typeof (selectedItem as Annotation).type === 'string' && ['text', 'rect', 'circle', 'arrow'].includes((selectedItem as Annotation).type as string);
 
   // Check if this is an external network node
   if (isNodeItem && !isAnnotation && isExternalNetworkNode(selectedItem as Node)) {
@@ -174,7 +174,7 @@ const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
           </button>
         </div>
         <div className="p-6 space-y-6">
-          {(ann.type === 'text' || ann.type === 'caption') && (
+          {ann.type === 'text' && (
             <div className="space-y-2">
               <label className="text-[11px] font-bold text-stone-500 uppercase">Text Content</label>
               <textarea
@@ -224,6 +224,31 @@ const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
                     />
                   </div>
                 )}
+              </div>
+            </div>
+          )}
+
+          {/* Arrow endpoints */}
+          {ann.type === 'arrow' && (
+            <div className="space-y-2">
+              <label className="text-[11px] font-bold text-stone-500 uppercase tracking-tighter">Endpoints</label>
+              <div className="grid grid-cols-2 gap-2">
+                <div className="space-y-1">
+                  <label className="text-[9px] font-bold text-stone-400 uppercase">Start X</label>
+                  <input type="number" value={Math.round(ann.x)} onChange={(e) => onUpdateAnnotation(ann.id, { x: parseFloat(e.target.value) || 0 })} className="w-full bg-stone-100 dark:bg-stone-800 border border-stone-300 dark:border-stone-600 rounded px-3 py-2 text-sm text-stone-900 dark:text-stone-100 focus:outline-none focus:border-sage-500" />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-[9px] font-bold text-stone-400 uppercase">Start Y</label>
+                  <input type="number" value={Math.round(ann.y)} onChange={(e) => onUpdateAnnotation(ann.id, { y: parseFloat(e.target.value) || 0 })} className="w-full bg-stone-100 dark:bg-stone-800 border border-stone-300 dark:border-stone-600 rounded px-3 py-2 text-sm text-stone-900 dark:text-stone-100 focus:outline-none focus:border-sage-500" />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-[9px] font-bold text-stone-400 uppercase">End X</label>
+                  <input type="number" value={Math.round(ann.targetX ?? ann.x + 100)} onChange={(e) => onUpdateAnnotation(ann.id, { targetX: parseFloat(e.target.value) || 0 })} className="w-full bg-stone-100 dark:bg-stone-800 border border-stone-300 dark:border-stone-600 rounded px-3 py-2 text-sm text-stone-900 dark:text-stone-100 focus:outline-none focus:border-sage-500" />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-[9px] font-bold text-stone-400 uppercase">End Y</label>
+                  <input type="number" value={Math.round(ann.targetY ?? ann.y + 100)} onChange={(e) => onUpdateAnnotation(ann.id, { targetY: parseFloat(e.target.value) || 0 })} className="w-full bg-stone-100 dark:bg-stone-800 border border-stone-300 dark:border-stone-600 rounded px-3 py-2 text-sm text-stone-900 dark:text-stone-100 focus:outline-none focus:border-sage-500" />
+                </div>
               </div>
             </div>
           )}

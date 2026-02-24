@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import Sidebar from "./Sidebar";
-import { DeviceModel, DeviceType, AnnotationType } from "../types";
+import { DeviceModel, DeviceType, CanvasTool } from "../types";
 
 // Mock FontAwesome icons
 vi.mock("@fortawesome/react-fontawesome", () => ({
@@ -74,7 +74,7 @@ const mockImageLibrary = [
 
 describe("Sidebar", () => {
   const mockOnAddDevice = vi.fn();
-  const mockOnAddAnnotation = vi.fn();
+  const mockOnSelectTool = vi.fn();
   const mockOnAddExternalNetwork = vi.fn();
 
   beforeEach(() => {
@@ -87,7 +87,8 @@ describe("Sidebar", () => {
         categories={mockCategories}
         imageLibrary={mockImageLibrary}
         onAddDevice={mockOnAddDevice}
-        onAddAnnotation={mockOnAddAnnotation}
+        onSelectTool={mockOnSelectTool}
+        activeTool="pointer"
       />
     );
 
@@ -100,7 +101,8 @@ describe("Sidebar", () => {
         categories={mockCategories}
         imageLibrary={mockImageLibrary}
         onAddDevice={mockOnAddDevice}
-        onAddAnnotation={mockOnAddAnnotation}
+        onSelectTool={mockOnSelectTool}
+        activeTool="pointer"
       />
     );
 
@@ -114,7 +116,8 @@ describe("Sidebar", () => {
         categories={mockCategories}
         imageLibrary={mockImageLibrary}
         onAddDevice={mockOnAddDevice}
-        onAddAnnotation={mockOnAddAnnotation}
+        onSelectTool={mockOnSelectTool}
+        activeTool="pointer"
       />
     );
 
@@ -131,7 +134,8 @@ describe("Sidebar", () => {
         categories={mockCategories}
         imageLibrary={mockImageLibrary}
         onAddDevice={mockOnAddDevice}
-        onAddAnnotation={mockOnAddAnnotation}
+        onSelectTool={mockOnSelectTool}
+        activeTool="pointer"
       />
     );
 
@@ -141,25 +145,26 @@ describe("Sidebar", () => {
     expect(mockOnAddDevice).toHaveBeenCalledWith(mockDeviceModels[0]);
   });
 
-  it("renders annotation tools", () => {
+  it("renders canvas tools", () => {
     render(
       <Sidebar
         categories={mockCategories}
         imageLibrary={mockImageLibrary}
         onAddDevice={mockOnAddDevice}
-        onAddAnnotation={mockOnAddAnnotation}
+        onSelectTool={mockOnSelectTool}
+        activeTool="pointer"
       />
     );
 
-    expect(screen.getByText("Annotations")).toBeInTheDocument();
+    expect(screen.getByText("Tools")).toBeInTheDocument();
+    expect(screen.getByText("Select")).toBeInTheDocument();
     expect(screen.getByText("Label")).toBeInTheDocument();
     expect(screen.getByText("Box")).toBeInTheDocument();
     expect(screen.getByText("Zone")).toBeInTheDocument();
     expect(screen.getByText("Flow")).toBeInTheDocument();
-    expect(screen.getByText("Note")).toBeInTheDocument();
   });
 
-  it("calls onAddAnnotation when an annotation tool is clicked", async () => {
+  it("calls onSelectTool when a tool is clicked", async () => {
     const user = userEvent.setup();
 
     render(
@@ -167,14 +172,15 @@ describe("Sidebar", () => {
         categories={mockCategories}
         imageLibrary={mockImageLibrary}
         onAddDevice={mockOnAddDevice}
-        onAddAnnotation={mockOnAddAnnotation}
+        onSelectTool={mockOnSelectTool}
+        activeTool="pointer"
       />
     );
 
     await user.click(screen.getByText("Label"));
 
-    expect(mockOnAddAnnotation).toHaveBeenCalledTimes(1);
-    expect(mockOnAddAnnotation).toHaveBeenCalledWith("text");
+    expect(mockOnSelectTool).toHaveBeenCalledTimes(1);
+    expect(mockOnSelectTool).toHaveBeenCalledWith("text");
   });
 
   it("renders external network button when handler is provided", () => {
@@ -182,7 +188,8 @@ describe("Sidebar", () => {
       <Sidebar
         categories={mockCategories}
         onAddDevice={mockOnAddDevice}
-        onAddAnnotation={mockOnAddAnnotation}
+        onSelectTool={mockOnSelectTool}
+        activeTool="pointer"
         onAddExternalNetwork={mockOnAddExternalNetwork}
       />
     );
@@ -197,7 +204,8 @@ describe("Sidebar", () => {
         categories={mockCategories}
         imageLibrary={mockImageLibrary}
         onAddDevice={mockOnAddDevice}
-        onAddAnnotation={mockOnAddAnnotation}
+        onSelectTool={mockOnSelectTool}
+        activeTool="pointer"
       />
     );
 
@@ -211,7 +219,8 @@ describe("Sidebar", () => {
       <Sidebar
         categories={mockCategories}
         onAddDevice={mockOnAddDevice}
-        onAddAnnotation={mockOnAddAnnotation}
+        onSelectTool={mockOnSelectTool}
+        activeTool="pointer"
         onAddExternalNetwork={mockOnAddExternalNetwork}
       />
     );
@@ -228,7 +237,8 @@ describe("Sidebar", () => {
           categories={mockCategories}
           imageLibrary={mockImageLibrary}
           onAddDevice={mockOnAddDevice}
-          onAddAnnotation={mockOnAddAnnotation}
+          onSelectTool={mockOnSelectTool}
+        activeTool="pointer"
         />
       );
 
@@ -245,7 +255,8 @@ describe("Sidebar", () => {
           categories={mockCategories}
           imageLibrary={mockImageLibrary}
           onAddDevice={mockOnAddDevice}
-          onAddAnnotation={mockOnAddAnnotation}
+          onSelectTool={mockOnSelectTool}
+        activeTool="pointer"
         />
       );
 
@@ -280,7 +291,8 @@ describe("Sidebar", () => {
           categories={categories}
           imageLibrary={images}
           onAddDevice={mockOnAddDevice}
-          onAddAnnotation={mockOnAddAnnotation}
+          onSelectTool={mockOnSelectTool}
+        activeTool="pointer"
         />
       );
 
@@ -319,7 +331,8 @@ describe("Sidebar", () => {
           categories={categories}
           imageLibrary={images}
           onAddDevice={mockOnAddDevice}
-          onAddAnnotation={mockOnAddAnnotation}
+          onSelectTool={mockOnSelectTool}
+        activeTool="pointer"
         />
       );
 
@@ -367,7 +380,8 @@ describe("Sidebar", () => {
           categories={categories}
           imageLibrary={images}
           onAddDevice={mockOnAddDevice}
-          onAddAnnotation={mockOnAddAnnotation}
+          onSelectTool={mockOnSelectTool}
+        activeTool="pointer"
         />
       );
 
@@ -401,7 +415,8 @@ describe("Sidebar", () => {
           categories={categories}
           imageLibrary={images}
           onAddDevice={mockOnAddDevice}
-          onAddAnnotation={mockOnAddAnnotation}
+          onSelectTool={mockOnSelectTool}
+        activeTool="pointer"
         />
       );
 
@@ -414,7 +429,8 @@ describe("Sidebar", () => {
           categories={mockCategories}
           imageLibrary={mockImageLibrary}
           onAddDevice={mockOnAddDevice}
-          onAddAnnotation={mockOnAddAnnotation}
+          onSelectTool={mockOnSelectTool}
+        activeTool="pointer"
         />
       );
 
@@ -431,7 +447,8 @@ describe("Sidebar", () => {
         <Sidebar
           categories={[]}
           onAddDevice={mockOnAddDevice}
-          onAddAnnotation={mockOnAddAnnotation}
+          onSelectTool={mockOnSelectTool}
+        activeTool="pointer"
         />
       );
 
@@ -449,7 +466,8 @@ describe("Sidebar", () => {
           categories={mockCategories}
           imageLibrary={mockImageLibrary}
           onAddDevice={mockOnAddDevice}
-          onAddAnnotation={mockOnAddAnnotation}
+          onSelectTool={mockOnSelectTool}
+        activeTool="pointer"
         />
       );
 
@@ -469,7 +487,8 @@ describe("Sidebar", () => {
           categories={mockCategories}
           imageLibrary={mockImageLibrary}
           onAddDevice={mockOnAddDevice}
-          onAddAnnotation={mockOnAddAnnotation}
+          onSelectTool={mockOnSelectTool}
+        activeTool="pointer"
         />
       );
 
@@ -483,7 +502,8 @@ describe("Sidebar", () => {
           categories={mockCategories}
           imageLibrary={mockImageLibrary}
           onAddDevice={mockOnAddDevice}
-          onAddAnnotation={mockOnAddAnnotation}
+          onSelectTool={mockOnSelectTool}
+        activeTool="pointer"
         />
       );
 
@@ -522,7 +542,8 @@ describe("Sidebar", () => {
         <Sidebar
           categories={mockCategories}
           onAddDevice={mockOnAddDevice}
-          onAddAnnotation={mockOnAddAnnotation}
+          onSelectTool={mockOnSelectTool}
+        activeTool="pointer"
           imageLibrary={imageLibrary}
         />
       );
@@ -547,7 +568,8 @@ describe("Sidebar", () => {
         <Sidebar
           categories={mockCategories}
           onAddDevice={mockOnAddDevice}
-          onAddAnnotation={mockOnAddAnnotation}
+          onSelectTool={mockOnSelectTool}
+        activeTool="pointer"
           imageLibrary={imageLibrary}
         />
       );

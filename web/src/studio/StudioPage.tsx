@@ -18,7 +18,7 @@ import LogsView from './components/LogsView';
 import VerificationPanel from './components/VerificationPanel';
 import ScenarioPanel from './components/ScenarioPanel';
 import InfraView from './components/InfraView';
-import { Annotation, AnnotationType, ConsoleWindow, DeviceModel, DeviceType, LabLayout, Link, Node, ExternalNetworkNode, DeviceNode, isExternalNetworkNode, isDeviceNode } from './types';
+import { Annotation, AnnotationType, CanvasTool, ConsoleWindow, DeviceModel, DeviceType, LabLayout, Link, Node, ExternalNetworkNode, DeviceNode, isExternalNetworkNode, isDeviceNode } from './types';
 import { API_BASE_URL, apiRequest, rawApiRequest } from '../api';
 import { TopologyGraph } from '../types';
 import { usePortManager } from './hooks/usePortManager';
@@ -180,6 +180,7 @@ const StudioPage: React.FC = () => {
   const [dockedConsoles, setDockedConsoles] = useState<DockedConsole[]>([]);
   const [activeBottomTabId, setActiveBottomTabId] = useState<string>('log');
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [activeTool, setActiveTool] = useState<CanvasTool>('pointer');
   const [showYamlModal, setShowYamlModal] = useState(false);
   const [yamlContent, setYamlContent] = useState('');
   const [agents, setAgents] = useState<{ id: string; name: string }[]>(() => {
@@ -402,6 +403,17 @@ const StudioPage: React.FC = () => {
   useEffect(() => { nodesRef.current = nodes; }, [nodes]);
   useEffect(() => { linksRef.current = links; }, [links]);
   useEffect(() => { annotationsRef.current = annotations; }, [annotations]);
+
+  // ESC key returns to pointer tool
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && activeTool !== 'pointer') {
+        setActiveTool('pointer');
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [activeTool]);
 
   const addTaskLogEntry = useCallback((level: TaskLogEntry['level'], message: string, jobId?: string) => {
     const id = `log-${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -736,7 +748,7 @@ const StudioPage: React.FC = () => {
         setAnnotations(
           layout.annotations.map((ann) => ({
             id: ann.id,
-            type: ann.type as AnnotationType,
+            type: (ann.type === 'caption' ? 'text' : ann.type) as AnnotationType,
             x: ann.x,
             y: ann.y,
             width: ann.width,
@@ -1171,24 +1183,32 @@ const StudioPage: React.FC = () => {
     setTimeout(() => triggerTopologySave(), 100);
   };
 
-  const handleAddAnnotation = (type: AnnotationType) => {
+  const handleSelectTool = useCallback((tool: CanvasTool) => {
+    setActiveTool(tool);
+    if (tool !== 'pointer') {
+      setSelectedId(null);
+    }
+  }, []);
+
+  const handleCanvasToolCreate = useCallback((type: AnnotationType, x: number, y: number, opts?: { width?: number; height?: number; targetX?: number; targetY?: number }) => {
     const id = Math.random().toString(36).slice(2, 9);
     const newAnn: Annotation = {
       id,
       type,
-      x: 400,
-      y: 300,
-      text: type === 'text' ? 'New Label' : type === 'caption' ? 'Note here' : '',
+      x,
+      y,
+      text: type === 'text' ? 'New Label' : '',
       color: effectiveMode === 'dark' ? '#3b82f6' : '#2563eb',
-      width: type === 'rect' || type === 'circle' ? 100 : undefined,
-      height: type === 'rect' ? 60 : undefined,
-      targetX: type === 'arrow' ? 500 : undefined,
-      targetY: type === 'arrow' ? 400 : undefined,
+      width: opts?.width ?? (type === 'rect' || type === 'circle' ? 100 : undefined),
+      height: opts?.height ?? (type === 'rect' ? 60 : undefined),
+      targetX: opts?.targetX,
+      targetY: opts?.targetY,
     };
     setAnnotations((prev) => [...prev, newAnn]);
     setSelectedId(id);
+    setActiveTool('pointer');
     triggerLayoutSave();
-  };
+  }, [effectiveMode, triggerLayoutSave]);
 
   const handleUpdateStatus = useCallback(async (nodeId: string, status: RuntimeStatus): Promise<void> => {
     if (!activeLab) return;
@@ -1945,7 +1965,7 @@ const StudioPage: React.FC = () => {
       default:
         return (
           <>
-            <Sidebar categories={deviceCategories} onAddDevice={handleAddDevice} onAddAnnotation={handleAddAnnotation} onAddExternalNetwork={handleAddExternalNetwork} imageLibrary={imageLibrary} />
+            <Sidebar categories={deviceCategories} onAddDevice={handleAddDevice} onSelectTool={handleSelectTool} activeTool={activeTool} onAddExternalNetwork={handleAddExternalNetwork} imageLibrary={imageLibrary} />
             <Canvas
               nodes={nodes}
               links={links}
@@ -1959,6 +1979,8 @@ const StudioPage: React.FC = () => {
               agents={agents}
               showAgentIndicators={showAgentIndicators}
               onToggleAgentIndicators={handleToggleAgentIndicators}
+              activeTool={activeTool}
+              onToolCreate={handleCanvasToolCreate}
               onNodeMove={handleNodeMove}
               onAnnotationMove={handleAnnotationMove}
               onConnect={handleConnect}

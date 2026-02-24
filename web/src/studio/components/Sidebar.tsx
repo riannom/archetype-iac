@@ -1,6 +1,6 @@
 
 import React, { useMemo, useState, useEffect, useRef, useCallback } from 'react';
-import { DeviceModel, AnnotationType, ImageLibraryEntry } from '../types';
+import { DeviceModel, CanvasTool, ImageLibraryEntry } from '../types';
 import SidebarFilters, { ImageStatus } from './SidebarFilters';
 import { useNotifications } from '../../contexts/NotificationContext';
 import {
@@ -14,7 +14,8 @@ import {
 interface SidebarProps {
   categories: { name: string; models?: DeviceModel[]; subCategories?: { name: string; models: DeviceModel[] }[] }[];
   onAddDevice: (model: DeviceModel) => void;
-  onAddAnnotation: (type: AnnotationType) => void;
+  onSelectTool: (tool: CanvasTool) => void;
+  activeTool: CanvasTool;
   onAddExternalNetwork?: () => void;
   imageLibrary?: ImageLibraryEntry[];
 }
@@ -28,7 +29,7 @@ const IMAGE_COMPAT_ALIASES: Record<string, string[]> = {
   ftdv: ['cisco_ftdv'],
 };
 
-const Sidebar: React.FC<SidebarProps> = ({ categories, onAddDevice, onAddAnnotation, onAddExternalNetwork, imageLibrary = [] }) => {
+const Sidebar: React.FC<SidebarProps> = ({ categories, onAddDevice, onSelectTool, activeTool, onAddExternalNetwork, imageLibrary = [] }) => {
   const { preferences, updateCanvasSettings } = useNotifications();
   const [expandedCategories, setExpandedCategories] = useState<Set<string>>(
     new Set(categories.map(c => c.name))
@@ -369,12 +370,12 @@ const Sidebar: React.FC<SidebarProps> = ({ categories, onAddDevice, onAddAnnotat
     );
   };
 
-  const annotationTools: { type: AnnotationType, icon: string, label: string }[] = [
-    { type: 'text', icon: 'fa-font', label: 'Label' },
-    { type: 'rect', icon: 'fa-square', label: 'Box' },
-    { type: 'circle', icon: 'fa-circle', label: 'Zone' },
-    { type: 'arrow', icon: 'fa-arrow-right', label: 'Flow' },
-    { type: 'caption', icon: 'fa-comment', label: 'Note' },
+  const canvasTools: { tool: CanvasTool, icon: string, label: string }[] = [
+    { tool: 'pointer', icon: 'fa-arrow-pointer', label: 'Select' },
+    { tool: 'text', icon: 'fa-font', label: 'Label' },
+    { tool: 'rect', icon: 'fa-square', label: 'Box' },
+    { tool: 'circle', icon: 'fa-circle', label: 'Zone' },
+    { tool: 'arrow', icon: 'fa-arrow-right', label: 'Flow' },
   ];
 
   // External network connection tool
@@ -442,19 +443,34 @@ const Sidebar: React.FC<SidebarProps> = ({ categories, onAddDevice, onAddAnnotat
         {/* Tools Section */}
         <div className="mb-4">
           <div className="px-4 py-2 flex items-center justify-between text-[10px] font-bold text-stone-700 dark:text-stone-300 uppercase tracking-widest bg-stone-400/45 dark:bg-stone-800 border-y border-stone-400/60 dark:border-stone-800 sticky top-0 z-10">
-            <span>Annotations</span>
+            <span>Tools</span>
           </div>
           <div className="p-2 grid grid-cols-2 gap-2">
-            {annotationTools.map(tool => (
-              <button
-                key={tool.type}
-                onClick={() => onAddAnnotation(tool.type)}
-                className="flex flex-col items-center justify-center p-2 rounded-lg bg-white dark:bg-stone-800/50 hover:bg-stone-50 dark:hover:bg-stone-800 border border-stone-200 dark:border-stone-700 hover:border-sage-300 dark:hover:border-sage-500/50 transition-all gap-1 group shadow-sm"
-              >
-                <i className={`fa-solid ${tool.icon} text-stone-600 dark:text-stone-400 group-hover:text-sage-700 dark:group-hover:text-sage-500 text-xs`}></i>
-                <span className="text-[9px] text-stone-700 dark:text-stone-400 group-hover:text-stone-900 dark:group-hover:text-stone-200 font-bold">{tool.label}</span>
-              </button>
-            ))}
+            {canvasTools.map(t => {
+              const isActive = activeTool === t.tool;
+              return (
+                <button
+                  key={t.tool}
+                  onClick={() => onSelectTool(t.tool)}
+                  className={`flex flex-col items-center justify-center p-2 rounded-lg border transition-all gap-1 group shadow-sm ${
+                    isActive
+                      ? 'bg-sage-100 dark:bg-sage-900/40 border-sage-400 dark:border-sage-600 ring-1 ring-sage-400/50 dark:ring-sage-600/50'
+                      : 'bg-white dark:bg-stone-800/50 hover:bg-stone-50 dark:hover:bg-stone-800 border-stone-200 dark:border-stone-700 hover:border-sage-300 dark:hover:border-sage-500/50'
+                  }`}
+                >
+                  <i className={`fa-solid ${t.icon} text-xs ${
+                    isActive
+                      ? 'text-sage-700 dark:text-sage-400'
+                      : 'text-stone-600 dark:text-stone-400 group-hover:text-sage-700 dark:group-hover:text-sage-500'
+                  }`}></i>
+                  <span className={`text-[9px] font-bold ${
+                    isActive
+                      ? 'text-sage-700 dark:text-sage-400'
+                      : 'text-stone-700 dark:text-stone-400 group-hover:text-stone-900 dark:group-hover:text-stone-200'
+                  }`}>{t.label}</span>
+                </button>
+              );
+            })}
           </div>
         </div>
 

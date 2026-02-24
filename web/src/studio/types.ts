@@ -14,7 +14,9 @@ export type NodeType = 'device' | 'external';
 // Connection type for external networks
 export type ExternalConnectionType = 'vlan' | 'bridge';
 
-export type AnnotationType = 'text' | 'rect' | 'circle' | 'arrow' | 'caption';
+export type AnnotationType = 'text' | 'rect' | 'circle' | 'arrow';
+
+export type CanvasTool = 'pointer' | 'text' | 'rect' | 'circle' | 'arrow';
 
 export interface Annotation {
   id: string;
@@ -227,7 +229,7 @@ export interface NodeLayout {
 
 export interface AnnotationLayout {
   id: string;
-  type: string; // text, rect, circle, arrow, caption
+  type: string; // text, rect, circle, arrow
   x: number;
   y: number;
   width?: number;
