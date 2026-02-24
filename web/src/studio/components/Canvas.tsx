@@ -779,7 +779,19 @@ const Canvas: React.FC<CanvasProps> = ({
               <g key={ann.id} className="pointer-events-auto cursor-move" onMouseDown={(e) => handleAnnotationMouseDown(e, ann.id)} onDoubleClick={handleTextDoubleClick}>
                 {ann.type === 'rect' && <rect x={ann.x} y={ann.y} width={ann.width || 100} height={ann.height || 60} fill={effectiveMode === 'dark' ? "rgba(68, 64, 60, 0.2)" : "rgba(214, 211, 209, 0.2)"} stroke={stroke} strokeWidth="2" strokeDasharray={isSelected ? "4" : "0"} rx="4" />}
                 {ann.type === 'circle' && <circle cx={ann.x} cy={ann.y} r={ann.width ? ann.width / 2 : 40} fill={effectiveMode === 'dark' ? "rgba(68, 64, 60, 0.2)" : "rgba(214, 211, 209, 0.2)"} stroke={stroke} strokeWidth="2" strokeDasharray={isSelected ? "4" : "0"} />}
-                {ann.type === 'text' && !(editingText?.id === ann.id) && <text x={ann.x} y={ann.y} fill={ann.color || (effectiveMode === 'dark' ? 'white' : '#1C1917')} fontSize={ann.fontSize || 14} className="font-black tracking-tight select-none">{ann.text || 'New Text'}</text>}
+                {ann.type === 'text' && !(editingText?.id === ann.id) && (() => {
+                  const text = ann.text || 'New Text';
+                  const fontSize = ann.fontSize || 14;
+                  const pad = 4;
+                  const approxW = Math.max(20, text.length * fontSize * 0.6);
+                  const approxH = fontSize * 1.2;
+                  return (
+                    <>
+                      {isSelected && <rect x={ann.x - pad} y={ann.y - approxH - pad} width={approxW + pad * 2} height={approxH + pad * 2} fill="none" stroke={handleFill} strokeWidth="1.5" strokeDasharray="4" rx="3" />}
+                      <text x={ann.x} y={ann.y} fill={ann.color || (effectiveMode === 'dark' ? 'white' : '#1C1917')} fontSize={fontSize} className="font-black tracking-tight select-none">{text}</text>
+                    </>
+                  );
+                })()}
                 {renderArrow()}
                 {renderRectHandles()}
                 {renderCircleHandles()}
