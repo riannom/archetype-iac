@@ -10,11 +10,21 @@ import logging
 import os
 import re
 import signal
+import subprocess
 import threading
 import time
+import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 
 logger = logging.getLogger(__name__)
+
+# Try to import libvirt for TCP serial port lookup
+try:
+    import libvirt as _libvirt
+    _LIBVIRT_AVAILABLE = True
+except ImportError:
+    _libvirt = None
+    _LIBVIRT_AVAILABLE = False
 
 # Try to import pexpect - it's optional
 try:
@@ -23,6 +33,174 @@ try:
 except ImportError:
     pexpect = None
     PEXPECT_AVAILABLE = False
+
+
+def _get_tcp_serial_port_sync(
+    domain_name: str, libvirt_uri: str = "qemu:///system",
+) -> int | None:
+    """Resolve TCP serial port from domain XML (standalone, no provider needed)."""
+    if not _LIBVIRT_AVAILABLE:
+        return None
+    try:
+        conn = _libvirt.open(libvirt_uri)
+        if conn is None:
+            return None
+        try:
+            domain = conn.lookupByName(domain_name)
+            xml_str = domain.XMLDesc(0)
+            root = ET.fromstring(xml_str)
+            for serial in root.findall(".//devices/serial[@type='tcp']"):
+                source = serial.find("source")
+                if source is not None:
+                    port_str = source.get("service")
+                    if port_str:
+                        return int(port_str)
+        finally:
+            conn.close()
+    except Exception:
+        pass
+    return None
+
+
+def _reset_tcp_chardev_sync(
+    domain_name: str, tcp_port: int, libvirt_uri: str = "qemu:///system",
+) -> None:
+    """Reset QEMU TCP serial chardev to clear stale connections (sync)."""
+    # Kill lingering TCP telnet console processes on this port
+    try:
+        result = subprocess.run(
+            ["ss", "-tnp", f"dst 127.0.0.1:{tcp_port}"],
+            capture_output=True, text=True, timeout=5,
+        )
+        for line in result.stdout.splitlines():
+            if "python3" in line:
+                m = re.search(r"pid=(\d+)", line)
+                if m:
+                    try:
+                        subprocess.run(["kill", m.group(1)], timeout=2)
+                    except Exception:
+                        pass
+    except Exception:
+        pass
+
+    # Check if chardev has a stale connection via QEMU monitor
+    try:
+        result = subprocess.run(
+            ["virsh", "-c", libvirt_uri, "qemu-monitor-command", domain_name,
+             "--hmp", "info chardev"],
+            capture_output=True, text=True, timeout=5,
+        )
+        for line in result.stdout.splitlines():
+            if "charserial0" in line and "<->" in line:
+                logger.info(
+                    "Resetting stale TCP chardev for %s (port %d): %s",
+                    domain_name, tcp_port, line.strip(),
+                )
+                subprocess.run(
+                    ["virsh", "-c", libvirt_uri, "qemu-monitor-command",
+                     domain_name, "--hmp",
+                     "chardev-change charserial0 null"],
+                    capture_output=True, text=True, timeout=5,
+                )
+                time.sleep(0.5)
+                subprocess.run(
+                    ["virsh", "-c", libvirt_uri, "qemu-monitor-command",
+                     domain_name, "--hmp",
+                     f"chardev-change charserial0 socket,host=127.0.0.1,"
+                     f"port={tcp_port},server=on,telnet=on,wait=off"],
+                    capture_output=True, text=True, timeout=5,
+                )
+                logger.info(
+                    "TCP chardev reset complete for %s (port %d)",
+                    domain_name, tcp_port,
+                )
+                break
+    except Exception as e:
+        logger.warning("Failed to reset TCP chardev for %s: %s", domain_name, e)
+
+
+# Inline TCP telnet bridge script — connects stdin/stdout to a TCP telnet
+# serial port with IAC negotiation.  Spawned via pexpect.spawn() with a PTY
+# so the existing console interaction code works unchanged.
+_TCP_TELNET_CONSOLE_SCRIPT = r'''
+import sys, os, socket, select, struct, tty, termios, time
+
+port = int(sys.argv[1])
+sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+sock.settimeout(10)
+for attempt in range(6):
+    try:
+        sock.connect(("127.0.0.1", port))
+        break
+    except ConnectionRefusedError:
+        if attempt < 5:
+            time.sleep(0.5)
+            sock.close()
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(10)
+        else:
+            sys.stderr.write(f"Failed to connect to TCP serial port {port} after retries\n")
+            sys.exit(1)
+    except Exception as e:
+        sys.stderr.write(f"Failed to connect to TCP serial port {port}: {e}\n")
+        sys.exit(1)
+sock.setblocking(False)
+
+fd = sys.stdin.fileno()
+old_settings = termios.tcgetattr(fd)
+try:
+    tty.setraw(fd)
+    while True:
+        readable, _, _ = select.select([sock, fd], [], [], 1.0)
+        for r in readable:
+            if r is sock:
+                try:
+                    data = sock.recv(4096)
+                except (BlockingIOError, ConnectionError):
+                    continue
+                if not data:
+                    sys.exit(0)
+                out = bytearray()
+                i = 0
+                while i < len(data):
+                    if data[i] == 0xFF and i + 1 < len(data):
+                        cmd = data[i + 1]
+                        if cmd == 0xFF:
+                            out.append(0xFF)
+                            i += 2
+                        elif cmd in (0xFB, 0xFC, 0xFD, 0xFE) and i + 2 < len(data):
+                            opt = data[i + 2]
+                            if cmd == 0xFD:
+                                sock.sendall(bytes([0xFF, 0xFC, opt]))
+                            elif cmd == 0xFB:
+                                sock.sendall(bytes([0xFF, 0xFE, opt]))
+                            i += 3
+                        elif cmd in (0xF1,0xF2,0xF3,0xF4,0xF5,0xF6,0xF7,0xF8,0xF9,0xFA):
+                            if cmd == 0xFA:
+                                i += 2
+                                while i < len(data):
+                                    if data[i] == 0xFF and i+1 < len(data) and data[i+1] == 0xF0:
+                                        i += 2
+                                        break
+                                    i += 1
+                            else:
+                                i += 2
+                        else:
+                            i += 2
+                    else:
+                        out.append(data[i])
+                        i += 1
+                if out:
+                    os.write(sys.stdout.fileno(), bytes(out))
+            elif r is fd:
+                data = sys.stdin.buffer.read1(4096)
+                if not data:
+                    break
+                sock.sendall(data)
+finally:
+    termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+    sock.close()
+'''
 
 
 @dataclass
@@ -67,6 +245,7 @@ class SerialConsoleExtractor:
         domain_name: str,
         libvirt_uri: str = "qemu:///system",
         timeout: int = 30,
+        tcp_port: int | None = None,
     ):
         if not PEXPECT_AVAILABLE:
             raise ImportError("pexpect package is not installed")
@@ -74,6 +253,7 @@ class SerialConsoleExtractor:
         self.domain_name = domain_name
         self.libvirt_uri = libvirt_uri
         self.timeout = timeout
+        self.tcp_port = tcp_port
         self.child: pexpect.spawn | None = None
 
     def extract_config(
@@ -168,6 +348,42 @@ class SerialConsoleExtractor:
 
         return last_result
 
+    def _spawn_console(self) -> str | None:
+        """Spawn a console session and wait for connection.
+
+        Returns None on success, or an error string on failure.
+        Sets self.child to the pexpect session.
+        """
+        if self.tcp_port is not None:
+            # TCP serial — reset chardev then spawn telnet bridge
+            _reset_tcp_chardev_sync(
+                self.domain_name, self.tcp_port, self.libvirt_uri,
+            )
+            cmd = ["python3", "-c", _TCP_TELNET_CONSOLE_SCRIPT, str(self.tcp_port)]
+            logger.debug(
+                "Starting TCP telnet console for %s on port %d",
+                self.domain_name, self.tcp_port,
+            )
+            self.child = pexpect.spawn(
+                cmd[0], cmd[1:], timeout=self.timeout, encoding="utf-8",
+            )
+            # TCP bridge has no "Connected to domain" banner — just give it
+            # a moment to establish the TCP connection and negotiate IAC.
+            time.sleep(1)
+        else:
+            # PTY serial — standard virsh console
+            cmd_str = f"virsh -c {self.libvirt_uri} console --force {self.domain_name}"
+            logger.debug("Starting console: %s", cmd_str)
+            self.child = pexpect.spawn(
+                cmd_str, timeout=self.timeout, encoding="utf-8",
+            )
+            try:
+                self.child.expect(r"Connected to domain", timeout=10)
+                logger.debug("Connected to domain console")
+            except pexpect.TIMEOUT:
+                return "Timeout waiting for console connection"
+        return None
+
     def _extract_config_inner(
         self,
         command: str,
@@ -179,21 +395,9 @@ class SerialConsoleExtractor:
     ) -> ExtractionResult:
         """Core extraction logic (called with lock held)."""
         try:
-            # Start virsh console
-            cmd = f"virsh -c {self.libvirt_uri} console --force {self.domain_name}"
-            logger.debug(f"Starting console: {cmd}")
-            self.child = pexpect.spawn(cmd, timeout=self.timeout, encoding='utf-8')
-
-            # Wait for initial connection
-            # virsh console prints "Connected to domain..." then waits
-            try:
-                self.child.expect(r"Connected to domain", timeout=10)
-                logger.debug("Connected to domain console")
-            except pexpect.TIMEOUT:
-                return ExtractionResult(
-                    success=False,
-                    error="Timeout waiting for console connection"
-                )
+            err = self._spawn_console()
+            if err:
+                return ExtractionResult(success=False, error=err)
 
             if not self._prime_console_for_prompt(prompt_pattern):
                 return ExtractionResult(
@@ -678,16 +882,17 @@ class SerialConsoleExtractor:
     def _cleanup(self) -> None:
         """Clean up pexpect session.
 
-        Uses force=True to ensure the virsh process is terminated,
+        Uses force=True to ensure the process is terminated,
         with a fallback SIGKILL if it refuses to die.
         """
         if self.child:
-            try:
-                # Send escape sequence to exit console (Ctrl+])
-                self.child.sendcontrol(']')
-                time.sleep(0.2)
-            except Exception:
-                pass
+            if self.tcp_port is None:
+                # Ctrl+] exits virsh console — not applicable for TCP bridge
+                try:
+                    self.child.sendcontrol(']')
+                    time.sleep(0.2)
+                except Exception:
+                    pass
             try:
                 self.child.close(force=True)
             except Exception:
@@ -890,20 +1095,9 @@ class SerialConsoleExtractor:
     ) -> CommandResult:
         """Core command execution logic (called with lock held)."""
         try:
-            # Start virsh console
-            cmd = f"virsh -c {self.libvirt_uri} console --force {self.domain_name}"
-            logger.debug(f"Starting console for post-boot commands: {cmd}")
-            self.child = pexpect.spawn(cmd, timeout=self.timeout, encoding='utf-8')
-
-            # Wait for initial connection
-            try:
-                self.child.expect(r"Connected to domain", timeout=10)
-                logger.debug("Connected to domain console")
-            except pexpect.TIMEOUT:
-                return CommandResult(
-                    success=False,
-                    error="Timeout waiting for console connection"
-                )
+            err = self._spawn_console()
+            if err:
+                return CommandResult(success=False, error=err)
 
             if not self._prime_console_for_prompt(prompt_pattern):
                 return CommandResult(
@@ -981,18 +1175,9 @@ class SerialConsoleExtractor:
     ) -> CommandCaptureResult:
         """Core command capture logic (called with lock held)."""
         try:
-            cmd = f"virsh -c {self.libvirt_uri} console --force {self.domain_name}"
-            logger.debug(f"Starting console for CLI capture: {cmd}")
-            self.child = pexpect.spawn(cmd, timeout=self.timeout, encoding='utf-8')
-
-            try:
-                self.child.expect(r"Connected to domain", timeout=10)
-                logger.debug("Connected to domain console")
-            except pexpect.TIMEOUT:
-                return CommandCaptureResult(
-                    success=False,
-                    error="Timeout waiting for console connection",
-                )
+            err = self._spawn_console()
+            if err:
+                return CommandCaptureResult(success=False, error=err)
 
             if not self._prime_console_for_prompt(prompt_pattern):
                 logger.info(
@@ -1127,10 +1312,23 @@ def extract_vm_config(
         )
 
     if settings.method == "serial":
+        # Resolve TCP serial port if the vendor uses TCP telnet serial
+        tcp_port = None
+        from agent.vendors import get_vendor_config
+        vconfig = get_vendor_config(kind)
+        if vconfig and getattr(vconfig, "serial_type", "pty") == "tcp":
+            tcp_port = _get_tcp_serial_port_sync(domain_name, libvirt_uri)
+            if tcp_port is None:
+                return ExtractionResult(
+                    success=False,
+                    error=f"Could not resolve TCP serial port for {domain_name}",
+                )
+
         extractor = SerialConsoleExtractor(
             domain_name=domain_name,
             libvirt_uri=libvirt_uri,
             timeout=settings.timeout,
+            tcp_port=tcp_port,
         )
         return extractor.extract_config(
             command=settings.command,
@@ -1227,10 +1425,16 @@ def run_vm_post_boot_commands(
         # Get extraction settings for console interaction parameters
         extraction_settings = get_config_extraction_settings(kind)
 
+        # Resolve TCP serial port if needed
+        tcp_port = None
+        if config and getattr(config, "serial_type", "pty") == "tcp":
+            tcp_port = _get_tcp_serial_port_sync(domain_name, libvirt_uri)
+
         extractor = SerialConsoleExtractor(
             domain_name=domain_name,
             libvirt_uri=libvirt_uri,
             timeout=30,  # Shorter timeout for simple commands
+            tcp_port=tcp_port,
         )
 
         result = extractor.run_commands(
@@ -1307,7 +1511,7 @@ def run_vm_cli_commands(
             error="pexpect package is not installed",
         )
 
-    from agent.vendors import get_config_extraction_settings
+    from agent.vendors import get_config_extraction_settings, get_vendor_config
 
     extraction_settings = get_config_extraction_settings(kind)
     if extraction_settings.method == "none":
@@ -1320,10 +1524,17 @@ def run_vm_cli_commands(
     if isinstance(timeout, int) and timeout > 0:
         effective_timeout = timeout
 
+    # Resolve TCP serial port if needed
+    tcp_port = None
+    vconfig = get_vendor_config(kind)
+    if vconfig and getattr(vconfig, "serial_type", "pty") == "tcp":
+        tcp_port = _get_tcp_serial_port_sync(domain_name, libvirt_uri)
+
     extractor = SerialConsoleExtractor(
         domain_name=domain_name,
         libvirt_uri=libvirt_uri,
         timeout=effective_timeout,
+        tcp_port=tcp_port,
     )
 
     resolved_username = extraction_settings.user if username is None else username

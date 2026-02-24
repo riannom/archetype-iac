@@ -555,13 +555,14 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         # TCP serial is single-connection (QEMU allows one client), so readiness probe can't
         # read console output without blocking the user's session. Skip the wait.
         readiness_probe="none",
-        # Config extraction via SSH (console is TCP serial, not docker exec)
-        config_extract_method="ssh",
+        # Config extraction via TCP serial console (immune to user SSH/password changes)
+        config_extract_method="serial",
         config_extract_command="show running-config",
         config_extract_user="cisco",
         config_extract_password="cisco",
-        config_extract_timeout=30,
+        config_extract_timeout=60,
         config_extract_prompt_pattern=r"RP/\d+/RP\d+/CPU\d+:[\w\-]+#",
+        config_extract_paging_disable="terminal length 0",
         console_user="cisco",
         console_password="cisco",
         documentation_url="https://www.cisco.com/c/en/us/td/docs/iosxr/",

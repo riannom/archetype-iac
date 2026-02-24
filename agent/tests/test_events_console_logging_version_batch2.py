@@ -613,7 +613,7 @@ def test_run_vm_post_boot_commands_skips_reentrant_call(monkeypatch) -> None:
     reentrant: dict[str, object] = {}
 
     class _FakeExtractor:
-        def __init__(self, domain_name: str, libvirt_uri: str, timeout: int):
+        def __init__(self, domain_name: str, libvirt_uri: str, timeout: int, tcp_port: int | None = None):
             self.domain_name = domain_name
             self.libvirt_uri = libvirt_uri
             self.timeout = timeout
@@ -670,7 +670,7 @@ def test_run_vm_post_boot_commands_failure_retries_after_return(monkeypatch) -> 
     seen = {"calls": 0}
 
     class _FakeExtractor:
-        def __init__(self, domain_name: str, libvirt_uri: str, timeout: int):
+        def __init__(self, domain_name: str, libvirt_uri: str, timeout: int, tcp_port: int | None = None):
             self.domain_name = domain_name
             self.libvirt_uri = libvirt_uri
             self.timeout = timeout
@@ -726,7 +726,7 @@ def test_run_vm_post_boot_commands_sets_and_releases_console_control(monkeypatch
     monkeypatch.setitem(sys.modules, "agent.console_session_registry", fake_registry)
 
     class _FakeExtractor:
-        def __init__(self, domain_name: str, libvirt_uri: str, timeout: int):
+        def __init__(self, domain_name: str, libvirt_uri: str, timeout: int, tcp_port: int | None = None):
             self.domain_name = domain_name
             self.libvirt_uri = libvirt_uri
             self.timeout = timeout
@@ -828,12 +828,13 @@ def test_run_vm_cli_commands_uses_extraction_settings(monkeypatch) -> None:
         prompt_pattern=r"[>#]\s*$",
         paging_disable="terminal length 0",
     )
+    fake_vendors.get_vendor_config = lambda kind: SimpleNamespace(serial_type="pty")
     monkeypatch.setitem(sys.modules, "agent.vendors", fake_vendors)
 
     seen: dict[str, object] = {}
 
     class _FakeExtractor:
-        def __init__(self, domain_name: str, libvirt_uri: str, timeout: int):
+        def __init__(self, domain_name: str, libvirt_uri: str, timeout: int, tcp_port: int | None = None):
             seen["domain_name"] = domain_name
             seen["libvirt_uri"] = libvirt_uri
             seen["timeout"] = timeout
@@ -911,12 +912,13 @@ def test_run_vm_cli_commands_honors_overrides(monkeypatch) -> None:
         prompt_pattern=r"[>#]\s*$",
         paging_disable="terminal length 0",
     )
+    fake_vendors.get_vendor_config = lambda kind: SimpleNamespace(serial_type="pty")
     monkeypatch.setitem(sys.modules, "agent.vendors", fake_vendors)
 
     seen: dict[str, object] = {}
 
     class _FakeExtractor:
-        def __init__(self, domain_name: str, libvirt_uri: str, timeout: int):
+        def __init__(self, domain_name: str, libvirt_uri: str, timeout: int, tcp_port: int | None = None):
             seen["timeout"] = timeout
 
         def run_commands_capture(self, **kwargs):
