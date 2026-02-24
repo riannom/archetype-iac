@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import subprocess
 from pathlib import Path
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
@@ -13,6 +14,7 @@ from agent.console.docker_exec import DockerConsole
 from agent.console.ssh_console import SSHConsole
 from agent.docker_client import get_docker_client
 from agent.providers import get_provider
+from agent.providers.naming import libvirt_domain_name
 from agent.vendors import get_console_credentials, get_console_method, get_console_shell
 
 logger = logging.getLogger(__name__)
@@ -433,6 +435,80 @@ async def _console_websocket_docker(
             pass
 
 
+async def _reset_tcp_chardev(domain_name: str, tcp_port: int) -> None:
+    """Reset QEMU TCP serial chardev to clear stale connections.
+
+    QEMU's TCP telnet chardev in server mode only accepts one client at a
+    time.  When a previous console session disconnects uncleanly, the chardev
+    stays bound to the dead socket (CLOSE-WAIT) and refuses new connections.
+
+    Fix: cycle the chardev through null backend and back to TCP, which forces
+    QEMU to drop the stale socket and listen for new connections.
+    """
+
+    def _do_reset() -> None:
+        import re
+        import time
+
+        uri = "qemu:///system"
+        # Kill any lingering TCP telnet console processes on this port
+        try:
+            result = subprocess.run(
+                ["ss", "-tnp", f"dst 127.0.0.1:{tcp_port}"],
+                capture_output=True, text=True, timeout=5,
+            )
+            for line in result.stdout.splitlines():
+                if "python3" in line:
+                    m = re.search(r"pid=(\d+)", line)
+                    if m:
+                        pid = int(m.group(1))
+                        try:
+                            subprocess.run(["kill", str(pid)], timeout=2)
+                        except Exception:
+                            pass
+        except Exception:
+            pass
+
+        # Check if chardev has a stale connection via QEMU monitor
+        try:
+            result = subprocess.run(
+                ["virsh", "-c", uri, "qemu-monitor-command", domain_name,
+                 "--hmp", "info chardev"],
+                capture_output=True, text=True, timeout=5,
+            )
+            # Look for charserial0 with a client connection (indicates <->)
+            for line in result.stdout.splitlines():
+                if "charserial0" in line and "<->" in line:
+                    logger.info(
+                        "Resetting stale TCP chardev for %s (port %d): %s",
+                        domain_name, tcp_port, line.strip(),
+                    )
+                    # Cycle through null to release the port
+                    subprocess.run(
+                        ["virsh", "-c", uri, "qemu-monitor-command", domain_name,
+                         "--hmp", "chardev-change charserial0 null"],
+                        capture_output=True, text=True, timeout=5,
+                    )
+                    time.sleep(0.5)
+                    # Restore TCP telnet server
+                    subprocess.run(
+                        ["virsh", "-c", uri, "qemu-monitor-command", domain_name,
+                         "--hmp",
+                         f"chardev-change charserial0 socket,host=127.0.0.1,"
+                         f"port={tcp_port},server=on,telnet=on,wait=off"],
+                        capture_output=True, text=True, timeout=5,
+                    )
+                    logger.info(
+                        "TCP chardev reset complete for %s (port %d)",
+                        domain_name, tcp_port,
+                    )
+                    break
+        except Exception as e:
+            logger.warning("Failed to reset TCP chardev for %s: %s", domain_name, e)
+
+    await asyncio.to_thread(_do_reset)
+
+
 async def _console_websocket_libvirt(
     websocket: WebSocket,
     lab_id: str,
@@ -466,6 +542,14 @@ async def _console_websocket_libvirt(
     _virsh_domain = console_cmd[-1] if _is_virsh else None
     _lock_ctx = None
 
+    # Detect TCP telnet console and extract port
+    _is_tcp_telnet = (
+        len(console_cmd) >= 4
+        and console_cmd[0] == "python3"
+        and console_cmd[1] == "-c"
+    )
+    _tcp_port = int(console_cmd[-1]) if _is_tcp_telnet else None
+
     if _virsh_domain:
         from agent.virsh_console_lock import console_lock
         try:
@@ -478,6 +562,11 @@ async def _console_websocket_libvirt(
             )
             await websocket.close(code=1011)
             return
+
+    # For TCP telnet consoles, reset QEMU chardev if stale connections exist
+    if _is_tcp_telnet and _tcp_port:
+        domain_name = libvirt_domain_name(lab_id, node_name)
+        await _reset_tcp_chardev(domain_name, _tcp_port)
 
     await websocket.send_text("\r\n\x1b[90m--- Connecting to VM console ---\x1b[0m\r\n")
     await websocket.send_text("\x1b[90mPress Ctrl+] to disconnect\x1b[0m\r\n\r\n")
