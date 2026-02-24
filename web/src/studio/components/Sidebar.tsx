@@ -454,7 +454,7 @@ const Sidebar: React.FC<SidebarProps> = ({ categories, onAddDevice, onSelectTool
                   onClick={() => onSelectTool(t.tool)}
                   className={`flex flex-col items-center justify-center p-2 rounded-lg border transition-all gap-1 group shadow-sm ${
                     isActive
-                      ? 'bg-sage-100 dark:bg-sage-900/40 border-sage-400 dark:border-sage-600 ring-1 ring-sage-400/50 dark:ring-sage-600/50'
+                      ? 'bg-sage-100 dark:bg-stone-900 border-sage-400 dark:border-sage-500/60 ring-1 ring-sage-400/50 dark:ring-sage-500/40 dark:shadow-[0_0_12px_#84CC1659]'
                       : 'bg-white dark:bg-stone-800/50 hover:bg-stone-50 dark:hover:bg-stone-800 border-stone-200 dark:border-stone-700 hover:border-sage-300 dark:hover:border-sage-500/50'
                   }`}
                 >
