@@ -340,6 +340,36 @@
 
 **Rule**: `@functools.total_ordering` does not work with `str` (or any type that already defines rich comparison methods). It only fills in MISSING methods. For `str` enums with custom ordering, explicitly implement all 4 comparison methods.
 
+## 2026-02-23: Linux VXLAN devices persist independently of OVS ports
+
+**Bug**: Deleting an OVS VXLAN port (via `ovs-vsctl del-port`) does NOT delete the underlying Linux VXLAN device created by `ip link add ... type vxlan`. The "ghost" device survives agent restarts and all OVS cleanup routines. When tunnel recreation is attempted, `ip link add` fails with "already exists" — permanently blocking that tunnel.
+
+**Impact**: Cross-host links stuck in `down` state permanently. Link reconciliation retried every 30s but could never succeed. Required manual `ip link delete` on the agent host to resolve.
+
+**Fix**: Added retry logic in `_create_vxlan_device()` in `agent/network/overlay.py`. On "already exists" error, automatically deletes the stale Linux device and retries creation.
+
+**Rule**: When cleaning up VXLAN infrastructure, always clean both the OVS port AND the Linux netdev. OVS port deletion is not sufficient. When creating VXLAN devices, handle "already exists" as a recoverable error (delete and retry) rather than a permanent failure.
+
+## 2026-02-23: Database queries should never assume error state implies specific status values
+
+**Bug**: Infrastructure notifications query filtered `VxlanTunnel.status.in_(["cleanup", "failed"])` to find problematic tunnels. But tunnels can have `status='active'` with a non-null `error_message` — this happens when cleanup is deferred (database record re-activated while the physical device remains orphaned).
+
+**Impact**: Notifications panel showed empty despite a known tunnel issue with a cleanup deferral error message.
+
+**Fix**: Added `or_()` clause to also match tunnels with non-null `error_message` regardless of status.
+
+**Rule**: When querying for records with problems/errors, check BOTH explicit status fields AND error message fields. Status values can be misleading — a record may be "active" while having an unresolved error. Use `or_(status_check, error_message_check)` pattern.
+
+## 2026-02-23: Nonexistent model attributes crash silently in periodic tasks
+
+**Bug**: `reconciliation.py` line 438 referenced `models.Lab.updated_at` — an attribute that doesn't exist on the Lab model (correct name: `Lab.state_updated_at`). This raised `AttributeError` every 30 seconds, crashing the entire `refresh_states_from_agents()` function.
+
+**Impact**: State reconciliation completely disabled. Link states for new links were never created. Transitional labs never reconciled. The scheduler caught the exception and continued, so no visible crash — failure was silent.
+
+**Fix**: Changed `Lab.updated_at` to `Lab.state_updated_at`.
+
+**Rule**: SQLAlchemy model attribute references in queries are only validated at query execution time, not import time. A typo in a model attribute name compiles fine but crashes at runtime. When referencing model columns in filter expressions, verify the column name exists on the model class. Periodic tasks are especially dangerous — failures are silent and may go undetected for days.
+
 ## 2026-02-22: Mock patch targets must follow code extraction
 
 **Bug**: After extracting endpoints from `agent/main.py` into `agent/routers/*.py`, 14 test files had `patch("agent.main.X")` that silently created new mocks instead of patching the real function. Python's `unittest.mock.patch` patches the name in the specified module — if the function moved to `agent.routers.nodes`, patching `agent.main.create_node` creates a new mock on `agent.main` that nothing calls.

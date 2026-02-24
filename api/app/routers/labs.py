@@ -2805,19 +2805,89 @@ def get_lab_interface_mappings(
     """Get all interface mappings for a lab.
 
     Returns OVS port, Linux interface, and vendor interface mappings
-    for all interfaces in the lab.
+    for all interfaces in the lab. Includes computed vendor names for
+    interfaces discovered from link states (covers VMs and other providers
+    that don't go through OVS plugin port sync).
     """
+    from app.services.interface_naming import denormalize_interface
+
     get_lab_or_404(lab_id, database, current_user)
 
+    # Get all nodes for this lab (need device type for vendor name computation)
+    all_nodes = (
+        database.query(models.Node)
+        .filter(models.Node.lab_id == lab_id)
+        .all()
+    )
+    node_id_map = {n.id: n for n in all_nodes}
+    node_name_to_node = {n.container_name: n for n in all_nodes}
+
+    # Get existing interface mappings from OVS sync
     mappings = (
         database.query(models.InterfaceMapping)
         .filter(models.InterfaceMapping.lab_id == lab_id)
         .all()
     )
 
+    # Track which (node_name, linux_interface) pairs we already have
+    seen: set[tuple[str, str]] = set()
+    result: list[schemas.InterfaceMappingOut] = []
+
+    for m in mappings:
+        node = node_id_map.get(m.node_id)
+        out = schemas.InterfaceMappingOut.model_validate(m)
+        out.node_name = node.container_name if node else None
+        # Fill in missing vendor_interface from node device type
+        if not out.vendor_interface and node and node.device:
+            vendor = denormalize_interface(m.linux_interface, node.device)
+            if vendor != m.linux_interface:
+                out.vendor_interface = vendor
+            out.device_type = out.device_type or node.device
+        result.append(out)
+        if out.node_name:
+            seen.add((out.node_name, m.linux_interface))
+
+    # Fill gaps: add entries for interfaces found in link_states but missing
+    # from interface_mappings (covers VMs and any other provider types)
+    link_states = (
+        database.query(models.LinkState)
+        .filter(models.LinkState.lab_id == lab_id)
+        .all()
+    )
+
+    for ls in link_states:
+        for node_name, iface in [
+            (ls.source_node, ls.source_interface),
+            (ls.target_node, ls.target_interface),
+        ]:
+            if not node_name or not iface:
+                continue
+            if (node_name, iface) in seen:
+                continue
+            seen.add((node_name, iface))
+
+            node = node_name_to_node.get(node_name)
+            vendor = None
+            if node and node.device:
+                v = denormalize_interface(iface, node.device)
+                if v != iface:
+                    vendor = v
+
+            result.append(schemas.InterfaceMappingOut(
+                id=f"computed-{node_name}-{iface}",
+                lab_id=lab_id,
+                node_id=node.id if node else "",
+                node_name=node_name,
+                linux_interface=iface,
+                vendor_interface=vendor,
+                device_type=node.device if node else None,
+                created_at=datetime.now(timezone.utc),
+                updated_at=datetime.now(timezone.utc),
+            ))
+
     return schemas.InterfaceMappingsResponse(
-        mappings=[schemas.InterfaceMappingOut.model_validate(m) for m in mappings],
-        total=len(mappings),
+        mappings=result,
+        total=len(result),
     )
 
 

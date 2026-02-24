@@ -1072,6 +1072,7 @@ class InterfaceMappingOut(BaseModel):
     id: str
     lab_id: str
     node_id: str
+    node_name: str | None = None  # Container name (from Node table)
     # OVS layer
     ovs_port: str | None = None
     ovs_bridge: str | None = None
@@ -1400,7 +1401,63 @@ class LinkReconciliationResponse(BaseModel):
     skipped: int
 
 
+class InfraNotification(BaseModel):
+    """A single infrastructure notification for the Infra view."""
+    id: str
+    severity: Literal["error", "warning", "info"]
+    category: str  # e.g. "tunnel_cleanup", "link_error", "node_error"
+    title: str
+    detail: str | None = None
+    entity_type: str | None = None  # "tunnel", "link", "node"
+    entity_name: str | None = None
+    timestamp: datetime | None = None
+
+
+class InfraNotificationsResponse(BaseModel):
+    """Response from infra notifications endpoint."""
+    notifications: list[InfraNotification] = Field(default_factory=list)
+
+
 # ── Lab verification framework ──
+
+
+class LinkEndpointDetail(BaseModel):
+    """Detail for one endpoint of a link path."""
+    node_name: str
+    interface: str
+    vendor_interface: str | None = None
+    ovs_port: str | None = None
+    ovs_bridge: str | None = None
+    vlan_tag: int | None = None
+    host_id: str | None = None
+    host_name: str | None = None
+    oper_state: str | None = None
+    oper_reason: str | None = None
+    carrier_state: str | None = None
+    vxlan_attached: bool | None = None
+
+
+class VxlanTunnelDetail(BaseModel):
+    """VXLAN tunnel detail for a cross-host link."""
+    vni: int
+    vlan_tag: int
+    agent_a_ip: str
+    agent_b_ip: str
+    port_name: str | None = None
+    status: str
+    error_message: str | None = None
+
+
+class LinkPathDetail(BaseModel):
+    """Full logical path detail for a link, combining link state + tunnel + interface mappings."""
+    link_name: str
+    actual_state: str
+    desired_state: str
+    error_message: str | None = None
+    is_cross_host: bool = False
+    source: LinkEndpointDetail
+    target: LinkEndpointDetail
+    tunnel: VxlanTunnelDetail | None = None
 
 
 class TestSpec(BaseModel):

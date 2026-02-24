@@ -35,6 +35,10 @@ export interface LinkStateData {
   target_host_id?: string | null;
   source_vlan_tag?: number | null;
   target_vlan_tag?: number | null;
+  source_oper_state?: string | null;
+  target_oper_state?: string | null;
+  source_oper_reason?: string | null;
+  target_oper_reason?: string | null;
 }
 
 export interface LabStateData {

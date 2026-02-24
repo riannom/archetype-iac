@@ -225,6 +225,102 @@ export async function getLabLogs(
 }
 
 
+// --- Link Path Detail Types and Functions ---
+
+export interface LinkEndpointDetail {
+  node_name: string;
+  interface: string;
+  vendor_interface: string | null;
+  ovs_port: string | null;
+  ovs_bridge: string | null;
+  vlan_tag: number | null;
+  host_id: string | null;
+  host_name: string | null;
+  oper_state: string | null;
+  oper_reason: string | null;
+  carrier_state: string | null;
+  vxlan_attached: boolean | null;
+}
+
+export interface VxlanTunnelDetail {
+  vni: number;
+  vlan_tag: number;
+  agent_a_ip: string;
+  agent_b_ip: string;
+  port_name: string | null;
+  status: string;
+  error_message: string | null;
+}
+
+export interface LinkPathDetail {
+  link_name: string;
+  actual_state: string;
+  desired_state: string;
+  error_message: string | null;
+  is_cross_host: boolean;
+  source: LinkEndpointDetail;
+  target: LinkEndpointDetail;
+  tunnel: VxlanTunnelDetail | null;
+}
+
+export async function getLinkDetail(
+  labId: string,
+  linkName: string
+): Promise<LinkPathDetail> {
+  return apiRequest<LinkPathDetail>(
+    `/labs/${labId}/links/${encodeURIComponent(linkName)}/detail`
+  );
+}
+
+
+// --- Interface Mapping Types and Functions ---
+
+export interface InterfaceMappingOut {
+  id: string;
+  lab_id: string;
+  node_id: string;
+  node_name: string | null;
+  ovs_port: string | null;
+  ovs_bridge: string | null;
+  vlan_tag: number | null;
+  linux_interface: string;
+  vendor_interface: string | null;
+  device_type: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface InterfaceMappingsResponse {
+  mappings: InterfaceMappingOut[];
+  total: number;
+}
+
+export async function getLabInterfaceMappings(labId: string): Promise<InterfaceMappingsResponse> {
+  return apiRequest<InterfaceMappingsResponse>(`/labs/${labId}/interface-mappings`);
+}
+
+// --- Infra Notifications ---
+
+export interface InfraNotification {
+  id: string;
+  severity: 'error' | 'warning' | 'info';
+  category: string;
+  title: string;
+  detail: string | null;
+  entity_type: string | null;
+  entity_name: string | null;
+  timestamp: string | null;
+}
+
+export interface InfraNotificationsResponse {
+  notifications: InfraNotification[];
+}
+
+export async function getLabInfraNotifications(labId: string): Promise<InfraNotificationsResponse> {
+  return apiRequest<InfraNotificationsResponse>(`/labs/${labId}/infra/notifications`);
+}
+
+
 // --- Support Bundle Types and Functions ---
 
 export interface SupportBundleCreate {

@@ -16,6 +16,7 @@ import TaskLogEntryModal from './components/TaskLogEntryModal';
 import ConfigsView from './components/ConfigsView';
 import LogsView from './components/LogsView';
 import VerificationPanel from './components/VerificationPanel';
+import InfraView from './components/InfraView';
 import { Annotation, AnnotationType, ConsoleWindow, DeviceModel, DeviceType, LabLayout, Link, Node, ExternalNetworkNode, DeviceNode, isExternalNetworkNode, isDeviceNode } from './types';
 import { API_BASE_URL, apiRequest, rawApiRequest } from '../api';
 import { TopologyGraph } from '../types';
@@ -159,7 +160,7 @@ const StudioPage: React.FC = () => {
   const showAdminStrip = canViewInfrastructure(user ?? null);
   const [labs, setLabs] = useState<LabSummary[]>([]);
   const [activeLab, setActiveLab] = useState<LabSummary | null>(null);
-  const [view, setView] = useState<'designer' | 'configs' | 'logs' | 'runtime' | 'tests'>('designer');
+  const [view, setView] = useState<'designer' | 'configs' | 'logs' | 'runtime' | 'tests' | 'infra'>('designer');
   const isDesignerView = view === 'designer';
   const [nodes, setNodes] = useState<Node[]>([]);
   const [links, setLinks] = useState<Link[]>([]);
@@ -185,9 +186,6 @@ const StudioPage: React.FC = () => {
   });
   const [showAgentIndicators, setShowAgentIndicators] = useState<boolean>(() => {
     return localStorage.getItem('archetype_show_agent_indicators') !== 'false';
-  });
-  const [showXRayView, setShowXRayView] = useState<boolean>(() => {
-    return localStorage.getItem('archetype_show_xray_view') === 'true';
   });
   const [authRequired, setAuthRequired] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
@@ -1468,13 +1466,6 @@ const StudioPage: React.FC = () => {
     });
   }, []);
 
-  const handleToggleXRayView = useCallback(() => {
-    setShowXRayView(prev => {
-      const next = !prev;
-      localStorage.setItem('archetype_show_xray_view', next ? 'true' : 'false');
-      return next;
-    });
-  }, []);
 
   const handleStartTests = useCallback(async () => {
     if (!activeLab?.id || testRunning) return;
@@ -1856,6 +1847,17 @@ const StudioPage: React.FC = () => {
             onStartTests={handleStartTests}
           />
         );
+      case 'infra':
+        return (
+          <InfraView
+            labId={activeLab?.id || ''}
+            nodes={nodes}
+            nodeStates={nodeStates}
+            linkStates={linkStates}
+            agents={agents}
+            deviceModels={deviceModels}
+          />
+        );
       default:
         return (
           <>
@@ -1866,14 +1868,11 @@ const StudioPage: React.FC = () => {
               annotations={annotations}
               runtimeStates={runtimeStates}
               nodeStates={nodeStates}
-              linkStates={linkStates}
               deviceModels={deviceModels}
               labId={activeLab?.id}
               agents={agents}
               showAgentIndicators={showAgentIndicators}
               onToggleAgentIndicators={handleToggleAgentIndicators}
-              showXRayView={showXRayView}
-              onToggleXRayView={handleToggleXRayView}
               onNodeMove={handleNodeMove}
               onAnnotationMove={handleAnnotationMove}
               onConnect={handleConnect}
@@ -1998,6 +1997,18 @@ const StudioPage: React.FC = () => {
         >
           Tests
         </button>
+        {agents.length > 1 && (
+          <button
+            onClick={() => setView('infra')}
+            className={`h-full px-4 text-[10px] font-black uppercase border-b-2 transition-all ${
+              view === 'infra'
+                ? 'text-sage-700 dark:text-sage-500 border-sage-700 dark:border-sage-500'
+                : 'text-stone-700 dark:text-stone-500 border-transparent hover:text-stone-900 dark:hover:text-stone-300'
+            }`}
+          >
+            Infra
+          </button>
+        )}
       </div>
       {showAdminStrip && <SystemStatusStrip metrics={systemMetrics} />}
       <AgentAlertBanner />
