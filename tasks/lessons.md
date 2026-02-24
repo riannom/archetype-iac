@@ -370,6 +370,16 @@
 
 **Rule**: SQLAlchemy model attribute references in queries are only validated at query execution time, not import time. A typo in a model attribute name compiles fine but crashes at runtime. When referencing model columns in filter expressions, verify the column name exists on the model class. Periodic tasks are especially dangerous — failures are silent and may go undetected for days.
 
+## 2026-02-23: backdrop-filter: blur() required for translucent dark-on-dark distinction
+
+**Bug**: SystemStatusStrip metric bar text was unreadable in dark mode despite using `text-white` classes. The strip background used `color-mix(in srgb, var(--color-bg-surface) 88%, transparent)` — translucent dark surface on dark wallpaper with no visual distinction. CSS `dark:` prefix classes had specificity issues against component-level styles.
+
+**Impact**: Metric bar text appeared gray/washed-out regardless of color class changes. Multiple iterations of opacity tuning (50%, 75%, 95%) failed to create readable contrast without blur.
+
+**Fix**: (1) Switched from CSS `dark:` prefix to JS `effectiveMode` check for all color classes. (2) Added `backdrop-filter: blur(12px)` alongside 55% opacity for frosted glass effect. The blur creates visual distinction between strip and background that opacity alone cannot achieve.
+
+**Rule**: When using translucent backgrounds in dark mode, always pair with `backdrop-filter: blur()`. Without blur, dark-on-dark translucency is invisible at any opacity. For components that already have `effectiveMode` state, use JS conditionals for color classes instead of CSS `dark:` prefix to avoid specificity battles.
+
 ## 2026-02-22: Mock patch targets must follow code extraction
 
 **Bug**: After extracting endpoints from `agent/main.py` into `agent/routers/*.py`, 14 test files had `patch("agent.main.X")` that silently created new mocks instead of patching the real function. Python's `unittest.mock.patch` patches the name in the specified module — if the function moved to `agent.routers.nodes`, patching `agent.main.create_node` creates a new mock on `agent.main` that nothing calls.
