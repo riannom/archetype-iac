@@ -7,6 +7,7 @@ import { PortManager } from '../hooks/usePortManager';
 import ExternalNetworkConfig from './ExternalNetworkConfig';
 import { getAgentColor } from '../../utils/agentColors';
 import { NodeStateEntry } from '../../types/nodeState';
+import ConfigSnapshotSelector from './ConfigSnapshotSelector';
 
 interface PropertiesPanelProps {
   selectedItem: Node | Link | Annotation | null;
@@ -23,6 +24,8 @@ interface PropertiesPanelProps {
   deviceModels: DeviceModel[];
   portManager: PortManager;
   onOpenConfigViewer?: (nodeId: string, nodeName: string) => void;
+  labId?: string;
+  studioRequest?: <T>(path: string, options?: RequestInit) => Promise<T>;
   agents?: { id: string; name: string }[];
   nodeStates?: Record<string, NodeStateEntry>;
   nodeReadinessHints?: Record<
@@ -114,7 +117,7 @@ const AgentDropdown: React.FC<{
 };
 
 const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
-  selectedItem, onUpdateNode, onUpdateLink, onUpdateAnnotation, onDelete, nodes, links, annotations = [], onOpenConsole, runtimeStates, onUpdateStatus, deviceModels, portManager, onOpenConfigViewer, agents = [], nodeStates = {}
+  selectedItem, onUpdateNode, onUpdateLink, onUpdateAnnotation, onDelete, nodes, links, annotations = [], onOpenConsole, runtimeStates, onUpdateStatus, deviceModels, portManager, onOpenConfigViewer, labId, studioRequest, agents = [], nodeStates = {}
 }) => {
   const [activeTab, setActiveTab] = useState<'general' | 'hardware' | 'connectivity' | 'config'>('general');
   const [isHardwareLocked, setIsHardwareLocked] = useState(true);
@@ -600,20 +603,34 @@ const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
 
         {activeTab === 'config' && (
           <div className="h-full flex flex-col">
-            <div className="flex items-center justify-between mb-3">
-              <label className="text-[10px] font-bold text-stone-500 uppercase tracking-widest">Startup Configuration</label>
-              {onOpenConfigViewer && (
-                <button
-                  onClick={() => onOpenConfigViewer(node.id, node.container_name || node.name)}
-                  className="flex items-center gap-1.5 px-2 py-1 text-[9px] font-bold uppercase text-sage-600 dark:text-sage-400 hover:bg-sage-500/10 rounded transition-colors"
-                  title="View saved config in larger window"
-                >
-                  <i className="fa-solid fa-expand" />
-                  Expand
-                </button>
-              )}
-            </div>
-            <textarea value={node.config || ''} onChange={(e) => onUpdateNode(node.id, { config: e.target.value })} spellCheck={false} className="flex-1 min-h-[300px] bg-stone-50 dark:bg-black text-sage-700 dark:text-sage-400 font-mono text-[11px] p-4 rounded-xl border border-stone-200 dark:border-stone-800 focus:outline-none focus:border-sage-500/50 resize-none" />
+            {labId && studioRequest ? (
+              <ConfigSnapshotSelector
+                labId={labId}
+                nodeName={node.container_name || node.name}
+                nodeId={node.id}
+                studioRequest={studioRequest}
+                onOpenConfigViewer={onOpenConfigViewer}
+                onUpdateStatus={onUpdateStatus}
+                nodeState={nodeStates[node.id]}
+              />
+            ) : (
+              <>
+                <div className="flex items-center justify-between mb-3">
+                  <label className="text-[10px] font-bold text-stone-500 uppercase tracking-widest">Startup Configuration</label>
+                  {onOpenConfigViewer && (
+                    <button
+                      onClick={() => onOpenConfigViewer(node.id, node.container_name || node.name)}
+                      className="flex items-center gap-1.5 px-2 py-1 text-[9px] font-bold uppercase text-sage-600 dark:text-sage-400 hover:bg-sage-500/10 rounded transition-colors"
+                      title="View saved config in larger window"
+                    >
+                      <i className="fa-solid fa-expand" />
+                      Expand
+                    </button>
+                  )}
+                </div>
+                <textarea value={node.config || ''} onChange={(e) => onUpdateNode(node.id, { config: e.target.value })} spellCheck={false} className="flex-1 min-h-[300px] bg-stone-50 dark:bg-black text-sage-700 dark:text-sage-400 font-mono text-[11px] p-4 rounded-xl border border-stone-200 dark:border-stone-800 focus:outline-none focus:border-sage-500/50 resize-none" />
+              </>
+            )}
           </div>
         )}
       </div>

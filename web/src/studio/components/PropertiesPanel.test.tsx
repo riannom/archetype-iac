@@ -67,6 +67,37 @@ vi.mock("./InterfaceSelect", () => ({
   ),
 }));
 
+// Mock ConfigSnapshotSelector component
+vi.mock("./ConfigSnapshotSelector", () => ({
+  default: ({
+    labId,
+    nodeName,
+    nodeId,
+    onOpenConfigViewer,
+  }: {
+    labId: string;
+    nodeName: string;
+    nodeId: string;
+    studioRequest: unknown;
+    onOpenConfigViewer?: (nodeId: string, nodeName: string) => void;
+    onUpdateStatus: unknown;
+    nodeState?: unknown;
+  }) => (
+    <div data-testid="config-snapshot-selector">
+      <span data-testid="snapshot-lab-id">{labId}</span>
+      <span data-testid="snapshot-node-name">{nodeName}</span>
+      {onOpenConfigViewer && (
+        <button
+          data-testid="snapshot-expand"
+          onClick={() => onOpenConfigViewer(nodeId, nodeName)}
+        >
+          Expand
+        </button>
+      )}
+    </div>
+  ),
+}));
+
 // Mock getAgentColor
 vi.mock("../../utils/agentColors", () => ({
   getAgentColor: (id: string) => `#${id.slice(0, 6)}`,
@@ -169,6 +200,8 @@ describe("PropertiesPanel", () => {
   const mockLinks: Link[] = [];
   const mockPortManager = createMockPortManager();
 
+  const mockStudioRequest = vi.fn().mockResolvedValue({ snapshots: [] });
+
   const defaultProps = {
     selectedItem: mockNode as DeviceNode | Link | Annotation | null,
     onUpdateNode: mockOnUpdateNode,
@@ -183,6 +216,8 @@ describe("PropertiesPanel", () => {
     deviceModels: mockDeviceModels,
     portManager: mockPortManager,
     onOpenConfigViewer: mockOnOpenConfigViewer,
+    labId: 'lab-1',
+    studioRequest: mockStudioRequest,
     agents: [],
     nodeStates: {},
   };
@@ -279,7 +314,7 @@ describe("PropertiesPanel", () => {
 
         await user.click(screen.getByText("config"));
 
-        expect(screen.getByText("Startup Configuration")).toBeInTheDocument();
+        expect(screen.getByTestId("config-snapshot-selector")).toBeInTheDocument();
       });
     });
 
@@ -704,42 +739,36 @@ describe("PropertiesPanel", () => {
     });
 
     describe("Config tab", () => {
-      it("displays config textarea", async () => {
+      it("displays config snapshot selector when labId and studioRequest provided", async () => {
         const user = userEvent.setup();
 
         render(<PropertiesPanel {...defaultProps} />);
 
         await user.click(screen.getByText("config"));
 
-        expect(screen.getByText("Startup Configuration")).toBeInTheDocument();
+        expect(screen.getByTestId("config-snapshot-selector")).toBeInTheDocument();
+        expect(screen.getByTestId("snapshot-lab-id")).toHaveTextContent("lab-1");
+        expect(screen.getByTestId("snapshot-node-name")).toHaveTextContent("archetype-lab1-router1");
+      });
+
+      it("falls back to textarea when labId is not provided", async () => {
+        const user = userEvent.setup();
+
+        render(<PropertiesPanel {...defaultProps} labId={undefined} studioRequest={undefined} />);
+
+        await user.click(screen.getByText("config"));
+
         expect(screen.getByDisplayValue("hostname router1")).toBeInTheDocument();
       });
 
-      it("updates config when textarea is changed", async () => {
+      it("shows expand button in snapshot selector when onOpenConfigViewer is provided", async () => {
         const user = userEvent.setup();
 
         render(<PropertiesPanel {...defaultProps} />);
 
         await user.click(screen.getByText("config"));
 
-        const textarea = screen.getByDisplayValue("hostname router1");
-
-        // Use fireEvent to simulate a complete change
-        fireEvent.change(textarea, { target: { value: "new config" } });
-
-        expect(mockOnUpdateNode).toHaveBeenCalledWith("node-1", {
-          config: "new config",
-        });
-      });
-
-      it("shows expand button when onOpenConfigViewer is provided", async () => {
-        const user = userEvent.setup();
-
-        render(<PropertiesPanel {...defaultProps} />);
-
-        await user.click(screen.getByText("config"));
-
-        expect(screen.getByText("Expand")).toBeInTheDocument();
+        expect(screen.getByTestId("snapshot-expand")).toBeInTheDocument();
       });
 
       it("calls onOpenConfigViewer when expand is clicked", async () => {

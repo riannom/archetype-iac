@@ -692,10 +692,11 @@ async def set_active_config(
     payload: schemas.SetActiveConfigRequest,
     current_user: models.User = Depends(get_current_user),
 ) -> dict:
-    """Set a specific config snapshot as the active startup-config for a node.
+    """Set or clear the active startup-config for a node.
 
-    Updates the node's active_config_snapshot_id, syncs content to
+    When snapshot_id is provided: sets it as active config, syncs to
     config_json["startup-config"], and pushes to the agent workspace.
+    When snapshot_id is None: clears active config (resets to vendor default).
     """
     snapshot_id = payload.snapshot_id
     agent_client = _agent_client()
@@ -720,7 +721,10 @@ async def set_active_config(
 
             config_svc = ConfigService(database)
             try:
-                config_svc.set_active_config(node.id, snapshot_id)
+                if snapshot_id is None:
+                    config_svc.clear_active_config(node.id)
+                else:
+                    config_svc.set_active_config(node.id, snapshot_id)
             except ValueError as e:
                 raise HTTPException(status_code=404, detail=str(e))
 
@@ -738,6 +742,13 @@ async def set_active_config(
             if placement:
                 agent = database.get(models.Host, placement.host_id)
                 if agent and agent_client.is_agent_online(agent):
+                    if snapshot_id is None:
+                        # Clear: push empty config to agent
+                        return {
+                            "agent_address": agent.address,
+                            "agent_id": agent.id,
+                            "config_content": None,
+                        }
                     snapshot = database.get(models.ConfigSnapshot, snapshot_id)
                     if snapshot:
                         return {
@@ -759,18 +770,23 @@ async def set_active_config(
         try:
             await client.put(
                 url,
-                json={"content": push_info["config_content"]},
+                json={"content": push_info["config_content"] or ""},
                 timeout=30.0,
                 headers=agent_client._get_agent_auth_headers(),
             )
         except Exception:
             pass  # Best-effort push, non-critical
 
+    message = (
+        f"Active config cleared for '{node_name}'. Reload node to apply."
+        if snapshot_id is None
+        else f"Active config set for '{node_name}'. Reload node to apply."
+    )
     return {
         "success": True,
         "node_name": node_name,
         "active_config_snapshot_id": snapshot_id,
-        "message": f"Active config set for '{node_name}'. Reload node to apply.",
+        "message": message,
     }
 
 

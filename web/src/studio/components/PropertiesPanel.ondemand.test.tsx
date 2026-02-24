@@ -126,6 +126,8 @@ describe("PropertiesPanel - On-Demand Image Sync Overlay", () => {
     deviceModels: mockDeviceModels,
     portManager: mockPortManager,
     onOpenConfigViewer: vi.fn(),
+    labId: 'lab-1',
+    studioRequest: vi.fn().mockResolvedValue({ snapshots: [] }),
     agents: [],
     nodeStates: {} as Record<string, NodeStateEntry>,
   };

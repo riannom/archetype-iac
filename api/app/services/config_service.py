@@ -253,6 +253,39 @@ class ConfigService:
         )
         return node
 
+    def clear_active_config(self, node_id: str) -> models.Node:
+        """Clear a node's active config, resetting to vendor default.
+
+        Updates:
+        1. Node.active_config_snapshot_id = None
+        2. Removes "startup-config" from Node.config_json
+        3. Deletes startup-config file from workspace
+        """
+        node = self.db.query(models.Node).get(node_id)
+        if not node:
+            raise ValueError(f"Node not found: {node_id}")
+
+        node.active_config_snapshot_id = None
+
+        # Remove startup-config from config_json
+        if node.config_json:
+            try:
+                config = json.loads(node.config_json)
+                config.pop("startup-config", None)
+                node.config_json = json.dumps(config) if config else None
+            except json.JSONDecodeError:
+                node.config_json = None
+
+        # Remove workspace file
+        workspace = lab_workspace(node.lab_id)
+        config_file = workspace / "configs" / node.container_name / "startup-config"
+        if config_file.exists():
+            config_file.unlink()
+
+        self.db.flush()
+        logger.info(f"Cleared active config for node {node.container_name}")
+        return node
+
     def map_config(
         self,
         snapshot_id: str,

@@ -2015,6 +2015,8 @@ const StudioPage: React.FC = () => {
                   onUpdateStatus={handleUpdateStatus}
                   portManager={portManager}
               onOpenConfigViewer={handleOpenConfigViewer}
+              labId={activeLab?.id || ''}
+              studioRequest={studioRequest}
               agents={agents}
               nodeStates={nodeStates}
               nodeReadinessHints={nodeReadinessHints}

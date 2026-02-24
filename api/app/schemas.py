@@ -500,7 +500,7 @@ class ConfigMappingRequest(BaseModel):
 class SetActiveConfigRequest(BaseModel):
     """Input schema for setting a node's active startup-config."""
 
-    snapshot_id: str
+    snapshot_id: str | None = None
 
 
 class ConfigDiffRequest(BaseModel):
