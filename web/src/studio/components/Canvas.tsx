@@ -6,6 +6,7 @@ import { useTheme } from '../../theme/index';
 import { getAgentColor, getAgentInitials } from '../../utils/agentColors';
 import { useNotifications } from '../../contexts/NotificationContext';
 import { NodeStateEntry } from '../../types/nodeState';
+import { LinkStateData } from '../hooks/useLabStateWS';
 import { computeLinkLabelPlacements } from '../utils/linkLabelPlacement';
 
 interface CanvasProps {
@@ -14,6 +15,8 @@ interface CanvasProps {
   annotations: Annotation[];
   runtimeStates: Record<string, RuntimeStatus>;
   nodeStates?: Record<string, NodeStateEntry>;
+  linkStates?: Map<string, LinkStateData>;
+  scenarioHighlights?: { activeNodeNames: Set<string>; activeLinkName: string | null; stepName: string };
   deviceModels: DeviceModel[];
   labId?: string;
   agents?: { id: string; name: string }[];
@@ -68,7 +71,7 @@ function readStoredViewport(labId?: string): { zoom: number; x: number; y: numbe
 }
 
 const Canvas: React.FC<CanvasProps> = ({
-  nodes, links, annotations, runtimeStates, nodeStates = {}, deviceModels, labId, agents = [], showAgentIndicators = false, onToggleAgentIndicators, onNodeMove, onAnnotationMove, onConnect, selectedId, onSelect, onOpenConsole, onExtractConfig, onUpdateStatus, onDelete, onDropDevice, onDropExternalNetwork, onUpdateAnnotation
+  nodes, links, annotations, runtimeStates, nodeStates = {}, linkStates, scenarioHighlights, deviceModels, labId, agents = [], showAgentIndicators = false, onToggleAgentIndicators, onNodeMove, onAnnotationMove, onConnect, selectedId, onSelect, onOpenConsole, onExtractConfig, onUpdateStatus, onDelete, onDropDevice, onDropExternalNetwork, onUpdateAnnotation
 }) => {
   const { effectiveMode } = useTheme();
   const { preferences } = useNotifications();
@@ -147,6 +150,31 @@ const Canvas: React.FC<CanvasProps> = ({
 
   const linkLabelPlacements = useMemo(() => computeLinkLabelPlacements(nodes, links), [nodes, links]);
 
+  // Build set of highlighted node names from scenario execution
+  const highlightedNodeNames = scenarioHighlights?.activeNodeNames;
+
+  // Parse scenario activeLinkName into node name pair for matching
+  const highlightedLinkNodes = useMemo(() => {
+    if (!scenarioHighlights?.activeLinkName) return null;
+    const parts = scenarioHighlights.activeLinkName.split(' <-> ');
+    if (parts.length !== 2) return null;
+    return {
+      a: parts[0].trim().split(':')[0],
+      b: parts[1].trim().split(':')[0],
+    };
+  }, [scenarioHighlights?.activeLinkName]);
+
+  // Build a lookup map from node name pairs to link actual_state for state-based coloring
+  const linkActualStateMap = useMemo(() => {
+    const map = new Map<string, string>();
+    if (!linkStates) return map;
+    linkStates.forEach((ls) => {
+      // Key by both orderings so either direction matches
+      map.set(`${ls.source_node}|${ls.target_node}`, ls.actual_state);
+      map.set(`${ls.target_node}|${ls.source_node}`, ls.actual_state);
+    });
+    return map;
+  }, [linkStates]);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -621,6 +649,26 @@ const Canvas: React.FC<CanvasProps> = ({
                 : (isHovered ? (effectiveMode === 'dark' ? '#84CC16' : '#65A30D') : (effectiveMode === 'dark' ? '#57534E' : '#D6D3D1'));
             }
 
+            // Override with state-based color when link is not selected/hovered
+            if (!isSelected && !isHovered && !isExternalLink) {
+              const sourceName = source.name;
+              const targetName = target.name;
+              const actualState = linkActualStateMap.get(`${sourceName}|${targetName}`);
+              if (actualState) {
+                const stateColors: Record<string, { dark: string; light: string }> = {
+                  up: { dark: '#22c55e', light: '#16a34a' },
+                  error: { dark: '#ef4444', light: '#dc2626' },
+                  pending: { dark: '#f59e0b', light: '#d97706' },
+                  creating: { dark: '#f59e0b', light: '#d97706' },
+                };
+                const colors = stateColors[actualState];
+                if (colors) {
+                  linkColor = effectiveMode === 'dark' ? colors.dark : colors.light;
+                }
+                // down/unknown → keep default stone color (no change)
+              }
+            }
+
             const labelPlacement = linkLabelPlacements.get(link.id);
             const sourceLabelX = labelPlacement?.source?.x;
             const sourceLabelY = labelPlacement?.source?.y;
@@ -631,9 +679,24 @@ const Canvas: React.FC<CanvasProps> = ({
             const labelColor = effectiveMode === 'dark' ? '#E7E5E4' : '#44403C';
             const labelStroke = effectiveMode === 'dark' ? '#1C1917' : '#FFFFFF';
 
+            // Scenario highlight: check if this link matches the active scenario step
+            const isScenarioHighlighted = highlightedLinkNodes && (
+              (source.name === highlightedLinkNodes.a && target.name === highlightedLinkNodes.b) ||
+              (source.name === highlightedLinkNodes.b && target.name === highlightedLinkNodes.a)
+            );
+
             return (
               <g key={link.id} className="pointer-events-auto cursor-pointer">
                 <line x1={source.x} y1={source.y} x2={target.x} y2={target.y} stroke="transparent" strokeWidth="12" onMouseDown={(e) => handleLinkMouseDown(e, link.id)} onContextMenu={(e) => handleLinkContextMenu(e, link.id)} onMouseEnter={() => setHoveredLinkId(link.id)} onMouseLeave={() => setHoveredLinkId(null)} />
+                {isScenarioHighlighted && (
+                  <line
+                    x1={source.x} y1={source.y} x2={target.x} y2={target.y}
+                    stroke={effectiveMode === 'dark' ? '#3B82F6' : '#2563EB'}
+                    strokeWidth="6"
+                    strokeOpacity="0.4"
+                    className="animate-pulse"
+                  />
+                )}
                 <line
                   x1={source.x}
                   y1={source.y}
@@ -863,6 +926,12 @@ const Canvas: React.FC<CanvasProps> = ({
               {getStatusDot()}
               {getAgentIndicator()}
               {getErrorIndicator()}
+              {highlightedNodeNames?.has(node.name) && (
+                <div
+                  className="absolute inset-[-6px] rounded-full border-2 border-blue-500 animate-pulse pointer-events-none"
+                  style={{ borderRadius }}
+                />
+              )}
               <div className="absolute top-full mt-1 text-[10px] font-bold text-stone-700 dark:text-stone-300 bg-white/90 dark:bg-stone-900/80 px-1 rounded shadow-sm border border-stone-200 dark:border-stone-700 whitespace-nowrap pointer-events-none">
                 {node.name}
               </div>

@@ -328,6 +328,48 @@ class StateBroadcaster:
             record_broadcast("test_result", False)
             return 0
 
+    async def publish_scenario_step(
+        self,
+        lab_id: str,
+        job_id: str,
+        step_index: int,
+        step_name: str,
+        step_type: str,
+        status: str,
+        total_steps: int,
+        duration_ms: float | None = None,
+        output: str | None = None,
+        error: str | None = None,
+        step_data: dict | None = None,
+    ) -> int:
+        """Publish a scenario step progress event."""
+        try:
+            message = {
+                "type": "scenario_step",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "data": {
+                    "job_id": job_id,
+                    "step_index": step_index,
+                    "step_name": step_name,
+                    "step_type": step_type,
+                    "status": status,
+                    "total_steps": total_steps,
+                    "duration_ms": duration_ms,
+                    "output": output,
+                    "error": error,
+                    "step_data": step_data,
+                },
+            }
+            channel = self._channel_name(lab_id)
+            count = await self._publish(channel, json.dumps(message))
+            logger.debug(f"Published scenario step to {channel}: step {step_index} -> {status}")
+            record_broadcast("scenario_step", True)
+            return count
+        except Exception as e:
+            logger.warning(f"Failed to publish scenario step: {e}")
+            record_broadcast("scenario_step", False)
+            return 0
+
     async def subscribe(self, lab_id: str) -> AsyncGenerator[dict, None]:
         """Subscribe to state updates for a lab.
 

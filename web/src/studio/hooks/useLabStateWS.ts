@@ -73,8 +73,21 @@ export interface TestResultData {
   };
 }
 
+export interface ScenarioStepData {
+  job_id: string;
+  step_index: number;
+  step_name: string;
+  step_type: string;
+  status: 'running' | 'passed' | 'failed' | 'error';
+  total_steps: number;
+  duration_ms?: number | null;
+  output?: string | null;
+  error?: string | null;
+  step_data?: Record<string, unknown> | null;
+}
+
 interface WSMessage {
-  type: 'node_state' | 'link_state' | 'lab_state' | 'job_progress' | 'test_result' | 'initial_state' | 'initial_links' | 'heartbeat' | 'pong' | 'error';
+  type: 'node_state' | 'link_state' | 'lab_state' | 'job_progress' | 'test_result' | 'scenario_step' | 'initial_state' | 'initial_links' | 'heartbeat' | 'pong' | 'error';
   timestamp: string;
   data: unknown;
 }
@@ -90,6 +103,8 @@ export interface UseLabStateWSOptions {
   onJobProgress?: (job: JobProgressData) => void;
   /** Callback when a test result arrives */
   onTestResult?: (data: TestResultData) => void;
+  /** Callback when a scenario step updates */
+  onScenarioStep?: (data: ScenarioStepData) => void;
   /** Whether to enable the WebSocket connection (default: true) */
   enabled?: boolean;
   /** Fallback polling interval in ms when WebSocket fails (default: 4000) */
@@ -128,6 +143,7 @@ export function useLabStateWS(
     onLabStateChange,
     onJobProgress,
     onTestResult,
+    onScenarioStep,
     enabled = true,
   } = options;
 
@@ -148,11 +164,13 @@ export function useLabStateWS(
   const onLabStateChangeRef = useRef(onLabStateChange);
   const onJobProgressRef = useRef(onJobProgress);
   const onTestResultRef = useRef(onTestResult);
+  const onScenarioStepRef = useRef(onScenarioStep);
   onNodeStateChangeRef.current = onNodeStateChange;
   onLinkStateChangeRef.current = onLinkStateChange;
   onLabStateChangeRef.current = onLabStateChange;
   onJobProgressRef.current = onJobProgress;
   onTestResultRef.current = onTestResult;
+  onScenarioStepRef.current = onScenarioStep;
 
   // Build WebSocket URL from API URL
   const getWSUrl = useCallback(() => {
@@ -238,6 +256,12 @@ export function useLabStateWS(
         case 'test_result': {
           const data = message.data as TestResultData;
           onTestResultRef.current?.(data);
+          break;
+        }
+
+        case 'scenario_step': {
+          const data = message.data as ScenarioStepData;
+          onScenarioStepRef.current?.(data);
           break;
         }
 

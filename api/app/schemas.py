@@ -1497,3 +1497,34 @@ class TestRunResponse(BaseModel):
     """Response from starting a test run."""
     job_id: str
     message: str
+
+
+# --- Scenario schemas ---
+
+class ScenarioSummary(BaseModel):
+    """Summary of a scenario file for listing."""
+    filename: str
+    name: str
+    description: str = ""
+    step_count: int = 0
+
+
+class ScenarioDetail(BaseModel):
+    """Full scenario definition with raw YAML."""
+    filename: str
+    name: str
+    description: str = ""
+    steps: list[dict]
+    raw_yaml: str
+
+
+class ScenarioSave(BaseModel):
+    """Request body for creating/updating a scenario."""
+    content: str
+
+
+class ScenarioExecuteResponse(BaseModel):
+    """Response from starting a scenario execution."""
+    job_id: str
+    scenario_name: str
+    step_count: int

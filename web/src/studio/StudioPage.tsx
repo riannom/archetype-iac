@@ -16,13 +16,14 @@ import TaskLogEntryModal from './components/TaskLogEntryModal';
 import ConfigsView from './components/ConfigsView';
 import LogsView from './components/LogsView';
 import VerificationPanel from './components/VerificationPanel';
+import ScenarioPanel from './components/ScenarioPanel';
 import InfraView from './components/InfraView';
 import { Annotation, AnnotationType, ConsoleWindow, DeviceModel, DeviceType, LabLayout, Link, Node, ExternalNetworkNode, DeviceNode, isExternalNetworkNode, isDeviceNode } from './types';
 import { API_BASE_URL, apiRequest, rawApiRequest } from '../api';
 import { TopologyGraph } from '../types';
 import { usePortManager } from './hooks/usePortManager';
 import { usePersistedState } from './hooks/usePersistedState';
-import { useLabStateWS, JobProgressData } from './hooks/useLabStateWS';
+import { useLabStateWS, JobProgressData, ScenarioStepData } from './hooks/useLabStateWS';
 import { NodeStateEntry, NodeStateData, NodeRuntimeStatus, mapActualToRuntime } from '../types/nodeState';
 import { useTheme } from '../theme/index';
 import { useUser } from '../contexts/UserContext';
@@ -160,7 +161,7 @@ const StudioPage: React.FC = () => {
   const showAdminStrip = canViewInfrastructure(user ?? null);
   const [labs, setLabs] = useState<LabSummary[]>([]);
   const [activeLab, setActiveLab] = useState<LabSummary | null>(null);
-  const [view, setView] = useState<'designer' | 'configs' | 'logs' | 'runtime' | 'tests' | 'infra'>('designer');
+  const [view, setView] = useState<'designer' | 'configs' | 'logs' | 'runtime' | 'tests' | 'scenarios' | 'infra'>('designer');
   const isDesignerView = view === 'designer';
   const [nodes, setNodes] = useState<Node[]>([]);
   const [links, setLinks] = useState<Link[]>([]);
@@ -215,6 +216,9 @@ const StudioPage: React.FC = () => {
   const [testResults, setTestResults] = useState<import('../studio/types').TestResult[]>([]);
   const [testSummary, setTestSummary] = useState<{ total: number; passed: number; failed: number; errors: number } | null>(null);
   const [testRunning, setTestRunning] = useState(false);
+  // Scenario engine state
+  const [scenarioSteps, setScenarioSteps] = useState<ScenarioStepData[]>([]);
+  const [activeScenarioJobId, setActiveScenarioJobId] = useState<string | null>(null);
   // Track pending node operations to prevent race conditions from rapid clicks
   const [pendingNodeOps, setPendingNodeOps] = useState<Set<string>>(new Set());
   // Tracks optimistic updates: nodeId -> expiry timestamp. Prevents polling/WS from
@@ -365,6 +369,23 @@ const StudioPage: React.FC = () => {
     }
   }, []);
 
+  const handleWSScenarioStep = useCallback((data: ScenarioStepData) => {
+    if (data.step_index === -1) {
+      // Completion signal
+      setActiveScenarioJobId(null);
+      return;
+    }
+    setScenarioSteps(prev => {
+      const existing = prev.findIndex(s => s.step_index === data.step_index);
+      if (existing >= 0) {
+        const next = [...prev];
+        next[existing] = data;
+        return next;
+      }
+      return [...prev, data];
+    });
+  }, []);
+
   const {
     isConnected: wsConnected,
     reconnectAttempts: wsReconnectAttempts,
@@ -373,6 +394,7 @@ const StudioPage: React.FC = () => {
     onNodeStateChange: handleWSNodeStateChange,
     onJobProgress: handleWSJobProgress,
     onTestResult: handleWSTestResult,
+    onScenarioStep: handleWSScenarioStep,
     enabled: !!activeLab,
   });
 
@@ -396,6 +418,42 @@ const StudioPage: React.FC = () => {
     () => taskLog.filter((entry) => entry.timestamp.getTime() > taskLogClearedAt),
     [taskLog, taskLogClearedAt]
   );
+
+  // Derive canvas highlights from the currently-running scenario step
+  const activeScenarioHighlights = useMemo(() => {
+    if (!activeScenarioJobId) return undefined;
+    const runningStep = scenarioSteps.find(s => s.status === 'running' && s.step_index >= 0);
+    if (!runningStep || !runningStep.step_data) return undefined;
+
+    const activeNodeNames = new Set<string>();
+    let activeLinkName: string | null = null;
+    const stepType = runningStep.step_type;
+    const sd = runningStep.step_data;
+
+    if (stepType === 'link_down' || stepType === 'link_up') {
+      const link = (sd.link as string) || '';
+      activeLinkName = link;
+      // Extract node names from "node1:iface1 <-> node2:iface2"
+      const parts = link.split(' <-> ');
+      parts.forEach(p => {
+        const nodeName = p.trim().split(':')[0];
+        if (nodeName) activeNodeNames.add(nodeName);
+      });
+    } else if (stepType === 'node_stop' || stepType === 'node_start' || stepType === 'exec') {
+      const node = (sd.node as string) || '';
+      if (node) activeNodeNames.add(node);
+    } else if (stepType === 'verify') {
+      const specs = (sd.specs as Array<Record<string, unknown>>) || [];
+      specs.forEach(spec => {
+        if (spec.source) activeNodeNames.add(spec.source as string);
+        if (spec.node) activeNodeNames.add(spec.node as string);
+        if (spec.node_name) activeNodeNames.add(spec.node_name as string);
+      });
+    }
+
+    if (activeNodeNames.size === 0 && !activeLinkName) return undefined;
+    return { activeNodeNames, activeLinkName, stepName: runningStep.step_name };
+  }, [activeScenarioJobId, scenarioSteps]);
 
   const isUnauthorized = (error: unknown) => error instanceof Error && error.message.toLowerCase().includes('unauthorized');
 
@@ -1484,6 +1542,17 @@ const StudioPage: React.FC = () => {
     }
   }, [activeLab?.id, testRunning, addNotification]);
 
+  const handleStartScenario = useCallback(async (filename: string) => {
+    if (!activeLab?.id || activeScenarioJobId) return;
+    setScenarioSteps([]);
+    try {
+      const data = await apiRequest<{ job_id: string }>(`/labs/${activeLab.id}/scenarios/${filename}/execute`, { method: 'POST' });
+      setActiveScenarioJobId(data.job_id);
+    } catch (e: any) {
+      addNotification('error', 'Scenario failed', e.message || 'Failed to start scenario');
+    }
+  }, [activeLab?.id, activeScenarioJobId, addNotification]);
+
   const handleCloseConfigViewer = useCallback(() => {
     setConfigViewerOpen(false);
     setConfigViewerNode(null);
@@ -1853,6 +1922,15 @@ const StudioPage: React.FC = () => {
             links={links}
           />
         );
+      case 'scenarios':
+        return (
+          <ScenarioPanel
+            labId={activeLab?.id || ''}
+            scenarioSteps={scenarioSteps}
+            activeScenarioJobId={activeScenarioJobId}
+            onStartScenario={handleStartScenario}
+          />
+        );
       case 'infra':
         return (
           <InfraView
@@ -1874,6 +1952,8 @@ const StudioPage: React.FC = () => {
               annotations={annotations}
               runtimeStates={runtimeStates}
               nodeStates={nodeStates}
+              linkStates={linkStates}
+              scenarioHighlights={activeScenarioHighlights}
               deviceModels={deviceModels}
               labId={activeLab?.id}
               agents={agents}
@@ -2002,6 +2082,16 @@ const StudioPage: React.FC = () => {
           }`}
         >
           Tests
+        </button>
+        <button
+          onClick={() => setView('scenarios')}
+          className={`h-full px-4 text-[10px] font-black uppercase border-b-2 transition-all ${
+            view === 'scenarios'
+              ? 'text-sage-700 dark:text-sage-500 border-sage-700 dark:border-sage-500'
+              : 'text-stone-700 dark:text-stone-300 border-transparent hover:text-stone-900 dark:hover:text-stone-100'
+          }`}
+        >
+          Scenarios
         </button>
         {agents.length > 1 && (
           <button
