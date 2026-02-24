@@ -59,7 +59,7 @@ def list_scenarios(
         return []
     results = []
     for f in sorted(sdir.iterdir()):
-        if not f.suffix in (".yml", ".yaml"):
+        if f.suffix not in (".yml", ".yaml"):
             continue
         try:
             data = yaml.safe_load(f.read_text())
