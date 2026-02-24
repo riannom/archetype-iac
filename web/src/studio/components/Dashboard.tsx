@@ -121,8 +121,8 @@ const Dashboard: React.FC<DashboardProps> = ({
 
   return (
     <>
-    <div className="min-h-screen bg-stone-50/72 dark:bg-stone-900/72 backdrop-blur-[1px] flex flex-col overflow-hidden">
-      <header className="h-20 border-b border-stone-200 dark:border-stone-800 bg-white/30 dark:bg-stone-900/30 flex items-center justify-between px-10">
+    <div className="min-h-screen bg-gradient-to-br from-stone-50/30 via-white/20 to-stone-100/30 dark:from-stone-950/30 dark:via-stone-900/20 dark:to-stone-950/30 flex flex-col overflow-hidden">
+      <header className="h-20 border-b border-stone-200 dark:border-stone-800 glass-surface flex items-center justify-between px-10">
         <div className="flex items-center gap-4">
           <ArchetypeIcon size={40} className="text-sage-600 dark:text-sage-400" />
           <div>
@@ -314,7 +314,7 @@ const Dashboard: React.FC<DashboardProps> = ({
               </div>
               );
             }) : (
-              <div className="col-span-full py-20 bg-stone-100/50 dark:bg-stone-900/30 border-2 border-dashed border-stone-300 dark:border-stone-800 rounded-3xl flex flex-col items-center justify-center text-stone-500 dark:text-stone-600">
+              <div className="col-span-full py-20 bg-stone-100/50 dark:bg-stone-900/30 border-2 border-dashed border-stone-300 dark:border-stone-800 rounded-3xl flex flex-col items-center justify-center text-stone-500 dark:text-stone-500">
                  <i className="fa-solid fa-folder-open text-5xl mb-4 opacity-10"></i>
                  <h3 className="text-lg font-bold text-stone-500 dark:text-stone-400">Empty Workspace</h3>
                  <p className="text-sm max-w-xs text-center mt-1">Start your first journey by clicking 'Create New Lab' above.</p>
@@ -324,7 +324,7 @@ const Dashboard: React.FC<DashboardProps> = ({
         </div>
       </main>
 
-      <footer className="h-10 border-t border-stone-200 dark:border-stone-900 glass-surface flex items-center px-10 justify-between text-[10px] text-stone-500 dark:text-stone-600 font-medium">
+      <footer className="h-10 border-t border-stone-200 dark:border-stone-900 glass-surface flex items-center px-10 justify-between text-[10px] text-stone-500 dark:text-stone-500 font-medium">
         <span>© 2026 Archetype Network Studio</span>
         <VersionBadge />
       </footer>

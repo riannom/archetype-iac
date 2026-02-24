@@ -44,14 +44,16 @@ const SystemStatusStrip: React.FC<SystemStatusStripProps> = ({ metrics }) => {
     backgroundColor:
       effectiveMode === 'light'
         ? 'var(--color-accent-700)'
-        : 'color-mix(in srgb, var(--color-bg-surface) 88%, transparent)',
+        : 'color-mix(in srgb, var(--color-bg-surface) 55%, transparent)',
+    backdropFilter: effectiveMode === 'dark' ? 'blur(12px)' : undefined,
   };
 
   const stripSubRowStyle: React.CSSProperties = {
     backgroundColor:
       effectiveMode === 'light'
         ? 'var(--color-accent-800)'
-        : 'color-mix(in srgb, var(--color-bg-base) 84%, var(--color-bg-surface) 16%)',
+        : 'color-mix(in srgb, var(--color-bg-base) 55%, transparent)',
+    backdropFilter: effectiveMode === 'dark' ? 'blur(12px)' : undefined,
   };
 
   if (!metrics) {
@@ -60,7 +62,7 @@ const SystemStatusStrip: React.FC<SystemStatusStripProps> = ({ metrics }) => {
         className="h-12 border-b border-stone-200 dark:border-stone-700 flex items-center justify-center"
         style={stripSurfaceStyle}
       >
-        <span className="text-xs text-stone-400 dark:text-stone-500">Loading system status...</span>
+        <span className="text-xs text-stone-400 dark:text-stone-400">Loading system status...</span>
       </div>
     );
   }
@@ -68,15 +70,15 @@ const SystemStatusStrip: React.FC<SystemStatusStripProps> = ({ metrics }) => {
   const isLightStrip = effectiveMode === 'light';
   const clickableClass = isLightStrip
     ? 'hover:bg-white/20 rounded-md px-2 py-1 -mx-2 -my-1 cursor-pointer transition-colors'
-    : 'hover:bg-stone-200/70 dark:hover:bg-stone-700/70 rounded-md px-2 py-1 -mx-2 -my-1 cursor-pointer transition-colors';
-  const iconClass = isLightStrip ? 'text-white/85' : 'text-stone-400 dark:text-stone-500';
-  const textClass = isLightStrip ? 'text-white/90' : 'text-stone-600 dark:text-stone-400';
-  const strongTextClass = isLightStrip ? 'text-white' : 'text-stone-800 dark:text-stone-200';
-  const mutedTextClass = isLightStrip ? 'text-white/75' : 'text-stone-400 dark:text-stone-500';
-  const labelTextClass = isLightStrip ? 'text-white/80' : 'text-stone-500 dark:text-stone-500';
-  const progressTrackClass = isLightStrip ? 'bg-black/20' : 'bg-stone-200 dark:bg-stone-700';
-  const subProgressTrackClass = isLightStrip ? 'bg-black/20' : 'bg-stone-200 dark:bg-stone-600';
-  const dividerClass = isLightStrip ? 'bg-white/30' : 'bg-stone-300 dark:bg-stone-600';
+    : 'hover:bg-stone-700 rounded-md px-2 py-1 -mx-2 -my-1 cursor-pointer transition-colors';
+  const iconClass = isLightStrip ? 'text-white' : 'text-stone-300';
+  const textClass = isLightStrip ? 'text-white' : 'text-stone-200';
+  const strongTextClass = isLightStrip ? 'text-white' : 'text-stone-100';
+  const mutedTextClass = isLightStrip ? 'text-white' : 'text-stone-400';
+  const labelTextClass = isLightStrip ? 'text-white' : 'text-stone-300';
+  const progressTrackClass = isLightStrip ? 'bg-black/20' : 'bg-stone-700';
+  const subProgressTrackClass = isLightStrip ? 'bg-black/20' : 'bg-stone-700';
+  const dividerClass = isLightStrip ? 'bg-white/30' : 'bg-stone-600';
 
   return (
     <>
@@ -215,17 +217,17 @@ const SystemStatusStrip: React.FC<SystemStatusStripProps> = ({ metrics }) => {
             className={`flex items-center gap-1.5 ml-2 px-2 py-1 rounded-md transition-colors ${
               isLightStrip
                 ? 'bg-white/20 hover:bg-white/30'
-                : 'bg-blue-100 dark:bg-blue-900/30 hover:bg-blue-200 dark:hover:bg-blue-900/50'
+                : 'bg-blue-900 hover:bg-blue-800'
             }`}
           >
-            <i className={`fa-solid fa-chevron-down ${isLightStrip ? 'text-white/90' : 'text-blue-500 dark:text-blue-400'} text-[8px] transition-transform duration-200 ${
+            <i className={`fa-solid fa-chevron-down ${isLightStrip ? 'text-white' : 'text-blue-200'} text-[8px] transition-transform duration-200 ${
               isExpanded ? '' : '-rotate-90'
             }`}></i>
-            <i className={`fa-solid fa-network-wired ${isLightStrip ? 'text-white/90' : 'text-blue-500 dark:text-blue-400'} text-[10px]`}></i>
-            <span className={`text-[10px] font-bold ${isLightStrip ? 'text-white' : 'text-blue-600 dark:text-blue-400'} uppercase tracking-wider`}>
+            <i className={`fa-solid fa-network-wired ${isLightStrip ? 'text-white' : 'text-blue-200'} text-[10px]`}></i>
+            <span className={`text-[10px] font-bold ${isLightStrip ? 'text-white' : 'text-white'} uppercase tracking-wider`}>
               aggregated
             </span>
-            <span className={`text-[10px] ${isLightStrip ? 'text-white/85' : 'text-blue-500 dark:text-blue-400'}`}>
+            <span className={`text-[10px] ${isLightStrip ? 'text-white' : 'text-blue-200'}`}>
               ({metrics.per_host?.length || 0})
             </span>
           </button>
@@ -242,7 +244,7 @@ const SystemStatusStrip: React.FC<SystemStatusStripProps> = ({ metrics }) => {
             {metrics.per_host.map((host) => (
               <div
                 key={host.id}
-                className="h-10 flex items-center px-10 gap-6 border-t border-stone-200/50 dark:border-stone-600/30"
+                className={`h-10 flex items-center px-10 gap-6 border-t ${isLightStrip ? 'border-stone-200/50' : 'border-stone-600/30'}`}
                 style={stripSubRowStyle}
               >
                 {/* Indent spacer to align with aggregate row content */}
@@ -258,7 +260,7 @@ const SystemStatusStrip: React.FC<SystemStatusStripProps> = ({ metrics }) => {
                 <button
                   onClick={() => handleOpenHostContainers(host.name)}
                   className={`flex items-center gap-1.5 rounded px-1 -mx-1 transition-colors ${
-                    isLightStrip ? 'hover:bg-white/20' : 'hover:bg-stone-200/70 dark:hover:bg-stone-600/50'
+                    isLightStrip ? 'hover:bg-white/20' : 'hover:bg-stone-600/50'
                   }`}
                   title={`View containers on ${host.name}`}
                 >
@@ -274,7 +276,7 @@ const SystemStatusStrip: React.FC<SystemStatusStripProps> = ({ metrics }) => {
                   <button
                     onClick={() => handleOpenHostContainers(host.name)}
                     className={`flex items-center gap-1.5 rounded px-1 -mx-1 transition-colors ${
-                      isLightStrip ? 'hover:bg-white/20' : 'hover:bg-stone-200/70 dark:hover:bg-stone-600/50'
+                      isLightStrip ? 'hover:bg-white/20' : 'hover:bg-stone-600/50'
                     }`}
                     title={`View VMs on ${host.name}`}
                   >
@@ -286,7 +288,7 @@ const SystemStatusStrip: React.FC<SystemStatusStripProps> = ({ metrics }) => {
                   </button>
                 )}
 
-                <div className={`h-4 w-px ${isLightStrip ? 'bg-white/25' : 'bg-stone-300/50 dark:bg-stone-600/50'}`}></div>
+                <div className={`h-4 w-px ${isLightStrip ? 'bg-white/25' : 'bg-stone-600'}`}></div>
 
                 {/* CPU */}
                 <div className="flex items-center gap-1.5">

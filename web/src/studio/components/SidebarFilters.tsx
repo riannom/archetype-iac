@@ -131,7 +131,7 @@ const SidebarFilters: React.FC<SidebarFiltersProps> = ({
   };
 
   return (
-    <div className="border-b border-stone-200 dark:border-stone-800 bg-stone-50/80 dark:bg-stone-900/50">
+    <div className="border-b border-stone-200 dark:border-stone-800 bg-stone-50/90 dark:bg-stone-900/80">
       {/* Search bar */}
       <div className="p-3">
         <div className="relative">
@@ -164,7 +164,7 @@ const SidebarFilters: React.FC<SidebarFiltersProps> = ({
       >
         <button
           onClick={() => setIsExpanded(!isExpanded)}
-          className="flex items-center gap-2 text-[10px] font-bold text-stone-700 dark:text-stone-400 uppercase tracking-wide hover:text-stone-900 dark:hover:text-stone-200 transition-colors"
+          className="flex items-center gap-2 text-[10px] font-bold text-stone-700 dark:text-stone-300 uppercase tracking-wide hover:text-stone-900 dark:hover:text-stone-100 transition-colors"
         >
           <i className={`fa-solid fa-filter ${hasActiveFilters ? 'text-sage-500' : ''}`} />
           <span>Filters</span>
@@ -182,7 +182,7 @@ const SidebarFilters: React.FC<SidebarFiltersProps> = ({
         <div className="px-3 pb-3 space-y-3 animate-in fade-in slide-in-from-top-1 duration-200">
           {/* Image Status */}
           <div>
-            <div className="text-[9px] font-bold text-stone-600 dark:text-stone-500 uppercase tracking-widest mb-1.5">
+            <div className="text-[9px] font-bold text-stone-600 dark:text-stone-400 uppercase tracking-widest mb-1.5">
               Image Status
             </div>
             <div className="flex flex-wrap gap-1.5">
@@ -215,7 +215,7 @@ const SidebarFilters: React.FC<SidebarFiltersProps> = ({
 
           {/* Vendors */}
           <div>
-            <div className="text-[9px] font-bold text-stone-600 dark:text-stone-500 uppercase tracking-widest mb-1.5">
+            <div className="text-[9px] font-bold text-stone-600 dark:text-stone-400 uppercase tracking-widest mb-1.5">
               Vendor
             </div>
             <div className="flex flex-wrap gap-1.5">
@@ -229,7 +229,7 @@ const SidebarFilters: React.FC<SidebarFiltersProps> = ({
                 />
               ))}
               {vendors.length > 8 && (
-                <span className="text-[10px] text-stone-600 dark:text-stone-500 self-center">
+                <span className="text-[10px] text-stone-600 dark:text-stone-400 self-center">
                   +{vendors.length - 8} more
                 </span>
               )}
@@ -238,7 +238,7 @@ const SidebarFilters: React.FC<SidebarFiltersProps> = ({
 
           {/* Types */}
           <div>
-            <div className="text-[9px] font-bold text-stone-600 dark:text-stone-500 uppercase tracking-widest mb-1.5">
+            <div className="text-[9px] font-bold text-stone-600 dark:text-stone-400 uppercase tracking-widest mb-1.5">
               Type
             </div>
             <div className="flex flex-wrap gap-1.5">

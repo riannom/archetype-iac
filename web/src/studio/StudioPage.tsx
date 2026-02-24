@@ -1958,7 +1958,7 @@ const StudioPage: React.FC = () => {
           className={`h-full px-4 text-[10px] font-black uppercase border-b-2 transition-all ${
             view === 'designer'
               ? 'text-sage-700 dark:text-sage-500 border-sage-700 dark:border-sage-500'
-              : 'text-stone-700 dark:text-stone-400 border-transparent hover:text-stone-900 dark:hover:text-stone-200'
+              : 'text-stone-700 dark:text-stone-300 border-transparent hover:text-stone-900 dark:hover:text-stone-100'
           }`}
         >
           Designer
@@ -1968,7 +1968,7 @@ const StudioPage: React.FC = () => {
           className={`h-full px-4 text-[10px] font-black uppercase border-b-2 transition-all ${
             view === 'runtime'
               ? 'text-sage-700 dark:text-sage-500 border-sage-700 dark:border-sage-500'
-              : 'text-stone-700 dark:text-stone-400 border-transparent hover:text-stone-900 dark:hover:text-stone-200'
+              : 'text-stone-700 dark:text-stone-300 border-transparent hover:text-stone-900 dark:hover:text-stone-100'
           }`}
         >
           Runtime
@@ -1978,7 +1978,7 @@ const StudioPage: React.FC = () => {
           className={`h-full px-4 text-[10px] font-black uppercase border-b-2 transition-all ${
             view === 'configs'
               ? 'text-sage-700 dark:text-sage-500 border-sage-700 dark:border-sage-500'
-              : 'text-stone-700 dark:text-stone-400 border-transparent hover:text-stone-900 dark:hover:text-stone-200'
+              : 'text-stone-700 dark:text-stone-300 border-transparent hover:text-stone-900 dark:hover:text-stone-100'
           }`}
         >
           Configs
@@ -1988,7 +1988,7 @@ const StudioPage: React.FC = () => {
           className={`h-full px-4 text-[10px] font-black uppercase border-b-2 transition-all ${
             view === 'logs'
               ? 'text-sage-700 dark:text-sage-500 border-sage-700 dark:border-sage-500'
-              : 'text-stone-700 dark:text-stone-400 border-transparent hover:text-stone-900 dark:hover:text-stone-200'
+              : 'text-stone-700 dark:text-stone-300 border-transparent hover:text-stone-900 dark:hover:text-stone-100'
           }`}
         >
           Logs
@@ -1998,7 +1998,7 @@ const StudioPage: React.FC = () => {
           className={`h-full px-4 text-[10px] font-black uppercase border-b-2 transition-all ${
             view === 'tests'
               ? 'text-sage-700 dark:text-sage-500 border-sage-700 dark:border-sage-500'
-              : 'text-stone-700 dark:text-stone-400 border-transparent hover:text-stone-900 dark:hover:text-stone-200'
+              : 'text-stone-700 dark:text-stone-300 border-transparent hover:text-stone-900 dark:hover:text-stone-100'
           }`}
         >
           Tests
@@ -2009,7 +2009,7 @@ const StudioPage: React.FC = () => {
             className={`h-full px-4 text-[10px] font-black uppercase border-b-2 transition-all ${
               view === 'infra'
                 ? 'text-sage-700 dark:text-sage-500 border-sage-700 dark:border-sage-500'
-                : 'text-stone-700 dark:text-stone-400 border-transparent hover:text-stone-900 dark:hover:text-stone-200'
+                : 'text-stone-700 dark:text-stone-300 border-transparent hover:text-stone-900 dark:hover:text-stone-100'
             }`}
           >
             Infra

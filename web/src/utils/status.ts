@@ -54,9 +54,9 @@ export function getResourceBgColor(level: ResourceLevel): string {
  * @returns Tailwind background class
  */
 export function getCpuColor(percent: number): string {
-  if (percent >= defaultThresholds.cpu.danger) return 'bg-red-500';
-  if (percent >= defaultThresholds.cpu.warning) return 'bg-amber-500';
-  return 'bg-sage-500';
+  if (percent >= defaultThresholds.cpu.danger) return 'bg-red-500 dark:bg-red-400';
+  if (percent >= defaultThresholds.cpu.warning) return 'bg-amber-500 dark:bg-amber-400';
+  return 'bg-sage-500 dark:bg-sage-400';
 }
 
 /**
@@ -66,9 +66,9 @@ export function getCpuColor(percent: number): string {
  * @returns Tailwind background class
  */
 export function getMemoryColor(percent: number): string {
-  if (percent >= defaultThresholds.memory.danger) return 'bg-red-500';
-  if (percent >= defaultThresholds.memory.warning) return 'bg-amber-500';
-  return 'bg-blue-500';
+  if (percent >= defaultThresholds.memory.danger) return 'bg-red-500 dark:bg-red-400';
+  if (percent >= defaultThresholds.memory.warning) return 'bg-amber-500 dark:bg-amber-400';
+  return 'bg-blue-500 dark:bg-blue-400';
 }
 
 /**
@@ -78,9 +78,9 @@ export function getMemoryColor(percent: number): string {
  * @returns Tailwind background class
  */
 export function getStorageColor(percent: number): string {
-  if (percent >= defaultThresholds.storage.danger) return 'bg-red-500';
-  if (percent >= defaultThresholds.storage.warning) return 'bg-amber-500';
-  return 'bg-violet-500';
+  if (percent >= defaultThresholds.storage.danger) return 'bg-red-500 dark:bg-red-400';
+  if (percent >= defaultThresholds.storage.warning) return 'bg-amber-500 dark:bg-amber-400';
+  return 'bg-violet-500 dark:bg-violet-400';
 }
 
 /** Lab-level aggregate status (distinct from node-level NodeRuntimeStatus in types/nodeState.ts). */

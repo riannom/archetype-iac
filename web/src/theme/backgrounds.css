@@ -48,6 +48,22 @@ body {
   background-color: rgb(var(--ui-glass-control-hover-rgb) / 0.52);
 }
 
+/* Dark mode: reduce glass opacity and blur for background pattern visibility */
+.dark .glass-surface {
+  background-color: rgb(var(--ui-glass-surface-rgb) / 0.55);
+  backdrop-filter: blur(2px);
+}
+
+.dark .glass-surface-elevated {
+  background-color: rgb(var(--ui-glass-elevated-rgb) / 0.65);
+  backdrop-filter: blur(4px);
+}
+
+.dark .glass-control {
+  background-color: rgb(var(--ui-glass-control-rgb) / 0.45);
+  backdrop-filter: blur(2px);
+}
+
 /* Global scrollbar styling - uses theme CSS variable */
 * {
   scrollbar-width: thin;
