@@ -194,11 +194,11 @@ describe("Canvas", () => {
       expect(document.querySelector(".fa-maximize")).toBeInTheDocument();
     });
 
-    it("applies cursor-crosshair class when not panning", () => {
+    it("applies cursor-default class in pointer mode", () => {
       renderWithTheme(<Canvas {...defaultProps} />);
 
       const canvasContainer = document.querySelector(".flex-1.relative");
-      expect(canvasContainer).toHaveClass("cursor-crosshair");
+      expect(canvasContainer).toHaveClass("cursor-default");
     });
   });
 
@@ -1502,6 +1502,322 @@ describe("Canvas", () => {
 
       // Canvas should have grabbing cursor
       expect(canvas).toHaveClass("cursor-grabbing");
+    });
+  });
+
+  describe("Tool Mode", () => {
+    const mockOnToolCreate = vi.fn();
+
+    beforeEach(() => {
+      mockOnToolCreate.mockClear();
+    });
+
+    describe("Cursor", () => {
+      it("shows text cursor for text tool", () => {
+        renderWithTheme(
+          <Canvas {...defaultProps} activeTool="text" onToolCreate={mockOnToolCreate} />
+        );
+        const canvas = document.querySelector(".flex-1.relative");
+        expect(canvas).toHaveClass("cursor-text");
+      });
+
+      it("shows crosshair cursor for rect tool", () => {
+        renderWithTheme(
+          <Canvas {...defaultProps} activeTool="rect" onToolCreate={mockOnToolCreate} />
+        );
+        const canvas = document.querySelector(".flex-1.relative");
+        expect(canvas).toHaveClass("cursor-crosshair");
+      });
+
+      it("shows crosshair cursor for circle tool", () => {
+        renderWithTheme(
+          <Canvas {...defaultProps} activeTool="circle" onToolCreate={mockOnToolCreate} />
+        );
+        const canvas = document.querySelector(".flex-1.relative");
+        expect(canvas).toHaveClass("cursor-crosshair");
+      });
+
+      it("shows crosshair cursor for arrow tool", () => {
+        renderWithTheme(
+          <Canvas {...defaultProps} activeTool="arrow" onToolCreate={mockOnToolCreate} />
+        );
+        const canvas = document.querySelector(".flex-1.relative");
+        expect(canvas).toHaveClass("cursor-crosshair");
+      });
+
+      it("shows default cursor for pointer tool", () => {
+        renderWithTheme(
+          <Canvas {...defaultProps} activeTool="pointer" onToolCreate={mockOnToolCreate} />
+        );
+        const canvas = document.querySelector(".flex-1.relative");
+        expect(canvas).toHaveClass("cursor-default");
+      });
+    });
+
+    describe("Text Tool", () => {
+      it("calls onToolCreate on single click", () => {
+        renderWithTheme(
+          <Canvas {...defaultProps} activeTool="text" onToolCreate={mockOnToolCreate} />
+        );
+        const canvas = document.querySelector(".flex-1.relative")!;
+
+        fireEvent.mouseDown(canvas, { button: 0, clientX: 200, clientY: 150 });
+
+        expect(mockOnToolCreate).toHaveBeenCalledTimes(1);
+        expect(mockOnToolCreate).toHaveBeenCalledWith("text", expect.any(Number), expect.any(Number));
+      });
+
+      it("does not start panning on left click in text mode", () => {
+        renderWithTheme(
+          <Canvas {...defaultProps} activeTool="text" onToolCreate={mockOnToolCreate} />
+        );
+        const canvas = document.querySelector(".flex-1.relative")!;
+
+        fireEvent.mouseDown(canvas, { button: 0, clientX: 200, clientY: 150 });
+
+        // Should NOT enter panning state
+        expect(canvas).not.toHaveClass("cursor-grabbing");
+      });
+    });
+
+    describe("Rect Tool - Drag Gesture", () => {
+      it("calls onToolCreate with dimensions after drag", () => {
+        renderWithTheme(
+          <Canvas {...defaultProps} activeTool="rect" onToolCreate={mockOnToolCreate} />
+        );
+        const canvas = document.querySelector(".flex-1.relative")!;
+
+        // Start drag
+        fireEvent.mouseDown(canvas, { button: 0, clientX: 100, clientY: 100 });
+        expect(mockOnToolCreate).not.toHaveBeenCalled();
+
+        // Drag far enough (> 10px threshold)
+        fireEvent.mouseMove(canvas, { clientX: 250, clientY: 200, movementX: 150, movementY: 100 });
+
+        // Complete drag
+        fireEvent.mouseUp(canvas);
+
+        expect(mockOnToolCreate).toHaveBeenCalledTimes(1);
+        expect(mockOnToolCreate).toHaveBeenCalledWith(
+          "rect",
+          expect.any(Number),
+          expect.any(Number),
+          expect.objectContaining({ width: expect.any(Number), height: expect.any(Number) })
+        );
+      });
+
+      it("does not create rect for very short drag (< 10px)", () => {
+        renderWithTheme(
+          <Canvas {...defaultProps} activeTool="rect" onToolCreate={mockOnToolCreate} />
+        );
+        const canvas = document.querySelector(".flex-1.relative")!;
+
+        fireEvent.mouseDown(canvas, { button: 0, clientX: 100, clientY: 100 });
+        fireEvent.mouseMove(canvas, { clientX: 103, clientY: 102, movementX: 3, movementY: 2 });
+        fireEvent.mouseUp(canvas);
+
+        expect(mockOnToolCreate).not.toHaveBeenCalled();
+      });
+
+      it("shows preview rect during drag", () => {
+        renderWithTheme(
+          <Canvas {...defaultProps} activeTool="rect" onToolCreate={mockOnToolCreate} />
+        );
+        const canvas = document.querySelector(".flex-1.relative")!;
+
+        fireEvent.mouseDown(canvas, { button: 0, clientX: 100, clientY: 100 });
+        fireEvent.mouseMove(canvas, { clientX: 250, clientY: 200, movementX: 150, movementY: 100 });
+
+        // Preview rect should have sage-green dashed stroke
+        const previewRect = document.querySelector('rect[stroke="#65A30D"][stroke-dasharray="6 3"]');
+        expect(previewRect).toBeInTheDocument();
+      });
+    });
+
+    describe("Circle Tool - Drag Gesture", () => {
+      it("calls onToolCreate with diameter after drag", () => {
+        renderWithTheme(
+          <Canvas {...defaultProps} activeTool="circle" onToolCreate={mockOnToolCreate} />
+        );
+        const canvas = document.querySelector(".flex-1.relative")!;
+
+        fireEvent.mouseDown(canvas, { button: 0, clientX: 200, clientY: 200 });
+        fireEvent.mouseMove(canvas, { clientX: 300, clientY: 200, movementX: 100, movementY: 0 });
+        fireEvent.mouseUp(canvas);
+
+        expect(mockOnToolCreate).toHaveBeenCalledTimes(1);
+        expect(mockOnToolCreate).toHaveBeenCalledWith(
+          "circle",
+          expect.any(Number),
+          expect.any(Number),
+          expect.objectContaining({ width: expect.any(Number) })
+        );
+      });
+
+      it("shows preview circle during drag", () => {
+        renderWithTheme(
+          <Canvas {...defaultProps} activeTool="circle" onToolCreate={mockOnToolCreate} />
+        );
+        const canvas = document.querySelector(".flex-1.relative")!;
+
+        fireEvent.mouseDown(canvas, { button: 0, clientX: 200, clientY: 200 });
+        fireEvent.mouseMove(canvas, { clientX: 300, clientY: 200, movementX: 100, movementY: 0 });
+
+        // Preview circle with sage-green dashed stroke
+        const previewCircle = document.querySelector('circle[stroke="#65A30D"][stroke-dasharray="6 3"]');
+        expect(previewCircle).toBeInTheDocument();
+      });
+    });
+
+    describe("Arrow Tool - Drag Gesture", () => {
+      it("calls onToolCreate with targetX/targetY after drag", () => {
+        renderWithTheme(
+          <Canvas {...defaultProps} activeTool="arrow" onToolCreate={mockOnToolCreate} />
+        );
+        const canvas = document.querySelector(".flex-1.relative")!;
+
+        fireEvent.mouseDown(canvas, { button: 0, clientX: 100, clientY: 100 });
+        fireEvent.mouseMove(canvas, { clientX: 300, clientY: 250, movementX: 200, movementY: 150 });
+        fireEvent.mouseUp(canvas);
+
+        expect(mockOnToolCreate).toHaveBeenCalledTimes(1);
+        expect(mockOnToolCreate).toHaveBeenCalledWith(
+          "arrow",
+          expect.any(Number),
+          expect.any(Number),
+          expect.objectContaining({ targetX: expect.any(Number), targetY: expect.any(Number) })
+        );
+      });
+
+      it("shows preview arrow during drag", () => {
+        renderWithTheme(
+          <Canvas {...defaultProps} activeTool="arrow" onToolCreate={mockOnToolCreate} />
+        );
+        const canvas = document.querySelector(".flex-1.relative")!;
+
+        fireEvent.mouseDown(canvas, { button: 0, clientX: 100, clientY: 100 });
+        fireEvent.mouseMove(canvas, { clientX: 300, clientY: 250, movementX: 200, movementY: 150 });
+
+        // Preview arrow has a sage-green line and polygon arrowhead
+        const previewLine = document.querySelector('line[stroke="#65A30D"][stroke-dasharray="6 3"]');
+        expect(previewLine).toBeInTheDocument();
+        const previewHead = document.querySelector('polygon[fill="#65A30D"]');
+        expect(previewHead).toBeInTheDocument();
+      });
+    });
+
+    describe("Middle-click pan in tool mode", () => {
+      it("still pans on middle mouse button when in tool mode", () => {
+        renderWithTheme(
+          <Canvas {...defaultProps} activeTool="rect" onToolCreate={mockOnToolCreate} />
+        );
+        const canvas = document.querySelector(".flex-1.relative")!;
+
+        fireEvent.mouseDown(canvas, { button: 1 });
+
+        expect(canvas).toHaveClass("cursor-grabbing");
+        expect(mockOnToolCreate).not.toHaveBeenCalled();
+      });
+    });
+
+    describe("Node interaction in tool mode", () => {
+      it("still selects nodes on click even in tool mode", async () => {
+        const node = createDeviceNode({ id: "node-1", name: "ClickableNode" });
+
+        renderWithTheme(
+          <Canvas
+            {...defaultProps}
+            nodes={[node]}
+            activeTool="rect"
+            onToolCreate={mockOnToolCreate}
+          />
+        );
+
+        const nodeEl = screen.getByText("ClickableNode").closest("[class*='absolute']");
+        if (nodeEl) {
+          fireEvent.mouseDown(nodeEl, { button: 0 });
+        }
+
+        // Node click uses stopPropagation, so onSelect should fire (not onToolCreate)
+        expect(mockOnSelect).toHaveBeenCalledWith("node-1");
+        expect(mockOnToolCreate).not.toHaveBeenCalled();
+      });
+    });
+  });
+
+  describe("Arrow Annotation Rendering", () => {
+    it("renders an arrow annotation with line and arrowhead", () => {
+      const annotation = createAnnotation({
+        id: "ann-arrow",
+        type: "arrow",
+        x: 100,
+        y: 100,
+        targetX: 300,
+        targetY: 200,
+      });
+
+      renderWithTheme(
+        <Canvas {...defaultProps} annotations={[annotation]} />
+      );
+
+      // Arrow should have a line element
+      const lines = document.querySelectorAll("line");
+      const arrowLine = Array.from(lines).find(
+        (l) => l.getAttribute("x1") === "100" && l.getAttribute("y1") === "100"
+      );
+      expect(arrowLine).toBeInTheDocument();
+
+      // Arrow should have a polygon arrowhead
+      const polygons = document.querySelectorAll("polygon");
+      expect(polygons.length).toBeGreaterThanOrEqual(1);
+    });
+
+    it("renders arrow endpoint handles when selected", () => {
+      const annotation = createAnnotation({
+        id: "ann-arrow",
+        type: "arrow",
+        x: 100,
+        y: 100,
+        targetX: 300,
+        targetY: 200,
+      });
+
+      renderWithTheme(
+        <Canvas
+          {...defaultProps}
+          annotations={[annotation]}
+          selectedId="ann-arrow"
+        />
+      );
+
+      // Arrow should show 2 circular endpoint handles when selected
+      // (not rect handles like rect/circle annotations)
+      const circles = document.querySelectorAll("circle");
+      // Should have handle circles at start and end points
+      expect(circles.length).toBeGreaterThanOrEqual(2);
+    });
+
+    it("does not render endpoint handles when not selected", () => {
+      const annotation = createAnnotation({
+        id: "ann-arrow",
+        type: "arrow",
+        x: 100,
+        y: 100,
+        targetX: 300,
+        targetY: 200,
+      });
+
+      renderWithTheme(
+        <Canvas
+          {...defaultProps}
+          annotations={[annotation]}
+          selectedId={null}
+        />
+      );
+
+      // No handle circles should be present
+      const handleCircles = document.querySelectorAll('circle[style*="cursor: move"]');
+      expect(handleCircles.length).toBe(0);
     });
   });
 

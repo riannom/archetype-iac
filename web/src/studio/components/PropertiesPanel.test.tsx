@@ -1000,5 +1000,43 @@ describe("PropertiesPanel", () => {
 
       expect(screen.queryByText("Size")).not.toBeInTheDocument();
     });
+
+    it("shows endpoint inputs for arrow annotations", () => {
+      const annotation = createAnnotation({
+        type: "arrow",
+        x: 100,
+        y: 150,
+        targetX: 300,
+        targetY: 250,
+      });
+
+      render(<PropertiesPanel {...defaultProps} selectedItem={annotation} />);
+
+      expect(screen.getByText("Endpoints")).toBeInTheDocument();
+      expect(screen.getByText("Start X")).toBeInTheDocument();
+      expect(screen.getByText("Start Y")).toBeInTheDocument();
+      expect(screen.getByText("End X")).toBeInTheDocument();
+      expect(screen.getByText("End Y")).toBeInTheDocument();
+      expect(screen.getByDisplayValue("100")).toBeInTheDocument();
+      expect(screen.getByDisplayValue("150")).toBeInTheDocument();
+      expect(screen.getByDisplayValue("300")).toBeInTheDocument();
+      expect(screen.getByDisplayValue("250")).toBeInTheDocument();
+    });
+
+    it("does not show endpoint inputs for non-arrow annotations", () => {
+      const annotation = createAnnotation({ type: "rect" });
+
+      render(<PropertiesPanel {...defaultProps} selectedItem={annotation} />);
+
+      expect(screen.queryByText("Endpoints")).not.toBeInTheDocument();
+    });
+
+    it("does not show text content for arrow annotations", () => {
+      const annotation = createAnnotation({ type: "arrow" });
+
+      render(<PropertiesPanel {...defaultProps} selectedItem={annotation} />);
+
+      expect(screen.queryByText("Text Content")).not.toBeInTheDocument();
+    });
   });
 });
