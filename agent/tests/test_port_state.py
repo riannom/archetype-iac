@@ -6,7 +6,7 @@ Covers:
 """
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
 
@@ -19,6 +19,7 @@ def _make_plugin_mock(ports_data=None):
     plugin = MagicMock()
     plugin.get_lab_ports = AsyncMock(return_value=ports_data or [])
     plugin._ovs_vsctl = AsyncMock(return_value=(0, "100", ""))
+    plugin.set_endpoint_vlan_by_host_veth = AsyncMock(return_value=True)
     return plugin
 
 
@@ -130,6 +131,7 @@ async def test_declare_port_converged():
     assert len(result.results) == 1
     assert result.results[0].status == "converged"
     assert result.results[0].actual_vlan == 100
+    assert plugin.set_endpoint_vlan_by_host_veth.await_count == 2
 
 
 @pytest.mark.asyncio
@@ -171,6 +173,13 @@ async def test_declare_port_updates_drifted():
 
     assert len(result.results) == 1
     assert result.results[0].status == "updated"
+    plugin.set_endpoint_vlan_by_host_veth.assert_has_awaits(
+        [
+            call("lab1", "vh-abc123", 200),
+            call("lab1", "vh-def456", 200),
+        ],
+        any_order=False,
+    )
 
 
 @pytest.mark.asyncio

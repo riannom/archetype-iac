@@ -56,10 +56,43 @@ async def test_healthz_reports_monitor_counts(monkeypatch):
     response = await scheduler.healthz(request)
 
     payload = json.loads(response.body)
-    assert payload["status"] == "ok"
+    assert response.status_code == 503
+    assert payload["status"] == "degraded"
     assert payload["service"] == "scheduler"
     assert payload["monitors"]["total"] == 2
     assert payload["monitors"]["active"] == 1
+    assert payload["monitors"]["dead"] == ["monitor-1"]
+
+
+@pytest.mark.asyncio
+async def test_healthz_ok_when_all_monitors_active(monkeypatch):
+    pool = SimpleNamespace(
+        size=lambda: 3,
+        checkedin=lambda: 2,
+        checkedout=lambda: 1,
+        overflow=lambda: 0,
+    )
+    monkeypatch.setattr(scheduler.db, "engine", DummyEngine(pool=pool))
+
+    task_a = asyncio.create_task(asyncio.sleep(0.1), name="monitor-a")
+    task_b = asyncio.create_task(asyncio.sleep(0.1), name="monitor-b")
+    scheduler._monitor_tasks = [task_a, task_b]
+
+    scope = {
+        "type": "http",
+        "method": "GET",
+        "path": "/healthz",
+        "headers": [],
+        "client": ("127.0.0.1", 1234),
+    }
+    request = Request(scope)
+    response = await scheduler.healthz(request)
+
+    payload = json.loads(response.body)
+    assert response.status_code == 200
+    assert payload["status"] == "ok"
+    assert payload["monitors"]["active"] == 2
+    assert payload["monitors"]["total"] == 2
 
 
 @pytest.mark.asyncio

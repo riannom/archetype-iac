@@ -203,6 +203,9 @@ class Host(Base):
 class NodePlacement(Base):
     """Tracks which host is running which node for a lab."""
     __tablename__ = "node_placements"
+    __table_args__ = (
+        UniqueConstraint("lab_id", "node_name", name="uq_node_placement_lab_node"),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
     lab_id: Mapped[str] = mapped_column(String(36), ForeignKey("labs.id"))

@@ -59,12 +59,25 @@ async def healthz(request: Request) -> JSONResponse:
     """Scheduler health probe."""
     active = sum(1 for t in _monitor_tasks if not t.done())
     total = len(_monitor_tasks)
+    dead_task_names: list[str] = []
+    for idx, task in enumerate(_monitor_tasks):
+        if not task.done():
+            continue
+        get_name = getattr(task, "get_name", None)
+        if callable(get_name):
+            dead_task_names.append(get_name())
+        else:
+            dead_task_names.append(f"monitor-{idx}")
+    degraded = total > 0 and active < total
+    status_text = "degraded" if degraded else "ok"
     result: dict = {
-        "status": "ok",
+        "status": status_text,
         "service": "scheduler",
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "monitors": {"active": active, "total": total},
     }
+    if dead_task_names:
+        result["monitors"]["dead"] = dead_task_names
     try:
         pool = db.engine.pool
         result["db_pool"] = {
@@ -75,7 +88,7 @@ async def healthz(request: Request) -> JSONResponse:
         }
     except Exception:
         pass
-    return JSONResponse(result)
+    return JSONResponse(result, status_code=503 if degraded else 200)
 
 
 async def metrics(_: Request) -> Response:

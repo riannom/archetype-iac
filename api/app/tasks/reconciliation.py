@@ -115,8 +115,8 @@ def reconciliation_lock(lab_id: str, timeout: int = 60):
         yield True
     except redis.RedisError as e:
         logger.warning(f"Redis error acquiring lock for lab {lab_id}: {e}")
-        # On Redis error, proceed without lock (better than blocking reconciliation)
-        yield True
+        # Fail closed so we never run concurrent reconciliation without locking.
+        yield False
     finally:
         if lock_acquired:
             try:
@@ -1456,11 +1456,22 @@ async def _do_reconcile_lab(session, lab, lab_id: str) -> int:
                         ls.actual_state = LinkActualState.UP.value
                         ls.error_message = None
                 else:
-                    # Same-host link - assume up if both nodes are running and carrier on
-                    # Full L2 verification would require querying OVS VLAN tags from agent
-                    # which adds latency. For now, trust that hot_connect worked.
-                    ls.actual_state = LinkActualState.UP.value
-                    ls.error_message = None
+                    # Same-host links must not be marked UP speculatively.
+                    # Keep explicit DOWN state, preserve existing UP/ERROR truth,
+                    # and otherwise move to PENDING so convergence/repair can verify.
+                    if ls.desired_state == LinkDesiredState.DOWN.value:
+                        ls.actual_state = LinkActualState.DOWN.value
+                        ls.error_message = None
+                    elif old_actual == LinkActualState.UP.value:
+                        ls.actual_state = LinkActualState.UP.value
+                        ls.error_message = None
+                    elif old_actual == LinkActualState.ERROR.value:
+                        ls.actual_state = LinkActualState.ERROR.value
+                        if not ls.error_message:
+                            ls.error_message = "Awaiting same-host convergence repair"
+                    else:
+                        ls.actual_state = LinkActualState.PENDING.value
+                        ls.error_message = None
             elif source_state == NodeActualState.ERROR.value or target_state == NodeActualState.ERROR.value:
                 # At least one node is in error state
                 ls.actual_state = LinkActualState.ERROR.value

@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
 import pytest
+import redis
 from sqlalchemy.orm import Session
 
 from app import models
@@ -223,6 +224,18 @@ class TestReconcileSingleLab:
             await _reconcile_single_lab(test_db, sample_lab.id)
 
 
+def test_reconciliation_lock_redis_error_fails_closed():
+    """Redis lock backend errors should skip reconciliation for safety."""
+    from app.tasks.reconciliation import reconciliation_lock
+
+    fake_redis = MagicMock()
+    fake_redis.set.side_effect = redis.RedisError("redis unavailable")
+
+    with patch("app.tasks.reconciliation.get_redis", return_value=fake_redis):
+        with reconciliation_lock("lab-1") as acquired:
+            assert acquired is False
+
+
 class TestCheckReadinessForNodes:
     """Tests for the _check_readiness_for_nodes function."""
 
@@ -355,8 +368,10 @@ class TestLinkStateReconciliation:
     """Tests for link state reconciliation within _reconcile_single_lab."""
 
     @pytest.mark.asyncio
-    async def test_link_state_up_when_both_nodes_running(self, test_db: Session, sample_lab: models.Lab, sample_host: models.Host):
-        """Link should be 'up' when both endpoint nodes are running."""
+    async def test_link_state_pending_when_same_host_running_without_verified_connectivity(
+        self, test_db: Session, sample_lab: models.Lab, sample_host: models.Host,
+    ):
+        """Same-host links should not be marked up speculatively."""
         from app.tasks.reconciliation import _reconcile_single_lab
 
         # Point lab at real host so reconciliation can find it
@@ -412,7 +427,7 @@ class TestLinkStateReconciliation:
                         await _reconcile_single_lab(test_db, sample_lab.id)
 
                     test_db.refresh(link)
-                    assert link.actual_state == "up"
+                    assert link.actual_state == "pending"
 
     @pytest.mark.asyncio
     async def test_link_state_down_when_node_stopped(self, test_db: Session, sample_lab: models.Lab, sample_host: models.Host):

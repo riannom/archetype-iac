@@ -13,6 +13,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from app import models
+from app.agent_client import AgentUnavailableError
 from app.state import JobStatus, NodeActualState
 from app.tasks.node_lifecycle import LifecycleResult, NodeLifecycleManager, _get_container_name
 import app.tasks.node_lifecycle_deploy as nlc_deploy
@@ -557,11 +558,68 @@ class TestResolveAgents:
 
         with patch("app.tasks.node_lifecycle_agents.agent_client") as mock_ac:
             mock_ac.is_agent_online = MagicMock(return_value=True)
+            mock_ac.ping_agent = AsyncMock(return_value=True)
             mock_ac.get_healthy_agent = AsyncMock(return_value=None)
             result = await manager._resolve_agents()
 
         assert result is True
         assert manager.agent.id == host.id
+
+    @pytest.mark.asyncio
+    async def test_stale_sticky_placement_is_evicted_and_reassigned(self, test_db, test_user):
+        """Unreachable sticky placements should be marked failed and re-homed."""
+        stale_host = _make_host(test_db, "host-a", "Host A")
+        fallback_host = _make_host(test_db, "host-b", "Host B")
+        lab = _make_lab(test_db, test_user)
+        job = _make_job(test_db, lab, test_user)
+        ns = _make_node_state(test_db, lab, "n1", "R1", desired="running", actual="stopped")
+        placement = _make_placement(test_db, lab, "R1", stale_host.id, status="deployed")
+
+        manager = _make_manager(test_db, lab, job, [ns.node_id])
+        manager.node_states = [ns]
+        manager.db_nodes_map = {}
+        manager.placements_map = {"R1": placement}
+
+        async def _ping(agent):
+            if agent.id == stale_host.id:
+                raise AgentUnavailableError("unreachable")
+            return True
+
+        with patch("app.tasks.node_lifecycle_agents.settings.placement_scoring_enabled", False):
+            with patch("app.tasks.node_lifecycle_agents.agent_client") as mock_ac:
+                mock_ac.is_agent_online = MagicMock(return_value=True)
+                mock_ac.ping_agent = AsyncMock(side_effect=_ping)
+                mock_ac.get_healthy_agent = AsyncMock(return_value=fallback_host)
+                result = await manager._resolve_agents()
+
+        test_db.refresh(placement)
+        assert result is True
+        assert manager.agent.id == fallback_host.id
+        assert placement.status == "failed"
+
+    @pytest.mark.asyncio
+    async def test_resolve_final_agent_skips_failed_placement_affinity(self, test_db, test_user):
+        """Failed sticky placements must not be reused as affinity."""
+        stale_host = _make_host(test_db, "host-a", "Host A")
+        lab = _make_lab(test_db, test_user)
+        job = _make_job(test_db, lab, test_user)
+        ns = _make_node_state(test_db, lab, "n1", "R1", desired="running", actual="stopped")
+        placement = _make_placement(test_db, lab, "R1", stale_host.id, status="failed")
+
+        manager = _make_manager(test_db, lab, job, [ns.node_id])
+        manager.node_states = [ns]
+        manager.placements_map = {"R1": placement}
+        manager.target_agent_id = None
+
+        with patch("app.tasks.node_lifecycle_agents.agent_client") as mock_ac:
+            mock_ac.is_agent_online = MagicMock(return_value=True)
+            mock_ac.get_healthy_agent = AsyncMock(return_value=None)
+            result = await manager._resolve_final_agent()
+
+        assert result is False
+        assert job.status == JobStatus.FAILED.value
+        assert ns.actual_state == NodeActualState.ERROR.value
+        assert ns.error_message == "No agent available"
 
     @pytest.mark.asyncio
     async def test_multi_agent_spawns_sub_jobs(self, test_db, test_user):

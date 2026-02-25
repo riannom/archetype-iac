@@ -724,9 +724,11 @@ class TestLabStatus:
             resource_usage=json.dumps({}),
         )
         test_db.add(agent2)
-        p1 = models.NodePlacement(lab_id=sample_lab.id, node_name="r1", host_id=sample_host.id)
+        # One placement row plus lab.agent_id still yields two queried agents,
+        # allowing duplicate status reports without duplicate DB rows.
+        sample_lab.agent_id = sample_host.id
         p2 = models.NodePlacement(lab_id=sample_lab.id, node_name="r1", host_id=agent2.id)
-        test_db.add_all([p1, p2])
+        test_db.add(p2)
         test_db.commit()
 
         with patch("app.routers.jobs.agent_client.get_lab_status_from_agent", new_callable=AsyncMock) as mock_status:

@@ -612,6 +612,26 @@ async def declare_port_state(request: DeclarePortStateRequest) -> DeclarePortSta
         logger.error(f"Port declare-state failed: {e}")
         return DeclarePortStateResponse(results=[])
 
+    async def _sync_plugin_endpoint_vlan(lab_id: str, port_name: str, vlan_tag: int) -> None:
+        sync_fn = getattr(plugin, "set_endpoint_vlan_by_host_veth", None)
+        if not callable(sync_fn):
+            return
+        try:
+            synced = await sync_fn(lab_id, port_name, vlan_tag)
+            if not synced:
+                logger.debug(
+                    "Port declare-state: no tracked endpoint for %s while syncing VLAN %s",
+                    port_name,
+                    vlan_tag,
+                )
+        except Exception as sync_exc:
+            logger.warning(
+                "Port declare-state: failed to sync plugin state for %s to VLAN %s: %s",
+                port_name,
+                vlan_tag,
+                sync_exc,
+            )
+
     results = []
     for pairing in request.pairings:
         try:
@@ -649,6 +669,16 @@ async def declare_port_state(request: DeclarePortStateRequest) -> DeclarePortSta
                     status="converged",
                     actual_vlan=pairing.vlan_tag,
                 ))
+                await _sync_plugin_endpoint_vlan(
+                    pairing.lab_id,
+                    pairing.port_a,
+                    pairing.vlan_tag,
+                )
+                await _sync_plugin_endpoint_vlan(
+                    pairing.lab_id,
+                    pairing.port_b,
+                    pairing.vlan_tag,
+                )
             else:
                 # Update mismatched ports
                 updated = False
@@ -674,6 +704,16 @@ async def declare_port_state(request: DeclarePortStateRequest) -> DeclarePortSta
                     status="updated" if updated else "converged",
                     actual_vlan=pairing.vlan_tag,
                 ))
+                await _sync_plugin_endpoint_vlan(
+                    pairing.lab_id,
+                    pairing.port_a,
+                    pairing.vlan_tag,
+                )
+                await _sync_plugin_endpoint_vlan(
+                    pairing.lab_id,
+                    pairing.port_b,
+                    pairing.vlan_tag,
+                )
 
         except Exception as e:
             results.append(DeclaredPortResult(
@@ -869,6 +909,16 @@ async def attach_overlay_interface(
             # Release old isolated-range tag
             if port_info.vlan_tag > 0:
                 plugin._release_vlan(port_info.vlan_tag)
+            sync_fn = getattr(plugin, "set_endpoint_vlan_by_host_veth", None)
+            if callable(sync_fn):
+                try:
+                    await sync_fn(request.lab_id, port_info.port_name, local_vlan)
+                except Exception as sync_exc:
+                    logger.warning(
+                        "Attach-link plugin state sync failed for %s: %s",
+                        port_info.port_name,
+                        sync_exc,
+                    )
         else:
             # Fallback: use the container's current tag (no plugin available)
             local_vlan = port_info.vlan_tag

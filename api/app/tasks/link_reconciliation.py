@@ -604,58 +604,83 @@ async def run_same_host_convergence(
     if not same_host_links:
         return {}
 
-    # Group by host
-    agent_pairings: dict[str, list[dict]] = defaultdict(list)
+    def _build_pairings() -> tuple[dict[str, list[dict]], int]:
+        pairings: dict[str, list[dict]] = defaultdict(list)
+        missing_mappings = 0
 
-    for ls in same_host_links:
-        host_id = ls.source_host_id or ls.target_host_id
-        if not host_id or host_id not in host_to_agent:
-            continue
+        for ls in same_host_links:
+            host_id = ls.source_host_id or ls.target_host_id
+            if not host_id or host_id not in host_to_agent:
+                continue
 
-        # Get node definitions to find node IDs
-        source_node = _resolve_node_by_endpoint_name(session, ls.lab_id, ls.source_node)
-        target_node = _resolve_node_by_endpoint_name(session, ls.lab_id, ls.target_node)
+            # Get node definitions to find node IDs
+            source_node = _resolve_node_by_endpoint_name(session, ls.lab_id, ls.source_node)
+            target_node = _resolve_node_by_endpoint_name(session, ls.lab_id, ls.target_node)
 
-        if not source_node or not target_node:
-            continue
+            if not source_node or not target_node:
+                missing_mappings += 1
+                continue
 
-        # Look up OVS port names from InterfaceMapping
-        source_mapping = (
-            session.query(models.InterfaceMapping)
-            .filter(
-                models.InterfaceMapping.lab_id == ls.lab_id,
-                models.InterfaceMapping.node_id == source_node.id,
-                models.InterfaceMapping.linux_interface == ls.source_interface,
+            # Look up OVS port names from InterfaceMapping
+            source_mapping = (
+                session.query(models.InterfaceMapping)
+                .filter(
+                    models.InterfaceMapping.lab_id == ls.lab_id,
+                    models.InterfaceMapping.node_id == source_node.id,
+                    models.InterfaceMapping.linux_interface == ls.source_interface,
+                )
+                .first()
             )
-            .first()
-        )
-        target_mapping = (
-            session.query(models.InterfaceMapping)
-            .filter(
-                models.InterfaceMapping.lab_id == ls.lab_id,
-                models.InterfaceMapping.node_id == target_node.id,
-                models.InterfaceMapping.linux_interface == ls.target_interface,
+            target_mapping = (
+                session.query(models.InterfaceMapping)
+                .filter(
+                    models.InterfaceMapping.lab_id == ls.lab_id,
+                    models.InterfaceMapping.node_id == target_node.id,
+                    models.InterfaceMapping.linux_interface == ls.target_interface,
+                )
+                .first()
             )
-            .first()
+
+            if not source_mapping or not target_mapping:
+                missing_mappings += 1
+                continue
+            if not source_mapping.ovs_port or not target_mapping.ovs_port:
+                missing_mappings += 1
+                continue
+
+            # Use the shared vlan_tag from LinkState (or source mapping's tag)
+            shared_vlan = ls.vlan_tag or source_mapping.vlan_tag or 0
+            if shared_vlan == 0:
+                continue
+
+            pairings[host_id].append({
+                "link_name": ls.link_name,
+                "lab_id": str(ls.lab_id),
+                "port_a": source_mapping.ovs_port,
+                "port_b": target_mapping.ovs_port,
+                "vlan_tag": shared_vlan,
+            })
+
+        return pairings, missing_mappings
+
+    # First pass, then one refresh/retry pass if mappings are missing.
+    agent_pairings, missing_mappings = _build_pairings()
+    if missing_mappings:
+        logger.warning(
+            "Same-host convergence skipped %s link(s) due to missing InterfaceMapping data; "
+            "refreshing mappings and retrying once",
+            missing_mappings,
         )
+        await refresh_interface_mappings(session, host_to_agent)
+        agent_pairings, still_missing = _build_pairings()
+        if still_missing:
+            logger.warning(
+                "Same-host convergence still missing InterfaceMapping data for %s link(s) after refresh",
+                still_missing,
+            )
 
-        if not source_mapping or not target_mapping:
-            continue
-        if not source_mapping.ovs_port or not target_mapping.ovs_port:
-            continue
-
-        # Use the shared vlan_tag from LinkState (or source mapping's tag)
-        shared_vlan = ls.vlan_tag or source_mapping.vlan_tag or 0
-        if shared_vlan == 0:
-            continue
-
-        agent_pairings[host_id].append({
-            "link_name": ls.link_name,
-            "lab_id": str(ls.lab_id),
-            "port_a": source_mapping.ovs_port,
-            "port_b": target_mapping.ovs_port,
-            "vlan_tag": shared_vlan,
-        })
+    if not agent_pairings:
+        return {}
 
     # Call each agent in parallel
     all_results: dict[str, Any] = {}
@@ -736,46 +761,66 @@ async def run_cross_host_port_convergence(
     if not cross_host_links:
         return result
 
-    # Collect corrections grouped by agent: agent_id -> [(port_name, db_vlan)]
-    agent_corrections: dict[str, list[tuple[str, int]]] = defaultdict(list)
+    def _collect_agent_corrections() -> tuple[dict[str, list[tuple[str, int]]], int]:
+        corrections: dict[str, list[tuple[str, int]]] = defaultdict(list)
+        missing_mappings = 0
 
-    for ls in cross_host_links:
-        # Process both endpoints
-        for side in ("source", "target"):
-            if side == "source":
-                host_id = ls.source_host_id
-                node_name = ls.source_node
-                iface = ls.source_interface
-                db_vlan = ls.source_vlan_tag
-            else:
-                host_id = ls.target_host_id
-                node_name = ls.target_node
-                iface = ls.target_interface
-                db_vlan = ls.target_vlan_tag
+        for ls in cross_host_links:
+            # Process both endpoints
+            for side in ("source", "target"):
+                if side == "source":
+                    host_id = ls.source_host_id
+                    node_name = ls.source_node
+                    iface = ls.source_interface
+                    db_vlan = ls.source_vlan_tag
+                else:
+                    host_id = ls.target_host_id
+                    node_name = ls.target_node
+                    iface = ls.target_interface
+                    db_vlan = ls.target_vlan_tag
 
-            if not host_id or host_id not in host_to_agent or not db_vlan:
-                continue
+                if not host_id or host_id not in host_to_agent or not db_vlan:
+                    continue
 
-            # Find node ID for InterfaceMapping lookup
-            node = _resolve_node_by_endpoint_name(session, ls.lab_id, node_name)
-            if not node:
-                continue
+                # Find node ID for InterfaceMapping lookup
+                node = _resolve_node_by_endpoint_name(session, ls.lab_id, node_name)
+                if not node:
+                    missing_mappings += 1
+                    continue
 
-            mapping = (
-                session.query(models.InterfaceMapping)
-                .filter(
-                    models.InterfaceMapping.lab_id == ls.lab_id,
-                    models.InterfaceMapping.node_id == node.id,
-                    models.InterfaceMapping.linux_interface == iface,
+                mapping = (
+                    session.query(models.InterfaceMapping)
+                    .filter(
+                        models.InterfaceMapping.lab_id == ls.lab_id,
+                        models.InterfaceMapping.node_id == node.id,
+                        models.InterfaceMapping.linux_interface == iface,
+                    )
+                    .first()
                 )
-                .first()
-            )
-            if not mapping or not mapping.ovs_port:
-                continue
+                if not mapping or not mapping.ovs_port:
+                    missing_mappings += 1
+                    continue
 
-            # Compare current tag vs DB truth
-            if mapping.vlan_tag != db_vlan:
-                agent_corrections[host_id].append((mapping.ovs_port, db_vlan))
+                # Compare current tag vs DB truth
+                if mapping.vlan_tag != db_vlan:
+                    corrections[host_id].append((mapping.ovs_port, db_vlan))
+
+        return corrections, missing_mappings
+
+    agent_corrections, missing_mappings = _collect_agent_corrections()
+    if missing_mappings:
+        logger.warning(
+            "Cross-host port convergence skipped %s endpoint(s) due to missing InterfaceMapping data; "
+            "refreshing mappings and retrying once",
+            missing_mappings,
+        )
+        await refresh_interface_mappings(session, host_to_agent)
+        agent_corrections, still_missing = _collect_agent_corrections()
+        if still_missing:
+            logger.warning(
+                "Cross-host port convergence still missing InterfaceMapping data for %s endpoint(s) after refresh",
+                still_missing,
+            )
 
     if not agent_corrections:
         return result

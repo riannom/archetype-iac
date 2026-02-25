@@ -41,7 +41,7 @@ def links_needing_reconciliation_filter():
 
     This includes:
     - Links marked as "up" (for verification, or teardown if desired="down")
-    - Cross-host links in "error" with desired_state "up" (for recovery)
+    - Links in "error" with desired_state "up" (for recovery)
     - Links "down"/"pending" with desired_state "up" (for creation)
 
     Returns:
@@ -54,11 +54,10 @@ def links_needing_reconciliation_filter():
         models.LinkState.actual_state != "cleanup",
         or_(
             models.LinkState.actual_state == "up",
-            # All cross-host error links that should be up need attention —
-            # includes both partial attachment AND VLAN tag mismatch cases
+            # Error links that should be up need attention —
+            # includes both same-host and cross-host recovery paths.
             (
                 (models.LinkState.actual_state == "error") &
-                (models.LinkState.is_cross_host) &
                 (models.LinkState.desired_state == "up")
             ),
             # Links that are down/pending but should be up — needs creation

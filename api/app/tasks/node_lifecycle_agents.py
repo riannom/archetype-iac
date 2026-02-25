@@ -149,6 +149,8 @@ class AgentResolutionMixin:
         # Separate sticky (have placement) from truly new
         sticky_nodes = []
         new_nodes = []
+        sticky_host_checks: dict[str, tuple[bool, str | None]] = {}
+        invalidated_sticky = 0
         for ns in auto_placed_nodes:
             placement = self.placements_map.get(ns.node_name)
             if placement:
@@ -156,13 +158,58 @@ class AgentResolutionMixin:
                     new_nodes.append(ns)
                     logger.info(
                         f"Skipping failed placement for {ns.node_name} "
-                        f"on agent {placement.host_id}"
+                            f"on agent {placement.host_id}"
                     )
                 else:
-                    all_node_agents[ns.node_name] = placement.host_id
-                    sticky_nodes.append(ns.node_name)
+                    host_check = sticky_host_checks.get(placement.host_id)
+                    if host_check is None:
+                        host_agent = self.session.get(models.Host, placement.host_id)
+                        if not host_agent:
+                            host_check = (
+                                False,
+                                f"assigned host {placement.host_id} not found",
+                            )
+                        elif not agent_client.is_agent_online(host_agent):
+                            host_check = (
+                                False,
+                                f"assigned host {host_agent.name} is offline",
+                            )
+                        else:
+                            try:
+                                await agent_client.ping_agent(host_agent)
+                                host_check = (True, None)
+                            except AgentUnavailableError:
+                                host_check = (
+                                    False,
+                                    f"assigned host {host_agent.name} is unreachable",
+                                )
+                        sticky_host_checks[placement.host_id] = host_check
+
+                    if host_check[0]:
+                        all_node_agents[ns.node_name] = placement.host_id
+                        sticky_nodes.append(ns.node_name)
+                    else:
+                        # Fail open for this node by evicting stale sticky placement
+                        # so normal placement/fallback logic can re-home it.
+                        placement.status = "failed"
+                        invalidated_sticky += 1
+                        new_nodes.append(ns)
+                        logger.warning(
+                            "Evicting sticky placement for %s on %s: %s",
+                            ns.node_name,
+                            placement.host_id,
+                            host_check[1],
+                        )
             else:
                 new_nodes.append(ns)
+
+        if invalidated_sticky:
+            self.session.commit()
+            logger.info(
+                "Invalidated %s stale sticky placement(s) in lab %s",
+                invalidated_sticky,
+                self.lab.id,
+            )
 
         if sticky_nodes:
             logger.debug(
@@ -527,7 +574,7 @@ class AgentResolutionMixin:
             placement_agents = set()
             for ns in self.node_states:
                 p = self.placements_map.get(ns.node_name)
-                if p:
+                if p and p.status != "failed":
                     placement_agents.add(p.host_id)
 
             if len(placement_agents) == 1:

@@ -3017,6 +3017,54 @@ class DockerOVSPlugin:
         )
         return False
 
+    async def set_endpoint_vlan_by_host_veth(
+        self,
+        lab_id: str,
+        host_veth: str,
+        vlan_tag: int,
+    ) -> bool:
+        """Update tracked endpoint VLAN by host veth name.
+
+        Use this when OVS VLAN tags are changed outside plugin paths and only
+        the host-side port name is known.
+        """
+        async with self._locked():
+            endpoint = next(
+                (ep for ep in self.endpoints.values() if ep.host_veth == host_veth),
+                None,
+            )
+            if endpoint is None:
+                logger.debug(
+                    "No tracked endpoint for host veth %s while syncing VLAN %s",
+                    host_veth,
+                    vlan_tag,
+                )
+                return False
+
+            old_vlan = endpoint.vlan_tag
+            if old_vlan == vlan_tag:
+                return True
+
+            self._release_vlan(old_vlan)
+            self._release_linked_vlan(old_vlan)
+
+            if VLAN_RANGE_START <= vlan_tag <= VLAN_RANGE_END:
+                self._allocated_vlans.add(vlan_tag)
+            elif LINKED_VLAN_START <= vlan_tag <= LINKED_VLAN_END:
+                self._allocated_linked_vlans.add(vlan_tag)
+
+            endpoint.vlan_tag = vlan_tag
+            self._touch_lab(lab_id)
+            await self._mark_dirty_and_save()
+
+            logger.debug(
+                "Updated endpoint VLAN by host veth %s: %s -> %s",
+                host_veth,
+                old_vlan,
+                vlan_tag,
+            )
+            return True
+
     def get_container_interface_mapping(
         self,
         lab_id: str,

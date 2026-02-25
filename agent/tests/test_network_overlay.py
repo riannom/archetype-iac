@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -380,6 +380,7 @@ async def test_overlay_attach_link():
     plugin._allocate_linked_vlan = AsyncMock(return_value=3100)
     plugin._ovs_vsctl = AsyncMock(return_value=(0, "", ""))
     plugin._release_vlan = MagicMock()
+    plugin.set_endpoint_vlan_by_host_veth = AsyncMock(return_value=True)
 
     from agent.main import attach_overlay_interface
     from agent.schemas import AttachOverlayInterfaceRequest
@@ -404,6 +405,9 @@ async def test_overlay_attach_link():
     assert response.local_vlan == 3100
     assert response.vni == 100
     backend.overlay_create_link_tunnel.assert_awaited_once()
+    plugin.set_endpoint_vlan_by_host_veth.assert_awaited_once_with(
+        "lab1", "vh_test", 3100
+    )
     assert call_order == ["create_link_tunnel"]
 
 
@@ -436,6 +440,7 @@ async def test_overlay_attach_link_multiple():
     plugin._allocate_linked_vlan = AsyncMock(side_effect=[3100, 3101])
     plugin._ovs_vsctl = AsyncMock(return_value=(0, "", ""))
     plugin._release_vlan = MagicMock()
+    plugin.set_endpoint_vlan_by_host_veth = AsyncMock(return_value=True)
 
     from agent.main import attach_overlay_interface
     from agent.schemas import AttachOverlayInterfaceRequest
@@ -471,6 +476,13 @@ async def test_overlay_attach_link_multiple():
     assert response_a.success is True
     assert response_b.success is True
     assert backend.overlay_create_link_tunnel.await_count == 2
+    plugin.set_endpoint_vlan_by_host_veth.assert_has_awaits(
+        [
+            call("lab1", "vh_a", 3100),
+            call("lab1", "vh_b", 3101),
+        ],
+        any_order=False,
+    )
 
 
 def test_overlay_attach_link_port_not_found(test_client):
