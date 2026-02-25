@@ -490,7 +490,212 @@ class TestRunMultihostDestroy:
 
         test_db.refresh(job)
         assert job.status == "failed"
-        assert "No agents found" in job.log_path
+        assert "no online agents found" in job.log_path.lower()
+
+    @pytest.mark.asyncio
+    async def test_partial_destroy_marks_lab_error_and_keeps_link_retry_state(
+        self,
+        test_db: Session,
+        test_user: models.User,
+        multiple_hosts: list[models.Host],
+    ):
+        """Partial destroy keeps LinkState rows for retry and marks lab error."""
+        online_host = multiple_hosts[0]
+        offline_host = multiple_hosts[2]
+
+        lab = models.Lab(
+            name="Multi-host Lab",
+            owner_id=test_user.id,
+            provider="docker",
+            state="running",
+        )
+        test_db.add(lab)
+        test_db.commit()
+        test_db.refresh(lab)
+
+        job = models.Job(
+            lab_id=lab.id,
+            user_id=test_user.id,
+            action="down",
+            status="queued",
+        )
+        test_db.add(job)
+        test_db.commit()
+        test_db.refresh(job)
+
+        node1 = models.Node(
+            lab_id=lab.id,
+            gui_id="r1",
+            display_name="r1",
+            container_name="r1",
+            node_type="device",
+            device="linux",
+            host_id=online_host.id,
+        )
+        node2 = models.Node(
+            lab_id=lab.id,
+            gui_id="r2",
+            display_name="r2",
+            container_name="r2",
+            node_type="device",
+            device="linux",
+            host_id=offline_host.id,
+        )
+        test_db.add_all([node1, node2])
+        test_db.flush()
+
+        link = models.LinkState(
+            lab_id=lab.id,
+            link_name="r1:eth1-r2:eth1",
+            source_node="r1",
+            source_interface="eth1",
+            target_node="r2",
+            target_interface="eth1",
+            desired_state="up",
+            actual_state="up",
+            is_cross_host=True,
+            source_host_id=online_host.id,
+            target_host_id=offline_host.id,
+        )
+        test_db.add(link)
+        test_db.commit()
+
+        with patch("app.tasks.jobs.get_session", _mock_get_session(test_db)):
+            with patch(
+                "app.tasks.jobs.agent_client.is_agent_online",
+                side_effect=lambda host: host.id == online_host.id,
+            ):
+                with patch(
+                    "app.tasks.link_orchestration.teardown_deployment_links",
+                    new_callable=AsyncMock,
+                ) as mock_teardown:
+                    mock_teardown.return_value = (1, 0)
+                    with patch(
+                        "app.tasks.jobs.agent_client.destroy_on_agent",
+                        new_callable=AsyncMock,
+                    ) as mock_destroy:
+                        mock_destroy.return_value = {"status": "completed"}
+                        with patch("app.tasks.jobs._dispatch_webhook", new_callable=AsyncMock):
+                            with patch("app.tasks.jobs.emit_job_failed", new_callable=AsyncMock):
+                                await run_multihost_destroy(job.id, lab.id)
+
+        test_db.refresh(job)
+        test_db.refresh(lab)
+        assert job.status == "completed_with_warnings"
+        assert lab.state == "error"
+        assert "cleanup pending retry" in (lab.state_error or "").lower()
+        assert mock_destroy.await_count == 1  # only online host attempted
+
+        remaining_links = (
+            test_db.query(models.LinkState)
+            .filter(models.LinkState.lab_id == lab.id)
+            .all()
+        )
+        assert len(remaining_links) == 1
+        assert remaining_links[0].desired_state == "deleted"
+
+    @pytest.mark.asyncio
+    async def test_successful_destroy_sets_stopped_and_cleans_links(
+        self,
+        test_db: Session,
+        test_user: models.User,
+        multiple_hosts: list[models.Host],
+    ):
+        """Full success clears links and marks lab stopped."""
+        host1 = multiple_hosts[0]
+        host2 = multiple_hosts[1]
+
+        lab = models.Lab(
+            name="Multi-host Lab",
+            owner_id=test_user.id,
+            provider="docker",
+            state="running",
+        )
+        test_db.add(lab)
+        test_db.commit()
+        test_db.refresh(lab)
+
+        job = models.Job(
+            lab_id=lab.id,
+            user_id=test_user.id,
+            action="down",
+            status="queued",
+        )
+        test_db.add(job)
+        test_db.commit()
+        test_db.refresh(job)
+
+        node1 = models.Node(
+            lab_id=lab.id,
+            gui_id="r1",
+            display_name="r1",
+            container_name="r1",
+            node_type="device",
+            device="linux",
+            host_id=host1.id,
+        )
+        node2 = models.Node(
+            lab_id=lab.id,
+            gui_id="r2",
+            display_name="r2",
+            container_name="r2",
+            node_type="device",
+            device="linux",
+            host_id=host2.id,
+        )
+        test_db.add_all([node1, node2])
+        test_db.flush()
+
+        test_db.add(
+            models.LinkState(
+                lab_id=lab.id,
+                link_name="r1:eth1-r2:eth1",
+                source_node="r1",
+                source_interface="eth1",
+                target_node="r2",
+                target_interface="eth1",
+                desired_state="up",
+                actual_state="up",
+                is_cross_host=True,
+                source_host_id=host1.id,
+                target_host_id=host2.id,
+            )
+        )
+        test_db.commit()
+
+        with patch("app.tasks.jobs.get_session", _mock_get_session(test_db)):
+            with patch(
+                "app.tasks.jobs.agent_client.is_agent_online",
+                side_effect=lambda host: host.id in {host1.id, host2.id},
+            ):
+                with patch(
+                    "app.tasks.link_orchestration.teardown_deployment_links",
+                    new_callable=AsyncMock,
+                ) as mock_teardown:
+                    mock_teardown.return_value = (1, 0)
+                    with patch(
+                        "app.tasks.jobs.agent_client.destroy_on_agent",
+                        new_callable=AsyncMock,
+                    ) as mock_destroy:
+                        mock_destroy.side_effect = [
+                            {"status": "completed"},
+                            {"status": "completed"},
+                        ]
+                        with patch("app.tasks.jobs._dispatch_webhook", new_callable=AsyncMock):
+                            with patch("app.tasks.jobs.emit_destroy_finished", new_callable=AsyncMock):
+                                await run_multihost_destroy(job.id, lab.id)
+
+        test_db.refresh(job)
+        test_db.refresh(lab)
+        assert job.status == "completed"
+        assert lab.state == "stopped"
+        assert mock_destroy.await_count == 2
+        assert (
+            test_db.query(models.LinkState)
+            .filter(models.LinkState.lab_id == lab.id)
+            .count()
+            == 0
+        )
 
 
 class TestRunNodeReconcile:

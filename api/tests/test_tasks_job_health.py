@@ -180,6 +180,44 @@ class TestCheckSingleJobParentChild:
             assert "orphaned" in child_job.log_path.lower()
 
     @pytest.mark.asyncio
+    async def test_fails_orphaned_child_job_when_parent_completed_with_warnings(
+        self, test_db: Session, sample_lab: models.Lab, test_user: models.User
+    ):
+        """Should fail stuck child job when parent finished with warnings."""
+        from app.tasks.job_health import _check_single_job
+
+        parent_job = models.Job(
+            id="parent-job-warn",
+            lab_id=sample_lab.id,
+            user_id=test_user.id,
+            action="down",
+            status="completed_with_warnings",
+            completed_at=datetime.now(timezone.utc) - timedelta(minutes=5),
+        )
+        test_db.add(parent_job)
+        test_db.commit()
+
+        child_job = models.Job(
+            id="child-job-warn",
+            lab_id=sample_lab.id,
+            user_id=test_user.id,
+            action="sync:agent:agent1:node1",
+            status="running",
+            parent_job_id=parent_job.id,
+            started_at=datetime.now(timezone.utc) - timedelta(minutes=30),
+        )
+        test_db.add(child_job)
+        test_db.commit()
+
+        now = datetime.now(timezone.utc)
+        with patch("app.tasks.job_health.is_job_stuck", return_value=True):
+            await _check_single_job(test_db, child_job, now)
+
+        test_db.refresh(child_job)
+        assert child_job.status == "failed"
+        assert "orphaned" in (child_job.log_path or "").lower()
+
+    @pytest.mark.asyncio
     async def test_fails_child_job_with_missing_parent(
         self, test_db: Session, sample_lab: models.Lab, test_user: models.User
     ):

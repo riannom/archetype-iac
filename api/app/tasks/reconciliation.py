@@ -19,6 +19,7 @@ import logging
 import time
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
+from threading import Event, Thread
 from uuid import uuid4
 
 import redis
@@ -35,7 +36,7 @@ from app.utils.link import canonicalize_link_endpoints, link_state_endpoint_key
 from app.services.topology import TopologyService
 from app.tasks.migration_cleanup import process_pending_migration_cleanups
 from app.utils.job import is_job_within_timeout
-from app.utils.locks import acquire_link_ops_lock, release_link_ops_lock
+from app.utils import locks as lock_utils
 from app.state import (
     JobStatus,
     LabState,
@@ -49,9 +50,57 @@ from app.utils.time import utcnow
 
 logger = logging.getLogger(__name__)
 
+# Backward-compat export for tests and existing call sites that patch these symbols.
+acquire_link_ops_lock = lock_utils.acquire_link_ops_lock
+release_link_ops_lock = lock_utils.release_link_ops_lock
+extend_link_ops_lock = lock_utils.extend_link_ops_lock
+
+
+@contextmanager
+def link_ops_lock(lab_id: str):
+    """Acquire link ops lock with lease renewal.
+
+    This wrapper intentionally calls module-level acquire/release symbols
+    so tests patching app.tasks.reconciliation.acquire_link_ops_lock keep
+    working as expected.
+    """
+    lock_token = acquire_link_ops_lock(lab_id)
+    acquired = bool(lock_token)
+    renew_stop_event: Event | None = None
+    renew_thread: Thread | None = None
+
+    def _renew_until_released() -> None:
+        while renew_stop_event and not renew_stop_event.wait(lock_utils.LINK_OPS_LOCK_RENEW_INTERVAL):
+            try:
+                if not extend_link_ops_lock(lab_id, lock_token):
+                    logger.warning(
+                        "Failed to renew link ops lock for lab %s; lock may be contended or expired",
+                        lab_id,
+                    )
+                    return
+            except Exception as e:  # pragma: no cover - defensive
+                logger.warning("Error renewing link ops lock for lab %s: %s", lab_id, e)
+                return
+
+    if acquired:
+        renew_stop_event = Event()
+        renew_thread = Thread(target=_renew_until_released, daemon=True)
+        renew_thread.start()
+
+    try:
+        yield acquired
+    finally:
+        if renew_stop_event:
+            renew_stop_event.set()
+        if renew_thread:
+            renew_thread.join(timeout=1.0)
+        if acquired:
+            release_link_ops_lock(lab_id, lock_token)
+
 # Rate-limit endpoint repairs: lab_id -> last repair attempt time
 _last_endpoint_repair: dict[str, datetime] = {}
 ENDPOINT_REPAIR_COOLDOWN = timedelta(minutes=2)
+_RECONCILIATION_RENEW_INTERVAL_SECONDS = 20
 
 
 def _set_agent_error(agent: models.Host, error_message: str) -> None:
@@ -104,6 +153,35 @@ def reconciliation_lock(lab_id: str, timeout: int = 60):
     r = get_redis()
     lock_token = str(uuid4())
     lock_acquired = False
+    renew_stop_event: Event | None = None
+    renew_thread: Thread | None = None
+
+    def _renew_until_released() -> None:
+        while renew_stop_event and not renew_stop_event.wait(_RECONCILIATION_RENEW_INTERVAL_SECONDS):
+            try:
+                renewed = bool(
+                    r.eval(
+                        "if redis.call('GET', KEYS[1]) == ARGV[1] then "
+                        "return redis.call('EXPIRE', KEYS[1], tonumber(ARGV[2])) else return 0 end",
+                        1,
+                        lock_key,
+                        lock_token,
+                        timeout,
+                    )
+                )
+            except redis.RedisError as e:
+                logger.warning(
+                    "Redis error renewing reconciliation lock for lab %s: %s",
+                    lab_id,
+                    e,
+                )
+                return
+            if not renewed:
+                logger.warning(
+                    "Failed to renew reconciliation lock for lab %s; lock may have expired or moved",
+                    lab_id,
+                )
+                return
 
     try:
         # Try to acquire lock with NX (only if not exists) and TTL
@@ -112,12 +190,20 @@ def reconciliation_lock(lab_id: str, timeout: int = 60):
             logger.debug(f"Could not acquire reconciliation lock for lab {lab_id}")
             yield False
             return
+
+        renew_stop_event = Event()
+        renew_thread = Thread(target=_renew_until_released, daemon=True)
+        renew_thread.start()
         yield True
     except redis.RedisError as e:
         logger.warning(f"Redis error acquiring lock for lab {lab_id}: {e}")
         # Fail closed so we never run concurrent reconciliation without locking.
         yield False
     finally:
+        if renew_stop_event:
+            renew_stop_event.set()
+        if renew_thread:
+            renew_thread.join(timeout=1.0)
         if lock_acquired:
             try:
                 # Delete only if we still own the lock.
@@ -1541,6 +1627,8 @@ async def _do_reconcile_lab(session, lab, lab_id: str) -> int:
                 ls.desired_state == LinkDesiredState.UP.value
                 and node_actual_states.get(ls.source_node) == NodeActualState.RUNNING.value
                 and node_actual_states.get(ls.target_node) == NodeActualState.RUNNING.value
+                and ls.source_carrier_state != "off"
+                and ls.target_carrier_state != "off"
                 and ls.actual_state in (LinkActualState.UNKNOWN.value, LinkActualState.PENDING.value, LinkActualState.DOWN.value, LinkActualState.ERROR.value)
             )
             if should_auto_connect:
@@ -1554,14 +1642,13 @@ async def _do_reconcile_lab(session, lab, lab_id: str) -> int:
 
         # Process auto-connect with lock to prevent conflicts with live_links
         if links_to_connect:
-            lock_token = acquire_link_ops_lock(lab_id)
-            if not lock_token:
-                logger.debug(
-                    f"Could not acquire link ops lock for lab {lab_id}, "
-                    f"skipping auto-connect (will retry next cycle)"
-                )
-            else:
-                try:
+            with link_ops_lock(lab_id) as lock_acquired:
+                if not lock_acquired:
+                    logger.debug(
+                        f"Could not acquire link ops lock for lab {lab_id}, "
+                        f"skipping auto-connect (will retry next cycle)"
+                    )
+                else:
                     # Repair stale endpoints before attempting link creation.
                     # Rate-limited to avoid spamming repair on every cycle.
                     error_links = [
@@ -1604,8 +1691,6 @@ async def _do_reconcile_lab(session, lab, lab_id: str) -> int:
                             logger.error(f"Failed to auto-connect link {ls.link_name}: {e}")
                             ls.actual_state = LinkActualState.ERROR.value
                             ls.error_message = str(e)
-                finally:
-                    release_link_ops_lock(lab_id, lock_token)
 
         # Clean up links marked for deletion (desired_state="deleted")
         for ls in link_states:

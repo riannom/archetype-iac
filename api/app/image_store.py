@@ -327,6 +327,25 @@ def manifest_path() -> Path:
 RUNNABLE_IMAGE_KINDS = {"docker", "qcow2"}
 
 
+def _maybe_correct_device_via_filename(image: dict, device_id: str | None) -> str | None:
+    """Use filename detection to correct misassigned qcow2 images.
+
+    When the stored device_id is a platform alias shared by multiple device
+    types (e.g. cisco_cat9kv), filename detection provides a more precise
+    device assignment.
+    """
+    kind = str(image.get("kind") or "").lower()
+    if kind != "qcow2":
+        return device_id
+    filename = str(image.get("filename") or "")
+    if not filename:
+        return device_id
+    detected, _ = detect_qcow2_device_type(filename)
+    if detected:
+        return detected
+    return device_id
+
+
 def _normalize_manifest_images(manifest: dict) -> None:
     """Canonicalize image metadata and backfill sensible default flags."""
     images = manifest.get("images", [])
@@ -339,6 +358,7 @@ def _normalize_manifest_images(manifest: dict) -> None:
 
         raw_device_id = _maybe_backfill_specific_linux_device(image)
         raw_device_id = _maybe_backfill_vjunos_evolved_device(image, raw_device_id)
+        raw_device_id = _maybe_correct_device_via_filename(image, raw_device_id)
         raw_compatible_devices = list(image.get("compatible_devices") or [])
 
         # If a legacy Linux assignment is clearly a distinct device type and

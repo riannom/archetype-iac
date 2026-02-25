@@ -154,6 +154,33 @@ async def test_supervised_task_cancellation_propagates():
         await supervisor_utils.supervised_task(lambda: worker(), name="cancel", max_restarts=1)
 
 
+@pytest.mark.asyncio
+async def test_supervised_task_restarts_on_clean_exit_when_enabled(monkeypatch):
+    attempts = {"count": 0}
+    sleep_calls = []
+
+    async def fake_sleep(delay):
+        sleep_calls.append(delay)
+
+    async def worker():
+        attempts["count"] += 1
+        return None
+
+    monkeypatch.setattr(asyncio, "sleep", fake_sleep)
+
+    await supervisor_utils.supervised_task(
+        lambda: worker(),
+        name="clean-exit-restart",
+        max_restarts=3,
+        base_backoff=0.0,
+        max_backoff=0.0,
+        restart_on_clean_exit=True,
+    )
+
+    assert attempts["count"] == 3
+    assert len(sleep_calls) == 2
+
+
 def test_global_role_ordering():
     assert GlobalRole.ADMIN > GlobalRole.OPERATOR
     assert GlobalRole.SUPER_ADMIN >= GlobalRole.ADMIN
@@ -273,4 +300,3 @@ def test_resolve_node_host_id_falls_back_to_placement(test_db, sample_lab):
 
     host_id = nodes_utils.resolve_node_host_id(test_db, sample_lab.id, "r3")
     assert host_id == host.id
-

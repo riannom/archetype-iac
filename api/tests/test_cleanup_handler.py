@@ -5,10 +5,12 @@ error isolation, and idempotent cleanup operations.
 """
 from __future__ import annotations
 
+from contextlib import contextmanager
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from app import models
 from app.events.cleanup_events import CleanupEvent, CleanupEventType
 from app.tasks.cleanup_base import CleanupResult
 from app.tasks.cleanup_handler import CircuitBreaker, CleanupEventHandler, _cleanup_dirty_event
@@ -363,6 +365,54 @@ class TestIdempotency:
             result = await _cleanup_lab_workspace("lab-1")
             assert result.deleted == 1
             assert not workspace.exists()
+
+    @pytest.mark.asyncio
+    async def test_cleanup_lab_placements_uses_node_container_name(
+        self, test_db, sample_lab, sample_host,
+    ):
+        """Node placement cleanup matches against Node.container_name values."""
+        from app.tasks.cleanup_handler import _cleanup_lab_placements
+
+        node = models.Node(
+            lab_id=sample_lab.id,
+            gui_id="node-r1",
+            display_name="R1",
+            container_name="r1",
+        )
+        test_db.add(node)
+        test_db.flush()
+
+        test_db.add_all([
+            models.NodePlacement(
+                lab_id=sample_lab.id,
+                node_name="r1",
+                node_definition_id=node.id,
+                host_id=sample_host.id,
+                status="deployed",
+            ),
+            models.NodePlacement(
+                lab_id=sample_lab.id,
+                node_name="missing-node-for-cleanup",
+                host_id=sample_host.id,
+                status="deployed",
+            ),
+        ])
+        test_db.commit()
+
+        @contextmanager
+        def _test_session():
+            yield test_db
+
+        with patch("app.tasks.cleanup_handler.get_session", _test_session):
+            result = await _cleanup_lab_placements(sample_lab.id)
+
+        assert result.deleted == 1
+        remaining = (
+            test_db.query(models.NodePlacement)
+            .filter(models.NodePlacement.lab_id == sample_lab.id)
+            .all()
+        )
+        assert [placement.node_name for placement in remaining] == ["r1"]
 
 
 # ---------------------------------------------------------------------------

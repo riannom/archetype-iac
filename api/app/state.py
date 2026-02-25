@@ -64,6 +64,7 @@ class JobStatus(str, Enum):
     QUEUED = "queued"  # Waiting for agent to pick up
     RUNNING = "running"  # Agent is executing
     COMPLETED = "completed"  # Finished successfully
+    COMPLETED_WITH_WARNINGS = "completed_with_warnings"  # Finished with partial issues
     FAILED = "failed"  # Failed (error or timeout)
     CANCELLED = "cancelled"  # Cancelled by user
 

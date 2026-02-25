@@ -270,6 +270,7 @@ async def register_agent(
                 from app.db import get_session
                 from app.tasks.link_reconciliation import (
                     run_overlay_convergence,
+                    run_cross_host_port_convergence,
                     refresh_interface_mappings,
                     run_same_host_convergence,
                 )
@@ -280,6 +281,7 @@ async def register_agent(
                         host_map = {ag.id: ag}
                         await run_overlay_convergence(sess, host_map)
                         await refresh_interface_mappings(sess, host_map)
+                        await run_cross_host_port_convergence(sess, host_map)
                         await run_same_host_convergence(sess, host_map)
                         await process_pending_migration_cleanups_for_agent(sess, ag, limit=50)
                         sess.commit()

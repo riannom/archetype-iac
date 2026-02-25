@@ -134,7 +134,12 @@ async def startup():
 
     for name, monitor_fn in monitors:
         task = safe_create_task(
-            supervised_task(monitor_fn, name=name),
+            supervised_task(
+                monitor_fn,
+                name=name,
+                max_restarts=None,
+                restart_on_clean_exit=True,
+            ),
             name=f"supervised_{name}",
         )
         _monitor_tasks.append(task)
@@ -142,7 +147,12 @@ async def startup():
     # Conditional monitors
     if settings.cleanup_event_driven_enabled:
         task = safe_create_task(
-            supervised_task(cleanup_event_monitor, name="cleanup_event_monitor"),
+            supervised_task(
+                cleanup_event_monitor,
+                name="cleanup_event_monitor",
+                max_restarts=None,
+                restart_on_clean_exit=True,
+            ),
             name="supervised_cleanup_event_monitor",
         )
         _monitor_tasks.append(task)

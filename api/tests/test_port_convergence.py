@@ -391,15 +391,22 @@ async def test_same_host_convergence_skips_missing_mappings(test_db, sample_lab,
     ) as mock_refresh:
         with patch.object(
             link_reconciliation,
-            "declare_port_state_on_agent",
+            "attempt_link_repair",
             new_callable=AsyncMock,
-        ) as mock_declare:
-            result = await link_reconciliation.run_same_host_convergence(
-                test_db, host_to_agent
-            )
+            return_value=False,
+        ) as mock_repair:
+            with patch.object(
+                link_reconciliation,
+                "declare_port_state_on_agent",
+                new_callable=AsyncMock,
+            ) as mock_declare:
+                result = await link_reconciliation.run_same_host_convergence(
+                    test_db, host_to_agent
+                )
 
     mock_declare.assert_not_called()
     assert mock_refresh.await_count == 1
+    assert mock_repair.await_count == 1
     assert result == {}
 
 
@@ -661,3 +668,65 @@ async def test_cross_host_convergence_retries_after_mapping_refresh(
     assert mock_refresh.await_count == 1
     assert mock_set_vlan.await_count == 2
     assert result == {"updated": 2, "errors": 0}
+
+
+@pytest.mark.asyncio
+async def test_cross_host_convergence_repairs_when_mappings_still_missing(
+    test_db, sample_lab, multiple_hosts,
+):
+    """Persistent mapping misses should trigger full link repair fallback."""
+    host_a, host_b = multiple_hosts[0], multiple_hosts[1]
+    _make_node(
+        test_db,
+        sample_lab.id,
+        "Router One",
+        host_id=host_a.id,
+        container_name="r1",
+    )
+    _make_node(
+        test_db,
+        sample_lab.id,
+        "Router Two",
+        host_id=host_b.id,
+        container_name="r2",
+    )
+    _make_cross_host_link(
+        test_db,
+        sample_lab.id,
+        "r1:eth1-r2:eth1",
+        source_host_id=host_a.id,
+        target_host_id=host_b.id,
+        source_node="r1",
+        target_node="r2",
+        source_vlan_tag=100,
+        target_vlan_tag=200,
+    )
+    test_db.commit()
+
+    host_to_agent = {host_a.id: host_a, host_b.id: host_b}
+
+    with patch.object(
+        link_reconciliation,
+        "refresh_interface_mappings",
+        new_callable=AsyncMock,
+        return_value={"updated": 0, "created": 0},
+    ) as mock_refresh:
+        with patch.object(
+            link_reconciliation,
+            "attempt_link_repair",
+            new_callable=AsyncMock,
+            return_value=False,
+        ) as mock_repair:
+            with patch.object(
+                link_reconciliation.agent_client,
+                "set_port_vlan_on_agent",
+                new_callable=AsyncMock,
+            ) as mock_set_vlan:
+                result = await link_reconciliation.run_cross_host_port_convergence(
+                    test_db, host_to_agent
+                )
+
+    assert mock_refresh.await_count == 1
+    assert mock_repair.await_count == 1
+    mock_set_vlan.assert_not_awaited()
+    assert result == {"updated": 0, "errors": 0}

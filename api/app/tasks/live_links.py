@@ -242,9 +242,14 @@ async def teardown_link(
         target_agent = host_to_agent.get(target_host_id) if target_host_id else None
 
         if not source_agent or not target_agent:
-            log_parts.append(f"  {link_name}: skipped (agents unavailable)")
-            logger.warning(f"Agents not available for cross-host link {link_name}")
-            return True  # Can't clean up without both agents
+            error = "Teardown deferred: required agents unavailable"
+            if link_state_record:
+                link_state_record.actual_state = LinkActualState.ERROR
+                link_state_record.error_message = error
+                _sync_oper_state(session, link_state_record)
+            log_parts.append(f"  {link_name}: deferred ({error})")
+            logger.warning(f"{error} for cross-host link {link_name}")
+            return False
 
         # Get link details for the detach operation
         source_node = link_info.get("source_node", "")
@@ -361,15 +366,25 @@ async def teardown_link(
         # Same-host link - call agent to delete it
         host_id = source_host_id or target_host_id
         if not host_id:
-            log_parts.append(f"  {link_name}: skipped (no host ID)")
-            logger.warning(f"No host ID for same-host link {link_name}")
-            return True  # Nothing to clean up
+            error = "Teardown deferred: no host ID for same-host link"
+            if link_state_record:
+                link_state_record.actual_state = LinkActualState.ERROR
+                link_state_record.error_message = error
+                _sync_oper_state(session, link_state_record)
+            log_parts.append(f"  {link_name}: deferred ({error})")
+            logger.warning(f"{error} {link_name}")
+            return False
 
         agent = host_to_agent.get(host_id)
         if not agent:
-            log_parts.append(f"  {link_name}: skipped (agent unavailable)")
-            logger.warning(f"Agent not available for link {link_name}")
-            return True  # Can't clean up if agent is unavailable
+            error = f"Teardown deferred: agent {host_id} unavailable"
+            if link_state_record:
+                link_state_record.actual_state = LinkActualState.ERROR
+                link_state_record.error_message = error
+                _sync_oper_state(session, link_state_record)
+            log_parts.append(f"  {link_name}: deferred ({error})")
+            logger.warning(f"{error} for link {link_name}")
+            return False
 
         source_node = link_info.get("source_node", "")
         target_node = link_info.get("target_node", "")
@@ -485,25 +500,38 @@ async def process_link_changes(
                     return
 
                 error_count = 0
+                teardown_status_by_link: dict[str, bool] = {}
 
                 # Process removed links first (teardown)
                 if removed_link_info:
                     log_parts.append("=== Removing Links ===")
                     for link_info in removed_link_info:
+                        link_name = link_info.get("link_name", "unknown")
                         try:
                             success = await teardown_link(session, lab_id, link_info, host_to_agent, log_parts)
+                            teardown_status_by_link[link_name] = success
                             if not success:
                                 error_count += 1
                         except Exception as e:
                             error_count += 1
-                            log_parts.append(f"  {link_info.get('link_name')}: FAILED - {e}")
-                            logger.error(f"Error tearing down link {link_info.get('link_name')}: {e}")
+                            teardown_status_by_link[link_name] = False
+                            log_parts.append(f"  {link_name}: FAILED - {e}")
+                            logger.error(f"Error tearing down link {link_name}: {e}")
                     log_parts.append("")
 
                 # Now delete the LinkState records for removed links
                 for link_info in removed_link_info:
                     link_name = link_info.get("link_name")
                     if link_name:
+                        if not teardown_status_by_link.get(link_name, False):
+                            # Keep desired_state="deleted" LinkState row so
+                            # link_reconciliation cleanup can retry teardown.
+                            logger.info(
+                                "Deferring LinkState delete for %s in lab %s: teardown incomplete",
+                                link_name,
+                                lab_id,
+                            )
+                            continue
                         ls = (
                             session.query(models.LinkState)
                             .filter(
@@ -548,7 +576,7 @@ async def process_link_changes(
                 log_parts.append("=== Summary ===")
                 if error_count > 0:
                     log_parts.append(f"Completed with {error_count} error(s)")
-                    job.status = JobStatus.COMPLETED  # Still completed, just with errors
+                    job.status = JobStatus.COMPLETED_WITH_WARNINGS
                 else:
                     log_parts.append("All link operations completed successfully")
                     job.status = JobStatus.COMPLETED

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
@@ -726,6 +727,74 @@ class TestLinkStateCarrierReconciliation:
                         assert link.target_carrier_state == "off"
                         # But link should be down since target carrier is off
                         assert link.actual_state == "down"
+
+    @pytest.mark.asyncio
+    async def test_carrier_off_link_skips_auto_connect_attempt(
+        self, test_db: Session, sample_lab: models.Lab, sample_host: models.Host
+    ):
+        """Carrier-off links should not trigger auto-connect retries."""
+        from app.tasks.reconciliation import _reconcile_single_lab
+
+        sample_lab.agent_id = sample_host.id
+        test_db.commit()
+
+        node1 = models.NodeState(
+            id=str(uuid4()),
+            lab_id=sample_lab.id,
+            node_id="n1",
+            node_name="R1",
+            desired_state="running",
+            actual_state="running",
+        )
+        node2 = models.NodeState(
+            id=str(uuid4()),
+            lab_id=sample_lab.id,
+            node_id="n2",
+            node_name="R2",
+            desired_state="running",
+            actual_state="running",
+        )
+        test_db.add_all([node1, node2])
+        _add_node_defs(test_db, sample_lab.id, ["R1", "R2"])
+
+        link = models.LinkState(
+            id=str(uuid4()),
+            lab_id=sample_lab.id,
+            link_name="R1:eth1-R2:eth1",
+            source_node="R1",
+            source_interface="eth1",
+            target_node="R2",
+            target_interface="eth1",
+            desired_state="up",
+            actual_state="down",
+            source_carrier_state="off",
+            target_carrier_state="on",
+        )
+        test_db.add(link)
+        test_db.commit()
+
+        @contextmanager
+        def _acquired_link_lock(_lab_id: str):
+            yield True
+
+        with patch("app.tasks.reconciliation.link_ops_lock", _acquired_link_lock):
+            with patch("app.tasks.live_links.create_link_if_ready", new_callable=AsyncMock) as mock_create:
+                with patch("app.tasks.reconciliation.agent_client.is_agent_online", return_value=True):
+                    with patch("app.tasks.reconciliation.agent_client.get_lab_status_from_agent", new_callable=AsyncMock) as mock_status:
+                        mock_status.return_value = {
+                            "nodes": [
+                                {"name": "R1", "status": "running"},
+                                {"name": "R2", "status": "running"},
+                            ]
+                        }
+                        with patch("app.tasks.reconciliation.agent_client.check_node_readiness", new_callable=AsyncMock) as mock_ready:
+                            mock_ready.return_value = {"is_ready": True}
+                            await _reconcile_single_lab(test_db, sample_lab.id)
+
+                mock_create.assert_not_awaited()
+
+        test_db.refresh(link)
+        assert link.actual_state == "down"
 
     @pytest.mark.asyncio
     async def test_link_state_updates_on_vxlan_tunnel_failure(

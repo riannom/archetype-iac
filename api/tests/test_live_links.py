@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
+from unittest.mock import AsyncMock
+
 import pytest
 
 from app import models
@@ -349,3 +352,136 @@ async def test_teardown_link_idempotent_when_already_down(test_db, sample_lab) -
         host_to_agent={},
     )
     assert ok is True
+
+
+@pytest.mark.asyncio
+async def test_teardown_link_defers_when_same_host_agent_unavailable(
+    test_db,
+    sample_lab,
+) -> None:
+    link_state = models.LinkState(
+        lab_id=sample_lab.id,
+        link_name="r1:eth1-r2:eth1",
+        source_node="r1",
+        source_interface="eth1",
+        target_node="r2",
+        target_interface="eth1",
+        desired_state="deleted",
+        actual_state="up",
+        source_host_id="offline-host",
+        target_host_id="offline-host",
+        is_cross_host=False,
+    )
+    test_db.add(link_state)
+    test_db.commit()
+
+    ok = await live_links.teardown_link(
+        test_db,
+        sample_lab.id,
+        {
+            "link_name": link_state.link_name,
+            "actual_state": "up",
+            "is_cross_host": False,
+            "source_host_id": "offline-host",
+            "target_host_id": "offline-host",
+        },
+        host_to_agent={},
+    )
+    assert ok is False
+
+    updated = (
+        test_db.query(models.LinkState)
+        .filter(models.LinkState.lab_id == sample_lab.id, models.LinkState.link_name == link_state.link_name)
+        .first()
+    )
+    assert updated is not None
+    assert updated.actual_state == "error"
+    assert "Teardown deferred" in (updated.error_message or "")
+
+
+@pytest.mark.asyncio
+async def test_process_link_changes_keeps_linkstate_when_teardown_incomplete(
+    test_db,
+    sample_lab,
+    sample_host,
+    monkeypatch,
+) -> None:
+    link_name = "r1:eth1-r2:eth1"
+    link_state = models.LinkState(
+        lab_id=sample_lab.id,
+        link_name=link_name,
+        source_node="r1",
+        source_interface="eth1",
+        target_node="r2",
+        target_interface="eth1",
+        desired_state="deleted",
+        actual_state="up",
+        source_host_id="offline-host",
+        target_host_id="offline-host",
+        is_cross_host=False,
+    )
+    test_db.add(link_state)
+    test_db.commit()
+
+    @contextmanager
+    def _test_session():
+        yield test_db
+
+    @contextmanager
+    def _acquired_lock(_lab_id: str):
+        yield True
+
+    async def _fake_build_host_to_agent_map(*_args, **_kwargs):
+        return {sample_host.id: sample_host}
+
+    monkeypatch.setattr("app.tasks.live_links.get_session", _test_session)
+    monkeypatch.setattr("app.tasks.live_links.link_ops_lock", _acquired_lock)
+    monkeypatch.setattr(
+        "app.tasks.live_links._build_host_to_agent_map",
+        _fake_build_host_to_agent_map,
+    )
+    monkeypatch.setattr(
+        "app.tasks.live_links.teardown_link",
+        AsyncMock(return_value=False),
+    )
+
+    await live_links.process_link_changes(
+        sample_lab.id,
+        added_link_names=[],
+        removed_link_info=[
+            {
+                "link_name": link_name,
+                "source_node": "r1",
+                "source_interface": "eth1",
+                "target_node": "r2",
+                "target_interface": "eth1",
+                "is_cross_host": False,
+                "actual_state": "up",
+                "source_host_id": "offline-host",
+                "target_host_id": "offline-host",
+                "vni": None,
+            }
+        ],
+        user_id=None,
+    )
+
+    remaining = (
+        test_db.query(models.LinkState)
+        .filter(
+            models.LinkState.lab_id == sample_lab.id,
+            models.LinkState.link_name == link_name,
+        )
+        .first()
+    )
+    assert remaining is not None
+    assert remaining.desired_state == "deleted"
+
+    job = (
+        test_db.query(models.Job)
+        .filter(models.Job.lab_id == sample_lab.id)
+        .order_by(models.Job.created_at.desc())
+        .first()
+    )
+    assert job is not None
+    assert job.status == "completed_with_warnings"
+    assert "Completed with 1 error(s)" in (job.log_path or "")

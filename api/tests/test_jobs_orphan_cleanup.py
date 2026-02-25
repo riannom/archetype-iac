@@ -65,12 +65,23 @@ async def test_cleanup_orphan_containers_skips_offline_agents(
 ) -> None:
     offline_host = multiple_hosts[2]
     new_host = multiple_hosts[0]
+    test_db.add(
+        models.Node(
+            lab_id=sample_lab.id,
+            gui_id="node-r1",
+            display_name="R1",
+            container_name="r1",
+        )
+    )
+    test_db.commit()
 
     log_parts: list[str] = []
     with patch(
         "app.tasks.jobs.agent_client.cleanup_lab_orphans",
         new_callable=AsyncMock,
-    ) as mock_cleanup:
+    ) as mock_cleanup, patch(
+        "app.tasks.migration_cleanup.enqueue_node_migration_cleanup",
+    ) as mock_enqueue:
         await _cleanup_orphan_containers(
             test_db,
             sample_lab.id,
@@ -80,4 +91,6 @@ async def test_cleanup_orphan_containers_skips_offline_agents(
         )
 
     mock_cleanup.assert_not_awaited()
+    assert mock_enqueue.called
     assert any("Skipped cleanup on offline agent" in line for line in log_parts)
+    assert any("Queued deferred cleanup" in line for line in log_parts)

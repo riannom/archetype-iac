@@ -14,6 +14,8 @@ logger = logging.getLogger(__name__)
 MAX_MIGRATION_CLEANUP_ATTEMPTS = 8
 # Reclaim "running" rows older than this to handle worker crashes/restarts.
 RUNNING_CLAIM_STALE_SECONDS = 600
+# Reclaim "failed" rows older than this for a periodic retry attempt.
+FAILED_RETRY_STALE_SECONDS = 6 * 3600
 
 
 def _is_missing_artifact_error(error: str) -> bool:
@@ -80,7 +82,14 @@ async def process_pending_migration_cleanups_for_agent(
 
     Reclaims stale rows stuck in "running" state before claiming pending work.
     """
-    stats = {"reclaimed": 0, "claimed": 0, "completed": 0, "retried": 0, "failed": 0}
+    stats = {
+        "reclaimed": 0,
+        "reclaimed_failed": 0,
+        "claimed": 0,
+        "completed": 0,
+        "retried": 0,
+        "failed": 0,
+    }
     if not agent_client.is_agent_online(agent):
         return stats
 
@@ -109,6 +118,34 @@ async def process_pending_migration_cleanups_for_agent(
     if reclaimed:
         session.commit()
         stats["reclaimed"] = reclaimed
+
+    failed_before = now - timedelta(seconds=FAILED_RETRY_STALE_SECONDS)
+    reclaimed_failed = (
+        session.query(models.NodeMigrationCleanup)
+        .filter(
+            models.NodeMigrationCleanup.old_host_id == agent.id,
+            models.NodeMigrationCleanup.status == "failed",
+            (
+                (models.NodeMigrationCleanup.last_attempt_at.is_(None))
+                | (models.NodeMigrationCleanup.last_attempt_at < failed_before)
+            ),
+        )
+        .update(
+            {
+                models.NodeMigrationCleanup.status: "pending",
+                models.NodeMigrationCleanup.attempt_count: (
+                    MAX_MIGRATION_CLEANUP_ATTEMPTS - 1
+                ),
+                models.NodeMigrationCleanup.last_error: (
+                    "Retrying previously failed cleanup after cooldown"
+                ),
+            },
+            synchronize_session=False,
+        )
+    )
+    if reclaimed_failed:
+        session.commit()
+        stats["reclaimed_failed"] = reclaimed_failed
 
     pending_rows = (
         session.query(models.NodeMigrationCleanup)
@@ -169,9 +206,10 @@ async def process_pending_migration_cleanups_for_agent(
 
     if stats["claimed"]:
         logger.info(
-            "Processed migration cleanup queue on %s: reclaimed=%s claimed=%s completed=%s retried=%s failed=%s",
+            "Processed migration cleanup queue on %s: reclaimed=%s reclaimed_failed=%s claimed=%s completed=%s retried=%s failed=%s",
             agent.name,
             stats["reclaimed"],
+            stats["reclaimed_failed"],
             stats["claimed"],
             stats["completed"],
             stats["retried"],
@@ -188,7 +226,7 @@ async def process_pending_migration_cleanups(limit_per_agent: int = 25) -> dict[
             row[0]
             for row in (
                 session.query(models.NodeMigrationCleanup.old_host_id)
-                .filter(models.NodeMigrationCleanup.status.in_(["pending", "running"]))
+                .filter(models.NodeMigrationCleanup.status.in_(["pending", "running", "failed"]))
                 .distinct()
                 .all()
             )

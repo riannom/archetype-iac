@@ -122,9 +122,20 @@ async def _cleanup_lab_placements(lab_id: str) -> CleanupResult:
     with get_session() as session:
         # Find placements whose node_name is no longer in the nodes table
         existing_names = {
-            name for (name,) in
-            session.query(models.Node.name).filter(models.Node.lab_id == lab_id).all()
+            name
+            for (name,) in session.query(models.Node.container_name)
+            .filter(models.Node.lab_id == lab_id)
+            .all()
+            if name
         }
+        # Backward compatibility: some placement rows may still use display_name.
+        existing_names.update(
+            name
+            for (name,) in session.query(models.Node.display_name)
+            .filter(models.Node.lab_id == lab_id)
+            .all()
+            if name
+        )
         placements = (
             session.query(models.NodePlacement)
             .filter(models.NodePlacement.lab_id == lab_id)
@@ -246,6 +257,11 @@ class CleanupEventHandler:
         self.circuit_breaker = CircuitBreaker()
         self._queue: asyncio.Queue[str] = asyncio.Queue(maxsize=self._QUEUE_MAXSIZE)
 
+    @staticmethod
+    def _require_cleanup_success(result: CleanupResult, context: str) -> None:
+        if result.errors:
+            raise RuntimeError(f"{context} failed: {'; '.join(result.errors)}")
+
     async def run(self) -> None:
         """Connect to Redis and process events forever.
 
@@ -358,23 +374,79 @@ class CleanupEventHandler:
         if not lab_id:
             return
         logger.info(f"Handling LAB_DELETED cleanup for lab {lab_id}")
-        await _runner.run_task(_cleanup_lab_workspace, lab_id)
-        await _runner.run_task(_cleanup_lab_config_snapshots, lab_id)
-        await _runner.run_task(_cleanup_lab_placements, lab_id)
-        await _runner.run_task(_cleanup_recovered_vxlan_ports, lab_id)
+        workspace = await _runner.run_task(_cleanup_lab_workspace, lab_id)
+        self._require_cleanup_success(workspace, "workspace cleanup")
+        snapshots = await _runner.run_task(_cleanup_lab_config_snapshots, lab_id)
+        self._require_cleanup_success(snapshots, "config snapshot cleanup")
+        placements = await _runner.run_task(_cleanup_lab_placements, lab_id)
+        self._require_cleanup_success(placements, "placement cleanup")
+        recovered_vxlan = await _runner.run_task(_cleanup_recovered_vxlan_ports, lab_id)
+        self._require_cleanup_success(recovered_vxlan, "recovered VXLAN cleanup")
         await _cleanup_agent_workspaces(lab_id)
 
     async def _handle_node_removed(self, event: CleanupEvent) -> None:
         if not event.lab_id or not event.node_name:
             return
         logger.info(f"Handling NODE_REMOVED cleanup: {event.node_name} in lab {event.lab_id}")
-        await _runner.run_task(_cleanup_node_placement, event.lab_id, event.node_name)
+        result = await _runner.run_task(_cleanup_node_placement, event.lab_id, event.node_name)
+        self._require_cleanup_success(result, "node placement cleanup")
 
     async def _handle_node_placement_changed(self, event: CleanupEvent) -> None:
+        if not event.lab_id or not event.node_name:
+            return
         logger.info(
             f"Node placement changed: {event.node_name} in lab {event.lab_id} "
             f"(old_agent={event.old_agent_id} -> new_agent={event.agent_id})"
         )
+        if not event.old_agent_id or not event.agent_id or event.old_agent_id == event.agent_id:
+            await self._trigger_lab_state_check(event.lab_id)
+            return
+
+        from app.tasks.jobs import _cleanup_orphan_containers
+        from app.tasks.link_reconciliation import (
+            run_cross_host_port_convergence,
+            run_overlay_convergence,
+            run_same_host_convergence,
+            refresh_interface_mappings,
+        )
+        from app.tasks.migration_cleanup import process_pending_migration_cleanups_for_agent
+
+        with get_session() as session:
+            cleanup_logs: list[str] = []
+            await _cleanup_orphan_containers(
+                session,
+                event.lab_id,
+                event.agent_id,
+                {event.old_agent_id},
+                cleanup_logs,
+            )
+
+            target_host_ids = {hid for hid in (event.old_agent_id, event.agent_id) if hid}
+            hosts = (
+                session.query(models.Host)
+                .filter(
+                    models.Host.status == "online",
+                    models.Host.id.in_(target_host_ids),
+                )
+                .all()
+            )
+            host_to_agent = {host.id: host for host in hosts}
+            if host_to_agent:
+                await run_overlay_convergence(session, host_to_agent)
+                await refresh_interface_mappings(session, host_to_agent)
+                await run_cross_host_port_convergence(session, host_to_agent)
+                await run_same_host_convergence(session, host_to_agent)
+
+            old_agent = session.get(models.Host, event.old_agent_id)
+            if old_agent and old_agent.status == "online":
+                await process_pending_migration_cleanups_for_agent(
+                    session,
+                    old_agent,
+                    limit=50,
+                )
+            session.commit()
+
+        await self._trigger_lab_state_check(event.lab_id)
 
     async def _handle_link_removed(self, event: CleanupEvent) -> None:
         logger.debug(f"Link removed in lab {event.lab_id} (teardown handled by live_links)")
@@ -383,7 +455,8 @@ class CleanupEventHandler:
         if not event.agent_id:
             return
         logger.info(f"Handling AGENT_OFFLINE cleanup for agent {event.agent_id}")
-        await _runner.run_task(_cleanup_agent_image_hosts, event.agent_id)
+        result = await _runner.run_task(_cleanup_agent_image_hosts, event.agent_id)
+        self._require_cleanup_success(result, "agent image-host cleanup")
 
     async def _handle_deploy_finished(self, event: CleanupEvent) -> None:
         logger.debug(f"Deploy finished for lab {event.lab_id}")
@@ -394,8 +467,10 @@ class CleanupEventHandler:
         if not event.lab_id:
             return
         logger.info(f"Handling DESTROY_FINISHED cleanup for lab {event.lab_id}")
-        await _runner.run_task(_cleanup_lab_placements, event.lab_id)
-        await _runner.run_task(_cleanup_recovered_vxlan_ports, event.lab_id)
+        placements = await _runner.run_task(_cleanup_lab_placements, event.lab_id)
+        self._require_cleanup_success(placements, "placement cleanup")
+        recovered_vxlan = await _runner.run_task(_cleanup_recovered_vxlan_ports, event.lab_id)
+        self._require_cleanup_success(recovered_vxlan, "recovered VXLAN cleanup")
         await self._trigger_lab_state_check(event.lab_id)
 
     async def _handle_job_completed(self, event: CleanupEvent) -> None:

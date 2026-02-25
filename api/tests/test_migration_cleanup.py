@@ -8,6 +8,7 @@ import pytest
 
 from app import models
 from app.tasks.migration_cleanup import (
+    FAILED_RETRY_STALE_SECONDS,
     MAX_MIGRATION_CLEANUP_ATTEMPTS,
     RUNNING_CLAIM_STALE_SECONDS,
     enqueue_node_migration_cleanup,
@@ -115,6 +116,34 @@ async def test_reclaims_stale_running_rows_and_retries(test_db, sample_lab):
 
 
 @pytest.mark.asyncio
+async def test_reclaims_stale_failed_rows_and_retries(test_db, sample_lab):
+    host = _make_host(test_db, "old-host", "Old Host")
+    row = enqueue_node_migration_cleanup(
+        test_db,
+        sample_lab.id,
+        "R5",
+        host.id,
+        provider="docker",
+    )
+    row.status = "failed"
+    row.attempt_count = MAX_MIGRATION_CLEANUP_ATTEMPTS
+    row.last_attempt_at = datetime.now(timezone.utc) - timedelta(
+        seconds=FAILED_RETRY_STALE_SECONDS + 5
+    )
+    test_db.commit()
+
+    with patch("app.tasks.migration_cleanup.agent_client") as mock_ac:
+        mock_ac.is_agent_online = MagicMock(return_value=True)
+        mock_ac.destroy_node_on_agent = AsyncMock(return_value={"success": True})
+        stats = await process_pending_migration_cleanups_for_agent(test_db, host)
+
+    assert stats["reclaimed_failed"] == 1
+    assert stats["claimed"] == 1
+    assert stats["completed"] == 1
+    assert test_db.query(models.NodeMigrationCleanup).count() == 0
+
+
+@pytest.mark.asyncio
 async def test_running_rows_are_included_in_global_scan(test_db, sample_lab):
     host = _make_host(test_db, "old-host", "Old Host")
     row = enqueue_node_migration_cleanup(
@@ -142,4 +171,36 @@ async def test_running_rows_are_included_in_global_scan(test_db, sample_lab):
 
     assert host.id in stats_by_agent
     assert stats_by_agent[host.id]["reclaimed"] == 1
+    assert stats_by_agent[host.id]["completed"] == 1
+
+
+@pytest.mark.asyncio
+async def test_failed_rows_are_included_in_global_scan(test_db, sample_lab):
+    host = _make_host(test_db, "old-host", "Old Host")
+    row = enqueue_node_migration_cleanup(
+        test_db,
+        sample_lab.id,
+        "R6",
+        host.id,
+        provider="docker",
+    )
+    row.status = "failed"
+    row.attempt_count = MAX_MIGRATION_CLEANUP_ATTEMPTS
+    row.last_attempt_at = datetime.now(timezone.utc) - timedelta(
+        seconds=FAILED_RETRY_STALE_SECONDS + 5
+    )
+    test_db.commit()
+
+    @contextmanager
+    def _session_ctx():
+        yield test_db
+
+    with patch("app.tasks.migration_cleanup.get_session", _session_ctx), \
+         patch("app.tasks.migration_cleanup.agent_client") as mock_ac:
+        mock_ac.is_agent_online = MagicMock(return_value=True)
+        mock_ac.destroy_node_on_agent = AsyncMock(return_value={"success": True})
+        stats_by_agent = await process_pending_migration_cleanups()
+
+    assert host.id in stats_by_agent
+    assert stats_by_agent[host.id]["reclaimed_failed"] == 1
     assert stats_by_agent[host.id]["completed"] == 1

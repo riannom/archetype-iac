@@ -177,7 +177,12 @@ async def _check_single_job(session, job: models.Job, now: datetime):
                 f"Skipping stuck child job {job.id} - parent job {job.parent_job_id} is still {parent_job.status}"
             )
             return
-        elif not parent_job or parent_job.status in ("completed", "failed", "cancelled"):
+        elif not parent_job or parent_job.status in (
+            JobStatus.COMPLETED.value,
+            JobStatus.COMPLETED_WITH_WARNINGS.value,
+            JobStatus.FAILED.value,
+            JobStatus.CANCELLED.value,
+        ):
             # Orphaned child - parent is done/missing, fail this child (don't retry orphans)
             logger.warning(
                 f"Failing orphaned child job {job.id} - parent job {job.parent_job_id} is "

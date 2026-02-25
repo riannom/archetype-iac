@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from datetime import datetime, timezone
 
 import redis
 
@@ -25,8 +26,13 @@ from app.db import get_redis, get_session
 from app.services.broadcaster import get_broadcaster as _get_broadcaster
 from app.services.topology import TopologyService
 from app.utils.job import broadcast_job_progress as _broadcast_job_progress
-from app.utils.lab import update_lab_state
-from app.events.publisher import emit_deploy_finished, emit_destroy_finished, emit_job_failed
+from app.utils.lab import get_node_provider, update_lab_state
+from app.events.publisher import (
+    emit_deploy_finished,
+    emit_destroy_finished,
+    emit_job_failed,
+    emit_node_placement_changed,
+)
 from app.metrics import record_job_completed, record_job_failed, record_job_started
 from app.state import (
     HostStatus,
@@ -65,15 +71,28 @@ def _normalized_job_action(action: str) -> str:
     return action.split(":")[0]
 
 
+def _as_utc_aware(dt: datetime | None) -> datetime | None:
+    """Normalize DB datetimes to UTC-aware values for safe arithmetic."""
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
 def _job_duration_seconds(job: models.Job) -> float | None:
-    if job.started_at and job.completed_at:
-        return max(0.0, (job.completed_at - job.started_at).total_seconds())
+    started_at = _as_utc_aware(job.started_at)
+    completed_at = _as_utc_aware(job.completed_at)
+    if started_at and completed_at:
+        return max(0.0, (completed_at - started_at).total_seconds())
     return None
 
 
 def _job_queue_wait_seconds(job: models.Job) -> float | None:
-    if job.created_at and job.started_at:
-        return max(0.0, (job.started_at - job.created_at).total_seconds())
+    created_at = _as_utc_aware(job.created_at)
+    started_at = _as_utc_aware(job.started_at)
+    if created_at and started_at:
+        return max(0.0, (started_at - created_at).total_seconds())
     return None
 
 
@@ -441,6 +460,7 @@ async def _update_node_placements(
         status: Placement status ("starting", "deployed", etc.)
     """
     try:
+        placement_moves: list[tuple[str, str, str]] = []
         for node_name in node_names:
             # Look up node definition for FK
             node_def = (
@@ -464,11 +484,14 @@ async def _update_node_placements(
 
             if existing:
                 # Update existing placement
+                old_host_id = existing.host_id
                 existing.host_id = agent_id
                 existing.status = status
                 # Backfill node_definition_id if missing
                 if node_def and not existing.node_definition_id:
                     existing.node_definition_id = node_def.id
+                if old_host_id and old_host_id != agent_id:
+                    placement_moves.append((node_name, old_host_id, agent_id))
             else:
                 # Create new placement with FK
                 placement = models.NodePlacement(
@@ -482,6 +505,22 @@ async def _update_node_placements(
 
         session.commit()
         logger.info(f"Updated placements for {len(node_names)} nodes in lab {lab_id} on agent {agent_id}")
+
+        for node_name, old_agent_id, new_agent_id in placement_moves:
+            try:
+                await emit_node_placement_changed(
+                    lab_id=lab_id,
+                    node_name=node_name,
+                    agent_id=new_agent_id,
+                    old_agent_id=old_agent_id,
+                )
+            except Exception as emit_error:
+                logger.warning(
+                    "Failed to emit NODE_PLACEMENT_CHANGED for %s in lab %s: %s",
+                    node_name,
+                    lab_id,
+                    emit_error,
+                )
 
     except Exception as e:
         logger.warning(f"Failed to update node placements for lab {lab_id}: {e}")
@@ -517,12 +556,6 @@ async def _cleanup_orphan_containers(
             if not old_agent:
                 continue
 
-            # Check if agent is online before attempting cleanup
-            if not agent_client.is_agent_online(old_agent):
-                logger.info(f"Skipping orphan cleanup on offline agent {old_agent_id}")
-                log_parts.append(f"Note: Skipped cleanup on offline agent {old_agent.name}")
-                continue
-
             # Keep any nodes still assigned to this old agent (partial migration).
             keep_node_names = [
                 row[0]
@@ -535,6 +568,45 @@ async def _cleanup_orphan_containers(
                     .all()
                 )
             ]
+            keep_node_name_set = set(keep_node_names)
+            nodes_by_name = {
+                node.container_name: node
+                for node in session.query(models.Node)
+                .filter(models.Node.lab_id == lab_id)
+                .all()
+                if node.container_name
+            }
+            candidate_cleanup_names = [
+                node_name
+                for node_name in nodes_by_name.keys()
+                if node_name not in keep_node_name_set
+            ]
+
+            # Check if agent is online before attempting cleanup
+            if not agent_client.is_agent_online(old_agent):
+                logger.info(f"Skipping orphan cleanup on offline agent {old_agent_id}")
+                log_parts.append(f"Note: Skipped cleanup on offline agent {old_agent.name}")
+                from app.tasks.migration_cleanup import enqueue_node_migration_cleanup
+
+                queued = 0
+                for node_name in candidate_cleanup_names:
+                    node = nodes_by_name.get(node_name)
+                    provider = get_node_provider(node, session) if node else "docker"
+                    enqueue_node_migration_cleanup(
+                        session,
+                        lab_id,
+                        node_name,
+                        old_agent_id,
+                        provider=provider,
+                        reason="Old agent offline during orphan cleanup",
+                    )
+                    queued += 1
+                if queued:
+                    session.commit()
+                    log_parts.append(
+                        f"  Queued deferred cleanup for {queued} node(s) on offline agent {old_agent.name}"
+                    )
+                continue
 
             logger.info(
                 f"Cleaning up orphan containers for lab {lab_id} on old agent "
@@ -1219,20 +1291,34 @@ async def run_multihost_destroy(
 
             update_lab_state(session, lab_id, LabState.STOPPING.value)
 
-            # Map host_id to agents
+            # Map host_id to reachable agents
             host_to_agent: dict[str, models.Host] = {}
             log_parts = []
+            missing_hosts: list[str] = []
+            unavailable_hosts: list[str] = []
 
             for host_id in analysis.placements:
                 agent = session.get(models.Host, host_id)
-                if agent:
+                if not agent:
+                    missing_hosts.append(host_id)
+                    log_parts.append(f"WARNING: Agent '{host_id}' not found, skipping")
+                elif agent_client.is_agent_online(agent):
                     host_to_agent[host_id] = agent
                 else:
-                    log_parts.append(f"WARNING: Agent '{host_id}' not found, skipping")
+                    unavailable_hosts.append(host_id)
+                    log_parts.append(
+                        f"WARNING: Agent '{host_id}' is offline/unreachable, destroy deferred"
+                    )
 
             if not host_to_agent:
-                # No agents found, try single-agent destroy as fallback
-                error_msg = "No agents found for multi-host destroy"
+                # No reachable agents found.
+                details: list[str] = []
+                if missing_hosts:
+                    details.append(f"missing={', '.join(missing_hosts)}")
+                if unavailable_hosts:
+                    details.append(f"offline={', '.join(unavailable_hosts)}")
+                detail_suffix = f" ({'; '.join(details)})" if details else ""
+                error_msg = f"No online agents found for multi-host destroy{detail_suffix}"
                 job.status = JobStatus.FAILED.value
                 job.completed_at = utcnow()
                 job.log_path = f"ERROR: {error_msg}"
@@ -1262,7 +1348,20 @@ async def run_multihost_destroy(
             # Wait for all destroys
             results = await asyncio.gather(*destroy_tasks, return_exceptions=True)
 
-            all_success = True
+            all_success = tunnels_failed == 0 and not missing_hosts and not unavailable_hosts
+            if tunnels_failed:
+                log_parts.append(
+                    f"WARNING: Overlay teardown incomplete ({tunnels_failed} tunnel teardown failure(s))"
+                )
+            if missing_hosts:
+                log_parts.append(
+                    f"WARNING: Missing agent records: {', '.join(missing_hosts)}"
+                )
+            if unavailable_hosts:
+                log_parts.append(
+                    f"WARNING: Offline/unreachable agents: {', '.join(unavailable_hosts)}"
+                )
+
             for (host_id, agent), result in zip(host_to_agent.items(), results):
                 if isinstance(result, Exception):
                     log_parts.append(f"{agent.name}: FAILED - {result}")
@@ -1277,29 +1376,40 @@ async def run_multihost_destroy(
                     if status != "completed":
                         all_success = False
 
-            # Clean up any remaining LinkState records
-            # Belt-and-suspenders: teardown_deployment_links should have
-            # deleted these, but ensures cleanup even if VXLAN teardown
-            # was skipped (e.g., no tunnels existed)
+            # Query remaining LinkState records.
             remaining_link_states = (
                 session.query(models.LinkState)
                 .filter(models.LinkState.lab_id == lab_id)
                 .all()
             )
-            if remaining_link_states:
-                for ls in remaining_link_states:
-                    session.delete(ls)
-                session.flush()
 
             # Update job status
             if all_success:
+                # Full success: safe to remove any lingering link state rows.
+                if remaining_link_states:
+                    for ls in remaining_link_states:
+                        session.delete(ls)
+                    session.flush()
                 job.status = JobStatus.COMPLETED.value
                 update_lab_state(session, lab_id, LabState.STOPPED.value)
             else:
-                # Use completed_with_warnings for partial failures
-                # This provides visibility that cleanup may be incomplete
-                job.status = "completed_with_warnings"
-                update_lab_state(session, lab_id, LabState.STOPPED.value)
+                # Preserve link rows for retry paths and make desired state explicit.
+                for ls in remaining_link_states:
+                    if ls.desired_state != "deleted":
+                        ls.desired_state = "deleted"
+                    if ls.actual_state == LinkActualState.UP.value:
+                        ls.actual_state = LinkActualState.ERROR.value
+                        ls.error_message = "Destroy incomplete; pending retry"
+                session.flush()
+
+                # Use completed_with_warnings for partial failures.
+                job.status = JobStatus.COMPLETED_WITH_WARNINGS.value
+                update_lab_state(
+                    session,
+                    lab_id,
+                    LabState.ERROR.value,
+                    error="Destroy completed with warnings; cleanup pending retry",
+                )
                 log_parts.append("\nWARNING: Some hosts may have had issues during destroy")
                 log_parts.append("Containers may need manual cleanup on failed hosts.")
 
@@ -1312,9 +1422,16 @@ async def run_multihost_destroy(
                 record_job_completed("down", duration_seconds=_job_duration_seconds(job) or 0.0)
             session.commit()
 
-            # Dispatch webhook for destroy complete
-            await _dispatch_webhook("lab.destroy_complete", lab, job, session)
-            asyncio.create_task(emit_destroy_finished(lab_id, job_id=job_id))
+            if all_success:
+                # Dispatch webhook for destroy complete
+                await _dispatch_webhook("lab.destroy_complete", lab, job, session)
+                asyncio.create_task(emit_destroy_finished(lab_id, job_id=job_id))
+            else:
+                # Surface partial-destroy as a warning failure event to operators.
+                await _dispatch_webhook("job.failed", lab, job, session)
+                asyncio.create_task(
+                    emit_job_failed(lab_id, job_id=job_id, job_action="down")
+                )
 
             logger.info(f"Job {job_id} completed: multi-host destroy {'successful' if all_success else 'with warnings'}")
 

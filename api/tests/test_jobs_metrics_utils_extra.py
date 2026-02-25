@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 
+from datetime import datetime, timezone
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import app.jobs as jobs_module
 import app.metrics as metrics_module
+import app.tasks.jobs as task_jobs
 
 from app import models
 
@@ -77,3 +80,19 @@ def test_record_link_oper_transition_normalizes_labels(monkeypatch) -> None:
         is_cross_host="true",
     )
     labeled.inc.assert_called_once()
+
+
+def test_job_duration_seconds_handles_mixed_tz_datetimes() -> None:
+    job = SimpleNamespace(
+        started_at=datetime(2026, 1, 1, 0, 0, 0),
+        completed_at=datetime(2026, 1, 1, 0, 0, 5, tzinfo=timezone.utc),
+    )
+    assert task_jobs._job_duration_seconds(job) == 5.0
+
+
+def test_job_queue_wait_seconds_handles_naive_datetimes() -> None:
+    job = SimpleNamespace(
+        created_at=datetime(2026, 1, 1, 0, 0, 0),
+        started_at=datetime(2026, 1, 1, 0, 0, 3),
+    )
+    assert task_jobs._job_queue_wait_seconds(job) == 3.0

@@ -604,9 +604,10 @@ async def run_same_host_convergence(
     if not same_host_links:
         return {}
 
-    def _build_pairings() -> tuple[dict[str, list[dict]], int]:
+    def _build_pairings() -> tuple[dict[str, list[dict]], int, set[str]]:
         pairings: dict[str, list[dict]] = defaultdict(list)
         missing_mappings = 0
+        links_missing_mapping: set[str] = set()
 
         for ls in same_host_links:
             host_id = ls.source_host_id or ls.target_host_id
@@ -619,6 +620,7 @@ async def run_same_host_convergence(
 
             if not source_node or not target_node:
                 missing_mappings += 1
+                links_missing_mapping.add(ls.id)
                 continue
 
             # Look up OVS port names from InterfaceMapping
@@ -643,9 +645,11 @@ async def run_same_host_convergence(
 
             if not source_mapping or not target_mapping:
                 missing_mappings += 1
+                links_missing_mapping.add(ls.id)
                 continue
             if not source_mapping.ovs_port or not target_mapping.ovs_port:
                 missing_mappings += 1
+                links_missing_mapping.add(ls.id)
                 continue
 
             # Use the shared vlan_tag from LinkState (or source mapping's tag)
@@ -661,10 +665,10 @@ async def run_same_host_convergence(
                 "vlan_tag": shared_vlan,
             })
 
-        return pairings, missing_mappings
+        return pairings, missing_mappings, links_missing_mapping
 
     # First pass, then one refresh/retry pass if mappings are missing.
-    agent_pairings, missing_mappings = _build_pairings()
+    agent_pairings, missing_mappings, _ = _build_pairings()
     if missing_mappings:
         logger.warning(
             "Same-host convergence skipped %s link(s) due to missing InterfaceMapping data; "
@@ -672,12 +676,29 @@ async def run_same_host_convergence(
             missing_mappings,
         )
         await refresh_interface_mappings(session, host_to_agent)
-        agent_pairings, still_missing = _build_pairings()
+        agent_pairings, still_missing, still_missing_link_ids = _build_pairings()
         if still_missing:
             logger.warning(
                 "Same-host convergence still missing InterfaceMapping data for %s link(s) after refresh",
                 still_missing,
             )
+            repaired = 0
+            failed = 0
+            for link_id in still_missing_link_ids:
+                link = session.get(models.LinkState, link_id)
+                if not link:
+                    continue
+                if await attempt_link_repair(session, link, host_to_agent):
+                    repaired += 1
+                else:
+                    failed += 1
+            if repaired or failed:
+                session.commit()
+                logger.info(
+                    "Same-host fallback repair after mapping miss: repaired=%s failed=%s",
+                    repaired,
+                    failed,
+                )
 
     if not agent_pairings:
         return {}
@@ -761,9 +782,10 @@ async def run_cross_host_port_convergence(
     if not cross_host_links:
         return result
 
-    def _collect_agent_corrections() -> tuple[dict[str, list[tuple[str, int]]], int]:
+    def _collect_agent_corrections() -> tuple[dict[str, list[tuple[str, int]]], int, set[str]]:
         corrections: dict[str, list[tuple[str, int]]] = defaultdict(list)
         missing_mappings = 0
+        links_missing_mapping: set[str] = set()
 
         for ls in cross_host_links:
             # Process both endpoints
@@ -786,6 +808,7 @@ async def run_cross_host_port_convergence(
                 node = _resolve_node_by_endpoint_name(session, ls.lab_id, node_name)
                 if not node:
                     missing_mappings += 1
+                    links_missing_mapping.add(ls.id)
                     continue
 
                 mapping = (
@@ -799,15 +822,16 @@ async def run_cross_host_port_convergence(
                 )
                 if not mapping or not mapping.ovs_port:
                     missing_mappings += 1
+                    links_missing_mapping.add(ls.id)
                     continue
 
                 # Compare current tag vs DB truth
                 if mapping.vlan_tag != db_vlan:
                     corrections[host_id].append((mapping.ovs_port, db_vlan))
 
-        return corrections, missing_mappings
+        return corrections, missing_mappings, links_missing_mapping
 
-    agent_corrections, missing_mappings = _collect_agent_corrections()
+    agent_corrections, missing_mappings, _ = _collect_agent_corrections()
     if missing_mappings:
         logger.warning(
             "Cross-host port convergence skipped %s endpoint(s) due to missing InterfaceMapping data; "
@@ -815,12 +839,29 @@ async def run_cross_host_port_convergence(
             missing_mappings,
         )
         await refresh_interface_mappings(session, host_to_agent)
-        agent_corrections, still_missing = _collect_agent_corrections()
+        agent_corrections, still_missing, still_missing_link_ids = _collect_agent_corrections()
         if still_missing:
             logger.warning(
                 "Cross-host port convergence still missing InterfaceMapping data for %s endpoint(s) after refresh",
                 still_missing,
             )
+            repaired = 0
+            failed = 0
+            for link_id in still_missing_link_ids:
+                link = session.get(models.LinkState, link_id)
+                if not link:
+                    continue
+                if await attempt_link_repair(session, link, host_to_agent):
+                    repaired += 1
+                else:
+                    failed += 1
+            if repaired or failed:
+                session.commit()
+                logger.info(
+                    "Cross-host fallback repair after mapping miss: repaired=%s failed=%s",
+                    repaired,
+                    failed,
+                )
 
     if not agent_corrections:
         return result
