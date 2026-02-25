@@ -2153,10 +2153,10 @@ def build_qcow2_device_patterns() -> dict[str, tuple[str, str]]:
     """
     patterns: dict[str, tuple[str, str]] = {}
     for key, cfg in VENDOR_CONFIGS.items():
-        if not cfg.filename_patterns or not cfg.vrnetlab_subdir:
+        if not cfg.filename_patterns:
             continue
         for pattern in cfg.filename_patterns:
-            patterns[pattern] = (key, cfg.vrnetlab_subdir)
+            patterns[pattern] = (key, cfg.vrnetlab_subdir or "")
     return patterns
 
 

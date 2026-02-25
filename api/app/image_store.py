@@ -30,7 +30,6 @@ def _build_qcow2_device_patterns() -> dict[str, tuple[str, str]]:
     # Legacy patterns for devices without VENDOR_CONFIGS entries.
     # These will be removed once corresponding entries are added.
     _LEGACY_QCOW2_PATTERNS: dict[str, tuple[str, str]] = {
-        r"cat9kv[_-]?[\d\.]+.*\.qcow2": ("cat9kv", "cisco/cat9kv"),
         r"c8000v[_-]?sdwan.*\.qcow2": ("cat-sdwan-cedge", "cisco/sdwan"),
         r"vmx.*\.qcow2": ("vmx", "juniper/vmx"),
         r"vqfx.*\.qcow2": ("juniper_vqfx", "juniper/vqfx"),
@@ -332,7 +331,8 @@ def _maybe_correct_device_via_filename(image: dict, device_id: str | None) -> st
 
     When the stored device_id is a platform alias shared by multiple device
     types (e.g. cisco_cat9kv), filename detection provides a more precise
-    device assignment.
+    device assignment.  Also resets stale compatible_devices when the
+    detected device differs from the stored one.
     """
     kind = str(image.get("kind") or "").lower()
     if kind != "qcow2":
@@ -341,9 +341,15 @@ def _maybe_correct_device_via_filename(image: dict, device_id: str | None) -> st
     if not filename:
         return device_id
     detected, _ = detect_qcow2_device_type(filename)
-    if detected:
-        return detected
-    return device_id
+    if not detected:
+        return device_id
+    # If filename detection gives a different device than stored,
+    # clear stale compatible_devices that were based on the old ID.
+    stored_canonical = canonicalize_device_id(device_id)
+    detected_canonical = canonicalize_device_id(detected)
+    if detected_canonical and detected_canonical != stored_canonical:
+        image["compatible_devices"] = [detected]
+    return detected
 
 
 def _normalize_manifest_images(manifest: dict) -> None:
