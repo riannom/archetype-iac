@@ -380,6 +380,46 @@
 
 **Rule**: When using translucent backgrounds in dark mode, always pair with `backdrop-filter: blur()`. Without blur, dark-on-dark translucency is invisible at any opacity. For components that already have `effectiveMode` state, use JS conditionals for color classes instead of CSS `dark:` prefix to avoid specificity battles.
 
+## 2026-02-24: Docker containerd-snapshotter produces wrong diff IDs on large image loads
+
+**Bug**: `docker load` on agent-01 failed with `wrong diff id calculated on extraction` for the 2.1GB cjunosevolved image. The computed diff ID changed with every attempt, indicating non-deterministic layer extraction. The containerd snapshotter (io.containerd.snapshotter.v1, default in Docker 29.x) was computing different hashes each time it extracted the same layer.
+
+**Impact**: Image sync to agent-01 completed successfully (100%), `docker load` reported "Loaded image" but only stored a 1.62kB manifest stub. Container creation failed with "content digest not found". Node deployment impossible.
+
+**Fix**: Created `/etc/docker/daemon.json` with `{"features": {"containerd-snapshotter": false}}` on agent-01 to fall back to the legacy overlay2 driver. Restarted Docker, reloaded all images, restarted agent.
+
+**Rule**: If `docker load` reports success but the image size is wrong (< 1MB for a multi-GB image) or container creation fails with "content digest not found" or "wrong diff id", suspect the containerd snapshotter. Disable it with `containerd-snapshotter: false` in daemon.json and restart Docker. Note: changing the image store requires reloading all images.
+
+## 2026-02-24: Scheduler container needs Docker socket for image sync
+
+**Bug**: The scheduler container ran `docker save` to stream images to remote agents but had no Docker socket mount. All image sync attempts failed with "failed to connect to the docker API at unix:///var/run/docker.sock".
+
+**Impact**: No images could be synced to remote agents. cJunos node stuck in error state with max enforcement attempts reached.
+
+**Fix**: Added `/var/run/docker.sock:/var/run/docker.sock` volume mount to the scheduler service in `docker-compose.gui.yml`.
+
+**Rule**: Any container that runs `docker save`, `docker load`, or other Docker CLI/SDK commands needs the Docker socket mounted. When adding new background tasks that interact with Docker, verify the container they run in has the socket.
+
+## 2026-02-24: Function-scoped `import asyncio` shadows module-level import (again)
+
+**Bug**: `agent/routers/images.py` had `import asyncio` inside `backfill_image_checksums()` (line 107) and `receive_image()` (line 239). Python treats any import inside a function as a local variable for the entire function scope. When the Docker load code path (line 323) was reached without executing the inner import first, `asyncio` was unbound.
+
+**Impact**: All Docker image transfers to agent-01 failed with `UnboundLocalError: cannot access local variable 'asyncio'`. This is the exact same bug pattern documented in lessons from 2026-02-19 (`jobs.py:lab_status()`).
+
+**Fix**: Removed both function-scoped `import asyncio` statements. The module-level import on line 4 is sufficient.
+
+**Rule**: This is the THIRD occurrence of this bug. Grep for `^\s+import asyncio` in ALL Python files after any code move or refactoring. The pattern is always the same: conditional `import` inside a function body shadows the module-level import for the entire function.
+
+## 2026-02-24: Reconcile endpoint must clean up Docker networks like destroy does
+
+**Bug**: `_reconcile_single_node()` in `agent/routers/labs.py` stopped and removed containers but never cleaned up associated Docker networks. The NLM's `_stop_nodes` phase uses `reconcile_nodes_on_agent()` (not `destroy_node_on_agent()`), so the network cleanup in `destroy_node()` was never reached during normal node migration.
+
+**Impact**: Orphaned `{lab_id}-ethN` Docker networks persisted after container migration. When redeploying on a different agent, `_create_lab_networks()` failed with Docker 409 "network already exists" errors. The user reported no containers had been on agent-01 for a day, yet stale networks remained — pointing directly to missing cleanup.
+
+**Fix**: (1) Added network cleanup to `_reconcile_single_node()` after container removal, triggered only when the last container for a lab is removed (matching `destroy_node()` behavior). (2) Added 409 resilience in `_create_lab_networks()` — on conflict, removes stale network and retries creation.
+
+**Rule**: When multiple code paths can remove resources (reconcile, destroy, cleanup), ALL paths must clean up associated dependent resources (networks, volumes, etc.). If `destroy_node()` cleans networks, `reconcile_single_node()` must too. Audit all resource removal paths for consistent cleanup behavior.
+
 ## 2026-02-22: Mock patch targets must follow code extraction
 
 **Bug**: After extracting endpoints from `agent/main.py` into `agent/routers/*.py`, 14 test files had `patch("agent.main.X")` that silently created new mocks instead of patching the real function. Python's `unittest.mock.patch` patches the name in the specified module — if the function moved to `agent.routers.nodes`, patching `agent.main.create_node` creates a new mock on `agent.main` that nothing calls.
