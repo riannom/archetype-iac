@@ -2,6 +2,7 @@ import { describe, it, expect, beforeAll } from 'vitest';
 import { DeviceModel, DeviceType } from '../types';
 import {
   initializePatterns,
+  setRuntimeAliases,
   getAvailableInterfaces,
   isValidInterface,
   getManagementInterface,
@@ -164,5 +165,10 @@ describe('getManagementInterface', () => {
 
   it('returns MgmtEth for iosxr', () => {
     expect(getManagementInterface('cisco_iosxr')).toBe('MgmtEth0/RP0/CPU0/0');
+  });
+
+  it('resolves server-provided alias mappings', () => {
+    setRuntimeAliases({ eos: 'ceos' });
+    expect(getManagementInterface('eos')).toBe('Management0');
   });
 });

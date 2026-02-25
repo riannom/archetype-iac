@@ -33,8 +33,9 @@ import { useImageLibrary } from '../contexts/ImageLibraryContext';
 import { downloadBlob } from '../utils/download';
 import { useDeviceCatalog } from '../contexts/DeviceCatalogContext';
 import {
+  buildImageCompatibilityAliasMap,
   getAllowedInstantiableImageKinds,
-  getImageDeviceIds,
+  imageMatchesDeviceId,
   isInstantiableImageKind,
   requiresRunnableImage,
 } from '../utils/deviceModels';
@@ -60,15 +61,6 @@ interface NodeReadinessHint {
 
 // RuntimeStatus is an alias for NodeRuntimeStatus for backward compatibility
 type RuntimeStatus = NodeRuntimeStatus;
-
-const IMAGE_COMPAT_ALIASES: Record<string, string[]> = {
-  'cat9000v-uadp': ['cisco_cat9kv'],
-  'cat9000v-q200': ['cisco_cat9kv'],
-  'cat9000v_uadp': ['cisco_cat9kv'],
-  'cat9000v_q200': ['cisco_cat9kv'],
-  c8000v: ['cisco_c8000v'],
-  ftdv: ['cisco_ftdv'],
-};
 
 /**
  * Generate a container name from a display name.
@@ -1114,11 +1106,13 @@ const StudioPage: React.FC = () => {
     }
   };
 
+  const imageCompatibilityAliases = useMemo(
+    () => buildImageCompatibilityAliasMap(deviceModels),
+    [deviceModels]
+  );
+
   const hasInstantiableImageForModel = useCallback((model: DeviceModel): boolean => {
     const allowedKinds = getAllowedInstantiableImageKinds(model);
-
-    const modelId = (model.id || '').toLowerCase();
-    const aliases = IMAGE_COMPAT_ALIASES[modelId] || [];
 
     return imageLibrary.some((img) => {
       if (!isInstantiableImageKind(img.kind)) {
@@ -1128,12 +1122,9 @@ const StudioPage: React.FC = () => {
       if (!allowedKinds.has(imageKind)) {
         return false;
       }
-
-      const deviceIds = getImageDeviceIds(img).map((id) => id.toLowerCase());
-      if (deviceIds.includes(modelId)) return true;
-      return aliases.some((alias) => deviceIds.includes(alias));
+      return imageMatchesDeviceId(img, model.id, imageCompatibilityAliases);
     });
-  }, [imageLibrary]);
+  }, [imageLibrary, imageCompatibilityAliases]);
 
   const handleAddDevice = (model: DeviceModel, x?: number, y?: number) => {
     if (requiresRunnableImage(model) && !hasInstantiableImageForModel(model)) {

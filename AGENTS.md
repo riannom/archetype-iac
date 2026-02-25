@@ -23,9 +23,15 @@
   - `make confidence-gate [BASE=origin/main] [CONFIDENCE_FILES="<paths>"] [CONFIDENCE_RULES=scripts/confidence_gate_rules.json] [CONFIDENCE_MIN_SCORE=0]` — plan minimal relevant build/test checks and write `reports/confidence-gate/latest.json`.
   - `make confidence-gate-run [BASE=origin/main] [CONFIDENCE_FILES="<paths>"] [CONFIDENCE_RULES=scripts/confidence_gate_rules.json] [CONFIDENCE_MIN_SCORE=0]` — execute selected checks and fail on required check failures or low confidence.
   - `make confidence-gate-json [BASE=origin/main] [CONFIDENCE_FILES="<paths>"] [CONFIDENCE_RULES=scripts/confidence_gate_rules.json] [CONFIDENCE_MIN_SCORE=0]` — emit machine-readable confidence-gate output to stdout.
+  - `make backfill-device-image-catalog [CATALOG_MANIFEST=/var/lib/archetype/images/manifest.json] [CATALOG_APPLY=1] [CATALOG_DATABASE_URL=postgresql+psycopg://archetype:archetype@localhost:15432/archetype]` — seed canonical catalog tables from vendor/custom/manifest sources (dry-run unless `CATALOG_APPLY=1`).
+  - `make backfill-manifest-compatible-devices [CATALOG_MANIFEST=/var/lib/archetype/images/manifest.json] [MANIFEST_BACKFILL_APPLY=1]` — normalize `compatible_devices` for shared qcow2 artifacts (dry-run unless apply flag set).
+  - `make catalog-manifest-drift-check [CATALOG_MANIFEST=/var/lib/archetype/images/manifest.json] [CATALOG_DRIFT_JSON_OUT=<optional-report-path>] [CATALOG_DRIFT_FAIL=1]` — compare manifest vs DB catalog and optionally fail on drift.
+  - `make catalog-maintenance` — run DB catalog backfill, manifest compatibility backfill, and drift check as one bundle.
   - `python3 scripts/coverage_map.py` — generate test-to-source coverage mapping and gaps report (outputs under `reports/`).
   - `python3 scripts/confidence_gate.py --base origin/main --run --report-path reports/confidence-gate/latest.json` — direct CLI entrypoint for rule-driven check selection and confidence scoring.
   - `python3 scripts/backfill_manifest_compatible_devices.py --manifest /var/lib/archetype/images/manifest.json` — dry-run manifest compatibility backfill for shared qcow2 images (`--apply` to write changes).
+  - `python3 scripts/backfill_device_image_catalog_db.py --manifest /var/lib/archetype/images/manifest.json` — dry-run DB catalog backfill (`--apply` to persist) after Alembic revisions `055` and `056`.
+  - `python3 scripts/catalog_manifest_drift_check.py --manifest /var/lib/archetype/images/manifest.json` — compare manifest and catalog projection (`--json-out <path>` and `--fail-on-drift` supported).
   - `python3 scripts/observability_canary.py --apply --lab-id <lab_id> --sync-node-id <node_id> --run-up-down` — generate controlled traffic (status/sync/up/down) and validate metric coverage.
   - `./scripts/observability_db_report.sh [days]` — query Postgres for long-running tasks, failure rates, and failure classes.
   - `./scripts/run_observability_canary_nonprod.sh` — wrapper for scheduled non-prod canary runs (`CANARY_LAB_ID` and `CANARY_SYNC_NODE_ID` required).

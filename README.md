@@ -128,6 +128,15 @@ flowchart TB
 
 The API maintains lab state in Postgres and uses Redis for job coordination and eventing. Interface mappings include OVS port and bridge metadata so the API can validate and reconcile links with the agent’s reported OVS state.
 
+## Device/Image Identity Model
+
+For device IDs, aliases, runtime kind, and image compatibility behavior, see:
+
+- `docs/device-image-identity-model.md`
+- `docs/device-image-catalog-cutover.md` (single-instance DB cutover runbook)
+
+This model is the source of truth for how image assignment (`device_id` and `compatible_devices`) and per-device defaults (`default_for_devices`) should behave in API and UI.
+
 ## Observability Operations
 
 Use the non-prod maintenance bundle to produce periodic canary, DB, and link-reservation drift logs:
@@ -167,7 +176,7 @@ Rules are defined in `scripts/confidence_gate_rules.json` (local/dev) and `scrip
 
 ## Supported Vendors and Device Kinds
 
-The supported device catalog is served dynamically from the API (`/vendors`) and sourced from `agent/vendors.py`. Current vendor coverage includes:
+The supported device catalog is served dynamically from the API (`/vendors`), with alias/runtime identity metadata available at `/vendors/identity-map`. Current vendor coverage includes:
 
 | Vendor | Device Kinds |
 | --- | --- |

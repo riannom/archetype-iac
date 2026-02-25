@@ -56,7 +56,7 @@ const ImageFilterBar: React.FC<ImageFilterBarProps> = ({
         if (fallbackVendor) vendorSet.add(fallbackVendor);
       });
       kindSet.add(img.kind);
-      if (img.device_id) {
+      if (getImageDeviceIds(img).length > 0) {
         assigned++;
       } else {
         unassigned++;

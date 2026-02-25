@@ -38,6 +38,9 @@ def _mock_redis_globally(monkeypatch):
     # 1. db.get_redis (sync)
     mock_sync_redis = MagicMock()
     monkeypatch.setattr(db, "get_redis", lambda: mock_sync_redis)
+    # cache utils import get_redis directly at module import time
+    from app.utils import cache as _cache_mod
+    monkeypatch.setattr(_cache_mod, "get_redis", lambda: mock_sync_redis)
 
     # 2. db.get_async_redis (async)
     mock_async_redis = MagicMock()

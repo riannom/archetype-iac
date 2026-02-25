@@ -47,6 +47,50 @@ class TestLabsCRUD:
         lab_names = {lab["name"] for lab in data["labs"]}
         assert lab_names == {"Lab 1", "Lab 2"}
 
+    def test_lab_vm_counts_use_alias_aware_vendor_lookup(
+        self,
+        test_client: TestClient,
+        test_db: Session,
+        test_user: models.User,
+        auth_headers: dict,
+        monkeypatch,
+    ):
+        """VM/container counts should resolve device aliases via get_config_by_device."""
+
+        class FakeConfig:
+            supported_image_kinds = ["qcow2"]
+
+        monkeypatch.setattr(
+            "agent.vendors.get_config_by_device",
+            lambda device_id: FakeConfig() if device_id in {"c8000v", "cisco_c8000v"} else None,
+        )
+
+        lab = models.Lab(name="VM Count Lab", owner_id=test_user.id, provider="docker")
+        test_db.add(lab)
+        test_db.flush()
+        test_db.add(
+            models.Node(
+                lab_id=lab.id,
+                gui_id="n1",
+                display_name="edge",
+                container_name="edge",
+                device="cisco_c8000v",
+                node_type="device",
+            )
+        )
+        test_db.commit()
+
+        listed = test_client.get("/labs", headers=auth_headers)
+        assert listed.status_code == 200
+        listed_lab = next(item for item in listed.json()["labs"] if item["id"] == lab.id)
+        assert listed_lab["vm_count"] == 1
+        assert listed_lab["container_count"] == 0
+
+        fetched = test_client.get(f"/labs/{lab.id}", headers=auth_headers)
+        assert fetched.status_code == 200
+        assert fetched.json()["vm_count"] == 1
+        assert fetched.json()["container_count"] == 0
+
     def test_list_labs_with_shared_labs(
         self,
         test_client: TestClient,

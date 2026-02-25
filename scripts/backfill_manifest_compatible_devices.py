@@ -13,10 +13,21 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+import sys
 from typing import Any
 
 
 DEFAULT_MANIFEST = Path("/var/lib/archetype/images/manifest.json")
+REPO_ROOT = Path(__file__).resolve().parents[1]
+API_ROOT = REPO_ROOT / "api"
+
+if str(API_ROOT) not in sys.path:
+    sys.path.insert(0, str(API_ROOT))
+
+try:
+    from app.image_store import canonicalize_device_ids as _canonicalize_device_ids
+except Exception:
+    _canonicalize_device_ids = None
 
 
 def _artifact_key(image: dict[str, Any]) -> str | None:
@@ -35,19 +46,33 @@ def _artifact_key(image: dict[str, Any]) -> str | None:
 
 
 def _normalize_devices(values: list[Any]) -> list[str]:
-    out: list[str] = []
-    seen: set[str] = set()
+    raw_devices: list[str] = []
     for raw in values:
         if not isinstance(raw, str):
             continue
         dev = raw.strip()
         if not dev:
             continue
-        key = dev.lower()
+        raw_devices.append(dev)
+
+    if _canonicalize_device_ids is not None:
+        try:
+            canonicalized = _canonicalize_device_ids(raw_devices)
+        except Exception:
+            canonicalized = raw_devices
+    else:
+        canonicalized = raw_devices
+
+    out: list[str] = []
+    seen: set[str] = set()
+    for dev in canonicalized:
+        key = str(dev).strip().lower()
+        if not key:
+            continue
         if key in seen:
             continue
         seen.add(key)
-        out.append(dev)
+        out.append(key)
     out.sort(key=str.lower)
     return out
 

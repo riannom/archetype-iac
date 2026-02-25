@@ -8,6 +8,7 @@ import { DeviceType } from '../studio/types';
 const apiRequest = vi.fn();
 const refreshImageLibrary = vi.fn();
 const initializePatterns = vi.fn();
+const setRuntimeAliases = vi.fn();
 const buildDeviceModels = vi.fn();
 const enrichDeviceCategories = vi.fn();
 
@@ -29,6 +30,7 @@ vi.mock('../utils/deviceModels', () => ({
 
 vi.mock('../studio/utils/interfaceRegistry', () => ({
   initializePatterns: (...args: unknown[]) => initializePatterns(...args),
+  setRuntimeAliases: (...args: unknown[]) => setRuntimeAliases(...args),
 }));
 
 function Consumer() {
@@ -48,6 +50,7 @@ describe('DeviceCatalogContext', () => {
     apiRequest.mockReset();
     refreshImageLibrary.mockReset();
     initializePatterns.mockReset();
+    setRuntimeAliases.mockReset();
     buildDeviceModels.mockReset();
     enrichDeviceCategories.mockReset();
   });
@@ -56,6 +59,9 @@ describe('DeviceCatalogContext', () => {
     apiRequest.mockImplementation(async (path: string) => {
       if (path === '/vendors') {
         return [{ name: 'Compute', models: [{ id: 'linux' }] }];
+      }
+      if (path === '/vendors/identity-map') {
+        return { interface_aliases: { eos: 'ceos' } };
       }
       return null;
     });
@@ -81,7 +87,8 @@ describe('DeviceCatalogContext', () => {
 
     await waitFor(() => expect(screen.getByText('vendors:1')).toBeInTheDocument());
     expect(refreshImageLibrary).toHaveBeenCalledTimes(1);
-    expect(initializePatterns).toHaveBeenCalledTimes(1);
+    expect(initializePatterns).toHaveBeenCalled();
+    expect(setRuntimeAliases).toHaveBeenCalled();
   });
 
   it('sets error state on fetch failure', async () => {

@@ -375,8 +375,8 @@ def list_labs(
         .all()
     )
 
-    # Determine VM vs container by device type using vendor registry
-    from agent.vendors import _get_config_by_kind
+    # Determine VM vs container by device type using vendor registry.
+    from agent.vendors import get_config_by_device
 
     device_nodes = (
         database.query(models.Node.lab_id, models.Node.device)
@@ -386,7 +386,7 @@ def list_labs(
     vm_counts: dict[str, int] = {}
     for nlab_id, device in device_nodes:
         if device:
-            config = _get_config_by_kind(device)
+            config = get_config_by_device(device)
             if config and "qcow2" in (config.supported_image_kinds or []):
                 vm_counts[nlab_id] = vm_counts.get(nlab_id, 0) + 1
 
@@ -406,7 +406,7 @@ def list_labs(
 
 def _populate_lab_counts(database: Session, lab_out: schemas.LabOut) -> None:
     """Populate node_count, running_count, container_count, vm_count for a single lab."""
-    from agent.vendors import _get_config_by_kind
+    from agent.vendors import get_config_by_device
 
     total = (
         database.query(func.count(models.Node.id))
@@ -426,7 +426,7 @@ def _populate_lab_counts(database: Session, lab_out: schemas.LabOut) -> None:
     vms = 0
     for (device,) in device_types:
         if device:
-            config = _get_config_by_kind(device)
+            config = get_config_by_device(device)
             if config and "qcow2" in (config.supported_image_kinds or []):
                 vms += 1
     lab_out.node_count = total

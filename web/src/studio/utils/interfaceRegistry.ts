@@ -69,33 +69,28 @@ const FALLBACK_PATTERNS: Record<string, InterfacePattern> = {
 };
 
 /**
- * Common device ID aliases that map to canonical IDs.
- * This handles cases where devices are stored with alias names
- * (e.g., from YAML imports using "eos" instead of "ceos").
- */
-const DEVICE_ALIASES: Record<string, string> = {
-  // Arista EOS aliases
-  eos: 'ceos',
-  arista_eos: 'ceos',
-  arista_ceos: 'ceos',
-  // Nokia SR Linux aliases
-  srl: 'nokia_srlinux',
-  srlinux: 'nokia_srlinux',
-  // Cisco legacy/custom IDs from older RefPlat imports
-  cat8000v: 'c8000v',
-  nxosv9000: 'cisco_n9kv',
-  iosxrv9000: 'cisco_iosxr',
-  ioll2_xe: 'iol-l2',
-  'ioll2-xe': 'iol-l2',
-  iol_xe: 'iol-xe',
-  'iol-xe-serial-4eth': 'iol-xe',
-};
-
-/**
  * Runtime pattern registry populated from device models.
  * This is updated when device models are loaded from the API.
  */
 let _runtimePatterns: Record<string, InterfacePattern> = {};
+let _runtimeAliases: Record<string, string> = {};
+
+function normalizeToken(value: string | null | undefined): string {
+  return (value || '').trim().toLowerCase();
+}
+
+function registerAlias(
+  bucket: Map<string, Set<string>>,
+  alias: string | null | undefined,
+  canonical: string | null | undefined
+): void {
+  const normalizedAlias = normalizeToken(alias);
+  const normalizedCanonical = normalizeToken(canonical);
+  if (!normalizedAlias || !normalizedCanonical) return;
+  const current = bucket.get(normalizedAlias) || new Set<string>();
+  current.add(normalizedCanonical);
+  bucket.set(normalizedAlias, current);
+}
 
 /**
  * Build an interface pattern from a DeviceModel's port configuration.
@@ -156,42 +151,76 @@ function buildPatternFromModel(model: DeviceModel): InterfacePattern {
  */
 export function initializePatterns(models: DeviceModel[]): void {
   const patterns: Record<string, InterfacePattern> = {};
+  const aliasBucket = new Map<string, Set<string>>();
 
   for (const model of models) {
     const pattern = buildPatternFromModel(model);
+    const canonicalId = normalizeToken(model.id);
+    if (!canonicalId) continue;
 
     // Register by model ID
-    patterns[model.id] = pattern;
+    patterns[canonicalId] = pattern;
+    registerAlias(aliasBucket, canonicalId, canonicalId);
 
     // Also register by kind if different from id
     if (model.kind && model.kind !== model.id) {
-      patterns[model.kind] = pattern;
+      patterns[normalizeToken(model.kind)] = pattern;
+      registerAlias(aliasBucket, model.kind, canonicalId);
     }
+    (model.compatibilityAliases || []).forEach((alias) => registerAlias(aliasBucket, alias, canonicalId));
   }
 
   _runtimePatterns = patterns;
+
+  const aliases: Record<string, string> = {};
+  aliasBucket.forEach((canonicals, alias) => {
+    if (canonicals.size === 1) {
+      aliases[alias] = Array.from(canonicals)[0];
+    }
+  });
+  _runtimeAliases = aliases;
+}
+
+export function setRuntimeAliases(aliasMap: Record<string, string>): void {
+  const aliases: Record<string, string> = {};
+  Object.entries(aliasMap || {}).forEach(([alias, canonical]) => {
+    const normalizedAlias = normalizeToken(alias);
+    const normalizedCanonical = normalizeToken(canonical);
+    if (!normalizedAlias || !normalizedCanonical) return;
+    aliases[normalizedAlias] = normalizedCanonical;
+  });
+  _runtimeAliases = {
+    ..._runtimeAliases,
+    ...aliases,
+  };
 }
 
 /**
  * Resolve a device ID to its canonical form using aliases.
  */
 function resolveAlias(modelId: string): string {
-  return DEVICE_ALIASES[modelId] || modelId;
+  const normalized = normalizeToken(modelId);
+  return _runtimeAliases[normalized] || normalized;
 }
 
 /**
  * Get the pattern for a device model.
  * First checks runtime patterns (from API), then falls back to defaults.
- * Also resolves common device aliases (e.g., "eos" -> "ceos").
+ * Also resolves server-provided alias mappings (e.g., "eos" -> "ceos").
  */
 export function getPattern(modelId: string): InterfacePattern {
+  const normalizedId = normalizeToken(modelId);
+
   // Check runtime patterns first (populated from /vendors API)
   if (_runtimePatterns[modelId]) {
     return _runtimePatterns[modelId];
   }
+  if (_runtimePatterns[normalizedId]) {
+    return _runtimePatterns[normalizedId];
+  }
 
   // Try resolving alias and check again
-  const canonicalId = resolveAlias(modelId);
+  const canonicalId = resolveAlias(normalizedId);
   if (canonicalId !== modelId && _runtimePatterns[canonicalId]) {
     return _runtimePatterns[canonicalId];
   }
@@ -199,6 +228,9 @@ export function getPattern(modelId: string): InterfacePattern {
   // Check fallback patterns
   if (FALLBACK_PATTERNS[modelId]) {
     return FALLBACK_PATTERNS[modelId];
+  }
+  if (FALLBACK_PATTERNS[normalizedId]) {
+    return FALLBACK_PATTERNS[normalizedId];
   }
 
   // Return generic fallback

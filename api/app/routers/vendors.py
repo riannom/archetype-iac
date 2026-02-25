@@ -1,18 +1,109 @@
 """Vendor device catalog endpoints."""
 from __future__ import annotations
 
+from collections import defaultdict
+
 from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.orm import Session
 
 from app import models
 from app.auth import get_current_user
+from app.db import get_db
 from app.services.device_constraints import validate_minimum_hardware
 
 
 router = APIRouter(prefix="/vendors", tags=["vendors"])
 
 
+def _normalize_scope_token(value: object | None) -> str | None:
+    from app.image_store import normalize_default_device_scope_id
+
+    if value is None:
+        return None
+    return normalize_default_device_scope_id(str(value))
+
+
+def _build_identity_map_from_registry() -> dict:
+    """Build identity metadata from vendor registry + manifest compatibility aliases."""
+    from agent.vendors import VENDOR_CONFIGS
+    from app.image_store import get_image_compatibility_aliases, load_custom_devices
+
+    canonical_to_runtime_kind: dict[str, str | None] = {}
+    canonical_to_aliases: dict[str, set[str]] = defaultdict(set)
+    alias_to_canonicals: dict[str, set[str]] = defaultdict(set)
+
+    def register_alias(canonical: str, alias: object | None) -> None:
+        normalized = _normalize_scope_token(alias)
+        if not normalized or normalized == canonical:
+            return
+        canonical_to_aliases[canonical].add(normalized)
+        alias_to_canonicals[normalized].add(canonical)
+
+    for key, config in VENDOR_CONFIGS.items():
+        canonical = _normalize_scope_token(key)
+        if not canonical:
+            continue
+        runtime_kind = _normalize_scope_token(getattr(config, "kind", None))
+        canonical_to_runtime_kind.setdefault(canonical, runtime_kind)
+        register_alias(canonical, runtime_kind)
+        for alias in getattr(config, "aliases", None) or []:
+            register_alias(canonical, alias)
+
+    compatibility_aliases = get_image_compatibility_aliases()
+    for raw_canonical, aliases in compatibility_aliases.items():
+        canonical = _normalize_scope_token(raw_canonical)
+        if not canonical:
+            continue
+        canonical_to_runtime_kind.setdefault(canonical, canonical)
+        for alias in aliases:
+            register_alias(canonical, alias)
+
+    for custom in load_custom_devices() or []:
+        canonical = _normalize_scope_token(custom.get("id"))
+        if not canonical:
+            continue
+        runtime_kind = _normalize_scope_token(custom.get("kind")) or canonical
+        canonical_to_runtime_kind.setdefault(canonical, runtime_kind)
+        register_alias(canonical, runtime_kind)
+
+    canonical_to_aliases_sorted = {
+        canonical: sorted(canonical_to_aliases.get(canonical, set()))
+        for canonical in sorted(canonical_to_runtime_kind.keys())
+    }
+    alias_to_canonicals_sorted = {
+        alias: sorted(canonicals)
+        for alias, canonicals in sorted(alias_to_canonicals.items())
+        if canonicals
+    }
+
+    interface_aliases: dict[str, str] = {
+        canonical: canonical for canonical in canonical_to_runtime_kind.keys()
+    }
+    for alias, canonicals in alias_to_canonicals_sorted.items():
+        if len(canonicals) == 1:
+            interface_aliases[alias] = canonicals[0]
+
+    return {
+        "canonical_to_runtime_kind": canonical_to_runtime_kind,
+        "canonical_to_aliases": canonical_to_aliases_sorted,
+        "alias_to_canonicals": alias_to_canonicals_sorted,
+        "interface_aliases": interface_aliases,
+    }
+
+
+def _get_identity_map(database: Session) -> dict:
+    from app.services.catalog_service import catalog_is_seeded, get_catalog_identity_map
+
+    try:
+        if catalog_is_seeded(database):
+            return get_catalog_identity_map(database)
+    except Exception:
+        pass
+    return _build_identity_map_from_registry()
+
+
 @router.get("")
-def list_vendors() -> list[dict]:
+def list_vendors(database: Session = Depends(get_db)) -> list[dict]:
     """Return vendor configurations for frontend device catalog.
 
     This endpoint provides a unified view of all supported network devices,
@@ -22,7 +113,10 @@ def list_vendors() -> list[dict]:
     Hidden devices are filtered out.
     """
     from agent.vendors import get_vendors_for_ui
-    from app.image_store import load_custom_devices, load_hidden_devices
+    from app.image_store import (
+        load_custom_devices,
+        load_hidden_devices,
+    )
 
     # Get base vendor configs
     result = get_vendors_for_ui()
@@ -49,10 +143,10 @@ def list_vendors() -> list[dict]:
     result = [c for c in result if c.get("models") or c.get("subCategories")]
 
     # Load custom devices and merge them (custom devices aren't hidden)
+    custom_by_category: dict[str, list[dict]] = {}
     custom_devices = load_custom_devices()
     if custom_devices:
         # Group custom devices by category
-        custom_by_category: dict[str, list[dict]] = {}
         for device in custom_devices:
             cat = device.get("category", "Compute")
             if cat not in custom_by_category:
@@ -82,14 +176,51 @@ def list_vendors() -> list[dict]:
                     cat_data["models"].extend(custom_by_category[cat_name])
                 del custom_by_category[cat_name]
 
-        # Add remaining categories that don't exist
-        for cat_name, devices in custom_by_category.items():
-            result.append({
-                "name": cat_name,
-                "models": devices
-            })
+    # Add remaining categories that don't exist
+    for cat_name, devices in custom_by_category.items():
+        result.append({
+            "name": cat_name,
+            "models": devices
+        })
+
+    identity_map = _get_identity_map(database)
+    canonical_to_aliases = identity_map.get("canonical_to_aliases", {})
+    alias_to_canonicals = identity_map.get("alias_to_canonicals", {})
+    canonical_to_runtime_kind = identity_map.get("canonical_to_runtime_kind", {})
+
+    def enrich_model(model: dict) -> dict:
+        device_id = _normalize_scope_token(model.get("id"))
+        canonical_id = device_id
+        if device_id and device_id not in canonical_to_aliases:
+            matches = alias_to_canonicals.get(device_id, [])
+            if len(matches) == 1:
+                canonical_id = matches[0]
+
+        aliases = set(canonical_to_aliases.get(canonical_id or "", []))
+        if device_id:
+            aliases.discard(device_id)
+        model["compatibilityAliases"] = sorted(aliases)
+        model["runtimeKind"] = canonical_to_runtime_kind.get(canonical_id or "")
+        return model
+
+    # Attach server-driven compatibility aliases to each model.
+    for category in result:
+        if "subCategories" in category:
+            for subcategory in category["subCategories"]:
+                subcategory["models"] = [enrich_model(model) for model in subcategory.get("models", [])]
+        elif "models" in category:
+            category["models"] = [enrich_model(model) for model in category.get("models", [])]
 
     return result
+
+
+@router.get("/identity-map")
+def get_identity_map(
+    database: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+) -> dict:
+    """Return canonical/alias/runtime identity metadata for frontend resolution."""
+    return _get_identity_map(database)
 
 
 @router.post("")
@@ -121,7 +252,7 @@ def add_custom_device(
     - tags: Searchable tags
     """
     from app.image_store import add_custom_device as store_add_device, find_custom_device
-    from agent.vendors import VENDOR_CONFIGS, get_kind_for_device
+    from agent.vendors import get_config_by_device
 
     device_id = payload.get("id")
     if not device_id:
@@ -129,12 +260,9 @@ def add_custom_device(
     if not payload.get("name"):
         raise HTTPException(status_code=400, detail="Device name is required")
 
-    # Check if device ID conflicts with vendor registry (including aliases).
-    # Without this, users can accidentally add "eos" as a custom device even
-    # though it is an alias of the built-in "ceos" vendor kind, causing it to
-    # show up under the "Custom" subcategory in the sidebar.
-    canonical_id = get_kind_for_device(device_id)
-    if device_id in VENDOR_CONFIGS or canonical_id in VENDOR_CONFIGS:
+    # Check if device ID conflicts with vendor registry (including aliases and
+    # cases where config key differs from runtime kind like c8000v).
+    if get_config_by_device(device_id) is not None:
         raise HTTPException(
             status_code=409,
             detail=f"Device ID '{device_id}' conflicts with built-in vendor registry"
@@ -168,6 +296,7 @@ def add_custom_device(
 @router.delete("/{device_id}")
 def delete_device(
     device_id: str,
+    database: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
 ) -> dict:
     """Delete or hide a device type.
@@ -179,38 +308,42 @@ def delete_device(
     Accepts device IDs or aliases (e.g., 'eos' or 'ceos' both work for Arista EOS).
     """
     from app.image_store import (
+        canonicalize_device_id,
         find_custom_device,
         delete_custom_device as store_delete_device,
         get_device_image_count,
         hide_device,
         is_device_hidden,
     )
-    from agent.vendors import VENDOR_CONFIGS, get_kind_for_device
+    from agent.vendors import get_config_by_device
+    from app.services.catalog_service import (
+        catalog_is_seeded,
+        count_catalog_images_for_device,
+    )
 
-    # Resolve alias to canonical device ID (for vendor registry lookup)
-    canonical_id = get_kind_for_device(device_id)
+    config = get_config_by_device(device_id)
+    canonical_id = canonicalize_device_id(device_id) or device_id
 
-    # Check if any images are assigned to this device (check both original and canonical)
-    image_count = get_device_image_count(device_id)
-    if canonical_id != device_id:
-        image_count += get_device_image_count(canonical_id)
+    # Check if any images are assigned to this device.
+    if catalog_is_seeded(database):
+        image_count = count_catalog_images_for_device(database, canonical_id)
+    else:
+        image_count = get_device_image_count(canonical_id)
     if image_count > 0:
         raise HTTPException(
             status_code=400,
             detail=f"Cannot delete device with {image_count} assigned image(s). Unassign images first."
         )
 
-    # Check if it's a built-in vendor device (use canonical ID)
-    if canonical_id in VENDOR_CONFIGS:
-        # Check if already hidden (we hide by the device_id used in UI, which is the alias)
-        if is_device_hidden(device_id):
+    # Check if it's a built-in vendor device.
+    if config is not None:
+        if is_device_hidden(canonical_id):
             raise HTTPException(
                 status_code=400,
-                detail=f"Device '{device_id}' is already hidden"
+                detail=f"Device '{canonical_id}' is already hidden"
             )
-        # Hide instead of delete - use the device_id as passed (the alias shown in UI)
-        hide_device(device_id)
-        return {"message": f"Built-in device '{device_id}' hidden successfully"}
+        hide_device(canonical_id)
+        return {"message": f"Built-in device '{canonical_id}' hidden successfully"}
 
     # Check if custom device exists
     device = find_custom_device(device_id)
@@ -235,27 +368,28 @@ def restore_hidden_device(
     Accepts device IDs or aliases.
     """
     from app.image_store import unhide_device, is_device_hidden
-    from agent.vendors import VENDOR_CONFIGS, get_kind_for_device
+    from app.image_store import canonicalize_device_id
+    from agent.vendors import get_config_by_device
 
-    # Resolve alias to canonical device ID
-    canonical_id = get_kind_for_device(device_id)
+    config = get_config_by_device(device_id)
+    canonical_id = canonicalize_device_id(device_id) or device_id
 
-    # Check if it's a built-in vendor device
-    if canonical_id not in VENDOR_CONFIGS:
+    # Check if it's a built-in vendor device.
+    if config is None:
         raise HTTPException(
             status_code=400,
             detail="Only built-in devices can be restored"
         )
 
-    # Check if it's actually hidden
-    if not is_device_hidden(device_id):
+    # Check if it's actually hidden.
+    if not is_device_hidden(canonical_id):
         raise HTTPException(
             status_code=400,
-            detail=f"Device '{device_id}' is not hidden"
+            detail=f"Device '{canonical_id}' is not hidden"
         )
 
-    unhide_device(device_id)
-    return {"message": f"Device '{device_id}' restored successfully"}
+    unhide_device(canonical_id)
+    return {"message": f"Device '{canonical_id}' restored successfully"}
 
 
 @router.get("/hidden")
@@ -293,10 +427,10 @@ def update_custom_device_endpoint(
     - isActive: Whether device is available in UI
     """
     from app.image_store import find_custom_device, update_custom_device
-    from agent.vendors import VENDOR_CONFIGS
+    from agent.vendors import get_config_by_device
 
-    # Check if it's a built-in vendor device
-    if device_id in VENDOR_CONFIGS:
+    # Check if it's a built-in vendor device (including aliases).
+    if get_config_by_device(device_id) is not None:
         raise HTTPException(
             status_code=400,
             detail="Cannot modify built-in vendor devices"
@@ -334,18 +468,24 @@ def get_device_config(
         - effective: Merged configuration (base + overrides)
     """
     from app.image_store import (
+        canonicalize_device_id,
         find_custom_device,
         get_device_override,
     )
-    from agent.vendors import _get_vendor_options, _get_config_by_kind
+    from agent.vendors import _get_vendor_options, get_config_by_device
 
     base_config = {}
 
-    # Check if it's a built-in vendor device
-    config = _get_config_by_kind(device_id)
+    # Check if it's a built-in vendor device.
+    config = get_config_by_device(device_id)
+    is_built_in = config is not None
+    resolved_device_id = (
+        (canonicalize_device_id(device_id) or device_id) if is_built_in else device_id
+    )
+
     if config:
         base_config = {
-            "id": device_id,
+            "id": resolved_device_id,
             "kind": config.kind,
             "vendor": config.vendor,
             "name": config.label or config.vendor,
@@ -382,8 +522,8 @@ def get_device_config(
             raise HTTPException(status_code=404, detail="Device not found")
         base_config = {**custom, "isBuiltIn": False}
 
-    # Get overrides
-    overrides = get_device_override(device_id) or {}
+    # Built-in overrides are keyed by canonical device ID.
+    overrides = get_device_override(resolved_device_id) or {}
 
     # Compute effective configuration
     effective = {**base_config, **overrides}
@@ -415,10 +555,11 @@ def update_device_config(
     Returns the updated configuration.
     """
     from app.image_store import (
+        canonicalize_device_id,
         find_custom_device,
         set_device_override,
     )
-    from agent.vendors import VENDOR_CONFIGS, get_kind_for_device
+    from agent.vendors import get_config_by_device
 
     # Allowed override fields
     ALLOWED_OVERRIDE_FIELDS = {
@@ -436,15 +577,15 @@ def update_device_config(
             detail=f"No valid override fields provided. Allowed: {', '.join(ALLOWED_OVERRIDE_FIELDS)}"
         )
 
-    # Resolve alias to canonical device ID
-    canonical_id = get_kind_for_device(device_id)
-
-    # Verify device exists
-    is_built_in = canonical_id in VENDOR_CONFIGS
+    # Verify device exists.
+    is_built_in = get_config_by_device(device_id) is not None
     if not is_built_in:
         custom = find_custom_device(device_id)
         if not custom:
             raise HTTPException(status_code=404, detail="Device not found")
+    override_device_id = (
+        (canonicalize_device_id(device_id) or device_id) if is_built_in else device_id
+    )
 
     # Set override
     try:
@@ -455,7 +596,7 @@ def update_device_config(
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
-    set_device_override(device_id, filtered_payload)
+    set_device_override(override_device_id, filtered_payload)
 
     # Return updated config
     return get_device_config(device_id, current_user)
@@ -471,23 +612,22 @@ def reset_device_config(
     Returns:
         Success message
     """
-    from app.image_store import delete_device_override
-    from agent.vendors import VENDOR_CONFIGS, get_kind_for_device
+    from app.image_store import canonicalize_device_id, delete_device_override, find_custom_device
+    from agent.vendors import get_config_by_device
 
-    # Resolve alias to canonical device ID
-    canonical_id = get_kind_for_device(device_id)
-
-    # Verify device exists
-    is_built_in = canonical_id in VENDOR_CONFIGS
+    # Verify device exists.
+    is_built_in = get_config_by_device(device_id) is not None
     if not is_built_in:
-        from app.image_store import find_custom_device
         custom = find_custom_device(device_id)
         if not custom:
             raise HTTPException(status_code=404, detail="Device not found")
+    override_device_id = (
+        (canonicalize_device_id(device_id) or device_id) if is_built_in else device_id
+    )
 
-    # Delete override
-    deleted = delete_device_override(device_id)
+    # Delete override.
+    deleted = delete_device_override(override_device_id)
     if not deleted:
-        return {"message": f"Device '{device_id}' has no overrides to reset"}
+        return {"message": f"Device '{override_device_id}' has no overrides to reset"}
 
-    return {"message": f"Device '{device_id}' reset to defaults"}
+    return {"message": f"Device '{override_device_id}' reset to defaults"}

@@ -163,6 +163,34 @@ describe("ImageFilterBar", () => {
       expect(assignedButton).toHaveTextContent("2");
     });
 
+    it("counts compatible_devices-only images as assigned", () => {
+      const sharedCompatImages: ImageLibraryEntry[] = [
+        {
+          id: "img-compat",
+          kind: "qcow2",
+          reference: "shared-cat9k.qcow2",
+          device_id: null,
+          compatible_devices: ["cat9000v-uadp", "cat9000v-q200"],
+        },
+        {
+          id: "img-unassigned",
+          kind: "docker",
+          reference: "orphan:latest",
+          device_id: null,
+        },
+      ];
+
+      render(<ImageFilterBar {...defaultProps} images={sharedCompatImages} />);
+
+      const allButton = screen.getByText("All").closest("button");
+      const unassignedButton = screen.getByText("Unassigned").closest("button");
+      const assignedButton = screen.getByText("Assigned").closest("button");
+
+      expect(allButton).toHaveTextContent("2");
+      expect(unassignedButton).toHaveTextContent("1");
+      expect(assignedButton).toHaveTextContent("1");
+    });
+
     it("calls onAssignmentFilterChange when clicking All", async () => {
       const user = userEvent.setup();
       render(

@@ -2,20 +2,12 @@ import React, { useMemo, useState } from 'react';
 import FilterChip from './FilterChip';
 import { DeviceModel, ImageLibraryEntry } from '../types';
 import {
+  buildImageCompatibilityAliasMap,
+  buildResolvedImageDeviceIdsIndex,
   getAllowedInstantiableImageKinds,
-  getImageDeviceIds,
   isImageDefaultForDevice,
   isInstantiableImageKind,
 } from '../../utils/deviceModels';
-
-const IMAGE_COMPAT_ALIASES: Record<string, string[]> = {
-  'cat9000v-uadp': ['cisco_cat9kv'],
-  'cat9000v-q200': ['cisco_cat9kv'],
-  'cat9000v_uadp': ['cisco_cat9kv'],
-  'cat9000v_q200': ['cisco_cat9kv'],
-  c8000v: ['cisco_c8000v'],
-  ftdv: ['cisco_ftdv'],
-};
 
 export type ImageStatus = 'all' | 'has_image' | 'has_default' | 'no_image';
 
@@ -77,23 +69,32 @@ const SidebarFilters: React.FC<SidebarFiltersProps> = ({
   // Count devices by image status
   const statusCounts = useMemo(() => {
     const counts = { has_image: 0, has_default: 0, no_image: 0 };
+    const knownDeviceIds = devices.map((device) => device.id);
+    const compatibilityAliases = buildImageCompatibilityAliasMap(devices);
+    const resolvedImageDeviceIdsByImageId = buildResolvedImageDeviceIdsIndex(
+      imageLibrary,
+      knownDeviceIds,
+      compatibilityAliases
+    );
+
+    const imagesByDevice = new Map<string, ImageLibraryEntry[]>();
+    imageLibrary.forEach((img) => {
+      if (!isInstantiableImageKind(img.kind)) return;
+      (resolvedImageDeviceIdsByImageId.get(img.id) || []).forEach((deviceId) => {
+        const bucket = imagesByDevice.get(deviceId) || [];
+        bucket.push(img);
+        imagesByDevice.set(deviceId, bucket);
+      });
+    });
 
     devices.forEach((device) => {
       const allowedKinds = getAllowedInstantiableImageKinds(device);
-      const deviceId = (device.id || '').toLowerCase();
-      const aliases = IMAGE_COMPAT_ALIASES[deviceId] || [];
       let hasImage = false;
       let hasDefault = false;
 
-      imageLibrary.forEach((img) => {
-        if (!isInstantiableImageKind(img.kind)) return;
+      (imagesByDevice.get(device.id) || []).forEach((img) => {
         const imageKind = (img.kind || '').toLowerCase();
         if (!allowedKinds.has(imageKind)) return;
-
-        const rawDeviceIds = new Set(getImageDeviceIds(img).map((id) => String(id).toLowerCase()));
-        const matchesById = rawDeviceIds.has(deviceId);
-        const matchesByAlias = aliases.some((alias) => rawDeviceIds.has(alias));
-        if (!(matchesById || matchesByAlias)) return;
 
         hasImage = true;
         if (isImageDefaultForDevice(img, device.id)) {

@@ -10,6 +10,18 @@ import { DeviceCategory } from '../studio/constants';
 
 const INSTANTIABLE_IMAGE_KINDS = new Set(['docker', 'qcow2']);
 
+export type ImageCompatibilityAliasMap = Record<string, string[]>;
+
+const EMPTY_IMAGE_COMPAT_ALIASES: ImageCompatibilityAliasMap = Object.freeze({});
+
+interface CompatibilityLookup {
+  direct: Map<string, string[]>;
+  reverse: Map<string, string[]>;
+  tokenCache: Map<string, Set<string>>;
+}
+
+const compatibilityLookupCache = new WeakMap<ImageCompatibilityAliasMap, CompatibilityLookup>();
+
 function normalizeImageKind(kind?: string | null): string {
   return (kind || '').toLowerCase();
 }
@@ -77,6 +89,196 @@ export function requiresRunnableImage(
 export function getImageDeviceIds(image: ImageLibraryEntry): string[] {
   if (image.compatible_devices?.length) return image.compatible_devices;
   return image.device_id ? [image.device_id] : [];
+}
+
+export function buildImageCompatibilityAliasMap(
+  devices: Iterable<Pick<DeviceModel, 'id' | 'compatibilityAliases'>>
+): ImageCompatibilityAliasMap {
+  const aliasMap: ImageCompatibilityAliasMap = {};
+  for (const device of devices) {
+    const deviceId = normalizeDeviceToken(device.id);
+    if (!deviceId) continue;
+
+    const aliases = new Set<string>();
+    (device.compatibilityAliases || []).forEach((alias) => {
+      const normalized = normalizeDeviceToken(alias);
+      if (!normalized || normalized === deviceId) return;
+      aliases.add(normalized);
+    });
+    if (aliases.size > 0) {
+      aliasMap[deviceId] = Array.from(aliases);
+    }
+  }
+  return aliasMap;
+}
+
+function normalizeDeviceToken(deviceId?: string | null): string | null {
+  if (!deviceId) return null;
+  const normalized = String(deviceId).trim().toLowerCase();
+  return normalized || null;
+}
+
+function getCompatibilityLookup(
+  compatibilityAliases?: ImageCompatibilityAliasMap
+): CompatibilityLookup {
+  const aliasMap = compatibilityAliases || EMPTY_IMAGE_COMPAT_ALIASES;
+  const cached = compatibilityLookupCache.get(aliasMap);
+  if (cached) return cached;
+
+  const direct = new Map<string, string[]>();
+  const reverseBuckets = new Map<string, Set<string>>();
+  Object.entries(aliasMap).forEach(([targetId, rawAliases]) => {
+    const normalizedTarget = normalizeDeviceToken(targetId);
+    if (!normalizedTarget) return;
+
+    const aliasBucket = new Set<string>();
+    (rawAliases || []).forEach((alias) => {
+      const normalizedAlias = normalizeDeviceToken(alias);
+      if (!normalizedAlias || normalizedAlias === normalizedTarget) return;
+      aliasBucket.add(normalizedAlias);
+
+      const reverse = reverseBuckets.get(normalizedAlias) || new Set<string>();
+      reverse.add(normalizedTarget);
+      reverseBuckets.set(normalizedAlias, reverse);
+    });
+
+    if (aliasBucket.size > 0) {
+      direct.set(normalizedTarget, Array.from(aliasBucket));
+    }
+  });
+
+  const reverse = new Map<string, string[]>();
+  reverseBuckets.forEach((targets, token) => {
+    reverse.set(token, Array.from(targets));
+  });
+
+  const lookup = { direct, reverse, tokenCache: new Map<string, Set<string>>() };
+  compatibilityLookupCache.set(aliasMap, lookup);
+  return lookup;
+}
+
+function getDeviceCompatibilityTokens(
+  deviceId?: string | null,
+  compatibilityAliases?: ImageCompatibilityAliasMap
+): Set<string> {
+  const normalized = normalizeDeviceToken(deviceId);
+  if (!normalized) return new Set<string>();
+
+  const lookup = getCompatibilityLookup(compatibilityAliases);
+  const cached = lookup.tokenCache.get(normalized);
+  if (cached) return cached;
+
+  const tokens = new Set<string>([normalized]);
+
+  // Direct aliases: canonical model -> shared/legacy token(s).
+  (lookup.direct.get(normalized) || []).forEach((token) => tokens.add(token));
+
+  // Reverse aliases: shared/legacy token -> one or more canonical models.
+  (lookup.reverse.get(normalized) || []).forEach((token) => tokens.add(token));
+
+  lookup.tokenCache.set(normalized, tokens);
+  return tokens;
+}
+
+function getImageCompatibilityTokens(
+  image: ImageLibraryEntry,
+  compatibilityAliases?: ImageCompatibilityAliasMap
+): Set<string> {
+  const tokens = new Set<string>();
+  getImageDeviceIds(image).forEach((id) => {
+    getDeviceCompatibilityTokens(id, compatibilityAliases).forEach((token) => tokens.add(token));
+  });
+  return tokens;
+}
+
+/**
+ * Return true when the image is compatible with a device model ID.
+ */
+export function imageMatchesDeviceId(
+  image: ImageLibraryEntry,
+  deviceId?: string | null,
+  compatibilityAliases?: ImageCompatibilityAliasMap
+): boolean {
+  const targetTokens = getDeviceCompatibilityTokens(deviceId, compatibilityAliases);
+  if (targetTokens.size === 0) return false;
+  const imageTokens = getImageCompatibilityTokens(image, compatibilityAliases);
+
+  return Array.from(targetTokens).some((token) => imageTokens.has(token));
+}
+
+function dedupeDeviceIds(deviceIds: string[]): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  deviceIds.forEach((deviceId) => {
+    const normalized = normalizeDeviceToken(deviceId);
+    if (!normalized || seen.has(normalized)) return;
+    seen.add(normalized);
+    result.push(deviceId);
+  });
+  return result;
+}
+
+/**
+ * Resolve an image's compatible device IDs against a known catalog.
+ *
+ * Keeps raw image IDs and adds matching known IDs via compatibility aliases.
+ */
+export function resolveImageDeviceIdsForCatalog(
+  image: ImageLibraryEntry,
+  knownDeviceIds: Iterable<string>,
+  compatibilityAliases?: ImageCompatibilityAliasMap
+): string[] {
+  const resolved = buildResolvedImageDeviceIdsIndex([image], knownDeviceIds, compatibilityAliases);
+  return resolved.get(image.id) || [];
+}
+
+/**
+ * Build a memoizable map of image_id -> resolved compatible device IDs.
+ *
+ * This pre-indexes compatibility tokens so large image catalogs avoid
+ * repeated O(images x devices) matching work across components.
+ */
+export function buildResolvedImageDeviceIdsIndex(
+  images: ImageLibraryEntry[],
+  knownDeviceIds: Iterable<string>,
+  compatibilityAliases?: ImageCompatibilityAliasMap
+): Map<string, string[]> {
+  const knownByToken = new Map<string, Set<string>>();
+  for (const knownId of knownDeviceIds) {
+    const candidate = String(knownId || '').trim();
+    if (!candidate) continue;
+    getDeviceCompatibilityTokens(candidate, compatibilityAliases).forEach((token) => {
+      const bucket = knownByToken.get(token) || new Set<string>();
+      bucket.add(candidate);
+      knownByToken.set(token, bucket);
+    });
+  }
+
+  const resolvedByImageId = new Map<string, string[]>();
+  images.forEach((image) => {
+    const rawIds = getImageDeviceIds(image).map((id) => String(id));
+    const resolved: string[] = [...rawIds];
+    const seen = new Set<string>(
+      rawIds
+        .map((id) => normalizeDeviceToken(id))
+        .filter((id): id is string => Boolean(id))
+    );
+
+    getImageCompatibilityTokens(image, compatibilityAliases).forEach((token) => {
+      const bucket = knownByToken.get(token);
+      if (!bucket) return;
+      bucket.forEach((knownId) => {
+        const normalized = normalizeDeviceToken(knownId);
+        if (!normalized || seen.has(normalized)) return;
+        seen.add(normalized);
+        resolved.push(knownId);
+      });
+    });
+
+    resolvedByImageId.set(image.id, dedupeDeviceIds(resolved));
+  });
+
+  return resolvedByImageId;
 }
 
 export function normalizeDefaultDeviceScopeId(deviceId?: string | null): string | null {

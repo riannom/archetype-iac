@@ -1,9 +1,13 @@
 import {
+  buildImageCompatibilityAliasMap,
+  buildResolvedImageDeviceIdsIndex,
   buildDeviceModels,
   enrichDeviceCategories,
   flattenVendorCategories,
   getAllowedInstantiableImageKinds,
+  imageMatchesDeviceId,
   isInstantiableImageKind,
+  resolveImageDeviceIdsForCatalog,
   requiresRunnableImage,
 } from './deviceModels';
 import { DeviceType } from '../studio/types';
@@ -106,5 +110,60 @@ describe('deviceModels', () => {
     const enriched = enrichDeviceCategories(vendorCategories, devices);
     expect(enriched).toHaveLength(2);
     expect(enriched[1].name).toBe('Other');
+  });
+
+  it('matches compatibility via shared alias tokens', () => {
+    const image = {
+      id: 'img',
+      kind: 'qcow2',
+      reference: 'shared-cat9k.qcow2',
+      compatible_devices: ['cisco_cat9kv'],
+    };
+    const compatAliases = buildImageCompatibilityAliasMap([
+      { id: 'cat9000v-uadp', compatibilityAliases: ['cisco_cat9kv'] },
+      { id: 'cat9000v-q200', compatibilityAliases: ['cisco_cat9kv'] },
+    ]);
+
+    expect(imageMatchesDeviceId(image, 'cat9000v-uadp', compatAliases)).toBe(true);
+    expect(imageMatchesDeviceId(image, 'cat9000v-q200', compatAliases)).toBe(true);
+  });
+
+  it('resolves image device IDs against a known catalog with alias expansion', () => {
+    const image = {
+      id: 'img',
+      kind: 'qcow2',
+      reference: 'c8000v.qcow2',
+      compatible_devices: ['cisco_c8000v'],
+    };
+    const compatAliases = buildImageCompatibilityAliasMap([
+      { id: 'c8000v', compatibilityAliases: ['cisco_c8000v'] },
+    ]);
+
+    const resolved = resolveImageDeviceIdsForCatalog(image, ['ceos', 'c8000v'], compatAliases);
+    expect(resolved).toEqual(expect.arrayContaining(['cisco_c8000v', 'c8000v']));
+  });
+
+  it('builds indexed image compatibility for large-catalog lookups', () => {
+    const compatAliases = buildImageCompatibilityAliasMap([
+      { id: 'cat9000v-uadp', compatibilityAliases: ['cisco_cat9kv'] },
+      { id: 'cat9000v-q200', compatibilityAliases: ['cisco_cat9kv'] },
+    ]);
+    const images = [
+      {
+        id: 'img-cat9k',
+        kind: 'qcow2',
+        reference: 'shared-cat9k.qcow2',
+        compatible_devices: ['cisco_cat9kv'],
+      },
+    ];
+
+    const resolved = buildResolvedImageDeviceIdsIndex(
+      images,
+      ['cat9000v-uadp', 'cat9000v-q200'],
+      compatAliases
+    );
+    expect(resolved.get('img-cat9k')).toEqual(
+      expect.arrayContaining(['cisco_cat9kv', 'cat9000v-uadp', 'cat9000v-q200'])
+    );
   });
 });

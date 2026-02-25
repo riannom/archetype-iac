@@ -1,4 +1,4 @@
-.PHONY: audit audit-ovs test-agent test-api test-api-container test-web-container test-web-container-down observability-canary observability-db-report observability-canary-nonprod observability-maintenance-nonprod observability-cron-install iso-metadata-parity confidence-gate confidence-gate-run confidence-gate-json install-gitleaks install-hooks scan-secrets
+.PHONY: audit audit-ovs test-agent test-api test-api-container test-web-container test-web-container-down observability-canary observability-db-report observability-canary-nonprod observability-maintenance-nonprod observability-cron-install iso-metadata-parity confidence-gate confidence-gate-run confidence-gate-json backfill-device-image-catalog backfill-manifest-compatible-devices catalog-manifest-drift-check catalog-maintenance install-gitleaks install-hooks scan-secrets
 
 API_TEST ?= tests
 WEB_TEST ?=
@@ -9,6 +9,12 @@ CONFIDENCE_FILES ?=
 CONFIDENCE_REPORT ?= reports/confidence-gate/latest.json
 CONFIDENCE_RULES ?= scripts/confidence_gate_rules.json
 CONFIDENCE_MIN_SCORE ?= 0
+CATALOG_MANIFEST ?= /var/lib/archetype/images/manifest.json
+CATALOG_APPLY ?= 0
+CATALOG_DATABASE_URL ?= postgresql+psycopg://archetype:archetype@localhost:15432/archetype
+MANIFEST_BACKFILL_APPLY ?= 0
+CATALOG_DRIFT_FAIL ?= 0
+CATALOG_DRIFT_JSON_OUT ?=
 
 audit:
 	python3 scripts/cleanup_audit.py
@@ -97,6 +103,72 @@ confidence-gate-json:
 	else \
 		python3 scripts/confidence_gate.py --json --rules "$(CONFIDENCE_RULES)" --min-score "$(CONFIDENCE_MIN_SCORE)" --base "$(BASE)"; \
 	fi
+
+backfill-device-image-catalog:
+	@if docker ps --format '{{.Names}}' | grep -q '^archetype-iac-api-1$$'; then \
+		if [ "$(CATALOG_APPLY)" = "1" ]; then \
+			docker exec archetype-iac-api-1 /bin/sh -lc 'if [ -d /app/project ]; then cd /app/project; else cd /app; fi; python3 scripts/backfill_device_image_catalog_db.py --manifest "$(CATALOG_MANIFEST)" --apply'; \
+		else \
+			docker exec archetype-iac-api-1 /bin/sh -lc 'if [ -d /app/project ]; then cd /app/project; else cd /app; fi; python3 scripts/backfill_device_image_catalog_db.py --manifest "$(CATALOG_MANIFEST)"'; \
+		fi; \
+	else \
+		if [ "$(CATALOG_APPLY)" = "1" ]; then \
+			DATABASE_URL="$(CATALOG_DATABASE_URL)" python3 scripts/backfill_device_image_catalog_db.py --manifest "$(CATALOG_MANIFEST)" --apply; \
+		else \
+			DATABASE_URL="$(CATALOG_DATABASE_URL)" python3 scripts/backfill_device_image_catalog_db.py --manifest "$(CATALOG_MANIFEST)"; \
+		fi; \
+	fi
+
+backfill-manifest-compatible-devices:
+	@if docker ps --format '{{.Names}}' | grep -q '^archetype-iac-api-1$$'; then \
+		if [ "$(MANIFEST_BACKFILL_APPLY)" = "1" ]; then \
+			docker exec archetype-iac-api-1 /bin/sh -lc 'if [ -d /app/project ]; then cd /app/project; else cd /app; fi; python3 scripts/backfill_manifest_compatible_devices.py --manifest "$(CATALOG_MANIFEST)" --apply'; \
+		else \
+			docker exec archetype-iac-api-1 /bin/sh -lc 'if [ -d /app/project ]; then cd /app/project; else cd /app; fi; python3 scripts/backfill_manifest_compatible_devices.py --manifest "$(CATALOG_MANIFEST)"'; \
+		fi; \
+	else \
+		if [ "$(MANIFEST_BACKFILL_APPLY)" = "1" ]; then \
+			python3 scripts/backfill_manifest_compatible_devices.py --manifest "$(CATALOG_MANIFEST)" --apply; \
+		else \
+			python3 scripts/backfill_manifest_compatible_devices.py --manifest "$(CATALOG_MANIFEST)"; \
+		fi; \
+	fi
+
+catalog-manifest-drift-check:
+	@if docker ps --format '{{.Names}}' | grep -q '^archetype-iac-api-1$$'; then \
+		if [ "$(CATALOG_DRIFT_FAIL)" = "1" ]; then \
+			if [ -n "$(CATALOG_DRIFT_JSON_OUT)" ]; then \
+				docker exec archetype-iac-api-1 /bin/sh -lc 'if [ -d /app/project ]; then cd /app/project; else cd /app; fi; python3 scripts/catalog_manifest_drift_check.py --manifest "$(CATALOG_MANIFEST)" --json-out "$(CATALOG_DRIFT_JSON_OUT)" --fail-on-drift'; \
+			else \
+				docker exec archetype-iac-api-1 /bin/sh -lc 'if [ -d /app/project ]; then cd /app/project; else cd /app; fi; python3 scripts/catalog_manifest_drift_check.py --manifest "$(CATALOG_MANIFEST)" --fail-on-drift'; \
+			fi; \
+		else \
+			if [ -n "$(CATALOG_DRIFT_JSON_OUT)" ]; then \
+				docker exec archetype-iac-api-1 /bin/sh -lc 'if [ -d /app/project ]; then cd /app/project; else cd /app; fi; python3 scripts/catalog_manifest_drift_check.py --manifest "$(CATALOG_MANIFEST)" --json-out "$(CATALOG_DRIFT_JSON_OUT)"'; \
+			else \
+				docker exec archetype-iac-api-1 /bin/sh -lc 'if [ -d /app/project ]; then cd /app/project; else cd /app; fi; python3 scripts/catalog_manifest_drift_check.py --manifest "$(CATALOG_MANIFEST)"'; \
+			fi; \
+		fi; \
+	else \
+		if [ "$(CATALOG_DRIFT_FAIL)" = "1" ]; then \
+			if [ -n "$(CATALOG_DRIFT_JSON_OUT)" ]; then \
+				DATABASE_URL="$(CATALOG_DATABASE_URL)" python3 scripts/catalog_manifest_drift_check.py --manifest "$(CATALOG_MANIFEST)" --json-out "$(CATALOG_DRIFT_JSON_OUT)" --fail-on-drift; \
+			else \
+				DATABASE_URL="$(CATALOG_DATABASE_URL)" python3 scripts/catalog_manifest_drift_check.py --manifest "$(CATALOG_MANIFEST)" --fail-on-drift; \
+			fi; \
+		else \
+			if [ -n "$(CATALOG_DRIFT_JSON_OUT)" ]; then \
+				DATABASE_URL="$(CATALOG_DATABASE_URL)" python3 scripts/catalog_manifest_drift_check.py --manifest "$(CATALOG_MANIFEST)" --json-out "$(CATALOG_DRIFT_JSON_OUT)"; \
+			else \
+				DATABASE_URL="$(CATALOG_DATABASE_URL)" python3 scripts/catalog_manifest_drift_check.py --manifest "$(CATALOG_MANIFEST)"; \
+			fi; \
+		fi; \
+	fi
+
+catalog-maintenance:
+	$(MAKE) backfill-device-image-catalog
+	$(MAKE) backfill-manifest-compatible-devices
+	$(MAKE) catalog-manifest-drift-check
 
 install-gitleaks:
 	bash scripts/install-gitleaks.sh

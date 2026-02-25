@@ -422,6 +422,7 @@ class TestCategorizationMatchesTransitionalStates:
 
         mock_ac = MagicMock()
         mock_ac.is_agent_online = MagicMock(return_value=True)
+        mock_ac.ping_agent = AsyncMock(return_value=True)
         mock_ac.get_healthy_agent = AsyncMock(return_value=None)
         mock_ac.container_action = AsyncMock(return_value={"success": True})
         mock_ac.check_node_readiness = AsyncMock(return_value={"is_ready": True})
@@ -493,6 +494,7 @@ class TestCategorizationMatchesTransitionalStates:
 
         mock_ac = MagicMock()
         mock_ac.is_agent_online = MagicMock(return_value=True)
+        mock_ac.ping_agent = AsyncMock(return_value=True)
         mock_ac.get_healthy_agent = AsyncMock(return_value=None)
         mock_ac.start_node_on_agent = AsyncMock(return_value={"success": True})
         mock_ac.create_node_on_agent = AsyncMock(return_value={"success": True})

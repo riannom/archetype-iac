@@ -642,6 +642,28 @@ describe("DeviceConfigPanel", () => {
   });
 
   describe("Documentation & Info section", () => {
+    it("shows Runtime Kind with explanatory tooltip", async () => {
+      const user = userEvent.setup();
+
+      render(<DeviceConfigPanel {...defaultProps} />);
+
+      await waitFor(() => {
+        expect(screen.getByText("Documentation & Info")).toBeInTheDocument();
+      });
+
+      // Expand the collapsed section
+      await user.click(screen.getByText("Documentation & Info"));
+
+      await waitFor(() => {
+        expect(screen.getByText("Runtime Kind")).toBeInTheDocument();
+        expect(
+          screen.getByTitle(
+            "Provider/runtime identifier used for startup behavior. This is not the device ID or alias."
+          )
+        ).toBeInTheDocument();
+      });
+    });
+
     it("shows documentation link when URL is provided", async () => {
       const user = userEvent.setup();
 
@@ -732,6 +754,44 @@ describe("DeviceConfigPanel", () => {
       await waitFor(() => {
         expect(screen.getByText("router")).toBeInTheDocument();
         expect(screen.getByText("datacenter")).toBeInTheDocument();
+      });
+    });
+  });
+
+  describe("Associated Images section", () => {
+    it("shows alias-compatible images for the selected device", async () => {
+      const user = userEvent.setup();
+      const aliasDevice: DeviceModel = {
+        ...mockDevice,
+        id: "cat9000v-uadp",
+        name: "Cat9000v UADP",
+        compatibilityAliases: ["cisco_cat9kv"],
+      };
+
+      render(
+        <DeviceConfigPanel
+          {...defaultProps}
+          device={aliasDevice}
+          imageLibrary={[
+            {
+              id: "img-cat9k",
+              kind: "qcow2",
+              filename: "cat9k-shared.qcow2",
+              reference: "/images/cat9k-shared.qcow2",
+              compatible_devices: ["cisco_cat9kv"],
+            },
+          ]}
+        />
+      );
+
+      await waitFor(() => {
+        expect(screen.getByText("Associated Images")).toBeInTheDocument();
+      });
+
+      await user.click(screen.getByText("Associated Images"));
+
+      await waitFor(() => {
+        expect(screen.getByText("cat9k-shared.qcow2")).toBeInTheDocument();
       });
     });
   });

@@ -76,6 +76,10 @@ class TestCalculateNodeRequirements:
             "app.services.resource_capacity._get_vendor_configs",
             _mock_vendor_configs({"arista_ceos": cfg}),
         )
+        monkeypatch.setattr(
+            "app.services.resource_capacity._get_device_overrides",
+            lambda: {},
+        )
         reqs = calculate_node_requirements(["arista_ceos"])
         assert reqs.memory_mb == 2048
         assert reqs.cpu_cores == 2
@@ -118,6 +122,10 @@ class TestCalculateNodeRequirements:
             "app.services.resource_capacity._get_vendor_configs",
             _mock_vendor_configs({}),
         )
+        monkeypatch.setattr(
+            "app.services.resource_capacity._get_device_overrides",
+            lambda: {},
+        )
         reqs = calculate_node_requirements(["arista_ceos", "srlinux"])
         assert reqs.memory_mb == DEFAULT_MEMORY_MB * 2
         assert reqs.cpu_cores == DEFAULT_CPU_CORES * 2
@@ -132,6 +140,38 @@ class TestCalculateNodeRequirements:
         assert reqs.memory_mb == 512 + DEFAULT_MEMORY_MB
         assert reqs.cpu_cores == 1 + DEFAULT_CPU_CORES
         assert reqs.node_count == 2
+
+    def test_alias_device_type_uses_vendor_lookup(self, monkeypatch):
+        cfg = SimpleNamespace(memory=8192, cpu=2)
+        monkeypatch.setattr(
+            "app.services.resource_capacity._get_vendor_configs",
+            _mock_vendor_configs({"c8000v": cfg}),
+        )
+        monkeypatch.setattr("app.image_store.canonicalize_device_id", lambda _device_id: "c8000v")
+        monkeypatch.setattr("app.services.resource_capacity._get_device_overrides", lambda: {})
+
+        reqs = calculate_node_requirements(["cisco_c8000v"])
+        assert reqs.memory_mb == 8192
+        assert reqs.cpu_cores == 2
+
+    def test_alias_device_type_uses_canonical_overrides(self, monkeypatch):
+        cfg = SimpleNamespace(memory=8192, cpu=2)
+        monkeypatch.setattr(
+            "app.services.resource_capacity._get_vendor_configs",
+            _mock_vendor_configs({"c8000v": cfg}),
+        )
+        monkeypatch.setattr(
+            "app.services.resource_capacity._get_device_overrides",
+            lambda: {"c8000v": {"memory": 12288, "cpu": 4}},
+        )
+        monkeypatch.setattr(
+            "app.image_store.canonicalize_device_id",
+            lambda device_id: "c8000v" if device_id in {"cisco_c8000v", "c8000v"} else device_id,
+        )
+
+        reqs = calculate_node_requirements(["cisco_c8000v"])
+        assert reqs.memory_mb == 12288
+        assert reqs.cpu_cores == 4
 
 
 # ---------------------------------------------------------------------------
@@ -1187,6 +1227,25 @@ class TestBuildNodeRequirements:
         reqs = build_node_requirements([("r1", "ceos"), ("r2", "unknown")])
         assert reqs[0].memory_mb == 2048
         assert reqs[1].memory_mb == DEFAULT_MEMORY_MB
+
+    def test_alias_device_uses_lookup_and_canonical_override(self, monkeypatch):
+        cfg = SimpleNamespace(memory=8192, cpu=2)
+        monkeypatch.setattr(
+            "app.services.resource_capacity._get_vendor_configs",
+            _mock_vendor_configs({"c8000v": cfg}),
+        )
+        monkeypatch.setattr(
+            "app.services.resource_capacity._get_device_overrides",
+            lambda: {"c8000v": {"memory": 12288, "cpu": 3}},
+        )
+        monkeypatch.setattr(
+            "app.image_store.canonicalize_device_id",
+            lambda device_id: "c8000v" if device_id in {"cisco_c8000v", "c8000v"} else device_id,
+        )
+
+        reqs = build_node_requirements([("edge-1", "cisco_c8000v")])
+        assert reqs[0].memory_mb == 12288
+        assert reqs[0].cpu_cores == 3
 
 
 # ---------------------------------------------------------------------------

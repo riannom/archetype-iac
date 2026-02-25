@@ -12,7 +12,7 @@ import { DeviceModel } from '../studio/types';
 import { DeviceCategory } from '../studio/constants';
 import { useImageLibrary } from './ImageLibraryContext';
 import { buildDeviceModels, enrichDeviceCategories } from '../utils/deviceModels';
-import { initializePatterns } from '../studio/utils/interfaceRegistry';
+import { initializePatterns, setRuntimeAliases } from '../studio/utils/interfaceRegistry';
 
 interface CustomDevicePayload {
   id: string;
@@ -33,6 +33,10 @@ interface CustomDevicePayload {
   licenseRequired?: boolean;
   documentationUrl?: string;
   tags?: string[];
+}
+
+interface VendorIdentityMapResponse {
+  interface_aliases?: Record<string, string>;
 }
 
 export interface DeviceCatalogContextType {
@@ -63,6 +67,7 @@ export function DeviceCatalogProvider({ children }: DeviceCatalogProviderProps) 
   const { imageLibrary, refreshImageLibrary } = useImageLibrary();
 
   const [vendorCategories, setVendorCategories] = useState<DeviceCategory[]>([]);
+  const [interfaceAliasMap, setInterfaceAliasMap] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -71,9 +76,15 @@ export function DeviceCatalogProvider({ children }: DeviceCatalogProviderProps) 
       setLoading(true);
       setError(null);
 
-      // Fetch vendor categories (includes custom devices)
-      const vendorData = await apiRequest<DeviceCategory[]>('/vendors');
+      const [vendorData, identityMap] = await Promise.all([
+        apiRequest<DeviceCategory[]>('/vendors'),
+        apiRequest<VendorIdentityMapResponse>('/vendors/identity-map').catch((err) => {
+          console.warn('Failed to fetch vendor identity map, using model-derived aliases:', err);
+          return { interface_aliases: {} };
+        }),
+      ]);
       setVendorCategories(vendorData || []);
+      setInterfaceAliasMap(identityMap.interface_aliases || {});
 
       // Also refresh image library to ensure consistency
       await refreshImageLibrary();
@@ -110,10 +121,9 @@ export function DeviceCatalogProvider({ children }: DeviceCatalogProviderProps) 
   // Initialize interface patterns when device models change
   // This ensures the interface registry uses data from /vendors API (single source of truth)
   useEffect(() => {
-    if (deviceModels.length > 0) {
-      initializePatterns(deviceModels);
-    }
-  }, [deviceModels]);
+    initializePatterns(deviceModels);
+    setRuntimeAliases(interfaceAliasMap);
+  }, [deviceModels, interfaceAliasMap]);
 
   // Compute enriched device categories
   const deviceCategories = useMemo(

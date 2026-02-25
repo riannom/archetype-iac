@@ -34,6 +34,32 @@ def get_kind_for_device(device_id: str) -> str:
     return vendor_get_kind_for_device(device_id)
 
 
+def get_config_by_device(device_id: str):
+    """Module-level helper kept patchable for tests.
+
+    Uses legacy patchable helpers first so existing tests can override behavior
+    without patching agent.vendors directly.
+    """
+    config = _get_config_by_kind(device_id)
+    if config:
+        return config
+
+    canonical = get_kind_for_device(device_id)
+    if canonical and canonical != device_id:
+        config = _get_config_by_kind(canonical)
+        if config:
+            return config
+
+    return None
+
+
+def canonicalize_device_id(device_id: str | None) -> str | None:
+    """Module-level helper kept patchable for tests."""
+    from app.image_store import canonicalize_device_id as image_store_canonicalize_device_id
+
+    return image_store_canonicalize_device_id(device_id)
+
+
 def find_custom_device(device_id: str):
     """Module-level helper kept patchable for tests."""
     from app.image_store import find_custom_device as image_store_find_custom_device
@@ -143,8 +169,13 @@ class DeviceService:
         including their categories, icons, versions, and availability status.
         Hidden devices are filtered out.
         """
-        from agent.vendors import get_vendors_for_ui
-        from app.image_store import load_custom_devices, load_hidden_devices
+        from agent.vendors import VENDOR_CONFIGS, get_vendors_for_ui
+        from app.image_store import (
+            get_image_compatibility_aliases,
+            load_custom_devices,
+            load_hidden_devices,
+            normalize_default_device_scope_id,
+        )
 
         # Get base vendor configs
         result = get_vendors_for_ui()
@@ -175,7 +206,46 @@ class DeviceService:
         if custom_devices:
             result = self._merge_custom_devices(result, custom_devices)
 
+        self._attach_compatibility_aliases(
+            result,
+            VENDOR_CONFIGS,
+            get_image_compatibility_aliases(),
+            normalize_default_device_scope_id,
+        )
         return result
+
+    def _attach_compatibility_aliases(
+        self,
+        categories: list[dict],
+        vendor_configs: dict,
+        compatibility_aliases: dict[str, list[str]],
+        normalize_scope,
+    ) -> None:
+        """Attach server-driven compatibility aliases to each device model."""
+
+        def enrich_model(model: dict) -> dict:
+            device_id = normalize_scope(model.get("id"))
+            aliases: set[str] = set()
+            if device_id:
+                aliases.update(compatibility_aliases.get(device_id, []))
+                config = vendor_configs.get(device_id)
+                if config:
+                    kind = normalize_scope(config.kind)
+                    if kind and kind != device_id:
+                        aliases.add(kind)
+                    for alias in config.aliases or []:
+                        normalized = normalize_scope(alias)
+                        if normalized:
+                            aliases.add(normalized)
+            model["compatibilityAliases"] = sorted(aliases)
+            return model
+
+        for category in categories:
+            if "subCategories" in category:
+                for subcategory in category["subCategories"]:
+                    subcategory["models"] = [enrich_model(model) for model in subcategory.get("models", [])]
+            elif "models" in category:
+                category["models"] = [enrich_model(model) for model in category.get("models", [])]
 
     def _merge_custom_devices(
         self, result: list[dict], custom_devices: list[dict]
@@ -234,7 +304,6 @@ class DeviceService:
             DeviceConflictError: If device ID conflicts with existing device
         """
         from app.image_store import add_custom_device as store_add_device, find_custom_device
-        from agent.vendors import VENDOR_CONFIGS
 
         device_id = payload.get("id")
         if not device_id:
@@ -243,7 +312,7 @@ class DeviceService:
             raise DeviceValidationError("Device name is required")
 
         # Check if device ID conflicts with vendor registry
-        if device_id in VENDOR_CONFIGS:
+        if get_config_by_device(device_id) is not None:
             raise DeviceConflictError(
                 f"Device ID '{device_id}' conflicts with built-in vendor registry"
             )
@@ -275,10 +344,9 @@ class DeviceService:
             DeviceValidationError: If trying to modify built-in device
         """
         from app.image_store import find_custom_device, update_custom_device
-        from agent.vendors import VENDOR_CONFIGS
 
         # Check if it's a built-in vendor device
-        if device_id in VENDOR_CONFIGS:
+        if get_config_by_device(device_id) is not None:
             raise DeviceValidationError("Cannot modify built-in vendor devices")
 
         # Check if custom device exists
@@ -317,26 +385,22 @@ class DeviceService:
             hide_device,
             is_device_hidden,
         )
-        from agent.vendors import VENDOR_CONFIGS, get_kind_for_device
-
-        # Resolve alias to canonical device ID
-        canonical_id = get_kind_for_device(device_id)
+        canonical_id = canonicalize_device_id(device_id) or device_id
+        config = get_config_by_device(device_id)
 
         # Check if any images are assigned
-        image_count = get_device_image_count(device_id)
-        if canonical_id != device_id:
-            image_count += get_device_image_count(canonical_id)
+        image_count = get_device_image_count(canonical_id)
         if image_count > 0:
             raise DeviceHasImagesError(
                 f"Cannot delete device with {image_count} assigned image(s)"
             )
 
         # Check if it's a built-in vendor device
-        if canonical_id in VENDOR_CONFIGS:
-            if is_device_hidden(device_id):
-                raise DeviceValidationError(f"Device '{device_id}' is already hidden")
-            hide_device(device_id)
-            return {"message": f"Built-in device '{device_id}' hidden successfully"}
+        if config is not None:
+            if is_device_hidden(canonical_id):
+                raise DeviceValidationError(f"Device '{canonical_id}' is already hidden")
+            hide_device(canonical_id)
+            return {"message": f"Built-in device '{canonical_id}' hidden successfully"}
 
         # Check if custom device exists
         device = find_custom_device(device_id)
@@ -362,18 +426,19 @@ class DeviceService:
             DeviceNotFoundError: If device not found
         """
         from app.image_store import find_custom_device, get_device_override
-        from agent.vendors import VENDOR_CONFIGS, get_kind_for_device, _get_vendor_options
-
-        # Resolve alias to canonical device ID
-        canonical_id = get_kind_for_device(device_id)
+        from agent.vendors import _get_vendor_options
 
         base_config = {}
 
         # Check if it's a built-in vendor device
-        if canonical_id in VENDOR_CONFIGS:
-            config = VENDOR_CONFIGS[canonical_id]
+        config = get_config_by_device(device_id)
+        is_built_in = config is not None
+        resolved_device_id = (
+            (canonicalize_device_id(device_id) or device_id) if is_built_in else device_id
+        )
+        if config:
             base_config = {
-                "id": device_id,
+                "id": resolved_device_id,
                 "kind": config.kind,
                 "vendor": config.vendor,
                 "name": config.label or config.vendor,
@@ -412,8 +477,8 @@ class DeviceService:
                 raise DeviceNotFoundError(f"Device '{device_id}' not found")
             base_config = {**custom, "isBuiltIn": False}
 
-        # Get overrides
-        overrides = get_device_override(device_id) or {}
+        # Built-in overrides are keyed by canonical device ID.
+        overrides = get_device_override(resolved_device_id) or {}
 
         # Compute effective configuration
         effective = {**base_config, **overrides}
@@ -439,7 +504,6 @@ class DeviceService:
             DeviceValidationError: If no valid override fields provided
         """
         from app.image_store import find_custom_device, set_device_override
-        from agent.vendors import VENDOR_CONFIGS, get_kind_for_device
 
         # Allowed override fields
         ALLOWED_OVERRIDE_FIELDS = {
@@ -461,26 +525,26 @@ class DeviceService:
                 f"No valid override fields provided. Allowed: {', '.join(ALLOWED_OVERRIDE_FIELDS)}"
             )
 
-        # Resolve alias to canonical device ID
-        canonical_id = get_kind_for_device(device_id)
-
         # Verify device exists
-        is_built_in = canonical_id in VENDOR_CONFIGS
+        is_built_in = get_config_by_device(device_id) is not None
         if not is_built_in:
             custom = find_custom_device(device_id)
             if not custom:
                 raise DeviceNotFoundError(f"Device '{device_id}' not found")
+        override_device_id = (
+            (canonicalize_device_id(device_id) or device_id) if is_built_in else device_id
+        )
 
         # Set override
         try:
             validate_minimum_hardware(
-                device_id,
+                override_device_id,
                 filtered_payload.get("memory"),
                 filtered_payload.get("cpu"),
             )
         except ValueError as e:
             raise DeviceValidationError(str(e))
-        set_device_override(device_id, filtered_payload)
+        set_device_override(override_device_id, filtered_payload)
 
         # Return updated config
         return self.get_device_config(device_id)
@@ -498,24 +562,23 @@ class DeviceService:
             DeviceNotFoundError: If device not found
         """
         from app.image_store import delete_device_override, find_custom_device
-        from agent.vendors import VENDOR_CONFIGS, get_kind_for_device
-
-        # Resolve alias to canonical device ID
-        canonical_id = get_kind_for_device(device_id)
 
         # Verify device exists
-        is_built_in = canonical_id in VENDOR_CONFIGS
+        is_built_in = get_config_by_device(device_id) is not None
         if not is_built_in:
             custom = find_custom_device(device_id)
             if not custom:
                 raise DeviceNotFoundError(f"Device '{device_id}' not found")
+        override_device_id = (
+            (canonicalize_device_id(device_id) or device_id) if is_built_in else device_id
+        )
 
         # Delete override
-        deleted = delete_device_override(device_id)
+        deleted = delete_device_override(override_device_id)
         if not deleted:
-            return {"message": f"Device '{device_id}' has no overrides to reset"}
+            return {"message": f"Device '{override_device_id}' has no overrides to reset"}
 
-        return {"message": f"Device '{device_id}' reset to defaults"}
+        return {"message": f"Device '{override_device_id}' reset to defaults"}
 
     def resolve_hardware_specs(
         self,
@@ -538,10 +601,7 @@ class DeviceService:
         specs: dict = {}
 
         # Layer 1: Built-in vendor config
-        config = _get_config_by_kind(device_id)
-        if not config:
-            canonical = get_kind_for_device(device_id)
-            config = _get_config_by_kind(canonical)
+        config = get_config_by_device(device_id)
 
         if config:
             specs["memory"] = config.memory
@@ -586,7 +646,7 @@ class DeviceService:
         metadata_image_reference = image_reference
         if not metadata_image_reference and version:
             candidates = [device_id]
-            canonical = get_kind_for_device(device_id)
+            canonical = canonicalize_device_id(device_id)
             if canonical and canonical not in candidates:
                 candidates.append(canonical)
             for candidate in candidates:
@@ -653,18 +713,16 @@ class DeviceService:
             DeviceValidationError: If device is not built-in or already hidden
         """
         from app.image_store import hide_device, is_device_hidden
-        from agent.vendors import VENDOR_CONFIGS, get_kind_for_device
 
-        canonical_id = get_kind_for_device(device_id)
-
-        if canonical_id not in VENDOR_CONFIGS:
+        canonical_id = canonicalize_device_id(device_id) or device_id
+        if get_config_by_device(device_id) is None:
             raise DeviceValidationError("Only built-in devices can be hidden")
 
-        if is_device_hidden(device_id):
-            raise DeviceValidationError(f"Device '{device_id}' is already hidden")
+        if is_device_hidden(canonical_id):
+            raise DeviceValidationError(f"Device '{canonical_id}' is already hidden")
 
-        hide_device(device_id)
-        return {"message": f"Device '{device_id}' hidden successfully"}
+        hide_device(canonical_id)
+        return {"message": f"Device '{canonical_id}' hidden successfully"}
 
     def restore_device(self, device_id: str) -> dict:
         """Restore a hidden built-in device.
@@ -679,18 +737,16 @@ class DeviceService:
             DeviceValidationError: If device is not built-in or not hidden
         """
         from app.image_store import unhide_device, is_device_hidden
-        from agent.vendors import VENDOR_CONFIGS, get_kind_for_device
 
-        canonical_id = get_kind_for_device(device_id)
-
-        if canonical_id not in VENDOR_CONFIGS:
+        canonical_id = canonicalize_device_id(device_id) or device_id
+        if get_config_by_device(device_id) is None:
             raise DeviceValidationError("Only built-in devices can be restored")
 
-        if not is_device_hidden(device_id):
-            raise DeviceValidationError(f"Device '{device_id}' is not hidden")
+        if not is_device_hidden(canonical_id):
+            raise DeviceValidationError(f"Device '{canonical_id}' is not hidden")
 
-        unhide_device(device_id)
-        return {"message": f"Device '{device_id}' restored successfully"}
+        unhide_device(canonical_id)
+        return {"message": f"Device '{canonical_id}' restored successfully"}
 
 
 # Singleton instance

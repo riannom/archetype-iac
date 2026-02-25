@@ -47,6 +47,43 @@ def test_images_library_assign_unassign_and_list(test_client, admin_user, admin_
     assert unassign.json()["image"]["device_id"] is None
 
 
+def test_images_library_device_scoped_unassign_removes_only_target_mapping(
+    test_client,
+    admin_user,
+    admin_auth_headers,
+    monkeypatch,
+) -> None:
+    manifest = {
+        "images": [
+            {
+                "id": "qcow2:cat9k-shared",
+                "kind": "qcow2",
+                "reference": "/images/cat9k-shared.qcow2",
+                "device_id": "cat9000v-uadp",
+                "compatible_devices": ["cat9000v-uadp", "cat9000v-q200"],
+                "is_default": True,
+                "default_for_devices": ["cat9000v-uadp", "cat9000v-q200"],
+            },
+        ]
+    }
+
+    monkeypatch.setattr("app.routers.images.load_manifest", lambda: manifest)
+    monkeypatch.setattr("app.routers.images.save_manifest", lambda m: None)
+
+    unassign = test_client.post(
+        "/images/library/qcow2:cat9k-shared/unassign",
+        json={"device_id": "cat9000v-uadp"},
+        headers=admin_auth_headers,
+    )
+    assert unassign.status_code == 200
+
+    image = unassign.json()["image"]
+    assert image["device_id"] == "cat9000v-q200"
+    assert image["compatible_devices"] == ["cat9000v-q200"]
+    assert image["default_for_devices"] == ["cat9000v-q200"]
+    assert image["is_default"] is True
+
+
 def test_images_hosts_and_sync_jobs(test_client, test_db, admin_user, admin_auth_headers, monkeypatch) -> None:
     host = models.Host(
         id="h1",

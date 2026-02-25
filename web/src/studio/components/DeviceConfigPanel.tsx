@@ -3,7 +3,7 @@ import { apiRequest } from '../../api';
 import { DeviceModel, DeviceConfig, ImageLibraryEntry } from '../types';
 import VendorOptionsPanel from './VendorOptionsPanel';
 import { formatSize } from '../../utils/format';
-import { getImageDeviceIds } from '../../utils/deviceModels';
+import { buildImageCompatibilityAliasMap, imageMatchesDeviceId } from '../../utils/deviceModels';
 
 interface DeviceConfigPanelProps {
   device: DeviceModel;
@@ -51,6 +51,7 @@ const ConfigSection: React.FC<ConfigSectionProps> = ({
 
 interface ConfigFieldProps {
   label: string;
+  labelHelp?: string;
   value: string | number | undefined;
   unit?: string;
   isOverridden?: boolean;
@@ -61,6 +62,7 @@ interface ConfigFieldProps {
 
 const ConfigField: React.FC<ConfigFieldProps> = ({
   label,
+  labelHelp,
   value,
   unit,
   isOverridden = false,
@@ -75,6 +77,15 @@ const ConfigField: React.FC<ConfigFieldProps> = ({
     <div className="flex items-center justify-between py-2 border-b border-stone-100 dark:border-stone-900 last:border-0">
       <div className="flex items-center gap-2">
         <span className="text-xs text-stone-600 dark:text-stone-400">{label}</span>
+        {labelHelp && (
+          <span
+            className="text-[10px] text-stone-400 cursor-help"
+            title={labelHelp}
+            aria-label={`${label} help`}
+          >
+            <i className="fa-solid fa-circle-info"></i>
+          </span>
+        )}
         {isOverridden && (
           <span className="w-1.5 h-1.5 rounded-full bg-blue-500" title="Custom override"></span>
         )}
@@ -114,11 +125,15 @@ const DeviceConfigPanel: React.FC<DeviceConfigPanelProps> = ({
 
   // Local edit state
   const [editValues, setEditValues] = useState<Record<string, unknown>>({});
+  const imageCompatibilityAliases = useMemo(
+    () => buildImageCompatibilityAliasMap([device]),
+    [device]
+  );
 
   // Filter images compatible with this device
   const deviceImages = useMemo(() => {
-    return imageLibrary.filter((img) => getImageDeviceIds(img).includes(device.id));
-  }, [imageLibrary, device.id]);
+    return imageLibrary.filter((img) => imageMatchesDeviceId(img, device.id, imageCompatibilityAliases));
+  }, [imageLibrary, device.id, imageCompatibilityAliases]);
 
   const loadConfig = useCallback(async () => {
     setLoading(true);
@@ -397,7 +412,8 @@ const DeviceConfigPanel: React.FC<DeviceConfigPanelProps> = ({
             readOnly
           />
           <ConfigField
-            label="Container Kind"
+            label="Runtime Kind"
+            labelHelp="Provider/runtime identifier used for startup behavior. This is not the device ID or alias."
             value={String(effective.kind || '-')}
             readOnly
           />

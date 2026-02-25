@@ -11,7 +11,13 @@ import type { ISOImportLogEvent } from '../../components/ISOImportModal';
 import { Modal } from '../../components/ui/Modal';
 import { usePersistedState, usePersistedSet } from '../hooks/usePersistedState';
 import { usePolling } from '../hooks/usePolling';
-import { getImageDeviceIds, isImageDefaultForDevice, isInstantiableImageKind } from '../../utils/deviceModels';
+import {
+  buildImageCompatibilityAliasMap,
+  buildResolvedImageDeviceIdsIndex,
+  getImageDeviceIds,
+  isImageDefaultForDevice,
+  isInstantiableImageKind,
+} from '../../utils/deviceModels';
 import { useNotifications } from '../../contexts/NotificationContext';
 
 interface DeviceManagerProps {
@@ -114,14 +120,6 @@ interface ImageManagementLogEntry {
 type ImageManagementLogFilter = 'all' | 'errors' | 'iso' | 'docker' | 'qcow2';
 
 const IMAGE_LOG_LIMIT = 200;
-const IMAGE_COMPAT_ALIASES: Record<string, string[]> = {
-  'cat9000v-uadp': ['cisco_cat9kv'],
-  'cat9000v-q200': ['cisco_cat9kv'],
-  'cat9000v_uadp': ['cisco_cat9kv'],
-  'cat9000v_q200': ['cisco_cat9kv'],
-  c8000v: ['cisco_c8000v'],
-  ftdv: ['cisco_ftdv'],
-};
 const IMAGE_LOG_LEVEL_COLORS: Record<ImageManagementLogEntry['level'], string> = {
   info: 'text-green-600 dark:text-green-400 bg-green-100 dark:bg-green-900/30',
   error: 'text-red-600 dark:text-red-400 bg-red-100 dark:bg-red-900/30',
@@ -263,25 +261,18 @@ const DeviceManagerInner: React.FC<DeviceManagerProps> = ({
     });
     return kinds;
   }, [selectedImageKinds]);
+  const imageCompatibilityAliases = useMemo(
+    () => buildImageCompatibilityAliasMap(deviceModels),
+    [deviceModels]
+  );
+  const knownDeviceIds = useMemo(() => deviceModels.map((device) => device.id), [deviceModels]);
+  const resolvedImageDeviceIdsByImageId = useMemo(
+    () => buildResolvedImageDeviceIdsIndex(runnableImageLibrary, knownDeviceIds, imageCompatibilityAliases),
+    [runnableImageLibrary, knownDeviceIds, imageCompatibilityAliases]
+  );
   const resolveImageDeviceIds = useCallback((image: ImageLibraryEntry): string[] => {
-    const rawDeviceIds = getImageDeviceIds(image);
-    if (rawDeviceIds.length === 0) return [];
-
-    const normalizedRawIds = new Set(rawDeviceIds.map((id) => String(id).toLowerCase()));
-    const resolved = new Set<string>(rawDeviceIds);
-
-    deviceModels.forEach((device) => {
-      const modelId = String(device.id || '').toLowerCase();
-      const aliases = IMAGE_COMPAT_ALIASES[modelId] || [];
-      const matchesById = normalizedRawIds.has(modelId);
-      const matchesByAlias = aliases.some((alias) => normalizedRawIds.has(alias));
-      if (matchesById || matchesByAlias) {
-        resolved.add(device.id);
-      }
-    });
-
-    return Array.from(resolved);
-  }, [deviceModels]);
+    return resolvedImageDeviceIdsByImageId.get(image.id) || getImageDeviceIds(image);
+  }, [resolvedImageDeviceIdsByImageId]);
   const withDeviceScopedDefault = useCallback(
     (image: ImageLibraryEntry, deviceId: string): ImageLibraryEntry => ({
       ...image,
@@ -511,8 +502,9 @@ const DeviceManagerInner: React.FC<DeviceManagerProps> = ({
       }
 
       // Assignment filter
-      if (imageAssignmentFilter === 'unassigned' && img.device_id) return false;
-      if (imageAssignmentFilter === 'assigned' && !img.device_id) return false;
+      const hasAssignedDevices = resolveImageDeviceIds(img).length > 0;
+      if (imageAssignmentFilter === 'unassigned' && hasAssignedDevices) return false;
+      if (imageAssignmentFilter === 'assigned' && !hasAssignedDevices) return false;
 
       return true;
     });
@@ -542,6 +534,7 @@ const DeviceManagerInner: React.FC<DeviceManagerProps> = ({
     imageAssignmentFilter,
     imageSort,
     imageVendorsById,
+    resolveImageDeviceIds,
   ]);
 
   const filteredPendingQcow2Uploads = useMemo(() => {

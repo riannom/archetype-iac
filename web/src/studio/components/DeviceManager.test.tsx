@@ -115,6 +115,7 @@ describe("DeviceManager", () => {
     mockRawApiRequest.mockResolvedValue(new Response("{}"));
     localStorage.removeItem("archetype:image-management:logs");
     localStorage.removeItem("archetype:image-management:log-filter");
+    localStorage.removeItem("archetype:filters:image:assignment");
   });
 
   afterEach(() => {
@@ -204,6 +205,34 @@ describe("DeviceManager", () => {
         const alpineElements = screen.queryAllByText(/alpine/i);
         expect(alpineElements.length).toBeGreaterThan(0);
       }
+    });
+
+    it("uses compatible_devices for assigned/unassigned image filters", async () => {
+      const user = userEvent.setup();
+      const sharedImageOnly: ImageLibraryEntry[] = [
+        {
+          id: "qcow2:shared-cat9k.qcow2",
+          kind: "qcow2",
+          reference: "/images/shared-cat9k.qcow2",
+          filename: "shared-cat9k.qcow2",
+          device_id: null,
+          compatible_devices: ["ceos"],
+          version: "17.15.03",
+          vendor: "Cisco",
+        },
+      ];
+
+      render(
+        <TestWrapper>
+          <DeviceManager {...defaultProps} imageLibrary={sharedImageOnly} />
+        </TestWrapper>
+      );
+
+      await user.click(screen.getByRole("button", { name: /^assigned\b/i }));
+      expect(screen.queryByText("No images found")).not.toBeInTheDocument();
+
+      await user.click(screen.getByRole("button", { name: /^unassigned\b/i }));
+      expect(screen.getByText("No images found")).toBeInTheDocument();
     });
   });
 
@@ -353,6 +382,7 @@ describe("DeviceManager", () => {
           isActive: true,
           vendor: "Cisco",
           kind: "cisco_cat9kv",
+          compatibilityAliases: ["cisco_cat9kv"],
         },
         {
           id: "cat9000v-q200",
@@ -363,6 +393,7 @@ describe("DeviceManager", () => {
           isActive: true,
           vendor: "Cisco",
           kind: "cisco_cat9kv",
+          compatibilityAliases: ["cisco_cat9kv"],
         },
       ];
       const cat9kImages: ImageLibraryEntry[] = [

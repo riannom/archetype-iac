@@ -129,6 +129,8 @@ IMAGE_COMPAT_ALIASES: dict[str, list[str]] = {
     "cat9000v-q200": ["cisco_cat9kv"],
     "cat9000v_uadp": ["cisco_cat9kv"],
     "cat9000v_q200": ["cisco_cat9kv"],
+    "c8000v": ["cisco_c8000v"],
+    "ftdv": ["cisco_ftdv"],
 }
 
 # Platform siblings: devices sharing a platform field use the same image.
@@ -153,6 +155,19 @@ def _build_platform_siblings() -> dict[str, list[str]]:
 
 
 PLATFORM_SIBLINGS: dict[str, list[str]] = _build_platform_siblings()
+
+
+def get_image_compatibility_aliases() -> dict[str, list[str]]:
+    """Return normalized image compatibility aliases for UI/API consumers."""
+    aliases: dict[str, list[str]] = {}
+    for device_id, values in IMAGE_COMPAT_ALIASES.items():
+        normalized_device = normalize_default_device_scope_id(device_id)
+        if not normalized_device:
+            continue
+        normalized_values = normalize_default_device_scope_ids(values)
+        if normalized_values:
+            aliases[normalized_device] = normalized_values
+    return aliases
 
 
 def normalize_default_device_scope_id(device_id: str | None) -> str | None:
@@ -398,6 +413,11 @@ def _normalize_manifest_images(manifest: dict) -> None:
             # Legacy manifest entries only tracked a single boolean default.
             scope = normalize_default_device_scope_id(canonical_device_id)
             default_for_devices = [scope] if scope else []
+        for scope in list(default_for_devices):
+            canonical_scope = canonicalize_device_id(scope)
+            if canonical_scope and canonical_scope not in compatible_devices:
+                compatible_devices.append(canonical_scope)
+        image["compatible_devices"] = compatible_devices
         image["default_for_devices"] = default_for_devices
         image["is_default"] = bool(default_for_devices)
 
@@ -437,6 +457,17 @@ def _backfill_single_image_defaults(manifest: dict) -> None:
 
 
 def load_manifest() -> dict:
+    # DB-first cutover: once catalog tables are seeded, read image library from DB.
+    try:
+        from app.db import get_session
+        from app.services.catalog_service import catalog_is_seeded, list_catalog_library_images
+
+        with get_session() as session:
+            if catalog_is_seeded(session):
+                return {"images": list_catalog_library_images(session)}
+    except Exception:
+        logger.debug("Catalog-backed manifest read failed; falling back to file", exc_info=True)
+
     path = manifest_path()
     if not path.exists():
         return {"images": []}
@@ -447,6 +478,23 @@ def load_manifest() -> dict:
 
 def save_manifest(data: dict) -> None:
     _normalize_manifest_images(data)
+    wrote_catalog = False
+    try:
+        from app.db import get_session
+        from app.services.catalog_service import catalog_is_seeded, sync_catalog_from_manifest
+
+        with get_session() as session:
+            if catalog_is_seeded(session):
+                sync_catalog_from_manifest(session, data, source="image_store.save_manifest")
+                session.commit()
+                wrote_catalog = True
+    except Exception:
+        logger.warning("Failed to persist image catalog from manifest payload", exc_info=True)
+
+    # Runtime manifest writes are deprecated once DB catalog is seeded.
+    if wrote_catalog and not settings.catalog_manifest_mirror_enabled:
+        return
+
     path = manifest_path()
     path.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
@@ -1211,6 +1259,23 @@ def update_image_entry(
                         updates["is_default"] = False
             elif "default_for_devices" in updates:
                 updates["is_default"] = bool(updates["default_for_devices"])
+
+            # Invariant: device defaults must always be compatible.
+            final_default_scopes = normalize_default_device_scope_ids(
+                updates.get("default_for_devices") or item.get("default_for_devices") or []
+            )
+            if final_default_scopes:
+                compatible = updates.get("compatible_devices")
+                if compatible is None:
+                    compatible = canonicalize_device_ids(item.get("compatible_devices") or [])
+                else:
+                    compatible = canonicalize_device_ids(compatible)
+
+                for scope in final_default_scopes:
+                    canonical_scope = canonicalize_device_id(scope)
+                    if canonical_scope and canonical_scope not in compatible:
+                        compatible.append(canonical_scope)
+                updates["compatible_devices"] = compatible
 
             item.update(updates)
             return item

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings
 
 
@@ -161,6 +162,11 @@ class Settings(BaseSettings):
     # Chunk size for streaming image data (1MB default)
     image_sync_chunk_size: int = 1048576
 
+    # Catalog cutover controls
+    # Keep manifest.json mirrored from DB catalog for legacy tooling.
+    # Runtime manifest usage is deprecated and disabled by default.
+    catalog_manifest_mirror_enabled: bool = False
+
     # ISO import settings
     # Per-file extraction timeout (seconds) - large qcow2 files can take a while
     iso_extraction_timeout: int = 1800  # 30 minutes
@@ -274,6 +280,16 @@ class Settings(BaseSettings):
     # Version checking
     github_repo: str = "riannom/archetype-iac"
     version_check_cache_ttl: int = 3600  # 1 hour cache
+
+    @field_validator("oidc_issuer_url", mode="before")
+    @classmethod
+    def _normalize_optional_oidc_issuer(cls, value):
+        """Treat blank OIDC issuer values as unset for deterministic defaults."""
+        if value is None:
+            return None
+        if isinstance(value, str) and value.strip() == "":
+            return None
+        return value
 
 
 settings = Settings()

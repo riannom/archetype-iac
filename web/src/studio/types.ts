@@ -75,6 +75,7 @@ export interface DeviceModel {
   readinessTimeout?: number;
   vendorOptions?: Record<string, unknown>;
   defaultCredentials?: string;
+  compatibilityAliases?: string[];
   isCustom?: boolean;
 }
 

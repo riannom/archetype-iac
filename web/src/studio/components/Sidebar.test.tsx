@@ -357,6 +357,7 @@ describe("Sidebar", () => {
       const cat9kModel: DeviceModel = {
         id: "cat9000v-uadp",
         kind: "cisco_cat9kv",
+        compatibilityAliases: ["cisco_cat9kv"],
         name: "BETA CAT9000v UADP",
         type: DeviceType.ROUTER,
         icon: "fa-microchip",
@@ -392,6 +393,7 @@ describe("Sidebar", () => {
     it("matches Cat9000v image status via alias when kind is missing", () => {
       const cat9kModel: DeviceModel = {
         id: "cat9000v-q200",
+        compatibilityAliases: ["cisco_cat9kv"],
         name: "BETA CAT9000v Q200",
         type: DeviceType.ROUTER,
         icon: "fa-microchip",

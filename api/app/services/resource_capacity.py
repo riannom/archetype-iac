@@ -104,24 +104,96 @@ def _get_device_overrides() -> dict[str, dict]:
         return {}
 
 
+def _get_vendor_config_for_device(device_type: str | None, vendor_configs: dict):
+    """Resolve vendor config for a device ID/kind/alias."""
+    if not device_type:
+        return None
+
+    normalized = str(device_type).strip()
+    if not normalized:
+        return None
+
+    if normalized in vendor_configs:
+        return vendor_configs[normalized]
+
+    lowered = normalized.lower()
+    if lowered in vendor_configs:
+        return vendor_configs[lowered]
+
+    try:
+        from app.image_store import canonicalize_device_id
+
+        canonical = canonicalize_device_id(normalized)
+        if canonical and canonical in vendor_configs:
+            return vendor_configs[canonical]
+    except Exception:
+        logger.debug("Vendor canonicalization failed for '%s'", device_type, exc_info=True)
+
+    # When vendor configs are unavailable, preserve legacy default behavior.
+    if not vendor_configs:
+        return None
+
+    try:
+        from agent.vendors import get_config_by_device
+
+        return get_config_by_device(normalized)
+    except ImportError:
+        return None
+    except Exception:
+        logger.warning(
+            "Unexpected vendor config lookup failure for '%s'",
+            device_type,
+            exc_info=True,
+        )
+        return None
+
+
+def _get_override_for_device(overrides: dict[str, dict], device_type: str | None) -> dict:
+    """Resolve device override using exact or canonical device ID."""
+    if not device_type:
+        return {}
+
+    normalized = str(device_type).strip()
+    if not normalized:
+        return {}
+
+    if normalized in overrides:
+        return overrides[normalized] or {}
+
+    lowered = normalized.lower()
+    if lowered in overrides:
+        return overrides[lowered] or {}
+
+    try:
+        from app.image_store import canonicalize_device_id
+
+        canonical = canonicalize_device_id(normalized)
+        if canonical and canonical in overrides:
+            return overrides[canonical] or {}
+    except Exception:
+        logger.debug("Override canonicalization failed for '%s'", device_type, exc_info=True)
+
+    return {}
+
+
 def calculate_node_requirements(device_types: list[str]) -> ResourceRequirements:
     """Calculate total resource requirements for a list of device types.
 
-    Looks up each device in VENDOR_CONFIGS for memory/cpu requirements,
-    with user overrides taking precedence. Unknown devices get default
-    values (1024 MB, 1 CPU).
+    Looks up each device via alias-aware vendor config resolution for
+    memory/cpu requirements, with user overrides taking precedence.
+    Unknown devices get default values (1024 MB, 1 CPU).
     """
     vendor_configs = _get_vendor_configs()
     overrides = _get_device_overrides()
     reqs = ResourceRequirements(node_count=len(device_types))
 
     for device_type in device_types:
-        override = overrides.get(device_type, {})
+        override = _get_override_for_device(overrides, device_type)
+        config = _get_vendor_config_for_device(device_type, vendor_configs)
         min_hw = minimum_hardware_for_device(device_type) or {}
         min_mem = min_hw.get("memory")
         min_cpu = min_hw.get("cpu")
-        if device_type and device_type in vendor_configs:
-            config = vendor_configs[device_type]
+        if config:
             memory = override.get("memory", getattr(config, "memory", DEFAULT_MEMORY_MB))
             cpu = override.get("cpu", getattr(config, "cpu", DEFAULT_CPU_CORES))
             reqs.memory_mb += max(memory, min_mem) if min_mem else memory
@@ -313,13 +385,13 @@ def build_node_requirements(
     overrides = _get_device_overrides()
     result = []
     for node_name, device_type in nodes:
-        override = overrides.get(device_type, {})
+        override = _get_override_for_device(overrides, device_type)
+        config = _get_vendor_config_for_device(device_type, vendor_configs)
         min_hw = minimum_hardware_for_device(device_type) or {}
         min_mem = min_hw.get("memory")
         min_cpu = min_hw.get("cpu")
 
-        if device_type and device_type in vendor_configs:
-            config = vendor_configs[device_type]
+        if config:
             memory = override.get("memory", getattr(config, "memory", DEFAULT_MEMORY_MB))
             cpu = override.get("cpu", getattr(config, "cpu", DEFAULT_CPU_CORES))
         else:

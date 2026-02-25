@@ -981,9 +981,9 @@ async def _import_single_image(
         )
         compat = shared_devices if shared_devices else [device_id]
 
-        # Check if vendor explicitly opts out of readiness probing
-        from agent.vendors import _get_config_by_kind
-        vendor_cfg = _get_config_by_kind(device_id)
+        # Check if vendor explicitly opts out of readiness probing.
+        from agent.vendors import get_config_by_device
+        vendor_cfg = get_config_by_device(device_id)
         vendor_probe_none = vendor_cfg and getattr(vendor_cfg, "readiness_probe", None) == "none"
 
         # Create manifest entry
