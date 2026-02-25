@@ -132,6 +132,29 @@ IMAGE_COMPAT_ALIASES: dict[str, list[str]] = {
     "cat9000v_q200": ["cisco_cat9kv"],
 }
 
+# Platform siblings: devices sharing a platform field use the same image.
+# Maps each device_id to the set of sibling device_ids (including itself).
+def _build_platform_siblings() -> dict[str, list[str]]:
+    """Build device_id → platform sibling device_ids from VENDOR_CONFIGS."""
+    try:
+        from agent.vendors import VENDOR_CONFIGS
+    except ImportError:
+        return {}
+    platform_groups: dict[str, list[str]] = {}
+    for key, cfg in VENDOR_CONFIGS.items():
+        if cfg.platform:
+            platform_groups.setdefault(cfg.platform, []).append(key)
+    siblings: dict[str, list[str]] = {}
+    for members in platform_groups.values():
+        if len(members) < 2:
+            continue
+        for member in members:
+            siblings[member] = members
+    return siblings
+
+
+PLATFORM_SIBLINGS: dict[str, list[str]] = _build_platform_siblings()
+
 
 def normalize_default_device_scope_id(device_id: str | None) -> str | None:
     """Normalize per-device default scope key.
@@ -331,6 +354,14 @@ def _normalize_manifest_images(manifest: dict) -> None:
         compatible_devices = canonicalize_device_ids(raw_compatible_devices)
         if canonical_device_id and canonical_device_id not in compatible_devices:
             compatible_devices.append(canonical_device_id)
+
+        # Expand platform siblings: if any compatible device shares a platform
+        # group, add all siblings (e.g. cat9800 → cat9000v-q200, cat9000v-uadp).
+        expanded = set(compatible_devices)
+        for dev_id in list(expanded):
+            for sibling in PLATFORM_SIBLINGS.get(dev_id, []):
+                expanded.add(sibling)
+        compatible_devices = list(expanded)
 
         image["device_id"] = canonical_device_id
         image["compatible_devices"] = compatible_devices
@@ -1025,6 +1056,13 @@ def create_image_entry(
     normalized_compatible_devices = canonicalize_device_ids(compatible_devices)
     if canonical_device_id and canonical_device_id not in normalized_compatible_devices:
         normalized_compatible_devices.append(canonical_device_id)
+
+    # Expand platform siblings for new entries too.
+    expanded = set(normalized_compatible_devices)
+    for dev_id in list(expanded):
+        for sibling in PLATFORM_SIBLINGS.get(dev_id, []):
+            expanded.add(sibling)
+    normalized_compatible_devices = list(expanded)
 
     vendor = get_vendor_for_device(canonical_device_id) if canonical_device_id else None
 
