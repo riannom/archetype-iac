@@ -111,6 +111,7 @@ services:
       - DB_POOL_TIMEOUT=60
     volumes:
       - archetype_workspaces:/var/lib/archetype
+      - /var/run/docker.sock:/var/run/docker.sock
     logging:
       driver: "json-file"
       options:
