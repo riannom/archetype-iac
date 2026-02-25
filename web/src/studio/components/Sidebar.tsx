@@ -145,7 +145,13 @@ const Sidebar: React.FC<SidebarProps> = ({
     const rawDeviceIds = getImageDeviceIds(image);
     if (rawDeviceIds.length === 0) return [];
 
-    const normalizedRawIds = new Set(rawDeviceIds.map((id) => String(id).toLowerCase()));
+    // Build token set: raw IDs + their platform aliases (e.g. cat9000v-q200 → cisco_cat9kv)
+    const normalizedRawIds = new Set<string>();
+    rawDeviceIds.forEach((id) => {
+      const lower = String(id).toLowerCase();
+      normalizedRawIds.add(lower);
+      (IMAGE_COMPAT_ALIASES[lower] || []).forEach((alias) => normalizedRawIds.add(alias));
+    });
     const resolved = new Set<string>(rawDeviceIds);
 
     allDevices.forEach((device) => {
