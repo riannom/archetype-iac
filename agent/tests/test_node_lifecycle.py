@@ -508,6 +508,28 @@ async def test_destroy_node_not_found(provider, workspace, mock_docker_client):
     mock_delete_nets.assert_awaited_once_with("lab1")
 
 
+@pytest.mark.asyncio
+async def test_destroy_node_skips_lab_cleanup_when_container_check_fails(
+    provider, workspace, mock_docker_client, mock_container
+):
+    """destroy_node should not run destructive lab cleanup if remaining-check fails."""
+    mock_docker_client.containers.get.return_value = mock_container
+    mock_docker_client.containers.list.side_effect = RuntimeError("docker unavailable")
+
+    with patch("agent.readiness.clear_post_boot_state"):
+        with patch.object(
+            provider, "_delete_lab_networks", new_callable=AsyncMock
+        ) as mock_delete_nets:
+            result = await provider.destroy_node(
+                lab_id="lab1",
+                node_name="node1",
+                workspace=workspace,
+            )
+
+    assert result.success is True
+    mock_delete_nets.assert_not_awaited()
+
+
 # ---------------------------------------------------------------------------
 # stop_node tests (unified lifecycle: stop = remove)
 # ---------------------------------------------------------------------------

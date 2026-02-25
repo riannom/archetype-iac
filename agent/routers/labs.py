@@ -96,7 +96,7 @@ async def lab_status(lab_id: str) -> LabStatusResponse:
 async def _reconcile_single_node(
     lab_id: str,
     target,
-    workspace: str,
+    workspace: Path,
 ) -> NodeReconcileResult:
     """Process one node reconciliation - returns result, never raises."""
     container_name = target.container_name
@@ -136,25 +136,24 @@ async def _reconcile_single_node(
             clear_post_boot_state(container_name)
             logger.info(f"Stopped and removed container {container_name}")
 
-            # Clean up Docker networks if this was the last container in the lab
+            # Clean up lab-level resources if this was the last container.
             docker_provider = get_provider("docker")
-            if docker_provider and getattr(docker_provider, "use_ovs_plugin", False):
+            cleanup_if_empty = getattr(docker_provider, "cleanup_lab_resources_if_empty", None)
+            if docker_provider and callable(cleanup_if_empty):
                 try:
-                    client = get_docker_client()
-                    remaining = await asyncio.to_thread(
-                        client.containers.list,
-                        all=True,
-                        filters={"label": f"archetype.lab_id={lab_id}"},
-                    )
-                    if not remaining:
-                        deleted = await docker_provider._delete_lab_networks(lab_id)
-                        if deleted:
-                            logger.info(
-                                f"Reconcile: cleaned up {deleted} orphaned networks "
-                                f"for lab {lab_id} (last container removed)"
-                            )
+                    cleanup_result = await cleanup_if_empty(lab_id, workspace)
+                    if cleanup_result.get("cleaned"):
+                        logger.info(
+                            f"Reconcile: cleaned lab resources for {lab_id} "
+                            f"(networks_deleted={cleanup_result.get('networks_deleted', 0)})"
+                        )
+                    elif cleanup_result.get("error"):
+                        logger.warning(
+                            f"Reconcile: skipped lab cleanup for {lab_id}: "
+                            f"{cleanup_result['error']}"
+                        )
                 except Exception as net_err:
-                    logger.warning(f"Reconcile: network cleanup failed for lab {lab_id}: {net_err}")
+                    logger.warning(f"Reconcile: lab cleanup failed for lab {lab_id}: {net_err}")
 
             return NodeReconcileResult(
                 container_name=container_name,

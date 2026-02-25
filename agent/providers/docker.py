@@ -31,12 +31,13 @@ import asyncio
 import logging
 import os
 import re
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 import docker
-from docker.errors import NotFound, APIError, ImageNotFound
+from docker.errors import NotFound, APIError, DockerException, ImageNotFound
 from docker.types import IPAMConfig
 
 from agent.config import settings
@@ -190,6 +191,10 @@ LABEL_NODE_READINESS_PATTERN = "archetype.readiness_pattern"
 LABEL_NODE_READINESS_TIMEOUT = "archetype.readiness_timeout"
 LABEL_PROVIDER = "archetype.provider"
 
+# Retry policy for transient Docker daemon/API failures on critical operations.
+DOCKER_OP_MAX_RETRIES = 3
+DOCKER_OP_RETRY_BASE_SECONDS = 0.2
+
 
 def _log_name_from_labels(labels: dict[str, str]) -> str:
     """Format node name for logging from container labels."""
@@ -325,6 +330,7 @@ class DockerProvider(Provider, VlanPersistenceMixin):
         self._docker: docker.DockerClient | None = None
         self._local_network: LocalNetworkManager | None = None
         self._ovs_manager: OVSNetworkManager | None = None
+        self._lab_network_locks: dict[str, asyncio.Lock] = {}
         self.__init_vlan_state__()
 
     @property
@@ -394,6 +400,149 @@ class DockerProvider(Provider, VlanPersistenceMixin):
         current_prefix = self._lab_network_prefix(lab_id)
         legacy_prefix = sanitize_id(lab_id, max_len=20)
         return current_prefix, legacy_prefix
+
+    def _get_lab_network_lock(self, lab_id: str) -> asyncio.Lock:
+        """Get per-lab lock to serialize network provisioning operations."""
+        lock = self._lab_network_locks.get(lab_id)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._lab_network_locks[lab_id] = lock
+        return lock
+
+    def _is_transient_docker_error(self, err: Exception) -> bool:
+        """Return True if a Docker API error should be retried."""
+        if isinstance(err, APIError):
+            status = getattr(err, "status_code", None)
+            if status in {500, 502, 503, 504}:
+                return True
+
+        msg = str(err).lower()
+        transient_markers = (
+            "timeout",
+            "timed out",
+            "temporarily unavailable",
+            "try again",
+            "connection reset",
+            "connection aborted",
+            "connection refused",
+            "broken pipe",
+            "eof",
+            "bad gateway",
+            "service unavailable",
+            "internal server error",
+            "transport is closing",
+            "docker daemon is not running",
+        )
+        return any(marker in msg for marker in transient_markers)
+
+    async def _retry_docker_call(
+        self,
+        op_name: str,
+        func: Callable[..., Any],
+        *args: Any,
+        **kwargs: Any,
+    ) -> Any:
+        """Run a Docker SDK call with bounded retries for transient failures."""
+        for attempt in range(1, DOCKER_OP_MAX_RETRIES + 1):
+            try:
+                return await asyncio.to_thread(func, *args, **kwargs)
+            except Exception as err:
+                should_retry = self._is_transient_docker_error(err) and attempt < DOCKER_OP_MAX_RETRIES
+                if not should_retry:
+                    raise
+                delay = DOCKER_OP_RETRY_BASE_SECONDS * (2 ** (attempt - 1))
+                logger.warning(
+                    f"Transient Docker failure during {op_name} "
+                    f"(attempt {attempt}/{DOCKER_OP_MAX_RETRIES}): {err}; "
+                    f"retrying in {delay:.1f}s"
+                )
+                await asyncio.sleep(delay)
+
+    def _lab_network_create_kwargs(
+        self,
+        network_name: str,
+        lab_id: str,
+        interface_name: str,
+    ) -> dict[str, Any]:
+        """Build canonical Docker network create arguments for lab interfaces."""
+        return {
+            "name": network_name,
+            "driver": "archetype-ovs",
+            "ipam": IPAMConfig(driver="null"),
+            "options": {
+                "lab_id": lab_id,
+                "interface_name": interface_name,
+            },
+            "labels": {
+                LABEL_LAB_ID: lab_id,
+                LABEL_PROVIDER: self.name,
+                "archetype.type": "lab-interface",
+            },
+        }
+
+    def _network_matches_lab_spec(
+        self,
+        network: Any,
+        lab_id: str,
+        interface_name: str,
+    ) -> bool:
+        """Check whether an existing Docker network matches expected lab config."""
+        attrs = getattr(network, "attrs", {}) or {}
+        labels = attrs.get("Labels") or {}
+        options = attrs.get("Options") or {}
+        driver = attrs.get("Driver")
+        return (
+            driver == "archetype-ovs"
+            and labels.get(LABEL_LAB_ID) == lab_id
+            and labels.get(LABEL_PROVIDER) == self.name
+            and labels.get("archetype.type") == "lab-interface"
+            and options.get("lab_id") == lab_id
+            and options.get("interface_name") == interface_name
+        )
+
+    async def _resolve_conflicting_lab_network(
+        self,
+        network_name: str,
+        lab_id: str,
+        interface_name: str,
+    ) -> str:
+        """Resolve network conflict safely: reuse valid, recreate stale+unused only."""
+        try:
+            existing = await self._retry_docker_call(
+                f"inspect network {network_name}",
+                self.docker.networks.get,
+                network_name,
+            )
+        except NotFound as err:
+            raise RuntimeError(
+                f"Docker reported conflict for {network_name}, but network lookup failed"
+            ) from err
+
+        if self._network_matches_lab_spec(existing, lab_id, interface_name):
+            logger.info(f"Reusing existing lab network {network_name} after conflict")
+            return "reused"
+
+        attrs = getattr(existing, "attrs", {}) or {}
+        containers = attrs.get("Containers") or {}
+        if containers:
+            raise RuntimeError(
+                f"Conflicting network {network_name} has active endpoints; "
+                "refusing destructive recreate"
+            )
+
+        logger.warning(
+            f"Conflicting network {network_name} has stale config; recreating (no active endpoints)"
+        )
+        await self._retry_docker_call(
+            f"remove stale network {network_name}",
+            existing.remove,
+        )
+        await self._retry_docker_call(
+            f"recreate network {network_name}",
+            self.docker.networks.create,
+            **self._lab_network_create_kwargs(network_name, lab_id, interface_name),
+        )
+        return "recreated"
 
     async def _recover_stale_network(
         self,
@@ -1025,97 +1174,78 @@ event-handler IPTABLES_CLEANUP
         Returns:
             Dict mapping interface name (e.g., "eth0") to network name
         """
-        # Clean up any legacy lab networks that don't follow current naming/labels
-        await self._prune_legacy_lab_networks(lab_id)
+        async with self._get_lab_network_lock(lab_id):
+            # Clean up any legacy lab networks that don't follow current naming/labels
+            await self._prune_legacy_lab_networks(lab_id)
 
-        networks = {}
-        errors: list[str] = []
-        lab_prefix = self._lab_network_prefix(lab_id)
+            networks: dict[str, str] = {}
+            errors: list[str] = []
+            lab_prefix = self._lab_network_prefix(lab_id)
 
-        for i in range(0, max_interfaces + 1):
-            interface_name = f"eth{i}"
-            network_name = f"{lab_prefix}-{interface_name}"
+            for i in range(0, max_interfaces + 1):
+                interface_name = f"eth{i}"
+                network_name = f"{lab_prefix}-{interface_name}"
 
-            try:
-                # Check if network already exists (run in thread to avoid blocking event loop)
                 try:
-                    await asyncio.to_thread(self.docker.networks.get, network_name)
-                    logger.debug(f"Network {network_name} already exists")
-                    networks[interface_name] = network_name
-                    continue
-                except NotFound:
-                    pass
-
-                # Create network via Docker API - plugin handles OVS bridge
-                # Use null IPAM driver to avoid consuming IP address space.
-                # These networks are L2-only (OVS switching), no IP allocation needed.
-                # Run in thread pool to avoid blocking event loop (OVS plugin needs it)
-                try:
-                    await asyncio.to_thread(
-                        self.docker.networks.create,
-                        name=network_name,
-                        driver="archetype-ovs",
-                        ipam=IPAMConfig(driver="null"),
-                        options={
-                            "lab_id": lab_id,
-                            "interface_name": interface_name,
-                        },
-                        labels={
-                            LABEL_LAB_ID: lab_id,
-                            LABEL_PROVIDER: self.name,
-                            "archetype.type": "lab-interface",
-                        },
-                    )
-                except APIError as create_err:
-                    if create_err.status_code == 409:
-                        # Network exists but get() missed it (Docker API race).
-                        # Remove the stale network and retry creation.
-                        logger.warning(
-                            f"Stale network {network_name} detected (409), "
-                            f"removing and recreating"
+                    # If the network exists and matches expected config, reuse it.
+                    try:
+                        existing = await self._retry_docker_call(
+                            f"inspect network {network_name}",
+                            self.docker.networks.get,
+                            network_name,
                         )
-                        try:
-                            stale = await asyncio.to_thread(
-                                self.docker.networks.get, network_name
-                            )
-                            await asyncio.to_thread(stale.remove)
-                        except Exception:
-                            pass  # best-effort removal
-                        await asyncio.to_thread(
+                        if self._network_matches_lab_spec(existing, lab_id, interface_name):
+                            logger.debug(f"Network {network_name} already exists with expected config")
+                            networks[interface_name] = network_name
+                            continue
+
+                        await self._resolve_conflicting_lab_network(
+                            network_name,
+                            lab_id,
+                            interface_name,
+                        )
+                        networks[interface_name] = network_name
+                        continue
+                    except NotFound:
+                        pass
+
+                    try:
+                        await self._retry_docker_call(
+                            f"create network {network_name}",
                             self.docker.networks.create,
-                            name=network_name,
-                            driver="archetype-ovs",
-                            ipam=IPAMConfig(driver="null"),
-                            options={
-                                "lab_id": lab_id,
-                                "interface_name": interface_name,
-                            },
-                            labels={
-                                LABEL_LAB_ID: lab_id,
-                                LABEL_PROVIDER: self.name,
-                                "archetype.type": "lab-interface",
-                            },
+                            **self._lab_network_create_kwargs(network_name, lab_id, interface_name),
                         )
-                    else:
-                        raise
-                networks[interface_name] = network_name
-                logger.debug(f"Created network {network_name}")
+                    except APIError as create_err:
+                        if create_err.status_code == 409:
+                            action = await self._resolve_conflicting_lab_network(
+                                network_name,
+                                lab_id,
+                                interface_name,
+                            )
+                            logger.warning(
+                                f"Resolved network conflict for {network_name} via {action}"
+                            )
+                        else:
+                            raise
 
-            except APIError as e:
-                msg = f"Failed to create network {network_name}: {e}"
-                errors.append(msg)
-                logger.error(msg)
+                    networks[interface_name] = network_name
+                    logger.debug(f"Ensured network {network_name}")
 
-        expected = max_interfaces + 1  # eth0 through ethN
-        if expected > 0 and len(networks) < expected:
-            missing = expected - len(networks)
-            err_detail = "; ".join(errors) if errors else "unknown error"
-            raise RuntimeError(
-                f"Failed to create {missing}/{expected} Docker networks for lab {lab_id}: {err_detail}"
-            )
+                except Exception as e:
+                    msg = f"Failed to ensure network {network_name}: {e}"
+                    errors.append(msg)
+                    logger.error(msg)
 
-        logger.info(f"Created {len(networks)} Docker networks for lab {lab_id}")
-        return networks
+            expected = max_interfaces + 1  # eth0 through ethN
+            if expected > 0 and len(networks) < expected:
+                missing = expected - len(networks)
+                err_detail = "; ".join(errors) if errors else "unknown error"
+                raise RuntimeError(
+                    f"Failed to create {missing}/{expected} Docker networks for lab {lab_id}: {err_detail}"
+                )
+
+            logger.info(f"Created {len(networks)} Docker networks for lab {lab_id}")
+            return networks
 
     async def _delete_lab_networks(self, lab_id: str) -> int:
         """Delete all Docker networks for a lab.
@@ -1135,14 +1265,18 @@ event-handler IPTABLES_CLEANUP
         try:
             await self._prune_legacy_lab_networks(lab_id)
             # Query networks by label when possible (more reliable than name)
-            lab_networks = await asyncio.to_thread(
+            lab_networks = await self._retry_docker_call(
+                f"list networks for {lab_id} by label",
                 self.docker.networks.list,
                 filters={"label": f"{LABEL_LAB_ID}={lab_id}"},
             )
 
             # Fallback to name-based lookup for legacy networks without labels
             if not lab_networks:
-                all_networks = await asyncio.to_thread(self.docker.networks.list)
+                all_networks = await self._retry_docker_call(
+                    f"list all networks for {lab_id} fallback",
+                    self.docker.networks.list,
+                )
                 safe_prefix = self._lab_network_prefix(lab_id)
                 lab_prefixes = (f"{safe_prefix}-", f"{lab_id}-")
                 lab_networks = [
@@ -1152,14 +1286,19 @@ event-handler IPTABLES_CLEANUP
 
             for network in lab_networks:
                 try:
-                    await asyncio.to_thread(network.remove)
+                    await self._retry_docker_call(
+                        f"remove network {network.name}",
+                        network.remove,
+                    )
                     deleted += 1
                     logger.debug(f"Deleted network {network.name}")
                 except APIError as e:
                     # Network might be in use or already deleted
                     logger.warning(f"Failed to delete network {network.name}: {e}")
+                except Exception as e:
+                    logger.warning(f"Failed to delete network {network.name}: {e}")
 
-        except APIError as e:
+        except (APIError, DockerException) as e:
             logger.warning(f"Failed to list networks for lab {lab_id}: {e}")
 
         if deleted > 0:
@@ -2790,8 +2929,8 @@ event-handler IPTABLES_CLEANUP
 
         Stops the container (if running), removes it, clears post-boot state,
         and cleans VLAN allocations for this node. Does NOT clean lab-level
-        resources (Docker networks, OVS management network) — that's only done
-        by destroy_node when it's the last container in the lab.
+        resources (Docker networks, OVS management network) — callers invoke
+        cleanup_lab_resources_if_empty() when appropriate.
 
         Raises NotFound if the container doesn't exist (caller should handle).
         """
@@ -3055,6 +3194,72 @@ event-handler IPTABLES_CLEANUP
                 error=f"Container creation failed: {e}",
             )
 
+    async def cleanup_lab_resources_if_empty(
+        self,
+        lab_id: str,
+        workspace: Path | None = None,
+    ) -> dict[str, Any]:
+        """Clean lab-level resources only when no containers remain for the lab.
+
+        Returns:
+            Dict containing:
+            - cleaned: bool
+            - remaining: int | None
+            - networks_deleted: int
+            - local_cleanup: bool
+            - ovs_cleanup: bool
+            - error: str | None
+        """
+        result: dict[str, Any] = {
+            "cleaned": False,
+            "remaining": None,
+            "networks_deleted": 0,
+            "local_cleanup": False,
+            "ovs_cleanup": False,
+            "error": None,
+        }
+
+        try:
+            remaining = await self._retry_docker_call(
+                f"list containers for lab {lab_id}",
+                self.docker.containers.list,
+                all=True,
+                filters={"label": f"{LABEL_LAB_ID}={lab_id}"},
+            )
+        except Exception as e:
+            result["error"] = str(e)
+            logger.warning(f"Failed to check remaining containers for {lab_id}: {e}")
+            return result
+
+        remaining_count = len(remaining)
+        result["remaining"] = remaining_count
+        if remaining_count > 0:
+            return result
+
+        result["cleaned"] = True
+        logger.info(f"Last container in lab {lab_id}, cleaning up lab-level resources")
+        result["networks_deleted"] = await self._delete_lab_networks(lab_id)
+
+        try:
+            await self.local_network.cleanup_lab(lab_id)
+            result["local_cleanup"] = True
+        except Exception as e:
+            logger.warning(f"Local network cleanup failed for lab {lab_id}: {e}")
+
+        if self.use_ovs and self.ovs_manager._initialized:
+            try:
+                await self.ovs_manager.cleanup_lab(lab_id)
+                result["ovs_cleanup"] = True
+            except Exception as e:
+                logger.warning(f"OVS cleanup failed for lab {lab_id}: {e}")
+
+        self._vlan_allocations.pop(lab_id, None)
+        self._next_vlan.pop(lab_id, None)
+        if workspace is not None:
+            self._remove_vlan_file(lab_id, workspace)
+
+        return result
+
     async def destroy_node(
         self,
         lab_id: str,
@@ -3074,37 +3279,12 @@ event-handler IPTABLES_CLEANUP
             except NotFound:
                 logger.info(f"Container {container_name} not found, already removed")
 
-            # Check if this was the last container in the lab
-            remaining = []
-            try:
-                all_containers = await asyncio.to_thread(self.docker.containers.list, all=True)
-                remaining = [
-                    c for c in all_containers
-                    if c.labels.get("archetype.lab_id") == lab_id
-                ]
-            except Exception as e:
-                logger.warning(f"Failed to check remaining containers: {e}")
-
-            if not remaining:
-                logger.info(f"Last container in lab {lab_id}, cleaning up networks")
-                await self._delete_lab_networks(lab_id)
-
-                # Clean up local networking
-                try:
-                    await self.local_network.cleanup_lab(lab_id)
-                except Exception as e:
-                    logger.warning(f"Local network cleanup failed for lab {lab_id}: {e}")
-
-                # Clean up OVS networking if enabled
-                if self.use_ovs and self.ovs_manager._initialized:
-                    try:
-                        await self.ovs_manager.cleanup_lab(lab_id)
-                    except Exception as e:
-                        logger.warning(f"OVS cleanup failed for lab {lab_id}: {e}")
-                # Clean up lab-level VLAN tracking
-                self._vlan_allocations.pop(lab_id, None)
-                self._next_vlan.pop(lab_id, None)
-                self._remove_vlan_file(lab_id, workspace)
+            cleanup_result = await self.cleanup_lab_resources_if_empty(lab_id, workspace)
+            if cleanup_result.get("error"):
+                logger.warning(
+                    f"Skipped lab-level cleanup for {lab_id} due to container check error: "
+                    f"{cleanup_result['error']}"
+                )
 
             return NodeActionResult(
                 success=True,

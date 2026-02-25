@@ -3,7 +3,8 @@ from __future__ import annotations
 import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
-from docker.errors import NotFound
+import pytest
+from docker.errors import NotFound, APIError
 
 from agent.config import settings
 from agent.providers.base import StatusResult
@@ -13,6 +14,12 @@ from agent.schemas import DeployNode, DeployTopology
 
 def _run(coro):
     return asyncio.run(coro)
+
+
+def _api_conflict(message: str = "already exists") -> APIError:
+    response = MagicMock()
+    response.status_code = 409
+    return APIError(message, response=response)
 
 
 def test_create_lab_networks_uses_sanitized_prefix_and_labels(monkeypatch):
@@ -28,6 +35,134 @@ def test_create_lab_networks_uses_sanitized_prefix_and_labels(monkeypatch):
     args, kwargs = docker_client.networks.create.call_args
     assert kwargs["name"].startswith(provider._lab_network_prefix(lab_id))
     assert kwargs["labels"]["archetype.lab_id"] == lab_id
+
+
+def test_create_lab_networks_reuses_valid_network_on_409(monkeypatch):
+    provider = DockerProvider()
+    provider._prune_legacy_lab_networks = AsyncMock(return_value=None)
+
+    existing = MagicMock()
+    existing.attrs = {
+        "Driver": "archetype-ovs",
+        "Labels": {
+            "archetype.lab_id": "lab1",
+            "archetype.provider": "docker",
+            "archetype.type": "lab-interface",
+        },
+        "Options": {
+            "lab_id": "lab1",
+            "interface_name": "eth0",
+        },
+        "Containers": {},
+    }
+
+    docker_client = MagicMock()
+    docker_client.networks.get.side_effect = [NotFound("missing"), existing]
+    docker_client.networks.create.side_effect = _api_conflict()
+    provider._docker = docker_client
+
+    async def _sync_to_thread(func, *args, **kwargs):
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr(asyncio, "to_thread", _sync_to_thread)
+
+    result = _run(provider._create_lab_networks("lab1", max_interfaces=0))
+
+    assert result == {"eth0": "lab1-eth0"}
+    assert docker_client.networks.create.call_count == 1
+    existing.remove.assert_not_called()
+
+
+def test_create_lab_networks_recreates_stale_unused_network_on_409(monkeypatch):
+    provider = DockerProvider()
+    provider._prune_legacy_lab_networks = AsyncMock(return_value=None)
+
+    stale = MagicMock()
+    stale.attrs = {
+        "Driver": "bridge",
+        "Labels": {},
+        "Options": {},
+        "Containers": {},
+    }
+
+    docker_client = MagicMock()
+    docker_client.networks.get.side_effect = [NotFound("missing"), stale]
+    docker_client.networks.create.side_effect = [_api_conflict(), MagicMock()]
+    provider._docker = docker_client
+
+    async def _sync_to_thread(func, *args, **kwargs):
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr(asyncio, "to_thread", _sync_to_thread)
+
+    result = _run(provider._create_lab_networks("lab1", max_interfaces=0))
+
+    assert result == {"eth0": "lab1-eth0"}
+    stale.remove.assert_called_once()
+    assert docker_client.networks.create.call_count == 2
+
+
+def test_create_lab_networks_refuses_delete_for_in_use_stale_network_on_409(monkeypatch):
+    provider = DockerProvider()
+    provider._prune_legacy_lab_networks = AsyncMock(return_value=None)
+
+    stale_in_use = MagicMock()
+    stale_in_use.attrs = {
+        "Driver": "bridge",
+        "Labels": {},
+        "Options": {},
+        "Containers": {"cid1": {"Name": "n1"}},
+    }
+
+    docker_client = MagicMock()
+    docker_client.networks.get.side_effect = [NotFound("missing"), stale_in_use]
+    docker_client.networks.create.side_effect = _api_conflict()
+    provider._docker = docker_client
+
+    async def _sync_to_thread(func, *args, **kwargs):
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr(asyncio, "to_thread", _sync_to_thread)
+
+    with pytest.raises(RuntimeError, match="active endpoints"):
+        _run(provider._create_lab_networks("lab1", max_interfaces=0))
+
+    stale_in_use.remove.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_create_lab_networks_serializes_concurrent_calls_per_lab(monkeypatch):
+    provider = DockerProvider()
+
+    active_calls = 0
+    max_concurrent_calls = 0
+
+    async def _tracked_prune(_lab_id: str):
+        nonlocal active_calls, max_concurrent_calls
+        active_calls += 1
+        max_concurrent_calls = max(max_concurrent_calls, active_calls)
+        await asyncio.sleep(0.05)
+        active_calls -= 1
+
+    provider._prune_legacy_lab_networks = AsyncMock(side_effect=_tracked_prune)
+
+    docker_client = MagicMock()
+    docker_client.networks.get.side_effect = NotFound("missing")
+    docker_client.networks.create = MagicMock()
+    provider._docker = docker_client
+
+    async def _sync_to_thread(func, *args, **kwargs):
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr(asyncio, "to_thread", _sync_to_thread)
+
+    await asyncio.gather(
+        provider._create_lab_networks("lab-lock", max_interfaces=0),
+        provider._create_lab_networks("lab-lock", max_interfaces=0),
+    )
+
+    # The per-lab lock should keep this critical section non-overlapping.
+    assert max_concurrent_calls == 1
 
 
 def test_local_cleanup_runs_orphan_veth_cleanup(monkeypatch):
