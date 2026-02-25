@@ -104,7 +104,6 @@ def list_images() -> ImageInventoryResponse:
 @router.post("/images/backfill-checksums")
 async def backfill_image_checksums() -> dict:
     """Compute SHA256 sidecars for existing file-based images missing them."""
-    import asyncio
     import hashlib
     import glob as globmod
 
@@ -236,7 +235,6 @@ async def receive_image(
 
             # Compute and verify checksum for file-based images
             import hashlib
-            import asyncio
 
             def _compute_file_sha256():
                 h = hashlib.sha256()
