@@ -135,6 +135,27 @@ async def _reconcile_single_node(
             await asyncio.to_thread(container.remove, force=True, v=True)
             clear_post_boot_state(container_name)
             logger.info(f"Stopped and removed container {container_name}")
+
+            # Clean up Docker networks if this was the last container in the lab
+            docker_provider = get_provider("docker")
+            if docker_provider and getattr(docker_provider, "use_ovs_plugin", False):
+                try:
+                    client = get_docker_client()
+                    remaining = await asyncio.to_thread(
+                        client.containers.list,
+                        all=True,
+                        filters={"label": f"archetype.lab_id={lab_id}"},
+                    )
+                    if not remaining:
+                        deleted = await docker_provider._delete_lab_networks(lab_id)
+                        if deleted:
+                            logger.info(
+                                f"Reconcile: cleaned up {deleted} orphaned networks "
+                                f"for lab {lab_id} (last container removed)"
+                            )
+                except Exception as net_err:
+                    logger.warning(f"Reconcile: network cleanup failed for lab {lab_id}: {net_err}")
+
             return NodeReconcileResult(
                 container_name=container_name,
                 action="removed",

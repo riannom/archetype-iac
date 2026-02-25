@@ -1050,21 +1050,54 @@ event-handler IPTABLES_CLEANUP
                 # Use null IPAM driver to avoid consuming IP address space.
                 # These networks are L2-only (OVS switching), no IP allocation needed.
                 # Run in thread pool to avoid blocking event loop (OVS plugin needs it)
-                await asyncio.to_thread(
-                    self.docker.networks.create,
-                    name=network_name,
-                    driver="archetype-ovs",
-                    ipam=IPAMConfig(driver="null"),
-                    options={
-                        "lab_id": lab_id,
-                        "interface_name": interface_name,
-                    },
-                    labels={
-                        LABEL_LAB_ID: lab_id,
-                        LABEL_PROVIDER: self.name,
-                        "archetype.type": "lab-interface",
-                    },
-                )
+                try:
+                    await asyncio.to_thread(
+                        self.docker.networks.create,
+                        name=network_name,
+                        driver="archetype-ovs",
+                        ipam=IPAMConfig(driver="null"),
+                        options={
+                            "lab_id": lab_id,
+                            "interface_name": interface_name,
+                        },
+                        labels={
+                            LABEL_LAB_ID: lab_id,
+                            LABEL_PROVIDER: self.name,
+                            "archetype.type": "lab-interface",
+                        },
+                    )
+                except APIError as create_err:
+                    if create_err.status_code == 409:
+                        # Network exists but get() missed it (Docker API race).
+                        # Remove the stale network and retry creation.
+                        logger.warning(
+                            f"Stale network {network_name} detected (409), "
+                            f"removing and recreating"
+                        )
+                        try:
+                            stale = await asyncio.to_thread(
+                                self.docker.networks.get, network_name
+                            )
+                            await asyncio.to_thread(stale.remove)
+                        except Exception:
+                            pass  # best-effort removal
+                        await asyncio.to_thread(
+                            self.docker.networks.create,
+                            name=network_name,
+                            driver="archetype-ovs",
+                            ipam=IPAMConfig(driver="null"),
+                            options={
+                                "lab_id": lab_id,
+                                "interface_name": interface_name,
+                            },
+                            labels={
+                                LABEL_LAB_ID: lab_id,
+                                LABEL_PROVIDER: self.name,
+                                "archetype.type": "lab-interface",
+                            },
+                        )
+                    else:
+                        raise
                 networks[interface_name] = network_name
                 logger.debug(f"Created network {network_name}")
 
