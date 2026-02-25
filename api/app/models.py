@@ -217,6 +217,38 @@ class NodePlacement(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+class NodeMigrationCleanup(Base):
+    """Deferred cleanup tasks for nodes moved away from an old host.
+
+    These records are created when migration cannot clean the old host
+    immediately (for example the old agent is offline). A background drain
+    retries destroy operations when the old host becomes reachable.
+    """
+
+    __tablename__ = "node_migration_cleanups"
+    __table_args__ = (
+        UniqueConstraint(
+            "lab_id",
+            "node_name",
+            "old_host_id",
+            name="uq_node_migration_cleanup_target",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    lab_id: Mapped[str] = mapped_column(String(36), ForeignKey("labs.id", ondelete="CASCADE"), index=True)
+    node_name: Mapped[str] = mapped_column(String(100), index=True)
+    old_host_id: Mapped[str] = mapped_column(String(36), ForeignKey("hosts.id", ondelete="CASCADE"), index=True)
+    provider: Mapped[str] = mapped_column(String(50), default="docker")
+    # pending -> running -> pending|failed (rows are deleted on success)
+    status: Mapped[str] = mapped_column(String(20), default="pending", index=True)
+    attempt_count: Mapped[int] = mapped_column(Integer, default=0)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    last_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
 class NodeState(Base):
     """Per-node desired/actual state for lab lifecycle management.
 

@@ -273,6 +273,7 @@ async def register_agent(
                     refresh_interface_mappings,
                     run_same_host_convergence,
                 )
+                from app.tasks.migration_cleanup import process_pending_migration_cleanups_for_agent
                 with get_session() as sess:
                     ag = sess.get(models.Host, host_id)
                     if ag and ag.status == HostStatus.ONLINE:
@@ -280,6 +281,7 @@ async def register_agent(
                         await run_overlay_convergence(sess, host_map)
                         await refresh_interface_mappings(sess, host_map)
                         await run_same_host_convergence(sess, host_map)
+                        await process_pending_migration_cleanups_for_agent(sess, ag, limit=50)
                         sess.commit()
             except Exception as e:
                 _logger.warning(f"Post-registration convergence for {host_id}: {e}")

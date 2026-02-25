@@ -207,6 +207,9 @@ class DeclaredTunnel(BaseModel):
 class DeclareOverlayStateRequest(BaseModel):
     """API -> Agent: Full desired overlay state."""
     tunnels: list[DeclaredTunnel]
+    # Optional explicit lab scope for orphan cleanup. This allows the API to
+    # converge an agent with an empty tunnel set while still scoping cleanup.
+    declared_labs: list[str] | None = None
 
 
 class DeclaredTunnelResult(BaseModel):

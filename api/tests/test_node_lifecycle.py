@@ -836,30 +836,30 @@ class TestHandleMigration:
 
     @pytest.mark.asyncio
     async def test_migration_stops_old_container(self, test_db, test_user):
-        """Migration stops container on old agent before deploying to new."""
+        """Migration destroys node on old agent before deploying to new."""
         old_host = _make_host(test_db, "old-host", "Old Host")
         new_host = _make_host(test_db, "new-host", "New Host")
         lab = _make_lab(test_db, test_user)
         job = _make_job(test_db, lab, test_user)
         ns = _make_node_state(test_db, lab, "n1", "R1", desired="running", actual="stopped")
         _make_placement(test_db, lab, "R1", old_host.id)
+        node_def = _make_node_def(test_db, lab, "n1", "R1", "R1", host_id=new_host.id)
 
         manager = _make_manager(test_db, lab, job, [ns.node_id], agent=new_host)
         manager.node_states = [ns]
-        manager.db_nodes_map = {}
+        manager.db_nodes_map = {"R1": node_def}
         manager._refresh_placements()
 
         with patch("app.tasks.node_lifecycle.agent_client") as mock_ac, \
              patch("app.tasks.jobs._update_node_placements", new_callable=AsyncMock):
             mock_ac.is_agent_online = MagicMock(return_value=True)
-            mock_ac.container_action = AsyncMock(return_value={"success": True})
+            mock_ac.destroy_node_on_agent = AsyncMock(return_value={"success": True})
             await manager._handle_migration([ns])
 
-        # container_action called to stop on old host
-        mock_ac.container_action.assert_called()
-        call_args = mock_ac.container_action.call_args
+        mock_ac.destroy_node_on_agent.assert_called()
+        call_args = mock_ac.destroy_node_on_agent.call_args
         assert call_args[0][0].id == old_host.id  # old agent
-        assert call_args[0][2] == "stop"  # action
+        assert call_args[0][2] == "R1"  # node_name
 
     @pytest.mark.asyncio
     async def test_migration_deletes_old_placement(self, test_db, test_user):
@@ -870,19 +870,53 @@ class TestHandleMigration:
         job = _make_job(test_db, lab, test_user)
         ns = _make_node_state(test_db, lab, "n1", "R1", desired="running", actual="stopped")
         _make_placement(test_db, lab, "R1", old_host.id)
+        node_def = _make_node_def(test_db, lab, "n1", "R1", "R1", host_id=new_host.id)
 
         manager = _make_manager(test_db, lab, job, [ns.node_id], agent=new_host)
         manager.node_states = [ns]
-        manager.db_nodes_map = {}
+        manager.db_nodes_map = {"R1": node_def}
         manager._refresh_placements()
 
         with patch("app.tasks.node_lifecycle.agent_client") as mock_ac, \
              patch("app.tasks.jobs._update_node_placements", new_callable=AsyncMock):
             mock_ac.is_agent_online = MagicMock(return_value=True)
-            mock_ac.container_action = AsyncMock(return_value={"success": True})
+            mock_ac.destroy_node_on_agent = AsyncMock(return_value={"success": True})
             await manager._handle_migration([ns])
 
         # Old placement should be deleted
+        old_placements = test_db.query(models.NodePlacement).filter_by(
+            host_id=old_host.id
+        ).all()
+        assert len(old_placements) == 0
+
+    @pytest.mark.asyncio
+    async def test_migration_offline_old_agent_queues_cleanup(self, test_db, test_user):
+        """Offline old agent queues deferred cleanup while moving placement."""
+        old_host = _make_host(test_db, "old-host", "Old Host", status="offline")
+        new_host = _make_host(test_db, "new-host", "New Host")
+        lab = _make_lab(test_db, test_user)
+        job = _make_job(test_db, lab, test_user)
+        ns = _make_node_state(test_db, lab, "n1", "R1", desired="running", actual="stopped")
+        _make_placement(test_db, lab, "R1", old_host.id)
+        _make_node_def(test_db, lab, "n1", "R1", "R1", host_id=new_host.id)
+
+        manager = _make_manager(test_db, lab, job, [ns.node_id], agent=new_host)
+        manager.node_states = [ns]
+        manager._refresh_placements()
+
+        with patch("app.tasks.node_lifecycle.agent_client") as mock_ac, \
+             patch("app.tasks.jobs._update_node_placements", new_callable=AsyncMock):
+            mock_ac.is_agent_online = MagicMock(return_value=False)
+            await manager._handle_migration([ns])
+
+        pending = (
+            test_db.query(models.NodeMigrationCleanup)
+            .filter_by(lab_id=lab.id, node_name="R1", old_host_id=old_host.id)
+            .first()
+        )
+        assert pending is not None
+        assert pending.status == "pending"
+
         old_placements = test_db.query(models.NodePlacement).filter_by(
             host_id=old_host.id
         ).all()

@@ -2519,14 +2519,42 @@ class DockerOVSPlugin:
                 )
                 return endpoint
 
-            # Fallback: match by interface name for untracked endpoints
+            # Strict fallback: only match untracked endpoints when network + binding
+            # checks produce exactly one unambiguous candidate.
+            attached_network_ids = {
+                net_info.get("NetworkID")
+                for net_info in networks.values()
+                if net_info.get("NetworkID")
+            }
+            fallback_candidates: list[EndpointState] = []
             for ep in self.endpoints.values():
-                if ep.interface_name == interface_name and not ep.container_name:
-                    code, _, _ = await self._ovs_vsctl("get", "port", ep.host_veth, "tag")
-                    if code == 0:
-                        ep.container_name = container_name
-                        logger.info(f"Matched endpoint by interface: {container_name}:{interface_name} -> {ep.host_veth}")
-                        return ep
+                if ep.interface_name != interface_name or ep.container_name:
+                    continue
+                if ep.network_id not in attached_network_ids:
+                    continue
+                network = self.networks.get(ep.network_id)
+                if not network or network.lab_id != lab_id:
+                    continue
+                if not await self._validate_endpoint_exists(ep):
+                    continue
+                if not await _binding_matches(ep.host_veth):
+                    continue
+                fallback_candidates.append(ep)
+
+            if len(fallback_candidates) == 1:
+                ep = fallback_candidates[0]
+                ep.container_name = container_name
+                logger.info(
+                    f"Matched endpoint by strict fallback: "
+                    f"{container_name}:{interface_name} -> {ep.host_veth}"
+                )
+                return ep
+
+            if len(fallback_candidates) > 1:
+                logger.warning(
+                    f"Ambiguous endpoint fallback for {container_name}:{interface_name}; "
+                    f"candidates={[ep.host_veth for ep in fallback_candidates]}"
+                )
 
             logger.warning(f"Could not find endpoint for {container_name}:{interface_name}")
             return None

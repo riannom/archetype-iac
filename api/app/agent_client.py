@@ -1275,6 +1275,7 @@ async def reconcile_vxlan_ports_on_agent(
 async def declare_overlay_state_on_agent(
     agent: models.Host,
     tunnels: list[dict],
+    declared_labs: list[str] | None = None,
 ) -> dict:
     """Declare full desired overlay state on an agent.
 
@@ -1286,6 +1287,8 @@ async def declare_overlay_state_on_agent(
         tunnels: List of declared tunnel dicts with keys:
             link_id, lab_id, vni, local_ip, remote_ip,
             expected_vlan, port_name, mtu
+        declared_labs: Optional explicit lab scope for orphan cleanup.
+            If empty/None, agent infers scope from declared tunnels.
 
     Returns:
         Dict with 'results' list and 'orphans_removed' list.
@@ -1297,7 +1300,10 @@ async def declare_overlay_state_on_agent(
         result = await _agent_request(
             "POST",
             url,
-            json_body={"tunnels": tunnels},
+            json_body={
+                "tunnels": tunnels,
+                "declared_labs": declared_labs,
+            },
             timeout=VTEP_OPERATION_TIMEOUT,
             max_retries=0,
         )

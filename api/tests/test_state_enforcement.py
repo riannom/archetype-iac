@@ -397,6 +397,71 @@ class TestEnforcementNoAgent:
         assert result is False
 
 
+class TestEnforcementSkipReasonMetrics:
+    """Skip paths emit reason-labeled metrics."""
+
+    @pytest.mark.asyncio
+    async def test_records_image_sync_skip_reason(self, test_db, monkeypatch) -> None:
+        lab, ns = _setup_lab_and_node(test_db)
+        ns.image_sync_status = "syncing"
+        test_db.commit()
+
+        skip_reasons: list[str] = []
+        monkeypatch.setattr(
+            state_enforcement,
+            "record_enforcement_skip",
+            lambda reason: skip_reasons.append(reason),
+        )
+
+        result = await state_enforcement.enforce_node_state(test_db, lab, ns)
+        assert result is False
+        assert skip_reasons[-1] == "image_sync_in_progress"
+
+    @pytest.mark.asyncio
+    async def test_records_backoff_skip_reason(self, test_db, monkeypatch) -> None:
+        now = datetime.now(timezone.utc)
+        lab, ns = _setup_lab_and_node(
+            test_db,
+            enforcement_attempts=2,
+            last_enforcement_at=now,
+        )
+        _stub_enforcement_deps(monkeypatch)
+
+        skip_reasons: list[str] = []
+        monkeypatch.setattr(
+            state_enforcement,
+            "record_enforcement_skip",
+            lambda reason: skip_reasons.append(reason),
+        )
+
+        result = await state_enforcement.enforce_node_state(test_db, lab, ns)
+        assert result is False
+        assert skip_reasons[-1] == "backoff_delay"
+
+    @pytest.mark.asyncio
+    async def test_records_no_agent_skip_reason(self, test_db, monkeypatch) -> None:
+        lab, ns = _setup_lab_and_node(test_db)
+
+        monkeypatch.setattr(state_enforcement, "_is_on_cooldown", AsyncMock(return_value=False))
+        monkeypatch.setattr(state_enforcement, "_set_cooldown", AsyncMock(return_value=None))
+        monkeypatch.setattr(state_enforcement.settings, "state_enforcement_max_retries", 5)
+        monkeypatch.setattr(state_enforcement.settings, "state_enforcement_auto_restart_enabled", True)
+        monkeypatch.setattr(state_enforcement.settings, "state_enforcement_retry_backoff", 5)
+        monkeypatch.setattr(state_enforcement.settings, "state_enforcement_cooldown", 30)
+        monkeypatch.setattr(state_enforcement, "_get_agent_for_node", AsyncMock(return_value=None))
+
+        skip_reasons: list[str] = []
+        monkeypatch.setattr(
+            state_enforcement,
+            "record_enforcement_skip",
+            lambda reason: skip_reasons.append(reason),
+        )
+
+        result = await state_enforcement.enforce_node_state(test_db, lab, ns)
+        assert result is False
+        assert skip_reasons[-1] == "no_healthy_agent"
+
+
 class TestEnforcementAutoRestartDisabled:
     """Auto-restart can be disabled for error-state nodes."""
 

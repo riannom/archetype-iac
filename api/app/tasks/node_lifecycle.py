@@ -676,6 +676,7 @@ class NodeLifecycleManager(AgentResolutionMixin, DeploymentMixin):
         Only runs AFTER _check_resources confirms new host can accept (Phase 2.2).
         """
         from app.tasks.jobs import _update_node_placements
+        from app.tasks.migration_cleanup import enqueue_node_migration_cleanup
 
         node_names_to_check = [
             ns.node_name for ns in nodes_to_start_or_deploy
@@ -704,65 +705,92 @@ class NodeLifecycleManager(AgentResolutionMixin, DeploymentMixin):
                     old_agent_nodes[placement.host_id] = []
                 old_agent_nodes[placement.host_id].append(placement.node_name)
 
+            def _provider_for_node(node_name: str) -> str:
+                node_provider = self.provider
+                db_node = self.db_nodes_map.get(node_name)
+                if db_node:
+                    kind = db_node.device or "linux"
+                    image = resolve_node_image(
+                        db_node.device,
+                        kind,
+                        db_node.image,
+                        db_node.version,
+                    )
+                    if image:
+                        node_provider = get_image_provider(image)
+                    else:
+                        logger.warning(
+                            f"Migration cleanup: cannot resolve image for {node_name} "
+                            f"(device={db_node.device}), using lab provider '{self.provider}'"
+                        )
+                return node_provider
+
             for old_agent_id, node_names in old_agent_nodes.items():
                 old_agent = self.session.get(models.Host, old_agent_id)
                 if not old_agent:
                     self.log_parts.append(
-                        f"  Old agent {old_agent_id} not found, skipping cleanup"
+                        f"  Old agent {old_agent_id} not found, removing stale placements"
                     )
-                    continue
-
-                if not agent_client.is_agent_online(old_agent):
+                elif not agent_client.is_agent_online(old_agent):
                     self.log_parts.append(
-                        f"  Old agent {old_agent.name} is offline, skipping cleanup"
+                        f"  Old agent {old_agent.name} is offline, "
+                        f"queued cleanup for {len(node_names)} node(s)"
                     )
-                    continue
-
-                self.log_parts.append(
-                    f"  Destroying {len(node_names)} node(s) on "
-                    f"{old_agent.name}..."
-                )
-
-                for node_name in node_names:
-                    try:
-                        # Resolve per-node provider from image type
-                        node_provider = self.provider  # fallback
-                        db_node = self.db_nodes_map.get(node_name)
-                        if db_node:
-                            kind = db_node.device or "linux"
-                            image = resolve_node_image(
-                                db_node.device, kind,
-                                db_node.image, db_node.version,
-                            )
-                            if image:
-                                node_provider = get_image_provider(image)
-                            else:
-                                logger.warning(
-                                    f"Migration cleanup: cannot resolve "
-                                    f"image for {node_name} "
-                                    f"(device={db_node.device}), "
-                                    f"using lab provider '{self.provider}'"
-                                )
-
-                        result = await agent_client.destroy_node_on_agent(
-                            old_agent,
+                    for node_name in node_names:
+                        enqueue_node_migration_cleanup(
+                            self.session,
                             self.lab.id,
                             node_name,
-                            provider=node_provider,
+                            old_agent.id,
+                            provider=_provider_for_node(node_name),
+                            reason="Old agent offline during migration",
                         )
-                        if result.get("success"):
-                            self.log_parts.append(
-                                f"    {node_name}: destroyed on {old_agent.name}"
-                            )
-                        else:
-                            error = result.get("error", "unknown")
-                            self.log_parts.append(
-                                f"    {node_name}: {error}"
-                            )
-                    except Exception as e:
                         self.log_parts.append(
-                            f"    {node_name}: cleanup failed - {e}"
+                            f"    {node_name}: cleanup queued until {old_agent.name} is online"
                         )
+                else:
+                    self.log_parts.append(
+                        f"  Destroying {len(node_names)} node(s) on "
+                        f"{old_agent.name}..."
+                    )
+
+                    for node_name in node_names:
+                        try:
+                            result = await agent_client.destroy_node_on_agent(
+                                old_agent,
+                                self.lab.id,
+                                node_name,
+                                provider=_provider_for_node(node_name),
+                            )
+                            if result.get("success"):
+                                self.log_parts.append(
+                                    f"    {node_name}: destroyed on {old_agent.name}"
+                                )
+                            else:
+                                error = result.get("error", "unknown")
+                                enqueue_node_migration_cleanup(
+                                    self.session,
+                                    self.lab.id,
+                                    node_name,
+                                    old_agent.id,
+                                    provider=_provider_for_node(node_name),
+                                    reason=f"Initial cleanup failed: {error}",
+                                )
+                                self.log_parts.append(
+                                    f"    {node_name}: cleanup queued after failure ({error})"
+                                )
+                        except Exception as e:
+                            enqueue_node_migration_cleanup(
+                                self.session,
+                                self.lab.id,
+                                node_name,
+                                old_agent.id,
+                                provider=_provider_for_node(node_name),
+                                reason=f"Initial cleanup exception: {e}",
+                            )
+                            self.log_parts.append(
+                                f"    {node_name}: cleanup queued after exception ({e})"
+                            )
 
                 # Delete old placement records
                 for node_name in node_names:
@@ -996,10 +1024,24 @@ class NodeLifecycleManager(AgentResolutionMixin, DeploymentMixin):
     async def _post_operation_cleanup(self):
         """Post-operation cleanup: create cross-host VXLAN links."""
         from app.tasks.jobs import _create_cross_host_links_if_ready
+        from app.tasks.link_reconciliation import reconcile_lab_links
 
         await _create_cross_host_links_if_ready(
             self.session, self.lab.id, self.log_parts,
         )
+        try:
+            reconcile_result = await reconcile_lab_links(self.session, self.lab.id)
+            if reconcile_result["checked"] or reconcile_result["errors"]:
+                self.log_parts.append(
+                    "Post-op link reconciliation: "
+                    f"checked={reconcile_result['checked']}, "
+                    f"created={reconcile_result['created']}, "
+                    f"repaired={reconcile_result['repaired']}, "
+                    f"errors={reconcile_result['errors']}, "
+                    f"skipped={reconcile_result['skipped']}"
+                )
+        except Exception as e:
+            logger.warning(f"Post-op link reconciliation failed for lab {self.lab.id}: {e}")
 
     async def _reconcile_node_placement_statuses(self) -> None:
         """Align node_placements.status with final per-node outcomes.

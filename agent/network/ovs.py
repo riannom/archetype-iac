@@ -1248,6 +1248,31 @@ class OVSNetworkManager:
         """
         return [p for p in self._ports.values() if p.container_name == container_name]
 
+    async def _host_veth_peer_missing(self, port_name: str) -> bool:
+        """Best-effort host-side check for a missing veth peer.
+
+        When Docker PID lookup fails, we cannot enter the container namespace.
+        As a fallback, read ifindex/iflink from sysfs:
+        - iflink <= 0 or iflink == ifindex strongly indicates no live peer.
+        Returns False when the check is inconclusive.
+        """
+
+        def _read_sysfs_peer_state() -> bool | None:
+            try:
+                ifindex = int(Path(f"/sys/class/net/{port_name}/ifindex").read_text().strip())
+                iflink = int(Path(f"/sys/class/net/{port_name}/iflink").read_text().strip())
+            except (FileNotFoundError, ValueError, OSError):
+                return None
+
+            if iflink <= 0:
+                return True
+            if iflink == ifindex:
+                return True
+            return False
+
+        missing = await asyncio.to_thread(_read_sysfs_peer_state)
+        return bool(missing) if missing is not None else False
+
     async def is_port_stale(self, port: OVSPort) -> bool:
         """Check if an OVS port is stale (host-side exists but container peer missing).
 
@@ -1269,8 +1294,8 @@ class OVSNetworkManager:
         # Get container PID
         pid = await self._get_container_pid(port.container_name)
         if pid is None:
-            # Container not running - can't check, assume not stale
-            return False
+            # Fallback heuristic when container PID is unavailable.
+            return await self._host_veth_peer_missing(port.port_name)
 
         # Check if interface exists inside container namespace
         code, stdout, _ = await self._run_cmd([

@@ -1586,6 +1586,7 @@ class OverlayManager:
     async def declare_state(
         self,
         tunnels: list[dict[str, Any]],
+        declared_labs: list[str] | None = None,
     ) -> dict[str, Any]:
         """Converge overlay state to match API-declared desired state.
 
@@ -1595,13 +1596,16 @@ class OverlayManager:
         - Port missing -> create -> "created"
         - Failure -> "error"
 
-        For declared labs, any vxlan-* port not in the declared set is
-        deleted as an orphan (scoped to declared labs only).
+        For declared labs, any tracked vxlan-* port not in the declared set is
+        deleted as an orphan (scoped to declared labs only). Untracked ports
+        are left untouched as a safety guard.
 
         Args:
             tunnels: List of declared tunnel dicts with keys:
                 link_id, lab_id, vni, local_ip, remote_ip,
                 expected_vlan, port_name, mtu
+            declared_labs: Optional explicit list of labs to scope orphan
+                cleanup. Labs from declared tunnels are always included.
 
         Returns:
             Dict with "results" list and "orphans_removed" list
@@ -1610,7 +1614,7 @@ class OverlayManager:
 
         results = []
         orphans_removed = []
-        declared_labs = set()
+        declared_labs_set = set(declared_labs or [])
         declared_port_names = set()
 
         # Batch read all OVS port state
@@ -1626,7 +1630,7 @@ class OverlayManager:
             port_name = t["port_name"]
             mtu = t.get("mtu", 0)
 
-            declared_labs.add(lab_id)
+            declared_labs_set.add(lab_id)
             declared_port_names.add(port_name)
 
             try:
@@ -1744,19 +1748,21 @@ class OverlayManager:
 
         # Orphan cleanup: for declared labs only, delete vxlan-* ports
         # not in the declared set
-        if declared_labs:
+        if declared_labs_set:
             for port_name, port_info in ovs_ports.items():
                 if port_name in declared_port_names:
                     continue
                 if not port_name.startswith("vxlan-"):
                     continue
-                # Skip ports tracked to non-declared labs.
+                # Skip untracked ports to keep cleanup conservative.
                 lt_for_port = next(
                     (lt for lt in self._link_tunnels.values()
                      if lt.interface_name == port_name),
                     None,
                 )
-                if lt_for_port and lt_for_port.lab_id not in declared_labs:
+                if not lt_for_port:
+                    continue
+                if lt_for_port.lab_id not in declared_labs_set:
                     continue  # Skip ports from non-declared labs
 
                 try:
@@ -1928,4 +1934,3 @@ class OverlayManager:
                 for lt in self._link_tunnels.values()
             ],
         }
-

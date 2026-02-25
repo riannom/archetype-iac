@@ -148,6 +148,12 @@ if PROMETHEUS_AVAILABLE:
         "Number of nodes with pending enforcement",
     )
 
+    enforcement_skip_reasons = Counter(
+        "archetype_enforcement_skips_total",
+        "Enforcement skips by reason",
+        ["reason"],
+    )
+
     # --- NLM Phase Timing ---
 
     nlm_phase_duration = Histogram(
@@ -311,6 +317,7 @@ else:
     enforcement_actions = DummyMetric()
     enforcement_failures = DummyMetric()
     enforcement_pending = DummyMetric()
+    enforcement_skip_reasons = DummyMetric()
     nlm_phase_duration = DummyMetric()
     agent_operation_duration = DummyMetric()
     labs_total = DummyMetric()
@@ -766,6 +773,13 @@ def record_enforcement_exhausted() -> None:
     if not PROMETHEUS_AVAILABLE:
         return
     enforcement_failures.inc()
+
+
+def record_enforcement_skip(reason: str) -> None:
+    """Record an enforcement skip reason."""
+    if not PROMETHEUS_AVAILABLE:
+        return
+    enforcement_skip_reasons.labels(reason=_normalize_reason_label(reason)).inc()
 
 
 def record_link_oper_transition(

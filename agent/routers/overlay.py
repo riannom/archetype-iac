@@ -462,7 +462,10 @@ async def declare_overlay_state(request: DeclareOverlayStateRequest):
     """
     overlay = get_overlay_manager()
     tunnel_dicts = [t.model_dump() for t in request.tunnels]
-    result = await overlay.declare_state(tunnel_dicts)
+    result = await overlay.declare_state(
+        tunnel_dicts,
+        declared_labs=request.declared_labs,
+    )
 
     return DeclareOverlayStateResponse(
         results=[

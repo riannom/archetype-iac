@@ -291,17 +291,19 @@ async def run_overlay_convergence(
 
     # Group by agent, building entries for both sides
     agent_tunnels: dict[str, list[dict]] = defaultdict(list)
+    agent_declared_labs: dict[str, set[str]] = defaultdict(set)
     for tunnel in tunnels:
         ls = tunnel.link_state
         if not ls:
             continue
 
+        lab_id = str(tunnel.lab_id)
         port_name = tunnel.port_name or compute_vxlan_port_name(str(tunnel.lab_id), ls.link_name)
 
         # Side A (source)
         agent_tunnels[tunnel.agent_a_id].append({
             "link_id": ls.link_name,
-            "lab_id": str(tunnel.lab_id),
+            "lab_id": lab_id,
             "vni": tunnel.vni,
             "local_ip": tunnel.agent_a_ip,
             "remote_ip": tunnel.agent_b_ip,
@@ -309,11 +311,12 @@ async def run_overlay_convergence(
             "port_name": port_name,
             "mtu": overlay_mtu,
         })
+        agent_declared_labs[tunnel.agent_a_id].add(lab_id)
 
         # Side B (target)
         agent_tunnels[tunnel.agent_b_id].append({
             "link_id": ls.link_name,
-            "lab_id": str(tunnel.lab_id),
+            "lab_id": lab_id,
             "vni": tunnel.vni,
             "local_ip": tunnel.agent_b_ip,
             "remote_ip": tunnel.agent_a_ip,
@@ -321,6 +324,7 @@ async def run_overlay_convergence(
             "port_name": port_name,
             "mtu": overlay_mtu,
         })
+        agent_declared_labs[tunnel.agent_b_id].add(lab_id)
 
     # Also protect in-progress cross-host links (creating/connecting)
     in_progress_links = (
@@ -333,6 +337,7 @@ async def run_overlay_convergence(
     )
     for ls in in_progress_links:
         port_name = compute_vxlan_port_name(ls.lab_id, ls.link_name)
+        lab_id = str(ls.lab_id)
         # Add placeholder entries so declare-state won't orphan-clean them
         for host_id in [ls.source_host_id, ls.target_host_id]:
             if host_id:
@@ -340,7 +345,7 @@ async def run_overlay_convergence(
                 if not any(t["port_name"] == port_name for t in existing):
                     agent_tunnels[host_id].append({
                         "link_id": ls.link_name,
-                        "lab_id": str(ls.lab_id),
+                        "lab_id": lab_id,
                         "vni": ls.vni or 0,
                         "local_ip": "",
                         "remote_ip": "",
@@ -348,6 +353,21 @@ async def run_overlay_convergence(
                         "port_name": port_name,
                         "mtu": overlay_mtu,
                     })
+                agent_declared_labs[host_id].add(lab_id)
+
+    # Include lab scope from placements so agents can safely converge empty
+    # declarations when they no longer host active cross-host tunnels.
+    online_agent_ids = list(host_to_agent.keys())
+    if online_agent_ids:
+        placement_scopes = (
+            session.query(models.NodePlacement.host_id, models.NodePlacement.lab_id)
+            .filter(models.NodePlacement.host_id.in_(online_agent_ids))
+            .distinct()
+            .all()
+        )
+        for host_id, lab_id in placement_scopes:
+            if host_id and lab_id:
+                agent_declared_labs[host_id].add(str(lab_id))
 
     # Call each online agent in parallel
     all_results: dict[str, Any] = {}
@@ -357,7 +377,12 @@ async def run_overlay_convergence(
         if not agent:
             return
         try:
-            result = await declare_overlay_state_on_agent(agent, declared_tunnels)
+            declared_labs = sorted(agent_declared_labs.get(agent_id, set()))
+            result = await declare_overlay_state_on_agent(
+                agent,
+                declared_tunnels,
+                declared_labs=declared_labs,
+            )
             results_list = result.get("results", [])
             orphans = result.get("orphans_removed", [])
 
@@ -399,8 +424,8 @@ async def run_overlay_convergence(
             logger.error(f"Overlay convergence failed on agent {agent_id}: {e}")
             all_results[agent_id] = {"error": str(e)}
 
-    # Include all online agents with tunnels
-    agents_to_converge = set(agent_tunnels.keys()) & set(host_to_agent.keys())
+    # Include all online agents, even those with empty declarations.
+    agents_to_converge = set(host_to_agent.keys())
     tasks = [
         _declare_on_agent(aid, agent_tunnels.get(aid, []))
         for aid in agents_to_converge
@@ -848,7 +873,7 @@ async def link_reconciliation_monitor():
                         conflicts=drift_counts["conflicts"],
                     )
 
-                    # Convergence and reservation self-heal (every Nth cycle)
+                    # Reservation self-heal is periodic (heavier write path).
                     if cycle_count % RESERVATION_RECONCILE_INTERVAL_CYCLES == 0:
                         reservation_result = reconcile_link_endpoint_reservations(session)
                         drift_counts_after = get_link_endpoint_reservation_drift_counts(session)
@@ -879,64 +904,64 @@ async def link_reconciliation_monitor():
                                 f"total={drift_counts_after['total']}"
                             )
 
-                        # Overlay (cross-host) convergence
-                        convergence_results = await run_overlay_convergence(
-                            session, host_to_agent
+                    # Overlay (cross-host) convergence
+                    convergence_results = await run_overlay_convergence(
+                        session, host_to_agent
+                    )
+                    if convergence_results:
+                        total_created = sum(
+                            r.get("created", 0) for r in convergence_results.values()
+                            if isinstance(r, dict)
                         )
-                        if convergence_results:
-                            total_created = sum(
-                                r.get("created", 0) for r in convergence_results.values()
-                                if isinstance(r, dict)
-                            )
-                            total_orphans = sum(
-                                len(r.get("orphans_removed", []))
-                                for r in convergence_results.values()
-                                if isinstance(r, dict)
-                            )
-                            if total_created or total_orphans:
-                                logger.info(
-                                    f"Overlay convergence: created={total_created}, "
-                                    f"orphans_removed={total_orphans} "
-                                    f"across {len(convergence_results)} agent(s)"
-                                )
-
-                        # Refresh InterfaceMapping from agent port state
-                        mapping_result = await refresh_interface_mappings(
-                            session, host_to_agent
+                        total_orphans = sum(
+                            len(r.get("orphans_removed", []))
+                            for r in convergence_results.values()
+                            if isinstance(r, dict)
                         )
-                        if mapping_result["updated"] or mapping_result["created"]:
+                        if total_created or total_orphans:
                             logger.info(
-                                f"InterfaceMapping refresh: "
-                                f"updated={mapping_result['updated']}, "
-                                f"created={mapping_result['created']}"
+                                f"Overlay convergence: created={total_created}, "
+                                f"orphans_removed={total_orphans} "
+                                f"across {len(convergence_results)} agent(s)"
                             )
 
-                        # Cross-host container port convergence
-                        # (push DB tags to container ports after restart)
-                        xhost_result = await run_cross_host_port_convergence(
-                            session, host_to_agent
+                    # Refresh InterfaceMapping from agent port state
+                    mapping_result = await refresh_interface_mappings(
+                        session, host_to_agent
+                    )
+                    if mapping_result["updated"] or mapping_result["created"]:
+                        logger.info(
+                            f"InterfaceMapping refresh: "
+                            f"updated={mapping_result['updated']}, "
+                            f"created={mapping_result['created']}"
                         )
-                        if xhost_result["updated"] or xhost_result["errors"]:
+
+                    # Cross-host container port convergence
+                    # (push DB tags to container ports after restart)
+                    xhost_result = await run_cross_host_port_convergence(
+                        session, host_to_agent
+                    )
+                    if xhost_result["updated"] or xhost_result["errors"]:
+                        logger.info(
+                            f"Cross-host port convergence: "
+                            f"updated={xhost_result['updated']}, "
+                            f"errors={xhost_result['errors']}"
+                        )
+
+                    # Same-host port convergence
+                    port_results = await run_same_host_convergence(
+                        session, host_to_agent
+                    )
+                    if port_results:
+                        total_updated = sum(
+                            r.get("updated", 0) for r in port_results.values()
+                            if isinstance(r, dict)
+                        )
+                        if total_updated:
                             logger.info(
-                                f"Cross-host port convergence: "
-                                f"updated={xhost_result['updated']}, "
-                                f"errors={xhost_result['errors']}"
+                                f"Same-host convergence: updated={total_updated} "
+                                f"across {len(port_results)} agent(s)"
                             )
-
-                        # Same-host port convergence
-                        port_results = await run_same_host_convergence(
-                            session, host_to_agent
-                        )
-                        if port_results:
-                            total_updated = sum(
-                                r.get("updated", 0) for r in port_results.values()
-                                if isinstance(r, dict)
-                            )
-                            if total_updated:
-                                logger.info(
-                                    f"Same-host convergence: updated={total_updated} "
-                                    f"across {len(port_results)} agent(s)"
-                                )
 
                 except Exception as e:
                     logger.error(f"Link reconciliation error: {e}")

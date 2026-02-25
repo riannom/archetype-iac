@@ -148,8 +148,20 @@ async def test_declare_converged_no_changes(tmp_path):
 
 @pytest.mark.asyncio
 async def test_declare_removes_orphans(tmp_path):
-    """VXLAN ports not in declared set are removed for declared labs."""
+    """Tracked VXLAN ports not in declared set are removed."""
     overlay = _make_overlay(tmp_path)
+
+    from agent.network.overlay import LinkTunnel
+    overlay._link_tunnels["stale-link"] = LinkTunnel(
+        link_id="stale-link",
+        vni=60000,
+        local_ip="10.0.0.1",
+        remote_ip="10.0.0.3",
+        local_vlan=3002,
+        interface_name="vxlan-orphan99",
+        lab_id="lab-1",
+        tenant_mtu=1400,
+    )
 
     # Existing orphan port (not in declared set)
     overlay._batch_read_ovs_ports = AsyncMock(return_value={
@@ -267,6 +279,50 @@ async def test_declare_empty_declaration(tmp_path):
 
     assert result["results"] == []
     assert result["orphans_removed"] == []
+
+
+@pytest.mark.asyncio
+async def test_declare_empty_declaration_with_scope_removes_tracked_orphans(tmp_path):
+    """Explicit lab scope allows cleanup when no tunnels are declared."""
+    overlay = _make_overlay(tmp_path)
+
+    from agent.network.overlay import LinkTunnel
+    overlay._link_tunnels["stale-link"] = LinkTunnel(
+        link_id="stale-link",
+        vni=50000,
+        local_ip="10.0.0.1",
+        remote_ip="10.0.0.2",
+        local_vlan=3001,
+        interface_name="vxlan-orphan99",
+        lab_id="lab-1",
+        tenant_mtu=1400,
+    )
+
+    overlay._batch_read_ovs_ports = AsyncMock(return_value={
+        "vxlan-orphan99": {"name": "vxlan-orphan99", "tag": 3001, "type": "vxlan"},
+    })
+    overlay._write_declared_state_cache = AsyncMock()
+
+    result = await overlay.declare_state([], declared_labs=["lab-1"])
+
+    assert "vxlan-orphan99" in result["orphans_removed"]
+    overlay._delete_vxlan_device.assert_called_once_with("vxlan-orphan99", "arch-ovs")
+
+
+@pytest.mark.asyncio
+async def test_declare_scope_keeps_untracked_orphans(tmp_path):
+    """Untracked VXLAN ports are not deleted even with explicit scope."""
+    overlay = _make_overlay(tmp_path)
+
+    overlay._batch_read_ovs_ports = AsyncMock(return_value={
+        "vxlan-orphan99": {"name": "vxlan-orphan99", "tag": 3001, "type": "vxlan"},
+    })
+    overlay._write_declared_state_cache = AsyncMock()
+
+    result = await overlay.declare_state([], declared_labs=["lab-1"])
+
+    assert "vxlan-orphan99" not in result["orphans_removed"]
+    overlay._delete_vxlan_device.assert_not_called()
 
 
 @pytest.mark.asyncio

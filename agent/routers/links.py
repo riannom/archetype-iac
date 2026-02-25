@@ -30,6 +30,79 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["links"])
 
 
+def _split_link_id_candidates(link_id: str) -> list[tuple[str, str, str, str]]:
+    """Parse link_id into endpoint candidates.
+
+    Supports node names containing "-" by trying each separator position.
+    """
+    candidates: list[tuple[str, str, str, str]] = []
+    seen: set[tuple[str, str, str, str]] = set()
+
+    for idx, char in enumerate(link_id):
+        if char != "-":
+            continue
+
+        left = link_id[:idx]
+        right = link_id[idx + 1:]
+        if ":" not in left or ":" not in right:
+            continue
+
+        node_a, iface_a = left.split(":", 1)
+        node_b, iface_b = right.split(":", 1)
+        if not node_a or not iface_a or not node_b or not iface_b:
+            continue
+
+        candidate = (node_a, iface_a, node_b, iface_b)
+        if candidate in seen:
+            continue
+        seen.add(candidate)
+        candidates.append(candidate)
+
+    return candidates
+
+
+async def _resolve_link_id_endpoints(
+    lab_id: str,
+    link_id: str,
+) -> tuple[tuple[str, str, str, str, OVSPortInfo | None, OVSPortInfo | None] | None, str | None]:
+    """Resolve link_id to endpoints and OVS ports.
+
+    Returns:
+        ((node_a, iface_a, node_b, iface_b, port_a, port_b), None) on success
+        (None, error_message) for invalid or ambiguous IDs
+    """
+    candidates = _split_link_id_candidates(link_id)
+    if not candidates:
+        return None, f"Invalid link_id format: {link_id}"
+
+    resolved_port_cache: dict[tuple[str, str], OVSPortInfo | None] = {}
+    successful: list[tuple[str, str, str, str, OVSPortInfo, OVSPortInfo]] = []
+
+    for node_a, iface_a, node_b, iface_b in candidates:
+        key_a = (node_a, iface_a)
+        key_b = (node_b, iface_b)
+
+        if key_a not in resolved_port_cache:
+            resolved_port_cache[key_a] = await _resolve_ovs_port(lab_id, node_a, iface_a)
+        if key_b not in resolved_port_cache:
+            resolved_port_cache[key_b] = await _resolve_ovs_port(lab_id, node_b, iface_b)
+
+        port_a = resolved_port_cache[key_a]
+        port_b = resolved_port_cache[key_b]
+        if port_a and port_b:
+            successful.append((node_a, iface_a, node_b, iface_b, port_a, port_b))
+
+    if len(successful) > 1:
+        return None, f"Ambiguous link_id format: {link_id}"
+
+    if len(successful) == 1:
+        node_a, iface_a, node_b, iface_b, port_a, port_b = successful[0]
+        return (node_a, iface_a, node_b, iface_b, port_a, port_b), None
+
+    # Fail closed if link_id cannot be resolved to both endpoints.
+    return None, f"Unresolvable link_id endpoints: {link_id}"
+
+
 @router.post("/labs/{lab_id}/links")
 async def create_link(lab_id: str, link: LinkCreate) -> LinkCreateResponse:
     """Hot-connect two interfaces in a running lab.
@@ -169,30 +242,17 @@ async def delete_link(lab_id: str, link_id: str) -> LinkDeleteResponse:
     logger.info(f"Hot-disconnect request: lab={lab_id}, link={link_id}")
 
     try:
-        # Parse link_id to get endpoints
-        # Format: "node1:iface1-node2:iface2"
-        parts = link_id.split("-")
-        if len(parts) != 2:
+        # Parse link_id and resolve endpoints/ports. Supports hyphenated node names.
+        resolved, parse_error = await _resolve_link_id_endpoints(lab_id, link_id)
+        if parse_error:
+            return LinkDeleteResponse(success=False, error=parse_error)
+        assert resolved is not None  # parse_error is None
+        node_a, iface_a, node_b, iface_b, port_a, port_b = resolved
+        if not port_a or not port_b:
             return LinkDeleteResponse(
                 success=False,
-                error=f"Invalid link_id format: {link_id}",
+                error=f"Unresolvable link endpoints for {link_id}",
             )
-
-        ep_a = parts[0].split(":")
-        ep_b = parts[1].split(":")
-
-        if len(ep_a) != 2 or len(ep_b) != 2:
-            return LinkDeleteResponse(
-                success=False,
-                error=f"Invalid link_id format: {link_id}",
-            )
-
-        node_a, iface_a = ep_a
-        node_b, iface_b = ep_b
-
-        # Resolve OVS ports for both endpoints (provider-agnostic)
-        port_a = await _resolve_ovs_port(lab_id, node_a, iface_a)
-        port_b = await _resolve_ovs_port(lab_id, node_b, iface_b)
 
         bridge = settings.ovs_bridge_name or "arch-ovs"
         used = await _ovs_list_used_vlans(bridge)
@@ -201,10 +261,6 @@ async def delete_link(lab_id: str, link_id: str) -> LinkDeleteResponse:
 
         # Plan both endpoint VLAN moves first to keep disconnect transactional.
         for port, node, iface in ((port_a, node_a, iface_a), (port_b, node_b, iface_b)):
-            if not port:
-                logger.warning(f"Port not found for {node}:{iface}, skipping disconnect")
-                continue
-
             new_vlan = _pick_isolation_vlan(used, bridge, port.port_name)
             if new_vlan is None:
                 errors.append(f"Failed to allocate VLAN for {node}:{iface}")

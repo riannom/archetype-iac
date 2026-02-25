@@ -9,8 +9,10 @@ modifications to the same records.
 from __future__ import annotations
 
 import logging
+from threading import Event, Thread
 from contextlib import contextmanager
 from typing import Generator, TYPE_CHECKING, TypeVar
+from uuid import uuid4
 
 import redis
 
@@ -27,10 +29,70 @@ logger = logging.getLogger(__name__)
 LINK_OPS_LOCK_KEY = "link_ops:{lab_id}"
 
 # Lock timeouts (TTL in seconds)
-LINK_OPS_LOCK_TTL = 60  # Auto-release after 60 seconds if holder crashes
+LINK_OPS_LOCK_TTL = 300  # Auto-release after 5 minutes if holder crashes
+LINK_OPS_LOCK_RENEW_INTERVAL = max(5, LINK_OPS_LOCK_TTL // 3)
+
+_RELEASE_IF_OWNER_SCRIPT = """
+if redis.call("GET", KEYS[1]) == ARGV[1] then
+    return redis.call("DEL", KEYS[1])
+end
+return 0
+""".strip()
+
+_EXTEND_IF_OWNER_SCRIPT = """
+if redis.call("GET", KEYS[1]) == ARGV[1] then
+    return redis.call("EXPIRE", KEYS[1], tonumber(ARGV[2]))
+end
+return 0
+""".strip()
 
 
-def acquire_link_ops_lock(lab_id: str, timeout: int = 5) -> bool:
+def _normalize_redis_value(value: object) -> str | None:
+    """Normalize Redis response value to a comparable string."""
+    if value is None:
+        return None
+    if isinstance(value, bytes):
+        try:
+            return value.decode("utf-8")
+        except Exception:
+            return value.decode("utf-8", errors="ignore")
+    return str(value)
+
+
+def _release_if_owner(r: redis.Redis, lock_key: str, lock_token: str) -> int:
+    """Delete lock only when the stored owner token matches."""
+    try:
+        return int(r.eval(_RELEASE_IF_OWNER_SCRIPT, 1, lock_key, lock_token))
+    except Exception:
+        # Fallback path for minimal/mocked Redis clients without EVAL.
+        current = _normalize_redis_value(r.get(lock_key))
+        if current != lock_token:
+            return 0
+        return int(r.delete(lock_key))
+
+
+def _extend_if_owner(
+    r: redis.Redis, lock_key: str, lock_token: str, additional_seconds: int
+) -> bool:
+    """Extend lock TTL only when the caller still owns the lock."""
+    try:
+        return bool(
+            r.eval(
+                _EXTEND_IF_OWNER_SCRIPT,
+                1,
+                lock_key,
+                lock_token,
+                additional_seconds,
+            )
+        )
+    except Exception:
+        current = _normalize_redis_value(r.get(lock_key))
+        if current != lock_token:
+            return False
+        return bool(r.expire(lock_key, additional_seconds))
+
+
+def acquire_link_ops_lock(lab_id: str, timeout: int = 5) -> str | None:
     """Try to acquire lock for link operations on a lab.
 
     Uses Redis SETNX with TTL to implement distributed locking.
@@ -42,61 +104,95 @@ def acquire_link_ops_lock(lab_id: str, timeout: int = 5) -> bool:
         timeout: Not used (kept for API compatibility), lock is non-blocking
 
     Returns:
-        True if lock was acquired, False if already held
+        Owner token if lock was acquired, None otherwise
     """
     try:
         r = get_redis()
         lock_key = LINK_OPS_LOCK_KEY.format(lab_id=lab_id)
-        acquired = r.set(lock_key, "1", nx=True, ex=LINK_OPS_LOCK_TTL)
+        lock_token = str(uuid4())
+        acquired = r.set(lock_key, lock_token, nx=True, ex=LINK_OPS_LOCK_TTL)
         if acquired:
             logger.debug(f"Acquired link ops lock for lab {lab_id}")
+            return lock_token
         else:
             logger.debug(f"Could not acquire link ops lock for lab {lab_id} - already held")
-        return bool(acquired)
+        return None
     except redis.RedisError as e:
         logger.warning(f"Redis error acquiring link ops lock for lab {lab_id}: {e}")
-        # On Redis error, proceed without lock (better than blocking)
-        return True
+        # Fail closed on lock backend errors to avoid concurrent mutation races.
+        return None
 
 
-def release_link_ops_lock(lab_id: str) -> None:
+def release_link_ops_lock(lab_id: str, lock_token: str | None) -> bool:
     """Release link operations lock.
 
     Safe to call even if lock wasn't held - operation is idempotent.
+    Only releases the lock when lock_token matches the lock owner.
 
     Args:
         lab_id: Lab identifier to unlock
+        lock_token: Owner token returned by acquire_link_ops_lock()
+
+    Returns:
+        True if the lock was released, False otherwise
     """
+    if not lock_token:
+        return False
     try:
         r = get_redis()
         lock_key = LINK_OPS_LOCK_KEY.format(lab_id=lab_id)
-        deleted = r.delete(lock_key)
+        deleted = _release_if_owner(r, lock_key, lock_token)
         if deleted:
             logger.debug(f"Released link ops lock for lab {lab_id}")
+            return True
+        logger.debug(
+            f"Did not release link ops lock for lab {lab_id} "
+            f"(not owner or lock expired)"
+        )
+        return False
     except redis.RedisError as e:
         logger.warning(f"Redis error releasing link ops lock for lab {lab_id}: {e}")
         # Lock will auto-expire via TTL
+        return False
 
 
-def extend_link_ops_lock(lab_id: str, additional_seconds: int = LINK_OPS_LOCK_TTL) -> bool:
+def extend_link_ops_lock(
+    lab_id: str,
+    lock_token: str | None,
+    additional_seconds: int = LINK_OPS_LOCK_TTL,
+) -> bool:
     """Extend the TTL of an existing link ops lock.
 
     Useful for long-running operations that need more time.
 
     Args:
         lab_id: Lab identifier
+        lock_token: Owner token returned by acquire_link_ops_lock()
         additional_seconds: Seconds to set as new TTL
 
     Returns:
-        True if lock existed and was extended, False otherwise
+        True if lock existed, caller owned it, and TTL was extended
     """
+    if not lock_token:
+        return False
     try:
         r = get_redis()
         lock_key = LINK_OPS_LOCK_KEY.format(lab_id=lab_id)
-        return r.expire(lock_key, additional_seconds)
+        return _extend_if_owner(r, lock_key, lock_token, additional_seconds)
     except redis.RedisError as e:
         logger.warning(f"Redis error extending link ops lock for lab {lab_id}: {e}")
         return False
+
+
+def _renew_link_ops_lock_until_released(lab_id: str, lock_token: str, stop_event: Event) -> None:
+    """Background lease renewal worker for long-running lock scopes."""
+    while not stop_event.wait(LINK_OPS_LOCK_RENEW_INTERVAL):
+        if not extend_link_ops_lock(lab_id, lock_token):
+            logger.warning(
+                f"Failed to renew link ops lock for lab {lab_id}; "
+                "lock may be contended or expired"
+            )
+            return
 
 
 @contextmanager
@@ -113,12 +209,27 @@ def link_ops_lock(lab_id: str) -> Generator[bool, None, None]:
     Yields:
         True if lock was acquired, False if already held by another process
     """
-    acquired = acquire_link_ops_lock(lab_id)
+    lock_token = acquire_link_ops_lock(lab_id)
+    acquired = bool(lock_token)
+    renew_stop = None
+    renew_thread = None
+    if lock_token:
+        renew_stop = Event()
+        renew_thread = Thread(
+            target=_renew_link_ops_lock_until_released,
+            args=(lab_id, lock_token, renew_stop),
+            daemon=True,
+        )
+        renew_thread.start()
     try:
         yield acquired
     finally:
+        if renew_stop:
+            renew_stop.set()
+        if renew_thread:
+            renew_thread.join(timeout=1.0)
         if acquired:
-            release_link_ops_lock(lab_id)
+            release_link_ops_lock(lab_id, lock_token)
 
 
 # =============================================================================

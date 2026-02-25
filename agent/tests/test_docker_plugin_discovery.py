@@ -243,6 +243,125 @@ async def test_discover_endpoint_prunes_stale_on_missing_container(monkeypatch, 
 
 
 @pytest.mark.asyncio
+async def test_discover_endpoint_strict_fallback_matches_single_candidate(monkeypatch, tmp_path):
+    monkeypatch.setattr("agent.network.docker_plugin.settings.workspace_path", str(tmp_path))
+    plugin = DockerOVSPlugin()
+
+    endpoint_id = "ep-fallback"
+    network_id = "net-fallback"
+    plugin.endpoints[endpoint_id] = EndpointState(
+        endpoint_id=endpoint_id,
+        network_id=network_id,
+        interface_name="eth7",
+        host_veth="vhstrict",
+        cont_veth="vcstrict",
+        vlan_tag=100,
+        container_name=None,
+    )
+    plugin.networks[network_id] = NetworkState(
+        network_id=network_id,
+        lab_id="lab",
+        interface_name="eth7",
+        bridge_name="arch-ovs",
+    )
+
+    networks = {
+        "lab-eth7": {
+            "EndpointID": "missing-endpoint-id",
+            "NetworkID": network_id,
+        }
+    }
+    _patch_docker_from_env(monkeypatch, networks)
+    monkeypatch.setattr(plugin, "_validate_endpoint_exists", AsyncMock(return_value=True))
+
+    calls: dict[str, int] = {}
+
+    async def _find_interface(_pid: int, host_veth: str) -> str:
+        calls[host_veth] = calls.get(host_veth, 0) + 1
+        if calls[host_veth] == 1:
+            return "eth-mismatch"
+        return "eth7"
+
+    async def _ovs_vsctl(*args):
+        if args[0] == "list-ports":
+            return 0, "", ""
+        return 1, "", ""
+
+    monkeypatch.setattr(plugin, "_find_interface_in_container", _find_interface)
+    monkeypatch.setattr(plugin, "_ovs_vsctl", _ovs_vsctl)
+
+    ep = await plugin._discover_endpoint("lab", "container-strict", "eth7")
+    assert ep is not None
+    assert ep.endpoint_id == endpoint_id
+    assert ep.container_name == "container-strict"
+
+
+@pytest.mark.asyncio
+async def test_discover_endpoint_strict_fallback_rejects_ambiguous(monkeypatch, tmp_path):
+    monkeypatch.setattr("agent.network.docker_plugin.settings.workspace_path", str(tmp_path))
+    plugin = DockerOVSPlugin()
+
+    plugin.endpoints["ep-a"] = EndpointState(
+        endpoint_id="ep-a",
+        network_id="net-a",
+        interface_name="eth1",
+        host_veth="vh-a",
+        cont_veth="vc-a",
+        vlan_tag=100,
+        container_name=None,
+    )
+    plugin.endpoints["ep-b"] = EndpointState(
+        endpoint_id="ep-b",
+        network_id="net-b",
+        interface_name="eth1",
+        host_veth="vh-b",
+        cont_veth="vc-b",
+        vlan_tag=101,
+        container_name=None,
+    )
+    plugin.networks["net-a"] = NetworkState(
+        network_id="net-a",
+        lab_id="lab",
+        interface_name="eth1",
+        bridge_name="arch-ovs",
+    )
+    plugin.networks["net-b"] = NetworkState(
+        network_id="net-b",
+        lab_id="lab",
+        interface_name="eth1",
+        bridge_name="arch-ovs",
+    )
+
+    networks = {
+        "net-a": {"EndpointID": "missing-a", "NetworkID": "net-a"},
+        "net-b": {"EndpointID": "missing-b", "NetworkID": "net-b"},
+    }
+    _patch_docker_from_env(monkeypatch, networks)
+    monkeypatch.setattr(plugin, "_validate_endpoint_exists", AsyncMock(return_value=True))
+
+    calls: dict[str, int] = {}
+
+    async def _find_interface(_pid: int, host_veth: str) -> str:
+        calls[host_veth] = calls.get(host_veth, 0) + 1
+        if calls[host_veth] == 1:
+            return "eth-mismatch"
+        return "eth1"
+
+    async def _ovs_vsctl(*args):
+        if args[0] == "list-ports":
+            return 0, "", ""
+        return 1, "", ""
+
+    monkeypatch.setattr(plugin, "_find_interface_in_container", _find_interface)
+    monkeypatch.setattr(plugin, "_ovs_vsctl", _ovs_vsctl)
+
+    ep = await plugin._discover_endpoint("lab", "container-ambiguous", "eth1")
+    assert ep is None
+    assert plugin.endpoints["ep-a"].container_name is None
+    assert plugin.endpoints["ep-b"].container_name is None
+
+
+@pytest.mark.asyncio
 async def test_reconcile_queues_missing_veth(monkeypatch, tmp_path):
     monkeypatch.setattr("agent.network.docker_plugin.settings.workspace_path", str(tmp_path))
     plugin = DockerOVSPlugin()

@@ -28,7 +28,12 @@ from app import models
 from app.config import settings
 from app.db import get_async_redis, get_session
 from app import agent_client
-from app.metrics import record_enforcement_action, record_enforcement_exhausted, record_enforcement_duration
+from app.metrics import (
+    record_enforcement_action,
+    record_enforcement_exhausted,
+    record_enforcement_duration,
+    record_enforcement_skip,
+)
 from app.utils.async_tasks import safe_create_task
 from app.state import (
     JobStatus,
@@ -102,6 +107,36 @@ def _should_skip_enforcement(node_state: models.NodeState) -> tuple[bool, str]:
             return True, f"in backoff delay ({remaining}s remaining)"
 
     return False, ""
+
+
+def _skip_reason_label(reason: str) -> str:
+    """Map freeform skip reasons to stable metric labels."""
+    reason_lower = reason.lower()
+    stable_reasons = {
+        "image_sync_in_progress",
+        "auto_restart_disabled",
+        "no_enforcement_action",
+        "legacy_cooldown",
+        "active_job",
+        "lab_wide_active_job",
+        "no_healthy_agent",
+        "desired_state_changed",
+    }
+    if reason_lower in stable_reasons:
+        return reason_lower
+    if "max retries" in reason_lower:
+        return "max_retries"
+    if "crash cooldown" in reason_lower:
+        return "crash_cooldown"
+    if "backoff delay" in reason_lower:
+        return "backoff_delay"
+    return "other"
+
+
+def _record_skip(reason: str) -> None:
+    """Record skipped action + reason in metrics."""
+    record_enforcement_action("skipped")
+    record_enforcement_skip(_skip_reason_label(reason))
 
 
 async def _notify_enforcement_failure(
@@ -332,7 +367,7 @@ async def enforce_node_state(
             f"Node {node_name} in lab {lab_id} has active image sync "
             f"({node_state.image_sync_status}), skipping enforcement"
         )
-        record_enforcement_action("skipped")
+        _record_skip("image_sync_in_progress")
         return False
 
     # Determine what action is needed using state machine
@@ -350,6 +385,7 @@ async def enforce_node_state(
     if action == "start" and actual == NodeActualState.ERROR.value:
         if not settings.state_enforcement_auto_restart_enabled:
             logger.debug(f"Auto-restart disabled for {node_name}, skipping")
+            _record_skip("auto_restart_disabled")
             return False
 
     if not action:
@@ -357,7 +393,7 @@ async def enforce_node_state(
         logger.debug(
             f"No enforcement action for {node_name}: desired={desired}, actual={actual}"
         )
-        record_enforcement_action("skipped")
+        _record_skip("no_enforcement_action")
         return False
 
     # Check if enforcement should be skipped (max retries, backoff, cooldown)
@@ -386,19 +422,19 @@ async def enforce_node_state(
             record_enforcement_exhausted()
         else:
             logger.debug(f"Node {node_name} in lab {lab_id}: {reason}")
-            record_enforcement_action("skipped")
+            _record_skip(reason)
         return False
 
     # Check legacy Redis cooldown (for backward compatibility)
     if await _is_on_cooldown(lab_id, node_name):
         logger.debug(f"Node {node_name} in lab {lab_id} is on enforcement cooldown")
-        record_enforcement_action("skipped")
+        _record_skip("legacy_cooldown")
         return False
 
     # Check for active jobs
     if _has_active_job(session, lab_id, node_name=node_name, node_id=node_state.node_id):
         logger.debug(f"Node {node_name} in lab {lab_id} has active job, skipping enforcement")
-        record_enforcement_action("skipped")
+        _record_skip("active_job")
         return False
 
     # Check for lab-wide active jobs (deploy/destroy/sync batch)
@@ -414,7 +450,7 @@ async def enforce_node_state(
     ).first()
     if lab_job:
         logger.debug(f"Lab {lab_id} has active lab-wide job, skipping enforcement")
-        record_enforcement_action("skipped")
+        _record_skip("lab_wide_active_job")
         return False
 
     # Get agent for this node
@@ -423,7 +459,7 @@ async def enforce_node_state(
         logger.warning(
             f"Cannot enforce state for {node_name} in lab {lab_id}: no healthy agent"
         )
-        record_enforcement_action("skipped")
+        _record_skip("no_healthy_agent")
         return False
 
     # Ensure placement record matches the agent we're using
@@ -472,7 +508,7 @@ async def enforce_node_state(
             f"Desired state changed for {node_name} ({desired} -> {current_desired}), "
             f"skipping enforcement"
         )
-        record_enforcement_action("skipped")
+        _record_skip("desired_state_changed")
         return False
 
     # Set cooldown BEFORE creating job to prevent race with concurrent iterations
@@ -559,7 +595,7 @@ async def _is_enforceable(
             f"Node {node_name} in lab {lab_id} has active image sync "
             f"({node_state.image_sync_status}), skipping enforcement"
         )
-        record_enforcement_action("skipped")
+        _record_skip("image_sync_in_progress")
         return False
 
     # Determine what action is needed using state machine
@@ -576,13 +612,14 @@ async def _is_enforceable(
     if action == "start" and actual == NodeActualState.ERROR.value:
         if not settings.state_enforcement_auto_restart_enabled:
             logger.debug(f"Auto-restart disabled for {node_name}, skipping")
+            _record_skip("auto_restart_disabled")
             return False
 
     if not action:
         logger.debug(
             f"No enforcement action for {node_name}: desired={desired}, actual={actual}"
         )
-        record_enforcement_action("skipped")
+        _record_skip("no_enforcement_action")
         return False
 
     # Check if enforcement should be skipped (max retries, backoff, cooldown)
@@ -609,13 +646,13 @@ async def _is_enforceable(
             record_enforcement_exhausted()
         else:
             logger.debug(f"Node {node_name} in lab {lab_id}: {reason}")
-            record_enforcement_action("skipped")
+            _record_skip(reason)
         return False
 
     # Check legacy Redis cooldown
     if await _is_on_cooldown(lab_id, node_name):
         logger.debug(f"Node {node_name} in lab {lab_id} is on enforcement cooldown")
-        record_enforcement_action("skipped")
+        _record_skip("legacy_cooldown")
         return False
 
     # D.1: Check for active per-node jobs using pre-loaded sets or fallback to DB query
@@ -632,7 +669,7 @@ async def _is_enforceable(
 
         if has_active_job:
             logger.debug(f"Node {node_name} in lab {lab_id} has active job, skipping enforcement")
-            record_enforcement_action("skipped")
+            _record_skip("active_job")
             return False
     else:
         if _has_active_job(
@@ -642,7 +679,7 @@ async def _is_enforceable(
             node_id=node_state.node_id,
         ):
             logger.debug(f"Node {node_name} in lab {lab_id} has active job, skipping enforcement")
-            record_enforcement_action("skipped")
+            _record_skip("active_job")
             return False
 
     return True
@@ -935,6 +972,8 @@ async def enforce_lab_states():
                 # Skip if lab has active lab-wide job (D.1: use pre-loaded set)
                 if _has_lab_wide_active_job(session, lab_id, labs_with_active_jobs=labs_with_active_jobs):
                     logger.debug(f"Lab {lab_id} has active lab-wide job, skipping batch enforcement")
+                    for _ in nodes:
+                        _record_skip("lab_wide_active_job")
                     continue
 
                 try:

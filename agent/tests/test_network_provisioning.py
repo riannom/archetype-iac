@@ -93,6 +93,93 @@ async def test_hot_disconnect_isolates_ports():
     )
 
 
+@pytest.mark.asyncio
+async def test_hot_disconnect_supports_hyphenated_node_names():
+    """hot-disconnect parses link IDs with hyphenated node names."""
+    port_a = _make_port_info("vh_a", 100, "docker")
+    port_b = _make_port_info("vh_b", 100, "docker")
+
+    plugin = MagicMock()
+    plugin.endpoints = {}
+    plugin._mark_dirty_and_save = AsyncMock()
+
+    from agent.main import delete_link
+
+    async def _resolve(lab_id, node, iface):
+        if node == "spine-1" and iface == "eth1":
+            return port_a
+        if node == "leaf-1" and iface == "eth2":
+            return port_b
+        return None
+
+    with patch("agent.routers.links._resolve_ovs_port", new_callable=AsyncMock, side_effect=_resolve):
+        with patch("agent.routers.links._ovs_list_used_vlans", new_callable=AsyncMock, return_value={100}):
+            with patch("agent.routers.links._ovs_set_port_vlan", new_callable=AsyncMock, return_value=True):
+                with patch("agent.routers.links._get_docker_ovs_plugin", return_value=plugin):
+                    response = await delete_link("lab1", "spine-1:eth1-leaf-1:eth2")
+
+    assert response.success is True
+
+
+@pytest.mark.asyncio
+async def test_hot_disconnect_unresolvable_link_id_fails_without_partial_mutation():
+    """Malformed link IDs are rejected before any VLAN changes."""
+    port_a = _make_port_info("vh_a", 100, "docker")
+
+    plugin = MagicMock()
+    plugin.endpoints = {}
+    plugin._mark_dirty_and_save = AsyncMock()
+
+    from agent.main import delete_link
+
+    async def _resolve(lab_id, node, iface):
+        if node == "spine-1" and iface == "eth1":
+            return port_a
+        return None
+
+    with patch("agent.routers.links._resolve_ovs_port", new_callable=AsyncMock, side_effect=_resolve):
+        with patch("agent.routers.links._ovs_set_port_vlan", new_callable=AsyncMock) as set_vlan:
+            with patch("agent.routers.links._get_docker_ovs_plugin", return_value=plugin):
+                response = await delete_link("lab1", "spine-1:eth1-leaf-1:eth2-extra")
+
+    assert response.success is False
+    assert "Unresolvable link_id endpoints" in (response.error or "")
+    set_vlan.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_hot_disconnect_ambiguous_link_id_fails():
+    """Ambiguous link IDs are rejected before any VLAN changes."""
+    port_a = _make_port_info("vh_a", 100, "docker")
+    port_b = _make_port_info("vh_b", 100, "docker")
+    port_c = _make_port_info("vh_c", 100, "docker")
+    port_d = _make_port_info("vh_d", 100, "docker")
+
+    plugin = MagicMock()
+    plugin.endpoints = {}
+    plugin._mark_dirty_and_save = AsyncMock()
+
+    from agent.main import delete_link
+
+    async def _resolve(lab_id, node, iface):
+        mapping = {
+            ("n1", "if"): port_a,
+            ("1-n2", "if-2"): port_b,
+            ("n1", "if-1"): port_c,
+            ("n2", "if-2"): port_d,
+        }
+        return mapping.get((node, iface))
+
+    with patch("agent.routers.links._resolve_ovs_port", new_callable=AsyncMock, side_effect=_resolve):
+        with patch("agent.routers.links._ovs_set_port_vlan", new_callable=AsyncMock) as set_vlan:
+            with patch("agent.routers.links._get_docker_ovs_plugin", return_value=plugin):
+                response = await delete_link("lab1", "n1:if-1-n2:if-2")
+
+    assert response.success is False
+    assert "Ambiguous link_id format" in (response.error or "")
+    set_vlan.assert_not_awaited()
+
+
 def test_hot_connect_source_not_found(test_client):
     """hot-connect returns error if source port cannot be resolved."""
     # Source port not found, target would succeed

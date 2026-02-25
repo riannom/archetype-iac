@@ -110,7 +110,7 @@ async def test_build_declare_payload_from_db(test_db, sample_lab, multiple_hosts
     host_to_agent = {h.id: h for h in multiple_hosts if h.status == "online"}
     declared_payloads = {}
 
-    async def _capture(agent, tunnels):
+    async def _capture(agent, tunnels, declared_labs=None):
         declared_payloads[agent.id] = tunnels
         return {"results": [], "orphans_removed": []}
 
@@ -172,7 +172,7 @@ async def test_build_payload_skips_inactive_tunnels(test_db, sample_lab, multipl
     host_to_agent = {h.id: h for h in multiple_hosts if h.status == "online"}
     declared_payloads = {}
 
-    async def _capture(agent, tunnels):
+    async def _capture(agent, tunnels, declared_labs=None):
         declared_payloads[agent.id] = tunnels
         return {"results": [], "orphans_removed": []}
 
@@ -208,7 +208,7 @@ async def test_build_payload_both_sides_included(test_db, sample_lab, multiple_h
     host_to_agent = {h.id: h for h in multiple_hosts if h.status == "online"}
     declared_payloads = {}
 
-    async def _capture(agent, tunnels):
+    async def _capture(agent, tunnels, declared_labs=None):
         declared_payloads[agent.id] = tunnels
         return {"results": [], "orphans_removed": []}
 
@@ -248,7 +248,7 @@ async def test_declare_payload_uses_linkstate_vlans(test_db, sample_lab, multipl
     host_to_agent = {h.id: h for h in multiple_hosts if h.status == "online"}
     declared_payloads = {}
 
-    async def _capture(agent, tunnels):
+    async def _capture(agent, tunnels, declared_labs=None):
         declared_payloads[agent.id] = tunnels
         return {"results": [], "orphans_removed": []}
 
@@ -291,7 +291,7 @@ async def test_declare_state_updates_attachment_flags(test_db, sample_lab, multi
 
     host_to_agent = {h.id: h for h in multiple_hosts if h.status == "online"}
 
-    async def _mock_declare(agent, tunnels):
+    async def _mock_declare(agent, tunnels, declared_labs=None):
         return {
             "results": [
                 {"link_id": "R1:eth1-R2:eth1", "lab_id": sample_lab.id,
@@ -314,7 +314,7 @@ async def test_declare_state_updates_attachment_flags(test_db, sample_lab, multi
 
 @pytest.mark.asyncio
 async def test_declare_state_handles_agent_offline(test_db, sample_lab, multiple_hosts):
-    """Gracefully skips agents not in host_to_agent map."""
+    """Skips offline agents but still converges all online agents."""
     ls = _make_link_state(
         test_db, sample_lab.id, "R1:eth1-R2:eth1",
         source_host_id=multiple_hosts[0].id,
@@ -332,7 +332,7 @@ async def test_declare_state_handles_agent_offline(test_db, sample_lab, multiple
 
     call_count = 0
 
-    async def _mock_declare(agent, tunnels):
+    async def _mock_declare(agent, tunnels, declared_labs=None):
         nonlocal call_count
         call_count += 1
         return {"results": [], "orphans_removed": []}
@@ -344,8 +344,8 @@ async def test_declare_state_handles_agent_offline(test_db, sample_lab, multiple
     ):
         result = await link_reconciliation.run_overlay_convergence(test_db, host_to_agent)
 
-    # Only agent-1 (online) should be called
-    assert call_count == 1
+    # Both online agents should be called; offline agent is excluded.
+    assert call_count == len(host_to_agent)
     assert multiple_hosts[2].id not in result
 
 
@@ -368,7 +368,7 @@ async def test_declare_state_handles_old_agent_404(test_db, sample_lab, multiple
     host_to_agent = {h.id: h for h in multiple_hosts if h.status == "online"}
 
     # Simulate 404 fallback that returns whitelist-style result
-    async def _mock_404_fallback(agent, tunnels):
+    async def _mock_404_fallback(agent, tunnels, declared_labs=None):
         return {
             "results": [],
             "orphans_removed": [],
@@ -415,7 +415,7 @@ async def test_declare_state_handles_mixed_results(test_db, sample_lab, multiple
 
     host_to_agent = {h.id: h for h in multiple_hosts if h.status == "online"}
 
-    async def _mock_mixed(agent, tunnels):
+    async def _mock_mixed(agent, tunnels, declared_labs=None):
         results = []
         for t in tunnels:
             if t["vni"] == 50000:
@@ -460,7 +460,7 @@ async def test_declare_state_handles_orphan_report(test_db, sample_lab, multiple
 
     host_to_agent = {h.id: h for h in multiple_hosts if h.status == "online"}
 
-    async def _mock_with_orphans(agent, tunnels):
+    async def _mock_with_orphans(agent, tunnels, declared_labs=None):
         return {
             "results": [
                 {"link_id": "R1:eth1-R2:eth1", "lab_id": sample_lab.id,
@@ -484,7 +484,7 @@ async def test_declare_state_handles_orphan_report(test_db, sample_lab, multiple
 
 @pytest.mark.asyncio
 async def test_declare_state_empty_payload(test_db, sample_lab, multiple_hosts):
-    """No active tunnels → no agent calls."""
+    """No active tunnels still converges all online agents with empty payloads."""
     test_db.commit()
     host_to_agent = {h.id: h for h in multiple_hosts if h.status == "online"}
 
@@ -493,10 +493,46 @@ async def test_declare_state_empty_payload(test_db, sample_lab, multiple_hosts):
         "declare_overlay_state_on_agent",
         new_callable=AsyncMock,
     ) as mock_declare:
+        mock_declare.return_value = {"results": [], "orphans_removed": []}
         result = await link_reconciliation.run_overlay_convergence(test_db, host_to_agent)
 
-    mock_declare.assert_not_called()
-    assert result == {}
+    assert mock_declare.await_count == len(host_to_agent)
+    for call in mock_declare.await_args_list:
+        _, tunnels = call.args
+        assert tunnels == []
+        assert call.kwargs.get("declared_labs") == []
+    assert set(result.keys()) == set(host_to_agent.keys())
+
+
+@pytest.mark.asyncio
+async def test_convergence_declares_labs_from_placements(test_db, sample_lab, multiple_hosts):
+    """Declared lab scope includes NodePlacement labs even with no tunnels."""
+    placement = models.NodePlacement(
+        lab_id=sample_lab.id,
+        node_name="R1",
+        node_definition_id=None,
+        host_id=multiple_hosts[0].id,
+        status="deployed",
+    )
+    test_db.add(placement)
+    test_db.commit()
+
+    host_to_agent = {h.id: h for h in multiple_hosts if h.status == "online"}
+    declared_scopes: dict[str, list[str] | None] = {}
+
+    async def _capture(agent, tunnels, declared_labs=None):
+        declared_scopes[agent.id] = declared_labs
+        return {"results": [], "orphans_removed": []}
+
+    with patch.object(
+        link_reconciliation,
+        "declare_overlay_state_on_agent",
+        side_effect=_capture,
+    ):
+        await link_reconciliation.run_overlay_convergence(test_db, host_to_agent)
+
+    assert sample_lab.id in (declared_scopes.get(multiple_hosts[0].id) or [])
+    assert declared_scopes.get(multiple_hosts[1].id) == []
 
 
 @pytest.mark.asyncio
@@ -520,7 +556,7 @@ async def test_declare_state_partial_state_error(test_db, sample_lab, multiple_h
     host_to_agent = {h.id: h for h in multiple_hosts if h.status == "online"}
     declared_payloads = {}
 
-    async def _capture(agent, tunnels):
+    async def _capture(agent, tunnels, declared_labs=None):
         declared_payloads[agent.id] = tunnels
         return {"results": [], "orphans_removed": []}
 
@@ -562,7 +598,7 @@ async def test_convergence_protects_in_progress_links(test_db, sample_lab, multi
     host_to_agent = {h.id: h for h in multiple_hosts if h.status == "online"}
     declared_payloads = {}
 
-    async def _capture(agent, tunnels):
+    async def _capture(agent, tunnels, declared_labs=None):
         declared_payloads[agent.id] = tunnels
         return {"results": [], "orphans_removed": []}
 
@@ -601,7 +637,7 @@ async def test_convergence_exception_continues(test_db, sample_lab, multiple_hos
     host_to_agent = {h.id: h for h in multiple_hosts if h.status == "online"}
     calls = []
 
-    async def _mock_error_then_ok(agent, tunnels):
+    async def _mock_error_then_ok(agent, tunnels, declared_labs=None):
         calls.append(agent.id)
         if agent.id == multiple_hosts[0].id:
             raise Exception("connection refused")
@@ -639,7 +675,7 @@ async def test_convergence_port_name_fallback(test_db, sample_lab, multiple_host
     host_to_agent = {h.id: h for h in multiple_hosts if h.status == "online"}
     declared_payloads = {}
 
-    async def _capture(agent, tunnels):
+    async def _capture(agent, tunnels, declared_labs=None):
         declared_payloads[agent.id] = tunnels
         return {"results": [], "orphans_removed": []}
 

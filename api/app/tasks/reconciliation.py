@@ -33,6 +33,7 @@ from app.services.broadcaster import broadcast_node_state_change, broadcast_link
 from app.services.link_reservations import release_link_endpoint_reservations
 from app.utils.link import canonicalize_link_endpoints, link_state_endpoint_key
 from app.services.topology import TopologyService
+from app.tasks.migration_cleanup import process_pending_migration_cleanups
 from app.utils.job import is_job_within_timeout
 from app.utils.locks import acquire_link_ops_lock, release_link_ops_lock
 from app.state import (
@@ -1542,8 +1543,8 @@ async def _do_reconcile_lab(session, lab, lab_id: str) -> int:
 
         # Process auto-connect with lock to prevent conflicts with live_links
         if links_to_connect:
-            lock_acquired = acquire_link_ops_lock(lab_id)
-            if not lock_acquired:
+            lock_token = acquire_link_ops_lock(lab_id)
+            if not lock_token:
                 logger.debug(
                     f"Could not acquire link ops lock for lab {lab_id}, "
                     f"skipping auto-connect (will retry next cycle)"
@@ -1593,7 +1594,7 @@ async def _do_reconcile_lab(session, lab, lab_id: str) -> int:
                             ls.actual_state = LinkActualState.ERROR.value
                             ls.error_message = str(e)
                 finally:
-                    release_link_ops_lock(lab_id)
+                    release_link_ops_lock(lab_id, lock_token)
 
         # Clean up links marked for deletion (desired_state="deleted")
         for ls in link_states:
@@ -1652,6 +1653,7 @@ async def state_reconciliation_monitor():
         try:
             await asyncio.sleep(interval)
             await refresh_states_from_agents()
+            await process_pending_migration_cleanups()
         except asyncio.CancelledError:
             logger.info("State reconciliation monitor stopped")
             break
