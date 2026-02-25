@@ -66,3 +66,55 @@ async def test_startup_snapshotter_check_does_not_warn_with_any_expected(monkeyp
         await _log_docker_snapshotter_mode_at_startup()
 
     assert "snapshotter drift detected" not in caplog.text.lower()
+
+
+@pytest.mark.asyncio
+async def test_startup_snapshotter_check_invalid_expected_mode_falls_back_to_any(
+    monkeypatch,
+    caplog,
+) -> None:
+    mock_client = MagicMock()
+    mock_client.info.return_value = {
+        "Driver": "overlayfs",
+        "DriverStatus": [["driver-type", "io.containerd.snapshotter.v1"]],
+    }
+
+    async def _sync_to_thread(func, *args, **kwargs):
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr("agent.main.get_docker_client", lambda: mock_client)
+    monkeypatch.setattr(asyncio, "to_thread", _sync_to_thread)
+    monkeypatch.setattr(settings, "enable_docker", True)
+    monkeypatch.setattr(settings, "docker_snapshotter_expected_mode", "unexpected-value")
+
+    with caplog.at_level("INFO"):
+        await _log_docker_snapshotter_mode_at_startup()
+
+    text = caplog.text.lower()
+    assert "invalid docker_snapshotter_expected_mode" in text
+    assert "expected=any" in text
+    assert "snapshotter drift detected" not in text
+
+
+@pytest.mark.asyncio
+async def test_startup_snapshotter_check_logs_warning_when_docker_info_fails(
+    monkeypatch,
+    caplog,
+) -> None:
+    mock_client = MagicMock()
+    mock_client.info.side_effect = RuntimeError("docker info unavailable")
+
+    async def _sync_to_thread(func, *args, **kwargs):
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr("agent.main.get_docker_client", lambda: mock_client)
+    monkeypatch.setattr(asyncio, "to_thread", _sync_to_thread)
+    monkeypatch.setattr(settings, "enable_docker", True)
+    monkeypatch.setattr(settings, "docker_snapshotter_expected_mode", "legacy")
+
+    with caplog.at_level("WARNING"):
+        await _log_docker_snapshotter_mode_at_startup()
+
+    text = caplog.text.lower()
+    assert "failed to inspect docker snapshotter mode" in text
+    assert "docker info unavailable" in text

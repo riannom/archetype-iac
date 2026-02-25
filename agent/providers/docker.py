@@ -530,6 +530,10 @@ class DockerProvider(Provider, VlanPersistenceMixin):
                 "refusing destructive recreate"
             )
 
+        rollback_driver = attrs.get("Driver")
+        rollback_labels = attrs.get("Labels") if isinstance(attrs.get("Labels"), dict) else {}
+        rollback_options = attrs.get("Options") if isinstance(attrs.get("Options"), dict) else {}
+
         logger.warning(
             f"Conflicting network {network_name} has stale config; recreating (no active endpoints)"
         )
@@ -537,11 +541,41 @@ class DockerProvider(Provider, VlanPersistenceMixin):
             f"remove stale network {network_name}",
             existing.remove,
         )
-        await self._retry_docker_call(
-            f"recreate network {network_name}",
-            self.docker.networks.create,
-            **self._lab_network_create_kwargs(network_name, lab_id, interface_name),
-        )
+        try:
+            await self._retry_docker_call(
+                f"recreate network {network_name}",
+                self.docker.networks.create,
+                **self._lab_network_create_kwargs(network_name, lab_id, interface_name),
+            )
+        except Exception:
+            rollback_kwargs: dict[str, Any] = {"name": network_name}
+            if isinstance(rollback_driver, str) and rollback_driver:
+                rollback_kwargs["driver"] = rollback_driver
+            if rollback_labels:
+                rollback_kwargs["labels"] = rollback_labels
+            if rollback_options:
+                rollback_kwargs["options"] = rollback_options
+
+            if "driver" in rollback_kwargs:
+                try:
+                    await self._retry_docker_call(
+                        f"rollback network {network_name}",
+                        self.docker.networks.create,
+                        **rollback_kwargs,
+                    )
+                    logger.warning(
+                        f"Recreate failed for {network_name}; restored prior network config via rollback"
+                    )
+                except Exception as rollback_err:
+                    logger.error(
+                        f"Recreate failed for {network_name} and rollback failed: {rollback_err}"
+                    )
+            else:
+                logger.error(
+                    f"Recreate failed for {network_name}; rollback skipped because previous "
+                    "network driver metadata was unavailable"
+                )
+            raise
         return "recreated"
 
     async def _recover_stale_network(
