@@ -15,6 +15,7 @@ import asyncio
 import hmac
 import os
 from contextlib import asynccontextmanager
+from typing import Any
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -77,6 +78,77 @@ AGENT_ID = _state.AGENT_ID
 AGENT_STARTED_AT = _state.AGENT_STARTED_AT
 
 
+def _parse_driver_status(driver_status: Any) -> dict[str, str]:
+    """Normalize Docker DriverStatus into a key-value dict."""
+    status: dict[str, str] = {}
+    if not isinstance(driver_status, list):
+        return status
+
+    for item in driver_status:
+        if isinstance(item, (list, tuple)) and len(item) == 2:
+            key, value = item
+            status[str(key)] = str(value)
+    return status
+
+
+def _classify_docker_snapshotter_mode(
+    driver: str,
+    driver_type: str | None,
+) -> str:
+    """Classify Docker image-store mode for drift detection."""
+    if driver_type and "io.containerd.snapshotter.v1" in driver_type:
+        return "containerd"
+    if not driver_type:
+        # Legacy Docker image store typically reports no driver-type metadata.
+        return "legacy"
+    if driver in {"overlay2", "overlayfs"} and "snapshotter" not in driver_type:
+        return "legacy"
+    return "unknown"
+
+
+async def _log_docker_snapshotter_mode_at_startup() -> None:
+    """Log Docker image-store mode and warn on config drift."""
+    if not settings.enable_docker:
+        return
+
+    expected_raw = (settings.docker_snapshotter_expected_mode or "any").strip().lower()
+    if expected_raw not in {"legacy", "containerd", "any"}:
+        logger.warning(
+            f"Invalid docker_snapshotter_expected_mode={settings.docker_snapshotter_expected_mode!r}; "
+            "using 'any'"
+        )
+        expected = "any"
+    else:
+        expected = expected_raw
+
+    try:
+        client = get_docker_client()
+        info = await asyncio.to_thread(client.info)
+        driver = str(info.get("Driver") or "unknown")
+        driver_status = _parse_driver_status(info.get("DriverStatus"))
+        driver_type = driver_status.get("driver-type")
+        mode = _classify_docker_snapshotter_mode(driver, driver_type)
+
+        logger.info(
+            f"Docker snapshotter mode detected: mode={mode}, "
+            f"driver={driver}, driver_type={driver_type or 'n/a'}, expected={expected}"
+        )
+
+        if expected != "any" and mode != expected:
+            logger.warning(
+                f"Docker snapshotter drift detected: expected={expected}, detected={mode} "
+                f"(driver={driver}, driver_type={driver_type or 'n/a'})"
+            )
+            if expected == "legacy" and mode == "containerd":
+                logger.warning(
+                    "Containerd snapshotter is active while legacy mode is expected. "
+                    "If image loads fail with 'wrong diff id' or 'content digest not found', "
+                    "set containerd-snapshotter=false in docker daemon.json and reload images."
+                )
+    except Exception as e:
+        logger.warning(f"Failed to inspect Docker snapshotter mode: {e}")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan - register on startup, cleanup on shutdown."""
@@ -93,6 +165,7 @@ async def lifespan(app: FastAPI):
     logger.info(f"Controller URL: {settings.controller_url}")
     logger.info(f"Capabilities: {get_capabilities()}")
     logger.info(f"Network backend: {get_network_backend().name}")
+    await _log_docker_snapshotter_mode_at_startup()
 
     # Initialize Redis lock manager
     from agent.locks import DeployLockManager, NoopDeployLockManager, set_lock_manager

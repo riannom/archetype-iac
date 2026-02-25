@@ -46,6 +46,11 @@ class Settings(BaseSettings):
 
     # Docker settings
     docker_socket: str = "unix:///var/run/docker.sock"
+    # Expected Docker image-store mode for startup drift detection:
+    # - "legacy": classic Docker image store (containerd-snapshotter disabled)
+    # - "containerd": containerd snapshotter-backed image store
+    # - "any": report mode only, no mismatch warning
+    docker_snapshotter_expected_mode: str = "legacy"
 
     # Workspace for lab files
     workspace_path: str = "/var/lib/archetype-agent"
