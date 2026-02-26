@@ -671,10 +671,10 @@ async def test_cross_host_convergence_retries_after_mapping_refresh(
 
 
 @pytest.mark.asyncio
-async def test_cross_host_convergence_repairs_when_mappings_still_missing(
+async def test_cross_host_convergence_skips_when_mappings_still_missing(
     test_db, sample_lab, multiple_hosts,
 ):
-    """Persistent mapping misses should trigger full link repair fallback."""
+    """Persistent mapping misses should not trigger full link repair fallback."""
     host_a, host_b = multiple_hosts[0], multiple_hosts[1]
     _make_node(
         test_db,
@@ -727,6 +727,6 @@ async def test_cross_host_convergence_repairs_when_mappings_still_missing(
                 )
 
     assert mock_refresh.await_count == 1
-    assert mock_repair.await_count == 1
+    mock_repair.assert_not_awaited()
     mock_set_vlan.assert_not_awaited()
     assert result == {"updated": 0, "errors": 0}

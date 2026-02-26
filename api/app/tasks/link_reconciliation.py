@@ -755,6 +755,11 @@ async def run_cross_host_port_convergence(
     tags to VXLAN tunnel ports, but nobody pushes DB tags to container ports.
     This function closes that gap.
 
+    Missing InterfaceMapping records are treated as a non-fatal condition.
+    Cross-host links can include VM endpoints that are not returned by the
+    agent /labs/{lab_id}/port-state endpoint, so we must not trigger full
+    link repair solely due to mapping absence.
+
     Uses InterfaceMapping to look up OVS port names, then calls
     set_port_vlan_on_agent for any container port whose current VLAN
     doesn't match the DB-stored tag.
@@ -839,29 +844,13 @@ async def run_cross_host_port_convergence(
             missing_mappings,
         )
         await refresh_interface_mappings(session, host_to_agent)
-        agent_corrections, still_missing, still_missing_link_ids = _collect_agent_corrections()
+        agent_corrections, still_missing, _ = _collect_agent_corrections()
         if still_missing:
             logger.warning(
-                "Cross-host port convergence still missing InterfaceMapping data for %s endpoint(s) after refresh",
+                "Cross-host port convergence still missing InterfaceMapping data for %s endpoint(s) "
+                "after refresh; skipping endpoint corrections for those sides",
                 still_missing,
             )
-            repaired = 0
-            failed = 0
-            for link_id in still_missing_link_ids:
-                link = session.get(models.LinkState, link_id)
-                if not link:
-                    continue
-                if await attempt_link_repair(session, link, host_to_agent):
-                    repaired += 1
-                else:
-                    failed += 1
-            if repaired or failed:
-                session.commit()
-                logger.info(
-                    "Cross-host fallback repair after mapping miss: repaired=%s failed=%s",
-                    repaired,
-                    failed,
-                )
 
     if not agent_corrections:
         return result
