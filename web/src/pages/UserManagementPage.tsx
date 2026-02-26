@@ -139,10 +139,10 @@ const UserManagementPage: React.FC = () => {
   }, []);
 
   useEffect(() => {
-    if (currentUser) {
+    if (currentUser?.id) {
       loadUsers();
     }
-  }, [currentUser, loadUsers]);
+  }, [currentUser?.id, loadUsers]);
 
   // ============================================================================
   // Modal Helpers
