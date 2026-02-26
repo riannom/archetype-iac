@@ -1,6 +1,6 @@
 # Obsidian Update
 
-Date: 2026-02-25
+Date: 2026-02-26
 
 ## Resiliency hardening applied
 
@@ -20,3 +20,10 @@ Date: 2026-02-25
 - Agent targeted tests: pass
 - API targeted tests (containerized): pass
 - Lint (`ruff check`) on changed files: pass
+
+## Vendor catalog identity lessons learned
+
+- Avoid split source-of-truth for device identity: serving from registry + DB in parallel causes alias/runtime-kind drift.
+- Keep DB authoritative at read time, but continuously sync it from runtime sources (vendor registry + custom devices).
+- Make sync idempotent and deterministic with fingerprinting, and guard against race conditions with process lock + Postgres advisory lock.
+- Do not skip sync purely on cached fingerprint when catalog is not yet seeded; include a seeded-state check.
