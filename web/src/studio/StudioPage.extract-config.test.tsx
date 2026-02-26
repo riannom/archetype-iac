@@ -11,62 +11,84 @@ const mockFetch = vi.fn();
 const wsRefresh = vi.fn();
 const userLogout = vi.fn();
 const userRefresh = vi.fn();
+const userHasRole = vi.fn(() => true);
+const userIsAdmin = vi.fn(() => true);
+const themeSetMode = vi.fn();
+const themeToggleMode = vi.fn();
+const addNotification = vi.fn();
+const dismissNotification = vi.fn();
+const dismissAllNotifications = vi.fn();
+const refreshImageLibrary = vi.fn();
+const refreshDeviceCatalog = vi.fn();
+const mockDeviceModels: any[] = [];
+const mockDeviceCategories: any[] = [];
+const mockVendorCategories: any[] = [];
+
+const themeContextValue = {
+  effectiveMode: 'light',
+  mode: 'light',
+  setMode: themeSetMode,
+  toggleMode: themeToggleMode,
+};
+
+const notificationContextValue = {
+  notifications: [],
+  addNotification,
+  dismissNotification,
+  dismissAllNotifications,
+};
+
+const userContextValue = {
+  user: { id: 'u1', username: 'test', global_role: 'super_admin' },
+  loading: false,
+  logout: userLogout,
+  refreshUser: userRefresh,
+  hasRole: userHasRole,
+  isAdmin: userIsAdmin,
+};
+
+const imageLibraryContextValue = {
+  imageLibrary: [],
+  loading: false,
+  error: null,
+  refreshImageLibrary,
+};
+
+const deviceCatalogContextValue = {
+  vendorCategories: mockVendorCategories,
+  deviceModels: mockDeviceModels,
+  deviceCategories: mockDeviceCategories,
+  addCustomDevice: vi.fn(),
+  removeCustomDevice: vi.fn(),
+  loading: false,
+  error: null,
+  refresh: refreshDeviceCatalog,
+};
 
 vi.mock('../theme/index', async () => {
   const actual = await vi.importActual('../theme/index');
   return {
     ...actual,
-    useTheme: () => ({
-      effectiveMode: 'light',
-      mode: 'light',
-      setMode: vi.fn(),
-      toggleMode: vi.fn(),
-    }),
+    useTheme: () => themeContextValue,
   };
 });
 
 vi.mock('../contexts/NotificationContext', () => ({
-  useNotifications: () => ({
-    notifications: [],
-    addNotification: vi.fn(),
-    dismissNotification: vi.fn(),
-    dismissAllNotifications: vi.fn(),
-  }),
+  useNotifications: () => notificationContextValue,
 }));
 
 vi.mock('../contexts/UserContext', () => ({
-  useUser: () => ({
-    user: { id: 'u1', username: 'test', global_role: 'super_admin' },
-    loading: false,
-    logout: userLogout,
-    refreshUser: userRefresh,
-    hasRole: () => true,
-    isAdmin: () => true,
-  }),
+  useUser: () => userContextValue,
   UserProvider: ({ children }: { children: React.ReactNode }) => children,
 }));
 
 vi.mock('../contexts/ImageLibraryContext', () => ({
-  useImageLibrary: () => ({
-    imageLibrary: [],
-    loading: false,
-    error: null,
-    refreshImageLibrary: vi.fn(),
-  }),
+  useImageLibrary: () => imageLibraryContextValue,
   ImageLibraryProvider: ({ children }: { children: React.ReactNode }) => children,
 }));
 
 vi.mock('../contexts/DeviceCatalogContext', () => ({
-  useDeviceCatalog: () => ({
-    vendorCategories: [],
-    deviceModels: [],
-    deviceCategories: [],
-    addCustomDevice: vi.fn(),
-    removeCustomDevice: vi.fn(),
-    loading: false,
-    error: null,
-    refresh: vi.fn(),
-  }),
+  useDeviceCatalog: () => deviceCatalogContextValue,
   DeviceCatalogProvider: ({ children }: { children: React.ReactNode }) => children,
 }));
 
@@ -130,6 +152,13 @@ function setupFetch(extractResponse: { ok: boolean; body: unknown; status?: numb
         json: () => Promise.resolve({ id: 'u1', username: 'test', global_role: 'super_admin' }),
       };
     }
+    if (url.includes('/extract-config')) {
+      return {
+        ok: extractResponse.ok,
+        status: extractResponse.status ?? (extractResponse.ok ? 200 : 500),
+        json: () => Promise.resolve(extractResponse.body),
+      };
+    }
     if (url.includes('/labs') && !url.includes('/export-graph')) {
       return {
         ok: true,
@@ -185,13 +214,6 @@ function setupFetch(extractResponse: { ok: boolean; body: unknown; status?: numb
     }
     if (url.includes('/jobs')) {
       return { ok: true, status: 200, json: () => Promise.resolve({ jobs: [] }) };
-    }
-    if (url.includes('/extract-config')) {
-      return {
-        ok: extractResponse.ok,
-        status: extractResponse.status ?? (extractResponse.ok ? 200 : 500),
-        json: () => Promise.resolve(extractResponse.body),
-      };
     }
     return { ok: true, status: 200, json: () => Promise.resolve({}) };
   });
