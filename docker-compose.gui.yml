@@ -65,6 +65,8 @@ services:
       - AGENT_SECRET=${AGENT_SECRET:-}
       # Agent updates (callback URL for external agents)
       - INTERNAL_URL=${INTERNAL_URL:-http://localhost:8000}
+      # Device/image catalog: keep DB authoritative at runtime
+      - CATALOG_MANIFEST_MIRROR_ENABLED=false
     volumes:
       - archetype_workspaces:/var/lib/archetype
       - /var/run/docker.sock:/var/run/docker.sock
@@ -105,6 +107,8 @@ services:
       - LOKI_URL=${LOKI_URL:-http://loki:3100}
       - AGENT_SECRET=${AGENT_SECRET:-}
       - INTERNAL_URL=${INTERNAL_URL:-http://localhost:8000}
+      # Device/image catalog: keep DB authoritative at runtime
+      - CATALOG_MANIFEST_MIRROR_ENABLED=false
       # Smaller pool for background monitors (fewer concurrent queries, can wait longer)
       - DB_POOL_SIZE=5
       - DB_MAX_OVERFLOW=10
@@ -151,6 +155,8 @@ services:
       - WORKER_EXECUTION_MODE=${WORKER_EXECUTION_MODE:-simple}
       - VRNETLAB_PATH=${VRNETLAB_PATH:-/opt/vrnetlab}
       - QCOW2_STORE=${QCOW2_STORE:-/var/lib/archetype/images}
+      # Device/image catalog: keep DB authoritative at runtime
+      - CATALOG_MANIFEST_MIRROR_ENABLED=false
     volumes:
       - archetype_workspaces:/var/lib/archetype
       - /var/run/docker.sock:/var/run/docker.sock
