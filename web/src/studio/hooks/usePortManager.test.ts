@@ -54,6 +54,7 @@ const testDeviceModels: DeviceModel[] = [
     isActive: true,
     vendor: "Cisco",
     kind: "cisco_c8000v",
+    compatibilityAliases: ["cat8000v"],
     portNaming: "GigabitEthernet",
     portStartIndex: 1,
     maxPorts: 12,
