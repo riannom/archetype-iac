@@ -1,15 +1,5 @@
 # Lessons Learned
 
-## 2026-02-26: Split source-of-truth for vendor identity causes silent drift
-
-**Bug**: Vendor category/model data came from runtime registry (`agent.vendors`) while identity aliases/runtime-kind could come from DB when seeded. This created drift windows where `/vendors` and `/vendors/identity-map` could disagree after vendor changes unless backfill was rerun.
-
-**Impact**: Alias resolution and runtime-kind display could become inconsistent across UI and API, especially for shared-image families and multi-alias device types. Troubleshooting became ambiguous because behavior depended on seed state.
-
-**Fix**: Added `ensure_catalog_identity_synced()` in `catalog_service` to upsert vendors/devices/aliases/revisions from runtime registry + custom devices before serving identity. Added startup sync in API lifespan. Added in-process fingerprint cache + Postgres advisory transaction lock to prevent concurrent sync races across workers.
-
-**Rule**: Never serve identity metadata from mixed authorities. Pick DB as the serving authority and continuously sync it from runtime sources with deterministic locking and idempotent upserts.
-
 ## 2026-02-14: sed `a` command does NOT interpret `\t` as tab in single quotes
 
 **Bug**: `sed -i '/pattern/a\\ttext' file` produces literal `\t` instead of a tab character.
