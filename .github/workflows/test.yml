@@ -289,12 +289,9 @@ jobs:
             exit 1
           fi
 
-          chunk_size=8
-          chunk=1
-          for ((i=0; i<${#test_files[@]}; i+=chunk_size)); do
-            echo "Running frontend test chunk ${chunk}..."
-            NODE_OPTIONS="--max-old-space-size=6144" npm test -- --run --pool=forks --poolOptions.forks.minForks=1 --poolOptions.forks.maxForks=1 "${test_files[@]:i:chunk_size}"
-            chunk=$((chunk + 1))
+          for test_file in "${test_files[@]}"; do
+            echo "Running frontend test file: ${test_file}"
+            NODE_OPTIONS="--max-old-space-size=6144" npm test -- --run --pool=forks --poolOptions.forks.minForks=1 --poolOptions.forks.maxForks=1 "${test_file}"
           done
 
   lint:
