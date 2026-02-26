@@ -282,7 +282,20 @@ jobs:
       - name: Run tests with coverage
         run: |
           cd web
-          NODE_OPTIONS="--max-old-space-size=8192" npm test -- --run --pool=threads --poolOptions.threads.minThreads=1 --poolOptions.threads.maxThreads=1 --poolOptions.threads.memoryLimit=8192
+          set -euo pipefail
+          mapfile -t test_files < <(find src -type f \( -name "*.test.ts" -o -name "*.test.tsx" \) | sort)
+          if [ ${#test_files[@]} -eq 0 ]; then
+            echo "No frontend test files found."
+            exit 1
+          fi
+
+          chunk_size=40
+          chunk=1
+          for ((i=0; i<${#test_files[@]}; i+=chunk_size)); do
+            echo "Running frontend test chunk ${chunk}..."
+            NODE_OPTIONS="--max-old-space-size=4096" npm test -- --run --pool=threads --poolOptions.threads.minThreads=1 --poolOptions.threads.maxThreads=1 "${test_files[@]:i:chunk_size}"
+            chunk=$((chunk + 1))
+          done
 
   lint:
     name: Lint

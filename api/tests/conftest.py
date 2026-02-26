@@ -111,6 +111,7 @@ def test_client(test_db: Session, test_engine, monkeypatch, tmp_path):
         "workspace": settings.workspace,
         "iso_upload_dir": settings.iso_upload_dir,
         "agent_secret": settings.agent_secret,
+        "catalog_identity_startup_sync_enabled": settings.catalog_identity_startup_sync_enabled,
     }
 
     # Use object.__setattr__ to bypass pydantic model validation/interception
@@ -121,6 +122,7 @@ def test_client(test_db: Session, test_engine, monkeypatch, tmp_path):
     # Disable agent secret by default for test-client runs unless a test
     # explicitly monkeypatches settings.agent_secret.
     object.__setattr__(settings, "agent_secret", "")
+    object.__setattr__(settings, "catalog_identity_startup_sync_enabled", False)
     object.__setattr__(settings, "workspace", str(tmp_path / "workspace"))
     object.__setattr__(settings, "iso_upload_dir", str(tmp_path / "uploads"))
 

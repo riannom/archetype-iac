@@ -166,6 +166,8 @@ class Settings(BaseSettings):
     # Keep manifest.json mirrored from DB catalog for legacy tooling.
     # Runtime manifest usage is deprecated and disabled by default.
     catalog_manifest_mirror_enabled: bool = False
+    # Sync runtime vendor/custom-device identity into catalog tables on API startup.
+    catalog_identity_startup_sync_enabled: bool = True
 
     # ISO import settings
     # Per-file extraction timeout (seconds) - large qcow2 files can take a while
