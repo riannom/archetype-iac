@@ -77,6 +77,25 @@ async def lifespan(app: FastAPI):
         logger.info("Falling back to create_all for database tables")
         models.Base.metadata.create_all(bind=db.engine)
 
+    # Keep catalog identity rows synchronized with runtime registry/custom devices.
+    try:
+        from app.services.catalog_service import ensure_catalog_identity_synced
+
+        with db.get_session() as session:
+            sync_result = ensure_catalog_identity_synced(
+                session,
+                source="runtime_identity_sync",
+            )
+            if sync_result.get("applied"):
+                logger.info("Catalog identity sync applied at startup")
+            else:
+                logger.info(
+                    "Catalog identity sync skipped at startup: %s",
+                    sync_result.get("reason"),
+                )
+    except Exception:
+        logger.exception("Catalog identity startup sync failed; registry fallback will be used")
+
     # Seed admin user if configured
     admin_username = settings.admin_username
     admin_email = settings.admin_email

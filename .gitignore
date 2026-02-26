@@ -9,6 +9,7 @@ venv/
 .pytest_cache/
 CLAUDE.md
 AGENTS.md
+.mcp.json
 
 # Build artifacts
 web/dist/

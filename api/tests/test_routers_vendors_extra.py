@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import app.routers.vendors as vendors_router  # noqa: F401
+from app import models
 
 
 
@@ -46,9 +47,10 @@ def test_list_vendors_includes_server_driven_compatibility_aliases(test_client, 
     }
 
 
-def test_identity_map_endpoint_uses_registry_when_catalog_not_seeded(
+def test_identity_map_endpoint_syncs_registry_into_catalog(
     test_client,
     auth_headers,
+    test_db,
     monkeypatch,
 ) -> None:
     class FakeConfig:
@@ -65,6 +67,51 @@ def test_identity_map_endpoint_uses_registry_when_catalog_not_seeded(
     assert payload["canonical_to_runtime_kind"]["ceos"] == "ceos"
     assert set(payload["canonical_to_aliases"]["ceos"]) == {"eos", "arista_eos", "arista_ceos"}
     assert payload["interface_aliases"]["eos"] == "ceos"
+
+    row = (
+        test_db.query(models.CatalogDeviceType)
+        .filter(models.CatalogDeviceType.canonical_device_id == "ceos")
+        .first()
+    )
+    assert row is not None
+    assert row.runtime_kind == "ceos"
+    assert row.source == "builtin"
+
+
+def test_identity_map_endpoint_syncs_custom_devices_into_catalog(
+    test_client,
+    auth_headers,
+    test_db,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr("agent.vendors.VENDOR_CONFIGS", {})
+    monkeypatch.setattr("app.image_store.get_image_compatibility_aliases", lambda: {})
+    monkeypatch.setattr(
+        "app.image_store.load_custom_devices",
+        lambda: [
+            {
+                "id": "my-edge",
+                "name": "My Edge",
+                "kind": "my_edge_kind",
+                "vendor": "Acme",
+                "type": "router",
+                "supportedImageKinds": ["qcow2"],
+            }
+        ],
+    )
+
+    resp = test_client.get("/vendors/identity-map", headers=auth_headers)
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload["canonical_to_runtime_kind"]["my-edge"] == "my_edge_kind"
+
+    row = (
+        test_db.query(models.CatalogDeviceType)
+        .filter(models.CatalogDeviceType.canonical_device_id == "my-edge")
+        .first()
+    )
+    assert row is not None
+    assert row.source == "custom"
 
 
 def test_add_custom_device_errors(test_client, auth_headers, monkeypatch) -> None:

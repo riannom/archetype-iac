@@ -92,13 +92,21 @@ def _build_identity_map_from_registry() -> dict:
 
 
 def _get_identity_map(database: Session) -> dict:
-    from app.services.catalog_service import catalog_is_seeded, get_catalog_identity_map
+    from app.services.catalog_service import (
+        catalog_is_seeded,
+        ensure_catalog_identity_synced,
+        get_catalog_identity_map,
+    )
 
     try:
+        ensure_catalog_identity_synced(database, source="runtime_identity_sync")
         if catalog_is_seeded(database):
             return get_catalog_identity_map(database)
     except Exception:
-        pass
+        try:
+            database.rollback()
+        except Exception:
+            pass
     return _build_identity_map_from_registry()
 
 
