@@ -651,6 +651,11 @@ class TopologyService:
         existing_nodes = {n.gui_id: n for n in self.get_nodes(lab_id)}
         existing_links = {lnk.link_name: lnk for lnk in self.get_links(lab_id)}
 
+        # Index existing nodes by container_name for host_id carryover
+        # When a node gets a new GUI ID but keeps the same container_name,
+        # the old row will be deleted; we carry over host_id to the replacement
+        old_nodes_by_name = {n.container_name: n for n in existing_nodes.values()}
+
         # Track which records we've seen
         seen_node_gui_ids: set[str] = set()
         seen_link_names: set[str] = set()
@@ -781,6 +786,17 @@ class TopologyService:
                     mi = self.db.get(models.AgentManagedInterface, managed_interface_id)
                     if mi:
                         effective_host_id = mi.host_id
+                # Carry over host_id from old node with same container_name
+                # (GUI ID changed but container identity preserved)
+                if effective_host_id is None:
+                    old_node = old_nodes_by_name.get(container_name)
+                    if old_node and old_node.host_id:
+                        effective_host_id = old_node.host_id
+                        logger.debug(
+                            f"Carrying over host_id={old_node.host_id} from old node "
+                            f"gui_id={old_node.gui_id} to new node gui_id={graph_node.id} "
+                            f"(container_name={container_name})"
+                        )
                 node = models.Node(
                     lab_id=lab_id,
                     gui_id=graph_node.id,

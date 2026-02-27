@@ -395,6 +395,49 @@ def _backfill_placement_node_ids(session, lab_id: str) -> int:
     return count
 
 
+def cleanup_orphaned_node_states(session, lab_id: str) -> int:
+    """Delete orphaned NodeState rows for a lab.
+
+    Orphaned NodeStates have node_definition_id IS NULL, meaning the Node
+    definition they referenced was deleted (e.g., GUI ID change without
+    name-match reuse). Only deletes rows in safe actual_states to avoid
+    disrupting active containers.
+
+    Returns:
+        Number of orphaned NodeStates deleted
+    """
+    safe_states = (
+        NodeActualState.UNDEPLOYED,
+        NodeActualState.STOPPED,
+        NodeActualState.ERROR,
+    )
+    orphaned = (
+        session.query(models.NodeState)
+        .filter(
+            models.NodeState.lab_id == lab_id,
+            models.NodeState.node_definition_id.is_(None),
+            models.NodeState.actual_state.in_(safe_states),
+        )
+        .all()
+    )
+
+    if not orphaned:
+        return 0
+
+    count = 0
+    for ns in orphaned:
+        logger.info(
+            f"Removing orphaned NodeState: lab={lab_id} node_id={ns.node_id} "
+            f"node_name={ns.node_name} actual_state={ns.actual_state}"
+        )
+        session.delete(ns)
+        count += 1
+
+    if count:
+        session.commit()
+    return count
+
+
 _lab_orphan_check_counter = 0
 _LAB_ORPHAN_CHECK_INTERVAL = settings.lab_orphan_check_multiplier
 
@@ -963,6 +1006,15 @@ async def _do_reconcile_lab(session, lab, lab_id: str) -> int:
     except Exception as e:
         session.rollback()
         logger.debug(f"Failed to backfill placement node IDs for lab {lab_id}: {e}")
+
+    # Clean up orphaned NodeState records (node_definition_id IS NULL)
+    try:
+        ns_deleted = cleanup_orphaned_node_states(session, lab_id)
+        if ns_deleted > 0:
+            logger.info(f"Cleaned up {ns_deleted} orphaned NodeState record(s) for lab {lab_id}")
+    except Exception as e:
+        session.rollback()
+        logger.debug(f"Failed to clean up orphaned node states for lab {lab_id}: {e}")
 
     # Get ALL agents that have nodes for this lab (multi-host support)
     try:

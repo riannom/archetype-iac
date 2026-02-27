@@ -238,10 +238,23 @@ def _upsert_node_states(
     # Track old node_ids that were reused via name-match (skip in removal pass)
     reused_old_ids: set[str] = set()
 
+    # Build lookup from GUI ID → Node definition for node_definition_id FK
+    node_defs_by_gui_id: dict[str, models.Node] = {}
+    for node_def in (
+        database.query(models.Node)
+        .filter(models.Node.lab_id == lab_id)
+        .all()
+    ):
+        node_defs_by_gui_id[node_def.gui_id] = node_def
+
     # Update or create node states
     for node in graph.nodes:
         # Use container_name (YAML key) for container operations, fall back to name
         container_name = node.container_name or node.name
+        # Resolve the Node definition FK (stable UUID)
+        node_def = node_defs_by_gui_id.get(node.id)
+        node_def_id = node_def.id if node_def else None
+
         if node.id in existing_by_node_id:
             existing_state = existing_by_node_id[node.id]
             # Fix node_name if it was set as a placeholder from lazy initialization.
@@ -252,12 +265,16 @@ def _upsert_node_states(
                 # This was a placeholder - safe to correct it
                 existing_state.node_name = container_name
             # If node_name != node_id, it was already set correctly or deployed - don't touch
+            # Always keep node_definition_id in sync
+            if node_def_id and existing_state.node_definition_id != node_def_id:
+                existing_state.node_definition_id = node_def_id
         elif container_name in existing_by_name:
             # Node exists by name but GUI ID changed — reuse the existing state
             # to prevent duplicate node_states for the same container
             existing_state = existing_by_name[container_name]
             old_id = existing_state.node_id
             existing_state.node_id = node.id
+            existing_state.node_definition_id = node_def_id
             reused_old_ids.add(old_id)
         else:
             # Create new with defaults - node_name is set only once at creation
@@ -265,6 +282,7 @@ def _upsert_node_states(
                 lab_id=lab_id,
                 node_id=node.id,
                 node_name=container_name,
+                node_definition_id=node_def_id,
                 desired_state=NodeDesiredState.STOPPED,
                 actual_state=NodeActualState.UNDEPLOYED,
             )

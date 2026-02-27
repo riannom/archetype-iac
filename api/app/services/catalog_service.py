@@ -1,6 +1,8 @@
 """DB-backed catalog helpers for device/image identity and compatibility."""
 from __future__ import annotations
 
+import logging
+import os
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -16,6 +18,11 @@ from sqlalchemy.exc import OperationalError, ProgrammingError
 from sqlalchemy.orm import Session
 
 from app import models
+
+log = logging.getLogger(__name__)
+
+# File extensions that represent file-based images (not container images)
+_FILE_BASED_EXTENSIONS = frozenset({".qcow2", ".img", ".iol", ".bin"})
 _NON_WORD_RE = re.compile(r"[^a-z0-9]+")
 
 
@@ -1055,6 +1062,22 @@ def _persist_catalog_snapshot(
         external_id = str(image.get("id") or "").strip()
         if not external_id:
             continue
+
+        # Validate file-based images exist on disk before persisting.
+        # Must happen before row creation to avoid partial DB entries.
+        reference = image.get("reference") or ""
+        if reference:
+            _ext = os.path.splitext(reference)[1].lower()
+            if _ext in _FILE_BASED_EXTENSIONS:
+                from app.image_store import image_store_root
+                full_path = image_store_root() / os.path.basename(reference)
+                if not full_path.exists():
+                    log.warning(
+                        "Skipping phantom catalog entry %s: file %s not found",
+                        external_id, full_path,
+                    )
+                    continue
+
         row = image_rows.get(external_id)
         if row is None:
             row = models.CatalogImage(

@@ -69,6 +69,7 @@ services:
       - CATALOG_MANIFEST_MIRROR_ENABLED=false
     volumes:
       - archetype_workspaces:/var/lib/archetype
+      - /var/lib/archetype/images:/var/lib/archetype/images
       - /var/run/docker.sock:/var/run/docker.sock
       # Mount project directory for agent rebuild functionality
       - .:/app/project:ro
@@ -115,6 +116,7 @@ services:
       - DB_POOL_TIMEOUT=60
     volumes:
       - archetype_workspaces:/var/lib/archetype
+      - /var/lib/archetype/images:/var/lib/archetype/images
       - /var/run/docker.sock:/var/run/docker.sock
     logging:
       driver: "json-file"
@@ -159,6 +161,7 @@ services:
       - CATALOG_MANIFEST_MIRROR_ENABLED=false
     volumes:
       - archetype_workspaces:/var/lib/archetype
+      - /var/lib/archetype/images:/var/lib/archetype/images
       - /var/run/docker.sock:/var/run/docker.sock
       - ${VRNETLAB_PATH:-/opt/vrnetlab}:/opt/vrnetlab
     logging:
@@ -235,6 +238,7 @@ services:
       - /etc/docker/plugins:/etc/docker/plugins
       # Shared images directory for qcow2/IOL images
       - archetype_workspaces:/var/lib/archetype:ro
+      - /var/lib/archetype/images:/var/lib/archetype/images
       # OVMF firmware for EFI-booting VMs (QEMU runs on host, needs host path)
       - /usr/share/OVMF:/usr/share/OVMF:ro
     logging:
