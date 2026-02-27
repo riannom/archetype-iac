@@ -45,7 +45,7 @@ def _disable_reconcile_redis():
 
 
 def _add_node_defs(test_db: Session, lab_id: str, node_names: list[str]) -> None:
-    """Create Node definitions to prevent orphan cleanup."""
+    """Create Node definitions and link existing NodeStates to prevent orphan cleanup."""
     for name in node_names:
         node_def = models.Node(
             lab_id=lab_id,
@@ -56,6 +56,13 @@ def _add_node_defs(test_db: Session, lab_id: str, node_names: list[str]) -> None
             device="linux",
         )
         test_db.add(node_def)
+        test_db.flush()
+        # Link any existing NodeState rows to this definition
+        test_db.query(models.NodeState).filter(
+            models.NodeState.lab_id == lab_id,
+            models.NodeState.node_name == name,
+            models.NodeState.node_definition_id.is_(None),
+        ).update({"node_definition_id": node_def.id})
 
 
 class TestGenerateLinkName:
@@ -1095,13 +1102,19 @@ class TestReconciliationTransitionalStates:
     """Tests for reconciliation behavior with transitional states."""
 
     def _add_node_def(self, test_db, lab_id, node_name):
-        """Create a Node definition to prevent orphan detection."""
+        """Create a Node definition and link existing NodeStates to prevent orphan detection."""
         node_def = models.Node(
             lab_id=lab_id, gui_id=node_name.lower(),
             display_name=node_name, container_name=node_name,
             node_type="device", device="linux",
         )
         test_db.add(node_def)
+        test_db.flush()
+        test_db.query(models.NodeState).filter(
+            models.NodeState.lab_id == lab_id,
+            models.NodeState.node_name == node_name,
+            models.NodeState.node_definition_id.is_(None),
+        ).update({"node_definition_id": node_def.id})
 
     @pytest.mark.asyncio
     async def test_stopping_node_with_timestamp_skipped(
@@ -1389,6 +1402,12 @@ class TestReconciliationWithActiveJobs:
             node_type="device", device="linux",
         )
         test_db.add(node_def)
+        test_db.flush()
+        test_db.query(models.NodeState).filter(
+            models.NodeState.lab_id == lab_id,
+            models.NodeState.node_name == node_name,
+            models.NodeState.node_definition_id.is_(None),
+        ).update({"node_definition_id": node_def.id})
 
     @pytest.mark.asyncio
     async def test_stopping_node_with_active_job_skipped(
@@ -1478,13 +1497,19 @@ class TestReconciliationStateUpdates:
     """Tests for correct state mapping from container status to node state."""
 
     def _add_node_def(self, test_db, lab_id, node_name):
-        """Create a Node definition to prevent orphan detection."""
+        """Create a Node definition and link existing NodeStates to prevent orphan detection."""
         node_def = models.Node(
             lab_id=lab_id, gui_id=node_name.lower(),
             display_name=node_name, container_name=node_name,
             node_type="device", device="linux",
         )
         test_db.add(node_def)
+        test_db.flush()
+        test_db.query(models.NodeState).filter(
+            models.NodeState.lab_id == lab_id,
+            models.NodeState.node_name == node_name,
+            models.NodeState.node_definition_id.is_(None),
+        ).update({"node_definition_id": node_def.id})
 
     @pytest.mark.asyncio
     async def test_container_running_sets_running(
@@ -1497,8 +1522,6 @@ class TestReconciliationStateUpdates:
         sample_lab.state = "running"
         test_db.commit()
 
-        self._add_node_def(test_db, sample_lab.id, "R1")
-
         ns = models.NodeState(
             id=str(uuid4()),
             lab_id=sample_lab.id,
@@ -1508,6 +1531,7 @@ class TestReconciliationStateUpdates:
             actual_state="stopped",
         )
         test_db.add(ns)
+        self._add_node_def(test_db, sample_lab.id, "R1")
         test_db.commit()
 
         with patch("app.tasks.reconciliation.agent_client.is_agent_online", return_value=True):
@@ -1533,8 +1557,6 @@ class TestReconciliationStateUpdates:
         sample_lab.state = "running"
         test_db.commit()
 
-        self._add_node_def(test_db, sample_lab.id, "R1")
-
         ns = models.NodeState(
             id=str(uuid4()),
             lab_id=sample_lab.id,
@@ -1544,6 +1566,7 @@ class TestReconciliationStateUpdates:
             actual_state="running",
         )
         test_db.add(ns)
+        self._add_node_def(test_db, sample_lab.id, "R1")
         test_db.commit()
 
         with patch("app.tasks.reconciliation.agent_client.is_agent_online", return_value=True):
@@ -1568,8 +1591,6 @@ class TestReconciliationStateUpdates:
         sample_lab.state = "running"
         test_db.commit()
 
-        self._add_node_def(test_db, sample_lab.id, "R1")
-
         ns = models.NodeState(
             id=str(uuid4()),
             lab_id=sample_lab.id,
@@ -1579,6 +1600,7 @@ class TestReconciliationStateUpdates:
             actual_state="running",
         )
         test_db.add(ns)
+        self._add_node_def(test_db, sample_lab.id, "R1")
         test_db.commit()
 
         with patch("app.tasks.reconciliation.agent_client.is_agent_online", return_value=True):
@@ -1603,8 +1625,6 @@ class TestReconciliationStateUpdates:
         sample_lab.state = "running"
         test_db.commit()
 
-        self._add_node_def(test_db, sample_lab.id, "R1")
-
         # Create placement so the agent is considered "queried successfully"
         placement = models.NodePlacement(
             lab_id=sample_lab.id,
@@ -1623,6 +1643,7 @@ class TestReconciliationStateUpdates:
             actual_state="running",
         )
         test_db.add(ns)
+        self._add_node_def(test_db, sample_lab.id, "R1")
         test_db.commit()
 
         with patch("app.tasks.reconciliation.agent_client.is_agent_online", return_value=True):

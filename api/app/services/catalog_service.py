@@ -1063,10 +1063,10 @@ def _persist_catalog_snapshot(
         if not external_id:
             continue
 
-        # Validate file-based images exist on disk before persisting.
-        # Must happen before row creation to avoid partial DB entries.
+        # Validate file-based images exist on disk before creating NEW entries.
+        # Existing rows are still updated (e.g. during unassign/reassign).
         reference = image.get("reference") or ""
-        if reference:
+        if reference and external_id not in image_rows:
             _ext = os.path.splitext(reference)[1].lower()
             if _ext in _FILE_BASED_EXTENSIONS:
                 from app.image_store import image_store_root
