@@ -44,6 +44,26 @@
       ],
       "required": true
     },
+    "test-observability-canary-script": {
+      "description": "Script-level regression for observability canary auto-discovery",
+      "command": [
+        "python3",
+        "-m",
+        "pytest",
+        "-q",
+        "tests/scripts/test_observability_canary.py"
+      ],
+      "required": true
+    },
+    "test-api-observability-regression": {
+      "description": "Targeted API regression for best-effort rollback handling",
+      "command": [
+        "/bin/bash",
+        "-lc",
+        "if command -v python3.11 >/dev/null 2>&1; then cd api && PYTHONPATH=\"${PYTHONPATH}:$(pwd)/..\" python3.11 -m pytest -q tests/test_tasks_jobs_advanced.py::TestCaptureNodeIps::test_commit_failure_rolls_back_session; elif docker ps --format '{{.Names}}' | grep -q '^archetype-iac-api-1$'; then docker exec archetype-iac-api-1 /bin/sh -lc 'cd /app && pytest -q tests/test_tasks_jobs_advanced.py::TestCaptureNodeIps::test_commit_failure_rolls_back_session'; else echo 'python3.11 is not available locally and API container archetype-iac-api-1 is not running.' >&2; exit 1; fi"
+      ],
+      "required": true
+    },
     "observability-canary": {
       "description": "Read-only observability canary verification",
       "command": [
@@ -64,6 +84,20 @@
       ],
       "checks": [
         "test-api"
+      ]
+    },
+    {
+      "name": "api-observability-regressions",
+      "areas": [
+        "api",
+        "observability"
+      ],
+      "globs": [
+        "api/app/tasks/jobs.py",
+        "api/tests/test_tasks_jobs_advanced.py"
+      ],
+      "checks": [
+        "test-api-observability-regression"
       ]
     },
     {
@@ -88,6 +122,20 @@
       ],
       "checks": [
         "test-web-container"
+      ]
+    },
+    {
+      "name": "observability-script-tests",
+      "areas": [
+        "observability",
+        "tooling"
+      ],
+      "globs": [
+        "scripts/observability_canary.py",
+        "tests/scripts/test_observability_canary.py"
+      ],
+      "checks": [
+        "test-observability-canary-script"
       ]
     },
     {

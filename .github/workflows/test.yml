@@ -52,6 +52,9 @@ jobs:
           cache: "npm"
           cache-dependency-path: web/package-lock.json
 
+      - name: Install confidence gate tooling
+        run: pip install pytest
+
       - name: Plan selected checks
         id: plan
         run: |
@@ -71,9 +74,9 @@ jobs:
           print("Selected checks:", ", ".join(checks) if checks else "none")
 
           outputs = {
-              "has_api": "true" if "test-api" in checks else "false",
-              "has_agent": "true" if "test-agent" in checks else "false",
-              "has_web": "true" if "test-web-container" in checks else "false",
+              "has_api": "true" if any(check.startswith("test-api") for check in checks) else "false",
+              "has_agent": "true" if any(check.startswith("test-agent") for check in checks) else "false",
+              "has_web": "true" if any(check.startswith("test-web") for check in checks) else "false",
           }
 
           with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as handle:

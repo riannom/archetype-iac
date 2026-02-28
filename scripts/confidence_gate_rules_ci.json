@@ -51,6 +51,26 @@
         "cd web && NODE_OPTIONS=\"--max-old-space-size=8192\" npm test -- --run --pool=threads --poolOptions.threads.minThreads=1 --poolOptions.threads.maxThreads=1 --dangerouslyIgnoreUnhandledErrors"
       ],
       "required": true
+    },
+    "test-observability-canary-script": {
+      "description": "Script-level regression for observability canary auto-discovery",
+      "command": [
+        "python3",
+        "-m",
+        "pytest",
+        "-q",
+        "tests/scripts/test_observability_canary.py"
+      ],
+      "required": true
+    },
+    "test-api-observability-regression": {
+      "description": "Targeted API regression for best-effort rollback handling",
+      "command": [
+        "/bin/bash",
+        "-lc",
+        "cd api && DATABASE_URL=sqlite:///test.db REDIS_URL=redis://localhost:6379/0 WORKSPACE=/tmp/archetype-test PYTHONPATH=\"${PYTHONPATH}:$(pwd)/..\" pytest -q tests/test_tasks_jobs_advanced.py::TestCaptureNodeIps::test_commit_failure_rolls_back_session"
+      ],
+      "required": true
     }
   },
   "rules": [
@@ -64,6 +84,20 @@
       ],
       "checks": [
         "test-api"
+      ]
+    },
+    {
+      "name": "api-observability-regressions",
+      "areas": [
+        "api",
+        "observability"
+      ],
+      "globs": [
+        "api/app/tasks/jobs.py",
+        "api/tests/test_tasks_jobs_advanced.py"
+      ],
+      "checks": [
+        "test-api-observability-regression"
       ]
     },
     {
@@ -88,6 +122,20 @@
       ],
       "checks": [
         "test-web-container"
+      ]
+    },
+    {
+      "name": "observability-script-tests",
+      "areas": [
+        "observability",
+        "tooling"
+      ],
+      "globs": [
+        "scripts/observability_canary.py",
+        "tests/scripts/test_observability_canary.py"
+      ],
+      "checks": [
+        "test-observability-canary-script"
       ]
     },
     {
