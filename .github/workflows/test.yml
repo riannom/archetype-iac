@@ -298,9 +298,11 @@ jobs:
         run: |
           set -euo pipefail
           docker compose -f docker-compose.gui.yml exec -T api /bin/sh -lc \
-            'cd /app && pytest -q tests/test_services_support_bundle.py'
+            'cd /app/project && pytest -q tests/test_grafana_dashboards.py tests/scripts/test_observability_canary.py tests/test_prometheus_alert_rules.py'
+          docker compose -f docker-compose.gui.yml exec -T api /bin/sh -lc \
+            'cd /app && pytest -q tests/test_services_support_bundle.py tests/test_support_bundles.py'
           docker compose -f docker-compose.gui.yml exec -T agent /bin/sh -lc \
-            'cd /app && pytest -q tests/test_auth_middleware.py'
+            'cd /app/agent && pytest -q tests/test_auth_middleware.py'
 
       - name: Run support bundle triage drill
         env:
@@ -315,11 +317,22 @@ jobs:
             --compose-file docker-compose.gui.yml \
             --output-zip /tmp/support-bundle-triage.zip
 
-      - name: Run observability canary target-health gate
+      - name: Run observability canary coverage gate (controlled traffic)
+        env:
+          ADMIN_EMAIL: admin@example.com
+          ADMIN_PASSWORD: changeme123
         run: |
           set -euo pipefail
-          sleep 40
-          make observability-canary
+          python3 scripts/observability_canary.py \
+            --apply \
+            --auto-discover \
+            --api-url http://localhost:8000 \
+            --prometheus-url http://localhost:9090 \
+            --username "${ADMIN_EMAIL}" \
+            --password "${ADMIN_PASSWORD}" \
+            --status-probes 3 \
+            --scrape-wait-seconds 30 \
+            --window 30m
 
       - name: Capture observability logs on failure
         if: failure()

@@ -321,6 +321,14 @@ def _print_coverage(cfg: Config) -> int:
     elif values["job_series_present"] > 0:
         print("[info] job metric series present but no new starts in window")
 
+    if cfg.apply:
+        if values["api_get_lab_status_samples"] <= 0:
+            print("[fail] controlled status probes generated no api_get_lab_status samples")
+            failures += 1
+        if cfg.run_up_down and values["jobs_started"] <= 0:
+            print("[fail] --run-up-down requested but no jobs_started samples observed")
+            failures += 1
+
     if failures == 0:
         print("[ok] coverage checks passed")
     return failures

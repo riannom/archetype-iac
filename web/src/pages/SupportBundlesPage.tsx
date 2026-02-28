@@ -18,6 +18,16 @@ type LabOption = { id: string; name: string };
 type AgentOption = { id: string; name: string };
 
 const DEFAULT_WINDOW_HOURS = 24;
+const DOWNLOADABLE_STATUSES = new Set(["completed", "completed_with_warnings"]);
+const PENDING_STATUSES = new Set(["pending", "running"]);
+
+function isDownloadableStatus(status: string): boolean {
+  return DOWNLOADABLE_STATUSES.has(status);
+}
+
+function isPendingStatus(status: string): boolean {
+  return PENDING_STATUSES.has(status);
+}
 
 export default function SupportBundlesPage() {
   const navigate = useNavigate();
@@ -74,13 +84,13 @@ export default function SupportBundlesPage() {
 
   useEffect(() => {
     if (!activeBundle) return;
-    if (!["pending", "running"].includes(activeBundle.status)) return;
+    if (!isPendingStatus(activeBundle.status)) return;
 
     const id = window.setInterval(async () => {
       try {
         const updated = await getSupportBundle(activeBundle.id);
         setActiveBundle(updated);
-        if (updated.status === "completed" || updated.status === "failed") {
+        if (!isPendingStatus(updated.status)) {
           window.clearInterval(id);
           void loadData();
         }
@@ -309,10 +319,17 @@ export default function SupportBundlesPage() {
                   {history.map((bundle) => (
                     <tr key={bundle.id} className="border-b border-stone-100 dark:border-stone-800">
                       <td className="py-2">{new Date(bundle.created_at).toLocaleString()}</td>
-                      <td className="py-2">{bundle.status}</td>
+                      <td className="py-2">
+                        <span>{bundle.status}</span>
+                        {(bundle.completeness_warning_count ?? 0) > 0 ? (
+                          <span className="ml-2 text-amber-700 dark:text-amber-400">
+                            ({bundle.completeness_warning_count} warnings)
+                          </span>
+                        ) : null}
+                      </td>
                       <td className="py-2">{bundle.size_bytes ? `${Math.round(bundle.size_bytes / 1024 / 1024)} MB` : "-"}</td>
                       <td className="py-2">
-                        {bundle.status === "completed" ? (
+                        {isDownloadableStatus(bundle.status) ? (
                           <button
                             onClick={() => void downloadBundle(bundle.id)}
                             className="text-sage-600 dark:text-sage-400 font-semibold"

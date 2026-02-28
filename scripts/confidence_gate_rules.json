@@ -55,6 +55,17 @@
       ],
       "required": true
     },
+    "test-prometheus-alert-rules": {
+      "description": "Alert-rule regression checks for required observability alerts",
+      "command": [
+        "python3",
+        "-m",
+        "pytest",
+        "-q",
+        "tests/test_prometheus_alert_rules.py"
+      ],
+      "required": true
+    },
     "test-api-observability-regression": {
       "description": "Targeted API regression for best-effort rollback handling",
       "command": [
@@ -136,6 +147,19 @@
       ],
       "checks": [
         "test-observability-canary-script"
+      ]
+    },
+    {
+      "name": "observability-alert-rules",
+      "areas": [
+        "observability"
+      ],
+      "globs": [
+        "prometheus-alerts.yml",
+        "tests/test_prometheus_alert_rules.py"
+      ],
+      "checks": [
+        "test-prometheus-alert-rules"
       ]
     },
     {

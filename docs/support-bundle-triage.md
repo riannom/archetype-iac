@@ -9,8 +9,22 @@ Check these files first:
 - `manifest.json`: confirms included files, hashes, and size/truncation.
 - `errors.json` (if present): lists artifacts that failed to collect.
 - `incident/user-report.json`: user-reported summary, repro, expected/actual behavior.
+- `system/control-plane-health.json`: API/scheduler/worker/agent + queue snapshot at capture time.
 
 If required artifacts are missing, stop and request a regenerated bundle.
+
+### Completeness Warning Triage
+
+Treat `manifest.json.errors` as follows:
+
+- Hard-fail warnings (must regenerate or escalate observability gap first):
+  - prefix `Coverage gap:`
+  - prefix `Failed `
+- Informational warnings (continue triage, note limitations in escalation packet):
+  - size-cap skips (`Skipped ... bundle size cap ...`)
+  - best-effort artifact collection errors that are not coverage-critical
+
+If any hard-fail warning is present, triage conclusions are lower confidence until the bundle is regenerated.
 
 ## 2. Establish Scope and Timeline
 
@@ -30,6 +44,7 @@ Determine:
 
 Use:
 
+- `system/control-plane-health.json`: control-plane probes + queue snapshot.
 - `system/queue-status.json`: queue depth vs active/running jobs.
 - `system/circuit-breaker.json`: enforcement/circuit breaker state.
 - `observability/prometheus.json`: sampled platform metrics (targets, queue, DB, failures).
