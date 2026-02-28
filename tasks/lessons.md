@@ -439,3 +439,13 @@
 **Fix**: Moved port label rendering to a completely separate SVG overlay element positioned AFTER all node divs in the DOM, with explicit `zIndex: 20`. This ensures labels always render above node elements.
 
 **Rule**: When mixing SVG elements and HTML divs inside a CSS-transformed container, z-index between the two element types is unreliable. To guarantee SVG elements appear above HTML divs, place them in a separate positioned layer after the HTML elements in DOM order.
+
+## 2026-02-27: Complex placement algorithms produce worse results than simple math
+
+**Bug**: A 300-line `linkLabelPlacement.ts` algorithm computed canvas port label positions using candidate generation, perpendicular offsets, overlap scoring, node avoidance, and stagger logic. Despite 3 rewrites (scoring rebalance, full rewrite with `placeLabel()`, simplified on-line placement), labels consistently appeared displaced from their link lines — especially for angled links between distant nodes.
+
+**Impact**: Port assignment labels (interface names like "eth0", "GigabitEthernet1/0/1") floated far from their links, making it impossible to identify which interface was assigned to which connection. Multiple algorithm iterations and container rebuilds failed to fix the visual issue.
+
+**Fix**: Deleted all algorithm usage. Replaced with 3 lines of inline math in Canvas.tsx: `source.x + 0.2 * (target.x - source.x)` for each coordinate. Labels placed at exactly 20% along the link line from each endpoint. Confirmed with RED debug text, then restored proper theme colors.
+
+**Rule**: For UI element positioning on geometric shapes (lines, curves), start with the simplest possible math (linear interpolation) before reaching for algorithms. A complex placement algorithm with overlap avoidance and scoring is only justified after proving the simple approach fails. In this case, the simple approach was both correct and sufficient — the algorithm was pure over-engineering that introduced bugs.
