@@ -36,6 +36,7 @@ from agent.vendors import (
     get_libvirt_config,
     get_config_extraction_settings,
     get_config_by_device,
+    get_vendors_for_ui,
     is_ceos_kind,
     is_cjunos_kind,
     list_supported_kinds,
@@ -486,3 +487,70 @@ class TestMiscHelpers:
 
     def test_get_default_image_unknown(self):
         assert get_default_image("unknown_xyz") is None
+
+
+# =============================================================================
+# get_vendors_for_ui — subcategory completeness and device visibility
+# =============================================================================
+
+
+class TestGetVendorsForUI:
+    """Tests for get_vendors_for_ui function."""
+
+    def test_all_vendor_configs_appear_in_output(self):
+        """Every device in VENDOR_CONFIGS must appear in the UI output."""
+        result = get_vendors_for_ui()
+        ui_ids = set()
+        for cat in result:
+            for dev in cat.get("models", []):
+                ui_ids.add(dev["id"])
+            for sub in cat.get("subCategories", []):
+                for dev in sub.get("models", []):
+                    ui_ids.add(dev["id"])
+        missing = set(VENDOR_CONFIGS.keys()) - ui_ids
+        assert not missing, f"Devices missing from UI output: {missing}"
+
+    def test_wireless_subcategory_present(self):
+        """The Wireless subcategory must appear under Network."""
+        result = get_vendors_for_ui()
+        network = next((c for c in result if c["name"] == "Network"), None)
+        assert network is not None
+        subcat_names = [s["name"] for s in network.get("subCategories", [])]
+        assert "Wireless" in subcat_names
+
+    def test_cat9800_in_wireless_subcategory(self):
+        """cat9800 must appear in the Wireless subcategory."""
+        result = get_vendors_for_ui()
+        network = next((c for c in result if c["name"] == "Network"), None)
+        wireless = next(
+            (s for s in network.get("subCategories", []) if s["name"] == "Wireless"),
+            None,
+        )
+        assert wireless is not None
+        ids = [m["id"] for m in wireless["models"]]
+        assert "cat9800" in ids
+
+    def test_no_empty_subcategories_in_output(self):
+        """Output should not contain empty subcategories."""
+        result = get_vendors_for_ui()
+        for cat in result:
+            for sub in cat.get("subCategories", []):
+                assert sub.get("models"), (
+                    f"Empty subcategory '{sub['name']}' in '{cat['name']}'"
+                )
+
+
+class TestLinuxDeviceSupportedImageKinds:
+    """Tests for linux device image kind configuration."""
+
+    def test_linux_accepts_docker_and_qcow2(self):
+        """linux device must accept both docker and qcow2 images."""
+        config = VENDOR_CONFIGS["linux"]
+        assert "docker" in config.supported_image_kinds
+        assert "qcow2" in config.supported_image_kinds
+
+    def test_alpine_accepts_docker_and_qcow2(self):
+        """alpine device must also accept both kinds."""
+        config = VENDOR_CONFIGS["alpine"]
+        assert "docker" in config.supported_image_kinds
+        assert "qcow2" in config.supported_image_kinds

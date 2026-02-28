@@ -353,6 +353,52 @@ class TestCreateDeviceConfigFromNodeDef:
 
         assert config["vendor"] == "Cisco"
 
+    def test_supported_image_kinds_default_qcow2(self):
+        """Test default VM devices get qcow2 supportedImageKinds."""
+        node_def = ParsedNodeDefinition(
+            id="test-router",
+            label="Test Router",
+            libvirt_driver="kvm",
+        )
+
+        config = create_device_config_from_node_def(node_def)
+
+        assert config["supportedImageKinds"] == ["qcow2"]
+
+    def test_supported_image_kinds_docker_device(self):
+        """Test Docker-based devices get docker supportedImageKinds."""
+        node_def = ParsedNodeDefinition(
+            id="chrome",
+            label="Chrome Browser",
+            libvirt_driver="docker",
+        )
+
+        config = create_device_config_from_node_def(node_def)
+
+        assert config["supportedImageKinds"] == ["docker"]
+
+    def test_supported_image_kinds_iol_device(self):
+        """Test IOL devices get iol supportedImageKinds."""
+        node_def = ParsedNodeDefinition(
+            id="iol-xe",
+            label="IOL XE",
+        )
+
+        config = create_device_config_from_node_def(node_def)
+
+        assert config["supportedImageKinds"] == ["iol"]
+
+    def test_supported_image_kinds_iol_in_id(self):
+        """Test devices with 'iol' in ID get iol supportedImageKinds."""
+        node_def = ParsedNodeDefinition(
+            id="ioll2-xe",
+            label="IOL L2 XE",
+        )
+
+        config = create_device_config_from_node_def(node_def)
+
+        assert config["supportedImageKinds"] == ["iol"]
+
 
 class TestGenerateTags:
     """Tests for _generate_tags function."""

@@ -1563,6 +1563,7 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         port_start_index=0,
         max_ports=8,
         requires_image=False,
+        supported_image_kinds=["docker", "qcow2"],
         documentation_url="https://docs.docker.com/",
         tags=["host", "linux", "container", "testing"],
         # Container runtime configuration
@@ -2710,9 +2711,10 @@ def get_vendors_for_ui() -> list[dict]:
 
         if has_subcategories:
             cat_data["subCategories"] = []
-            # Define subcategory order for Network
-            subcat_order = ["Routers", "Switches", "Load Balancers", "_direct"]
-            for subcat in subcat_order:
+            # Define preferred subcategory order; any unlisted ones appended
+            subcat_order = ["Routers", "Switches", "Wireless", "Load Balancers"]
+            remaining = [k for k in subcats if k != "_direct" and k not in subcat_order]
+            for subcat in subcat_order + remaining + ["_direct"]:
                 if subcat not in subcats:
                     continue
                 if subcat == "_direct":
