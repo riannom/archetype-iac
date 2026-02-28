@@ -171,7 +171,7 @@ jobs:
             --username "${ADMIN_EMAIL}" \
             --password "${ADMIN_PASSWORD}" \
             --status-probes 3 \
-            --scrape-wait-seconds 30 \
+            --scrape-wait-seconds 65 \
             --window 30m \
             2>&1 | tee /tmp/observability-maintenance/canary.log
 

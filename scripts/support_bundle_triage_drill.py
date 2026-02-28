@@ -72,7 +72,11 @@ from uuid import uuid4
 from app import models
 from app.db import get_session
 
+triage_marker = "[support-bundle-triage-drill]"
+triage_action = "support:bundle-triage-drill"
+triage_lab_prefix = "ci-triage-lab-"
 message = (
+    f"{triage_marker} "
     "ERROR: this session's transaction has been rolled back after an exception. "
     "Automatic recovery attempted but rollback failed while cleaning up."
 )
@@ -88,11 +92,11 @@ with get_session() as session:
         raise RuntimeError("No super_admin user found for support-bundle drill")
 
     lab = models.Lab(
-        name=f"ci-triage-lab-{uuid4().hex[:8]}",
+        name=f"{triage_lab_prefix}{uuid4().hex[:8]}",
         owner_id=user.id,
         provider="docker",
         state="error",
-        state_error="Synthetic support-bundle triage drill",
+        state_error=f"{triage_marker} Synthetic support-bundle triage drill",
     )
     session.add(lab)
     session.commit()
@@ -101,7 +105,7 @@ with get_session() as session:
     job = models.Job(
         lab_id=lab.id,
         user_id=user.id,
-        action="up",
+        action=triage_action,
         status="failed",
         log_path=message,
     )

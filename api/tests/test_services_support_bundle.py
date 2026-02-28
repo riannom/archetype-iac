@@ -78,6 +78,18 @@ class TestZipBuilder:
         assert builder.files[0]["sha256"] == expected_hash
 
 
+def test_resolve_worker_metrics_urls_includes_host_mode_fallbacks(monkeypatch):
+    from app.services import support_bundle as support_bundle_module
+
+    monkeypatch.setattr(support_bundle_module, "WORKER_METRICS_URLS_RAW", "")
+    monkeypatch.setattr(support_bundle_module, "WORKER_METRICS_URL", "http://worker:8003/metrics")
+
+    urls = support_bundle_module._resolve_worker_metrics_urls()
+    assert "http://worker:8003/metrics" in urls
+    assert "http://local-agent:8003/metrics" in urls
+    assert "http://host.docker.internal:8003/metrics" in urls
+
+
 class TestSanitizeData:
     """Tests for sensitive data redaction."""
 
@@ -746,3 +758,85 @@ class TestBuildSupportBundleEndToEnd:
             assert any("jobs started in 2h window but no archetype_job_duration_seconds samples" in item for item in errors)
             assert any("jobs started in 2h window but no archetype_job_queue_wait_seconds samples" in item for item in errors)
             assert any("scheduler /healthz reported status 'degraded'" in item for item in errors)
+
+    @pytest.mark.asyncio
+    async def test_build_support_bundle_flags_prometheus_query_failures_and_worker_probe_fallback(
+        self,
+        test_db: Session,
+        test_user: models.User,
+        sample_lab: models.Lab,
+        monkeypatch,
+    ):
+        from app.services import support_bundle as support_bundle_module
+
+        bundle = models.SupportBundle(
+            user_id=test_user.id,
+            status="running",
+            include_configs=False,
+            pii_safe=True,
+            time_window_hours=24,
+            options_json=json.dumps({"impacted_lab_ids": [sample_lab.id], "impacted_agent_ids": []}),
+            incident_json=json.dumps(
+                {
+                    "summary": "Coverage check",
+                    "repro_steps": "N/A",
+                    "expected_behavior": "N/A",
+                    "actual_behavior": "N/A",
+                }
+            ),
+        )
+
+        async def _raise_prometheus(_expr: str, **_kwargs) -> dict:
+            raise RuntimeError("prometheus unavailable")
+
+        async def _raise_targets() -> dict:
+            raise RuntimeError("targets unavailable")
+
+        async def _raise_alerts() -> dict:
+            raise RuntimeError("alerts unavailable")
+
+        async def _fake_loki_service_logs(_service: str, _since_hours: int, limit: int = 500, **_kwargs) -> dict:
+            return {"status": "success", "data": {"result": []}, "limit": limit}
+
+        async def _fake_loki_label_values(_label: str) -> dict:
+            return {"status": "success", "data": ["api", "worker", "scheduler", "agent"]}
+
+        async def _fake_service_health(_url: str, **_kwargs) -> dict:
+            return {"status": "ok"}
+
+        async def _fake_probe_http_endpoint(url: str, **_kwargs) -> dict:
+            if "worker:8003" in url:
+                raise RuntimeError("name resolution failed")
+            return {
+                "status_code": 200,
+                "ok": True,
+                "content_type": "text/plain",
+                "content_length": 64,
+                "line_count": 3,
+            }
+
+        monkeypatch.setattr(support_bundle_module, "_query_prometheus", _raise_prometheus)
+        monkeypatch.setattr(support_bundle_module, "_query_prometheus_targets", _raise_targets)
+        monkeypatch.setattr(support_bundle_module, "_query_prometheus_alerts", _raise_alerts)
+        monkeypatch.setattr(support_bundle_module, "_query_loki_service_logs", _fake_loki_service_logs)
+        monkeypatch.setattr(support_bundle_module, "_query_loki_label_values", _fake_loki_label_values)
+        monkeypatch.setattr(support_bundle_module, "_query_service_health", _fake_service_health)
+        monkeypatch.setattr(support_bundle_module, "_probe_http_endpoint", _fake_probe_http_endpoint)
+        monkeypatch.setattr(
+            support_bundle_module,
+            "WORKER_METRICS_URLS",
+            ["http://worker:8003/metrics", "http://host.docker.internal:8003/metrics"],
+        )
+
+        archive, _metadata = await build_support_bundle(test_db, bundle)
+        with zipfile.ZipFile(BytesIO(archive), "r") as zf:
+            control_plane = json.loads(zf.read("system/control-plane-health.json"))
+            worker = control_plane["worker"]
+            assert worker["url"] == "http://host.docker.internal:8003/metrics"
+            assert worker["probe"]["ok"] is True
+            assert any("worker:8003" in item for item in worker.get("probe_attempt_errors", []))
+
+            errors = json.loads(zf.read("errors.json"))["errors"]
+            assert any("failed to query Prometheus signal 'targets_up_api'" in item for item in errors)
+            assert any("failed to query Prometheus targets snapshot" in item for item in errors)
+            assert any("failed to query Prometheus alerts snapshot" in item for item in errors)

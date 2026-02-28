@@ -161,3 +161,8 @@ def test_get_support_bundle_includes_completeness_warnings(test_client, test_db,
     assert body["completeness_status"] == "warning"
     assert body["completeness_warning_count"] == 2
     assert len(body["completeness_warnings"]) == 2
+
+
+def test_support_bundle_status_column_fits_completed_with_warnings():
+    status_col = models.SupportBundle.__table__.c.status
+    assert getattr(status_col.type, "length", None) >= len("completed_with_warnings")

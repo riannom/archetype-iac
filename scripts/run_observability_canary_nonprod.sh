@@ -12,6 +12,7 @@ PASSWORD="${CANARY_PASSWORD:-changeme123}"
 LAB_ID="${CANARY_LAB_ID:-}"
 SYNC_NODE_ID="${CANARY_SYNC_NODE_ID:-}"
 WINDOW="${CANARY_WINDOW:-30m}"
+SCRAPE_WAIT_SECONDS="${CANARY_SCRAPE_WAIT_SECONDS:-65}"
 
 ARGS=(
   --apply
@@ -20,7 +21,7 @@ ARGS=(
   --username "$USERNAME"
   --password "$PASSWORD"
   --status-probes 3
-  --scrape-wait-seconds 20
+  --scrape-wait-seconds "$SCRAPE_WAIT_SECONDS"
   --window "$WINDOW"
 )
 

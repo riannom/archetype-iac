@@ -155,6 +155,8 @@ For local/manual runs, use the non-prod maintenance bundle:
 This writes timestamped artifacts under `reports/observability/`, including:
 
 - `canary_<timestamp>.log`
+- `support_bundle_triage_<timestamp>.log`
+- `support_bundle_triage_<timestamp>.zip`
 - `db_report_<timestamp>.log`
 - `link_reservation_drift_<timestamp>.log`
 

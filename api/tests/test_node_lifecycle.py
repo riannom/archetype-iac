@@ -2986,3 +2986,36 @@ class TestPingAgent:
             mock_req.side_effect = Exception("Connection refused")
             with pytest.raises(AgentUnavailableError):
                 await ping_agent(agent)
+
+
+class TestPostOperationCleanup:
+    """Tests for post-operation cleanup session recovery."""
+
+    @pytest.mark.asyncio
+    async def test_rolls_back_session_when_reconcile_fails(self, test_db, test_user, monkeypatch):
+        host = _make_host(test_db)
+        lab = _make_lab(test_db, test_user, agent_id=host.id)
+        job = _make_job(test_db, lab, test_user)
+        manager = _make_manager(test_db, lab, job, [], agent=host)
+        manager.log_parts = []
+        manager._release_db_transaction_for_io = MagicMock()
+
+        rollback_spy = MagicMock(wraps=test_db.rollback)
+        monkeypatch.setattr(test_db, "rollback", rollback_spy)
+
+        with patch(
+            "app.tasks.jobs._create_cross_host_links_if_ready",
+            new_callable=AsyncMock,
+        ) as mock_cross_host, patch(
+            "app.tasks.link_reconciliation.reconcile_lab_links",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("statement timeout"),
+        ):
+            await manager._post_operation_cleanup()
+
+        mock_cross_host.assert_awaited_once()
+        assert rollback_spy.call_count == 1
+        assert any(
+            "Post-op link reconciliation failed" in line
+            for line in manager.log_parts
+        )

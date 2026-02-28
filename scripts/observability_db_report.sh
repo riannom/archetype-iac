@@ -4,17 +4,28 @@ set -euo pipefail
 DAYS="${1:-30}"
 COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.gui.yml}"
 
+# Exclude synthetic support-bundle triage drill jobs from reliability diagnostics.
+# Those rows are intentionally injected to validate bundle triage artifacts.
+
 echo "--- Job duration summary (${DAYS}d) ---"
 docker compose -f "$COMPOSE_FILE" exec -T postgres psql -U archetype -d archetype -c "
 WITH base AS (
   SELECT
-    split_part(action,':',1) AS action_root,
-    status,
-    EXTRACT(EPOCH FROM (completed_at-started_at)) AS dur_s
-  FROM jobs
-  WHERE started_at IS NOT NULL
-    AND completed_at IS NOT NULL
-    AND started_at > NOW() - INTERVAL '${DAYS} days'
+    split_part(j.action,':',1) AS action_root,
+    j.status,
+    EXTRACT(EPOCH FROM (j.completed_at-j.started_at)) AS dur_s
+  FROM jobs j
+  LEFT JOIN labs l ON l.id = j.lab_id
+  WHERE j.started_at IS NOT NULL
+    AND j.completed_at IS NOT NULL
+    AND j.started_at > NOW() - INTERVAL '${DAYS} days'
+    AND NOT (
+      j.action LIKE 'support:bundle-triage-drill%'
+      OR COALESCE(j.log_path, '') ILIKE '%[support-bundle-triage-drill]%'
+      OR COALESCE(l.name, '') LIKE 'ci-triage-lab-%'
+      OR COALESCE(l.state_error, '') ILIKE '%[support-bundle-triage-drill]%'
+      OR COALESCE(l.state_error, '') ILIKE '%synthetic support-bundle triage drill%'
+    )
 )
 SELECT
   action_root,
@@ -33,12 +44,20 @@ echo "--- Failure rate by action_root (${DAYS}d) ---"
 docker compose -f "$COMPOSE_FILE" exec -T postgres psql -U archetype -d archetype -c "
 WITH c AS (
   SELECT
-    split_part(action,':',1) AS action_root,
-    COUNT(*) FILTER (WHERE status='failed') AS failed_runs,
+    split_part(j.action,':',1) AS action_root,
+    COUNT(*) FILTER (WHERE j.status='failed') AS failed_runs,
     COUNT(*) AS total_runs
-  FROM jobs
-  WHERE created_at > NOW() - INTERVAL '${DAYS} days'
-  GROUP BY split_part(action,':',1)
+  FROM jobs j
+  LEFT JOIN labs l ON l.id = j.lab_id
+  WHERE j.created_at > NOW() - INTERVAL '${DAYS} days'
+    AND NOT (
+      j.action LIKE 'support:bundle-triage-drill%'
+      OR COALESCE(j.log_path, '') ILIKE '%[support-bundle-triage-drill]%'
+      OR COALESCE(l.name, '') LIKE 'ci-triage-lab-%'
+      OR COALESCE(l.state_error, '') ILIKE '%[support-bundle-triage-drill]%'
+      OR COALESCE(l.state_error, '') ILIKE '%synthetic support-bundle triage drill%'
+    )
+  GROUP BY split_part(j.action,':',1)
 )
 SELECT
   action_root,
@@ -54,64 +73,72 @@ echo "--- Failure classes (${DAYS}d) ---"
 docker compose -f "$COMPOSE_FILE" exec -T postgres psql -U archetype -d archetype -c "
 SELECT
   CASE
-    WHEN log_path ILIKE '%preflight connectivity check failed%' THEN 'preflight_connectivity_failed'
-    WHEN log_path ILIKE '%preflight image check failed%' THEN 'preflight_image_check_failed'
-    WHEN log_path ILIKE '%preflight image validation failed%' THEN 'preflight_image_validation_failed'
-    WHEN log_path ILIKE '%job timed out after maximum retries%' THEN 'timeout_retries_exhausted'
-    WHEN log_path LIKE 'Job timed out after 300s%' THEN 'timeout_300s'
-    WHEN log_path LIKE 'Job timed out after 1200s%' THEN 'timeout_1200s'
-    WHEN log_path ILIKE '%timed out after%' THEN 'timeout'
-    WHEN log_path ILIKE '%this session''s transaction has been rolled back%' THEN 'db_session_invalidated'
-    WHEN log_path ILIKE '%session is in ''inactive'' state%' THEN 'db_session_invalidated'
-    WHEN log_path ILIKE '%can''t reconnect until invalid transaction is rolled back%' THEN 'db_session_invalidated'
-    WHEN log_path ILIKE '%idle-in-transaction timeout%' THEN 'db_idle_transaction_timeout'
-    WHEN log_path ILIKE '%terminating connection due to idle-in-transaction timeout%' THEN 'db_idle_transaction_timeout'
-    WHEN log_path ILIKE '%server closed the connection unexpectedly%' THEN 'db_connection_closed'
-    WHEN log_path ILIKE '%connection not open%' THEN 'db_connection_closed'
-    WHEN log_path ILIKE '%row is otherwise not present%' THEN 'orm_row_stale'
-    WHEN log_path ILIKE '%objectdeletederror%' THEN 'orm_row_stale'
-    WHEN log_path ILIKE '%staledataerror%' THEN 'orm_row_stale'
-    WHEN log_path LIKE 'Parent job completed or missing%' THEN 'orphaned_child'
-    WHEN log_path ILIKE '%No image found%' THEN 'missing_image'
-    WHEN log_path ILIKE '%docker image not found%' THEN 'missing_image'
-    WHEN log_path ILIKE '%required images not available on agent%' THEN 'missing_image'
-    WHEN log_path ILIKE '%upload/sync required images%' THEN 'missing_image'
-    WHEN log_path ILIKE '%no healthy agent available%' THEN 'no_healthy_agent'
-    WHEN log_path ILIKE '%agent became unavailable%' OR log_path ILIKE '%agent unavailable%' THEN 'agent_unavailable'
-    WHEN log_path ILIKE '%connection refused%' THEN 'agent_connection_refused'
-    WHEN log_path ILIKE '%name or service not known%' THEN 'agent_dns_failure'
-    WHEN log_path ILIKE '%network is unreachable%' OR log_path ILIKE '%host unreachable%' THEN 'agent_unreachable'
-    WHEN log_path ILIKE '%explicit host assignments failed%' OR log_path ILIKE '%assigned host%' THEN 'host_assignment_failed'
-    WHEN log_path ILIKE '%missing or unhealthy agents for hosts%' THEN 'host_assignment_failed'
-    WHEN log_path ILIKE '%insufficient resources%' THEN 'insufficient_resources'
-    WHEN log_path ILIKE '%capacity%' THEN 'capacity_check_failed'
-    WHEN log_path ILIKE '%link setup failed%' THEN 'link_setup_failed'
-    WHEN log_path ILIKE '%per-link tunnel creation failed%' THEN 'link_tunnel_creation_failed'
-    WHEN log_path ILIKE '%could not find ovs port%' THEN 'ovs_port_missing'
-    WHEN log_path ILIKE '%deployment failed on one or more hosts%' THEN 'deploy_partial_failure'
-    WHEN log_path ILIKE '%rollback failed%' THEN 'deploy_rollback_failed'
-    WHEN log_path ILIKE '%stale - cleared after api restart%' THEN 'stale_after_restart'
-    WHEN log_path ILIKE '%docker api error%' THEN 'docker_api_error'
-    WHEN log_path ILIKE '%libvirt error%' AND log_path ILIKE '%domain not found%' THEN 'libvirt_domain_not_found'
-    WHEN log_path ILIKE '%libvirt error%' AND log_path ILIKE '%unsupported configuration%' THEN 'libvirt_unsupported_configuration'
-    WHEN log_path ILIKE '%libvirt error%' THEN 'libvirt_error'
-    WHEN log_path ILIKE '%container creation failed%' THEN 'container_create_failed'
-    WHEN log_path ILIKE '%create failed%' THEN 'container_create_failed'
-    WHEN log_path ILIKE '%completed with % error%' THEN 'partial_failure'
-    WHEN log_path ILIKE '%job execution failed on agent%' THEN 'agent_job_error'
-    WHEN log_path ILIKE '%unknown action%' THEN 'unknown_action'
-    WHEN log_path ILIKE '%unexpected error during job execution%' THEN 'unexpected_job_error'
-    WHEN log_path ILIKE '%failed to create node%' THEN 'create_node_failed'
-    WHEN log_path ILIKE '%failed to start node%' THEN 'start_node_failed'
-    WHEN log_path ILIKE '%failed to stop node%' THEN 'stop_node_failed'
-    WHEN log_path ILIKE '%failed to destroy node%' THEN 'destroy_node_failed'
-    WHEN log_path IS NULL OR log_path='' THEN 'empty'
+    WHEN j.log_path ILIKE '%preflight connectivity check failed%' THEN 'preflight_connectivity_failed'
+    WHEN j.log_path ILIKE '%preflight image check failed%' THEN 'preflight_image_check_failed'
+    WHEN j.log_path ILIKE '%preflight image validation failed%' THEN 'preflight_image_validation_failed'
+    WHEN j.log_path ILIKE '%job timed out after maximum retries%' THEN 'timeout_retries_exhausted'
+    WHEN j.log_path LIKE 'Job timed out after 300s%' THEN 'timeout_300s'
+    WHEN j.log_path LIKE 'Job timed out after 1200s%' THEN 'timeout_1200s'
+    WHEN j.log_path ILIKE '%timed out after%' THEN 'timeout'
+    WHEN j.log_path ILIKE '%this session''s transaction has been rolled back%' THEN 'db_session_invalidated'
+    WHEN j.log_path ILIKE '%session is in ''inactive'' state%' THEN 'db_session_invalidated'
+    WHEN j.log_path ILIKE '%can''t reconnect until invalid transaction is rolled back%' THEN 'db_session_invalidated'
+    WHEN j.log_path ILIKE '%idle-in-transaction timeout%' THEN 'db_idle_transaction_timeout'
+    WHEN j.log_path ILIKE '%terminating connection due to idle-in-transaction timeout%' THEN 'db_idle_transaction_timeout'
+    WHEN j.log_path ILIKE '%server closed the connection unexpectedly%' THEN 'db_connection_closed'
+    WHEN j.log_path ILIKE '%connection not open%' THEN 'db_connection_closed'
+    WHEN j.log_path ILIKE '%row is otherwise not present%' THEN 'orm_row_stale'
+    WHEN j.log_path ILIKE '%objectdeletederror%' THEN 'orm_row_stale'
+    WHEN j.log_path ILIKE '%staledataerror%' THEN 'orm_row_stale'
+    WHEN j.log_path LIKE 'Parent job completed or missing%' THEN 'orphaned_child'
+    WHEN j.log_path ILIKE '%No image found%' THEN 'missing_image'
+    WHEN j.log_path ILIKE '%docker image not found%' THEN 'missing_image'
+    WHEN j.log_path ILIKE '%required images not available on agent%' THEN 'missing_image'
+    WHEN j.log_path ILIKE '%upload/sync required images%' THEN 'missing_image'
+    WHEN j.log_path ILIKE '%no healthy agent available%' THEN 'no_healthy_agent'
+    WHEN j.log_path ILIKE '%agent became unavailable%' OR j.log_path ILIKE '%agent unavailable%' THEN 'agent_unavailable'
+    WHEN j.log_path ILIKE '%connection refused%' THEN 'agent_connection_refused'
+    WHEN j.log_path ILIKE '%name or service not known%' THEN 'agent_dns_failure'
+    WHEN j.log_path ILIKE '%network is unreachable%' OR j.log_path ILIKE '%host unreachable%' THEN 'agent_unreachable'
+    WHEN j.log_path ILIKE '%explicit host assignments failed%' OR j.log_path ILIKE '%assigned host%' THEN 'host_assignment_failed'
+    WHEN j.log_path ILIKE '%missing or unhealthy agents for hosts%' THEN 'host_assignment_failed'
+    WHEN j.log_path ILIKE '%insufficient resources%' THEN 'insufficient_resources'
+    WHEN j.log_path ILIKE '%capacity%' THEN 'capacity_check_failed'
+    WHEN j.log_path ILIKE '%link setup failed%' THEN 'link_setup_failed'
+    WHEN j.log_path ILIKE '%per-link tunnel creation failed%' THEN 'link_tunnel_creation_failed'
+    WHEN j.log_path ILIKE '%could not find ovs port%' THEN 'ovs_port_missing'
+    WHEN j.log_path ILIKE '%deployment failed on one or more hosts%' THEN 'deploy_partial_failure'
+    WHEN j.log_path ILIKE '%rollback failed%' THEN 'deploy_rollback_failed'
+    WHEN j.log_path ILIKE '%stale - cleared after api restart%' THEN 'stale_after_restart'
+    WHEN j.log_path ILIKE '%docker api error%' THEN 'docker_api_error'
+    WHEN j.log_path ILIKE '%libvirt error%' AND j.log_path ILIKE '%domain not found%' THEN 'libvirt_domain_not_found'
+    WHEN j.log_path ILIKE '%libvirt error%' AND j.log_path ILIKE '%unsupported configuration%' THEN 'libvirt_unsupported_configuration'
+    WHEN j.log_path ILIKE '%libvirt error%' THEN 'libvirt_error'
+    WHEN j.log_path ILIKE '%container creation failed%' THEN 'container_create_failed'
+    WHEN j.log_path ILIKE '%create failed%' THEN 'container_create_failed'
+    WHEN j.log_path ILIKE '%completed with % error%' THEN 'partial_failure'
+    WHEN j.log_path ILIKE '%job execution failed on agent%' THEN 'agent_job_error'
+    WHEN j.log_path ILIKE '%unknown action%' THEN 'unknown_action'
+    WHEN j.log_path ILIKE '%unexpected error during job execution%' THEN 'unexpected_job_error'
+    WHEN j.log_path ILIKE '%failed to create node%' THEN 'create_node_failed'
+    WHEN j.log_path ILIKE '%failed to start node%' THEN 'start_node_failed'
+    WHEN j.log_path ILIKE '%failed to stop node%' THEN 'stop_node_failed'
+    WHEN j.log_path ILIKE '%failed to destroy node%' THEN 'destroy_node_failed'
+    WHEN j.log_path IS NULL OR j.log_path='' THEN 'empty'
     ELSE 'other'
   END AS failure_class,
   COUNT(*)
-FROM jobs
-WHERE status='failed'
-  AND created_at > NOW() - INTERVAL '${DAYS} days'
+FROM jobs j
+LEFT JOIN labs l ON l.id = j.lab_id
+WHERE j.status='failed'
+  AND j.created_at > NOW() - INTERVAL '${DAYS} days'
+  AND NOT (
+    j.action LIKE 'support:bundle-triage-drill%'
+    OR COALESCE(j.log_path, '') ILIKE '%[support-bundle-triage-drill]%'
+    OR COALESCE(l.name, '') LIKE 'ci-triage-lab-%'
+    OR COALESCE(l.state_error, '') ILIKE '%[support-bundle-triage-drill]%'
+    OR COALESCE(l.state_error, '') ILIKE '%synthetic support-bundle triage drill%'
+  )
 GROUP BY 1
 ORDER BY 2 DESC;
 "
@@ -122,30 +149,38 @@ docker compose -f "$COMPOSE_FILE" exec -T postgres psql -U archetype -d archetyp
 WITH classified AS (
   SELECT
     CASE
-      WHEN log_path ILIKE '%preflight connectivity check failed%' THEN 'preflight_connectivity_failed'
-      WHEN log_path ILIKE '%preflight image check failed%' THEN 'preflight_image_check_failed'
-      WHEN log_path ILIKE '%preflight image validation failed%' THEN 'preflight_image_validation_failed'
-      WHEN log_path ILIKE '%job timed out after maximum retries%' THEN 'timeout_retries_exhausted'
-      WHEN log_path LIKE 'Job timed out after 300s%' THEN 'timeout_300s'
-      WHEN log_path LIKE 'Job timed out after 1200s%' THEN 'timeout_1200s'
-      WHEN log_path ILIKE '%timed out after%' THEN 'timeout'
-      WHEN log_path ILIKE '%this session''s transaction has been rolled back%' THEN 'db_session_invalidated'
-      WHEN log_path ILIKE '%session is in ''inactive'' state%' THEN 'db_session_invalidated'
-      WHEN log_path ILIKE '%can''t reconnect until invalid transaction is rolled back%' THEN 'db_session_invalidated'
-      WHEN log_path ILIKE '%idle-in-transaction timeout%' THEN 'db_idle_transaction_timeout'
-      WHEN log_path ILIKE '%terminating connection due to idle-in-transaction timeout%' THEN 'db_idle_transaction_timeout'
-      WHEN log_path ILIKE '%server closed the connection unexpectedly%' THEN 'db_connection_closed'
-      WHEN log_path ILIKE '%connection not open%' THEN 'db_connection_closed'
-      WHEN log_path ILIKE '%row is otherwise not present%' THEN 'orm_row_stale'
-      WHEN log_path ILIKE '%objectdeletederror%' THEN 'orm_row_stale'
-      WHEN log_path ILIKE '%staledataerror%' THEN 'orm_row_stale'
-      WHEN log_path ILIKE '%per-link tunnel creation failed%' THEN 'link_tunnel_creation_failed'
-      WHEN log_path ILIKE '%completed with % error%' THEN 'partial_failure'
+      WHEN j.log_path ILIKE '%preflight connectivity check failed%' THEN 'preflight_connectivity_failed'
+      WHEN j.log_path ILIKE '%preflight image check failed%' THEN 'preflight_image_check_failed'
+      WHEN j.log_path ILIKE '%preflight image validation failed%' THEN 'preflight_image_validation_failed'
+      WHEN j.log_path ILIKE '%job timed out after maximum retries%' THEN 'timeout_retries_exhausted'
+      WHEN j.log_path LIKE 'Job timed out after 300s%' THEN 'timeout_300s'
+      WHEN j.log_path LIKE 'Job timed out after 1200s%' THEN 'timeout_1200s'
+      WHEN j.log_path ILIKE '%timed out after%' THEN 'timeout'
+      WHEN j.log_path ILIKE '%this session''s transaction has been rolled back%' THEN 'db_session_invalidated'
+      WHEN j.log_path ILIKE '%session is in ''inactive'' state%' THEN 'db_session_invalidated'
+      WHEN j.log_path ILIKE '%can''t reconnect until invalid transaction is rolled back%' THEN 'db_session_invalidated'
+      WHEN j.log_path ILIKE '%idle-in-transaction timeout%' THEN 'db_idle_transaction_timeout'
+      WHEN j.log_path ILIKE '%terminating connection due to idle-in-transaction timeout%' THEN 'db_idle_transaction_timeout'
+      WHEN j.log_path ILIKE '%server closed the connection unexpectedly%' THEN 'db_connection_closed'
+      WHEN j.log_path ILIKE '%connection not open%' THEN 'db_connection_closed'
+      WHEN j.log_path ILIKE '%row is otherwise not present%' THEN 'orm_row_stale'
+      WHEN j.log_path ILIKE '%objectdeletederror%' THEN 'orm_row_stale'
+      WHEN j.log_path ILIKE '%staledataerror%' THEN 'orm_row_stale'
+      WHEN j.log_path ILIKE '%per-link tunnel creation failed%' THEN 'link_tunnel_creation_failed'
+      WHEN j.log_path ILIKE '%completed with % error%' THEN 'partial_failure'
       ELSE 'other'
     END AS failure_class
-  FROM jobs
-  WHERE status='failed'
-    AND created_at > NOW() - INTERVAL '${DAYS} days'
+  FROM jobs j
+  LEFT JOIN labs l ON l.id = j.lab_id
+  WHERE j.status='failed'
+    AND j.created_at > NOW() - INTERVAL '${DAYS} days'
+    AND NOT (
+      j.action LIKE 'support:bundle-triage-drill%'
+      OR COALESCE(j.log_path, '') ILIKE '%[support-bundle-triage-drill]%'
+      OR COALESCE(l.name, '') LIKE 'ci-triage-lab-%'
+      OR COALESCE(l.state_error, '') ILIKE '%[support-bundle-triage-drill]%'
+      OR COALESCE(l.state_error, '') ILIKE '%synthetic support-bundle triage drill%'
+    )
 )
 SELECT
   failure_class,
@@ -179,28 +214,36 @@ echo "--- Recent failure samples for dominant classes (${DAYS}d) ---"
 docker compose -f "$COMPOSE_FILE" exec -T postgres psql -U archetype -d archetype -c "
 WITH classified AS (
   SELECT
-    created_at,
-    action,
-    LEFT(COALESCE(log_path,'<empty>'), 220) AS sample,
+    j.created_at,
+    j.action,
+    LEFT(COALESCE(j.log_path,'<empty>'), 220) AS sample,
     CASE
-      WHEN log_path LIKE 'Job timed out after 300s%' THEN 'timeout_300s'
-      WHEN log_path ILIKE '%per-link tunnel creation failed%' THEN 'link_tunnel_creation_failed'
-      WHEN log_path ILIKE '%completed with % error%' THEN 'partial_failure'
-      WHEN log_path ILIKE '%this session''s transaction has been rolled back%' THEN 'db_session_invalidated'
-      WHEN log_path ILIKE '%session is in ''inactive'' state%' THEN 'db_session_invalidated'
-      WHEN log_path ILIKE '%can''t reconnect until invalid transaction is rolled back%' THEN 'db_session_invalidated'
-      WHEN log_path ILIKE '%idle-in-transaction timeout%' THEN 'db_idle_transaction_timeout'
-      WHEN log_path ILIKE '%terminating connection due to idle-in-transaction timeout%' THEN 'db_idle_transaction_timeout'
-      WHEN log_path ILIKE '%server closed the connection unexpectedly%' THEN 'db_connection_closed'
-      WHEN log_path ILIKE '%connection not open%' THEN 'db_connection_closed'
-      WHEN log_path ILIKE '%row is otherwise not present%' THEN 'orm_row_stale'
-      WHEN log_path ILIKE '%objectdeletederror%' THEN 'orm_row_stale'
-      WHEN log_path ILIKE '%staledataerror%' THEN 'orm_row_stale'
+      WHEN j.log_path LIKE 'Job timed out after 300s%' THEN 'timeout_300s'
+      WHEN j.log_path ILIKE '%per-link tunnel creation failed%' THEN 'link_tunnel_creation_failed'
+      WHEN j.log_path ILIKE '%completed with % error%' THEN 'partial_failure'
+      WHEN j.log_path ILIKE '%this session''s transaction has been rolled back%' THEN 'db_session_invalidated'
+      WHEN j.log_path ILIKE '%session is in ''inactive'' state%' THEN 'db_session_invalidated'
+      WHEN j.log_path ILIKE '%can''t reconnect until invalid transaction is rolled back%' THEN 'db_session_invalidated'
+      WHEN j.log_path ILIKE '%idle-in-transaction timeout%' THEN 'db_idle_transaction_timeout'
+      WHEN j.log_path ILIKE '%terminating connection due to idle-in-transaction timeout%' THEN 'db_idle_transaction_timeout'
+      WHEN j.log_path ILIKE '%server closed the connection unexpectedly%' THEN 'db_connection_closed'
+      WHEN j.log_path ILIKE '%connection not open%' THEN 'db_connection_closed'
+      WHEN j.log_path ILIKE '%row is otherwise not present%' THEN 'orm_row_stale'
+      WHEN j.log_path ILIKE '%objectdeletederror%' THEN 'orm_row_stale'
+      WHEN j.log_path ILIKE '%staledataerror%' THEN 'orm_row_stale'
       ELSE 'other'
     END AS failure_class
-  FROM jobs
-  WHERE status='failed'
-    AND created_at > NOW() - INTERVAL '${DAYS} days'
+  FROM jobs j
+  LEFT JOIN labs l ON l.id = j.lab_id
+  WHERE j.status='failed'
+    AND j.created_at > NOW() - INTERVAL '${DAYS} days'
+    AND NOT (
+      j.action LIKE 'support:bundle-triage-drill%'
+      OR COALESCE(j.log_path, '') ILIKE '%[support-bundle-triage-drill]%'
+      OR COALESCE(l.name, '') LIKE 'ci-triage-lab-%'
+      OR COALESCE(l.state_error, '') ILIKE '%[support-bundle-triage-drill]%'
+      OR COALESCE(l.state_error, '') ILIKE '%synthetic support-bundle triage drill%'
+    )
 )
 SELECT
   to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS') AS created_utc,
@@ -226,42 +269,50 @@ echo "--- Top unclassified failure signatures (${DAYS}d) ---"
 docker compose -f "$COMPOSE_FILE" exec -T postgres psql -U archetype -d archetype -c "
 WITH classified AS (
   SELECT
-    LEFT(COALESCE(log_path,'<empty>'), 140) AS msg,
+    LEFT(COALESCE(j.log_path,'<empty>'), 140) AS msg,
     CASE
-      WHEN log_path ILIKE '%preflight connectivity check failed%' THEN 'known'
-      WHEN log_path ILIKE '%preflight image check failed%' THEN 'known'
-      WHEN log_path ILIKE '%job timed out after%' THEN 'known'
-      WHEN log_path ILIKE '%this session''s transaction has been rolled back%' THEN 'known'
-      WHEN log_path ILIKE '%session is in ''inactive'' state%' THEN 'known'
-      WHEN log_path ILIKE '%can''t reconnect until invalid transaction is rolled back%' THEN 'known'
-      WHEN log_path ILIKE '%idle-in-transaction timeout%' THEN 'known'
-      WHEN log_path ILIKE '%terminating connection due to idle-in-transaction timeout%' THEN 'known'
-      WHEN log_path ILIKE '%server closed the connection unexpectedly%' THEN 'known'
-      WHEN log_path ILIKE '%connection not open%' THEN 'known'
-      WHEN log_path ILIKE '%row is otherwise not present%' THEN 'known'
-      WHEN log_path ILIKE '%objectdeletederror%' THEN 'known'
-      WHEN log_path ILIKE '%staledataerror%' THEN 'known'
-      WHEN log_path ILIKE '%parent job completed or missing%' THEN 'known'
-      WHEN log_path ILIKE '%image not found%' OR log_path ILIKE '%no image found%' THEN 'known'
-      WHEN log_path ILIKE '%no healthy agent available%' THEN 'known'
-      WHEN log_path ILIKE '%agent unavailable%' OR log_path ILIKE '%agent became unavailable%' THEN 'known'
-      WHEN log_path ILIKE '%explicit host assignments failed%' OR log_path ILIKE '%assigned host%' THEN 'known'
-      WHEN log_path ILIKE '%insufficient resources%' OR log_path ILIKE '%capacity%' THEN 'known'
-      WHEN log_path ILIKE '%link setup failed%' THEN 'known'
-      WHEN log_path ILIKE '%per-link tunnel creation failed%' OR log_path ILIKE '%could not find ovs port%' THEN 'known'
-      WHEN log_path ILIKE '%deployment failed on one or more hosts%' THEN 'known'
-      WHEN log_path ILIKE '%rollback failed%' THEN 'known'
-      WHEN log_path ILIKE '%docker api error%' THEN 'known'
-      WHEN log_path ILIKE '%libvirt error%' OR log_path ILIKE '%domain not found%' OR log_path ILIKE '%unsupported configuration%' THEN 'known'
-      WHEN log_path ILIKE '%completed with % error%' THEN 'known'
-      WHEN log_path ILIKE '%job execution failed on agent%' THEN 'known'
-      WHEN log_path ILIKE '%unexpected error during job execution%' THEN 'known'
-      WHEN log_path ILIKE '%failed to create node%' OR log_path ILIKE '%failed to start node%' OR log_path ILIKE '%failed to stop node%' OR log_path ILIKE '%failed to destroy node%' THEN 'known'
+      WHEN j.log_path ILIKE '%preflight connectivity check failed%' THEN 'known'
+      WHEN j.log_path ILIKE '%preflight image check failed%' THEN 'known'
+      WHEN j.log_path ILIKE '%job timed out after%' THEN 'known'
+      WHEN j.log_path ILIKE '%this session''s transaction has been rolled back%' THEN 'known'
+      WHEN j.log_path ILIKE '%session is in ''inactive'' state%' THEN 'known'
+      WHEN j.log_path ILIKE '%can''t reconnect until invalid transaction is rolled back%' THEN 'known'
+      WHEN j.log_path ILIKE '%idle-in-transaction timeout%' THEN 'known'
+      WHEN j.log_path ILIKE '%terminating connection due to idle-in-transaction timeout%' THEN 'known'
+      WHEN j.log_path ILIKE '%server closed the connection unexpectedly%' THEN 'known'
+      WHEN j.log_path ILIKE '%connection not open%' THEN 'known'
+      WHEN j.log_path ILIKE '%row is otherwise not present%' THEN 'known'
+      WHEN j.log_path ILIKE '%objectdeletederror%' THEN 'known'
+      WHEN j.log_path ILIKE '%staledataerror%' THEN 'known'
+      WHEN j.log_path ILIKE '%parent job completed or missing%' THEN 'known'
+      WHEN j.log_path ILIKE '%image not found%' OR j.log_path ILIKE '%no image found%' THEN 'known'
+      WHEN j.log_path ILIKE '%no healthy agent available%' THEN 'known'
+      WHEN j.log_path ILIKE '%agent unavailable%' OR j.log_path ILIKE '%agent became unavailable%' THEN 'known'
+      WHEN j.log_path ILIKE '%explicit host assignments failed%' OR j.log_path ILIKE '%assigned host%' THEN 'known'
+      WHEN j.log_path ILIKE '%insufficient resources%' OR j.log_path ILIKE '%capacity%' THEN 'known'
+      WHEN j.log_path ILIKE '%link setup failed%' THEN 'known'
+      WHEN j.log_path ILIKE '%per-link tunnel creation failed%' OR j.log_path ILIKE '%could not find ovs port%' THEN 'known'
+      WHEN j.log_path ILIKE '%deployment failed on one or more hosts%' THEN 'known'
+      WHEN j.log_path ILIKE '%rollback failed%' THEN 'known'
+      WHEN j.log_path ILIKE '%docker api error%' THEN 'known'
+      WHEN j.log_path ILIKE '%libvirt error%' OR j.log_path ILIKE '%domain not found%' OR j.log_path ILIKE '%unsupported configuration%' THEN 'known'
+      WHEN j.log_path ILIKE '%completed with % error%' THEN 'known'
+      WHEN j.log_path ILIKE '%job execution failed on agent%' THEN 'known'
+      WHEN j.log_path ILIKE '%unexpected error during job execution%' THEN 'known'
+      WHEN j.log_path ILIKE '%failed to create node%' OR j.log_path ILIKE '%failed to start node%' OR j.log_path ILIKE '%failed to stop node%' OR j.log_path ILIKE '%failed to destroy node%' THEN 'known'
       ELSE 'other'
     END AS class
-  FROM jobs
-  WHERE status='failed'
-    AND created_at > NOW() - INTERVAL '${DAYS} days'
+  FROM jobs j
+  LEFT JOIN labs l ON l.id = j.lab_id
+  WHERE j.status='failed'
+    AND j.created_at > NOW() - INTERVAL '${DAYS} days'
+    AND NOT (
+      j.action LIKE 'support:bundle-triage-drill%'
+      OR COALESCE(j.log_path, '') ILIKE '%[support-bundle-triage-drill]%'
+      OR COALESCE(l.name, '') LIKE 'ci-triage-lab-%'
+      OR COALESCE(l.state_error, '') ILIKE '%[support-bundle-triage-drill]%'
+      OR COALESCE(l.state_error, '') ILIKE '%synthetic support-bundle triage drill%'
+    )
 )
 SELECT msg, COUNT(*) AS count
 FROM classified

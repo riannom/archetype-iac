@@ -345,7 +345,7 @@ def parse_args() -> Config:
     p.add_argument("--apply", action="store_true", help="Generate controlled traffic")
     p.add_argument("--run-up-down", action="store_true", help="Include lab up/down cycle (requires --apply)")
     p.add_argument("--status-probes", type=int, default=3)
-    p.add_argument("--scrape-wait-seconds", type=int, default=20)
+    p.add_argument("--scrape-wait-seconds", type=int, default=65)
     p.add_argument("--job-timeout-seconds", type=int, default=1800)
     p.add_argument("--window", default="30m", help="Prometheus range window for increase() checks")
     p.add_argument(

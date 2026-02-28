@@ -1188,6 +1188,14 @@ async def reconcile_lab_links(session: Session, lab_id: str) -> dict:
 
         except Exception as e:
             logger.error(f"Error reconciling link {link.link_name}: {e}")
+            try:
+                session.rollback()
+            except Exception as rollback_error:
+                logger.warning(
+                    "Failed to rollback session after link %s reconciliation error: %s",
+                    link.link_name,
+                    rollback_error,
+                )
             results["errors"] += 1
 
     session.commit()
