@@ -571,3 +571,143 @@ async def test_container_mapping_and_endpoint_name_helpers(monkeypatch, tmp_path
     )
     plugin._discover_endpoint = AsyncMock(return_value=discovered)
     assert await plugin.get_endpoint_host_veth("lab1", "c1", "eth9") == "vhX"
+
+
+@pytest.mark.asyncio
+async def test_hot_disconnect_paths(monkeypatch, tmp_path):
+    monkeypatch.setattr(plugin_mod.settings, "workspace_path", str(tmp_path))
+    plugin = DockerOVSPlugin()
+    plugin._mark_dirty_and_save = AsyncMock()
+
+    # Missing lab
+    assert await plugin.hot_disconnect("lab1", "c1", "eth1") is None
+
+    plugin.lab_bridges["lab1"] = LabBridge(lab_id="lab1", bridge_name="arch-ovs")
+
+    # Missing endpoint
+    assert await plugin.hot_disconnect("lab1", "c1", "eth1") is None
+
+    ep = EndpointState(
+        endpoint_id="ep1",
+        network_id="net1",
+        interface_name="eth1",
+        host_veth="vh1",
+        cont_veth="vc1",
+        vlan_tag=100,
+        container_name="c1",
+    )
+    plugin.endpoints["ep1"] = ep
+    plugin._allocate_vlan = AsyncMock(return_value=333)
+    plugin._ovs_vsctl = AsyncMock(return_value=(0, "", ""))
+
+    assert await plugin.hot_disconnect("lab1", "c1", "eth1") == 333
+    assert plugin.endpoints["ep1"].vlan_tag == 333
+    plugin._mark_dirty_and_save.assert_awaited_once()
+
+    plugin._ovs_vsctl = AsyncMock(return_value=(1, "", "set-failed"))
+    assert await plugin.hot_disconnect("lab1", "c1", "eth1") is None
+
+
+@pytest.mark.asyncio
+async def test_set_carrier_state_paths(monkeypatch, tmp_path):
+    monkeypatch.setattr(plugin_mod.settings, "workspace_path", str(tmp_path))
+    plugin = DockerOVSPlugin()
+
+    assert await plugin.set_carrier_state("lab1", "c1", "eth1", "invalid") is False
+
+    plugin._get_container_pid = AsyncMock(return_value=None)
+    assert await plugin.set_carrier_state("lab1", "c1", "eth1", "off") is False
+
+    plugin._get_container_pid = AsyncMock(return_value=1234)
+    plugin._run_cmd = AsyncMock(return_value=(1, "", "fail"))
+    assert await plugin.set_carrier_state("lab1", "c1", "eth1", "off") is False
+
+    plugin._run_cmd = AsyncMock(return_value=(0, "", ""))
+    assert await plugin.set_carrier_state("lab1", "c1", "eth1", "on") is True
+
+
+@pytest.mark.asyncio
+async def test_isolate_and_restore_port_paths(monkeypatch, tmp_path):
+    monkeypatch.setattr(plugin_mod.settings, "workspace_path", str(tmp_path))
+    plugin = DockerOVSPlugin()
+
+    plugin.hot_disconnect = AsyncMock(return_value=None)
+    assert await plugin.isolate_port("lab1", "c1", "eth1") is None
+
+    plugin.hot_disconnect = AsyncMock(return_value=444)
+    plugin.set_carrier_state = AsyncMock(return_value=False)
+    assert await plugin.isolate_port("lab1", "c1", "eth1") == 444
+
+    # Restore: missing lab
+    assert await plugin.restore_port("lab1", "c1", "eth1", 200) is False
+
+    plugin.lab_bridges["lab1"] = LabBridge(lab_id="lab1", bridge_name="arch-ovs")
+    plugin._mark_dirty_and_save = AsyncMock()
+
+    # Restore: endpoint missing
+    assert await plugin.restore_port("lab1", "c1", "eth1", 200) is False
+
+    plugin.endpoints["ep1"] = EndpointState(
+        endpoint_id="ep1",
+        network_id="net1",
+        interface_name="eth1",
+        host_veth="vh1",
+        cont_veth="vc1",
+        vlan_tag=100,
+        container_name="c1",
+    )
+
+    plugin._ovs_vsctl = AsyncMock(return_value=(1, "", "set-failed"))
+    assert await plugin.restore_port("lab1", "c1", "eth1", 200) is False
+
+    plugin._ovs_vsctl = AsyncMock(return_value=(0, "", ""))
+    plugin.set_carrier_state = AsyncMock(return_value=False)
+    assert await plugin.restore_port("lab1", "c1", "eth1", 200) is False
+
+    plugin.set_carrier_state = AsyncMock(return_value=True)
+    assert await plugin.restore_port("lab1", "c1", "eth1", 201) is True
+    assert plugin.endpoints["ep1"].vlan_tag == 201
+
+
+@pytest.mark.asyncio
+async def test_get_and_set_endpoint_vlan_paths(monkeypatch, tmp_path):
+    monkeypatch.setattr(plugin_mod.settings, "workspace_path", str(tmp_path))
+    plugin = DockerOVSPlugin()
+    plugin.lab_bridges["lab1"] = LabBridge(lab_id="lab1", bridge_name="arch-ovs")
+    plugin.endpoints["ep1"] = EndpointState(
+        endpoint_id="ep1",
+        network_id="net1",
+        interface_name="eth1",
+        host_veth="vh1",
+        cont_veth="vc1",
+        vlan_tag=150,
+        container_name="c1",
+    )
+    plugin._mark_dirty_and_save = AsyncMock()
+
+    assert await plugin.get_endpoint_vlan("lab1", "c1", "eth1") == 150
+
+    plugin._run_cmd = AsyncMock(return_value=(0, "321", ""))
+    assert await plugin.get_endpoint_vlan("lab1", "c1", "eth1", read_from_ovs=True) == 321
+
+    plugin._run_cmd = AsyncMock(return_value=(0, "not-an-int", ""))
+    assert await plugin.get_endpoint_vlan("lab1", "c1", "eth1", read_from_ovs=True) is None
+
+    assert await plugin.set_endpoint_vlan("lab1", "c1", "eth1", 222) is True
+    assert plugin.endpoints["ep1"].vlan_tag == 222
+
+    discovered = EndpointState(
+        endpoint_id="ep2",
+        network_id="net2",
+        interface_name="eth9",
+        host_veth="vh9",
+        cont_veth="vc9",
+        vlan_tag=111,
+        container_name="c1",
+    )
+    plugin._discover_endpoint = AsyncMock(return_value=discovered)
+    assert await plugin.set_endpoint_vlan("lab1", "c1", "eth9", 333) is True
+    assert plugin.endpoints["ep2"].vlan_tag == 333
+
+    plugin._discover_endpoint = AsyncMock(return_value=None)
+    assert await plugin.set_endpoint_vlan("lab1", "c1", "ethX", 444) is False
