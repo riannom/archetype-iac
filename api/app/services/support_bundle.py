@@ -156,19 +156,40 @@ def _bundle_dir() -> Path:
 
 
 async def _query_prometheus(expr: str) -> dict[str, Any]:
-    async with httpx.AsyncClient(timeout=15.0) as client:
+    return await _query_prometheus_api(
+        "/api/v1/query",
+        params={"query": expr},
+        timeout=15.0,
+    )
+
+
+async def _query_prometheus_api(
+    path: str,
+    *,
+    params: dict[str, Any] | None = None,
+    timeout: float = 15.0,
+) -> dict[str, Any]:
+    async with httpx.AsyncClient(timeout=timeout) as client:
         resp = await client.get(
-            f"{PROMETHEUS_URL}/api/v1/query",
-            params={"query": expr},
+            f"{PROMETHEUS_URL}{path}",
+            params=params,
         )
         resp.raise_for_status()
         return resp.json()
 
 
-async def _query_loki_api_logs(since_hours: int, limit: int = 500) -> dict[str, Any]:
+async def _query_prometheus_targets() -> dict[str, Any]:
+    return await _query_prometheus_api("/api/v1/targets", timeout=20.0)
+
+
+async def _query_prometheus_alerts() -> dict[str, Any]:
+    return await _query_prometheus_api("/api/v1/alerts", timeout=20.0)
+
+
+async def _query_loki_service_logs(service: str, since_hours: int, limit: int = 500) -> dict[str, Any]:
     seconds = max(1, since_hours) * 3600
     start_ns = (int(_now_utc().timestamp()) - seconds) * 1_000_000_000
-    query = '{service="api"} | json'
+    query = f'{{service="{service}"}} | json'
     async with httpx.AsyncClient(timeout=25.0) as client:
         resp = await client.get(
             f"{settings.loki_url}/loki/api/v1/query_range",
@@ -181,6 +202,11 @@ async def _query_loki_api_logs(since_hours: int, limit: int = 500) -> dict[str, 
         )
         resp.raise_for_status()
         return resp.json()
+
+
+async def _query_loki_api_logs(since_hours: int, limit: int = 500) -> dict[str, Any]:
+    # Backward-compatible wrapper used by tests/importers.
+    return await _query_loki_service_logs("api", since_hours, limit=limit)
 
 
 async def _collect_agent_snapshot(agent: models.Host) -> dict[str, Any]:
@@ -530,10 +556,20 @@ async def build_support_bundle(
     # Observability snapshots (best-effort).
     prom_queries = {
         "agents_online": "archetype_agents_online",
+        "targets_up_api": 'up{job="archetype-api"}',
+        "targets_up_agent": 'up{job="archetype-agent"}',
+        "targets_up_scheduler": 'up{job="archetype-scheduler"}',
+        "targets_up_worker": 'up{job="archetype-worker"}',
         "jobs_started_2h": 'sum(increase(archetype_jobs_total{status="started"}[2h]))',
         "jobs_failed_2h": 'sum(increase(archetype_jobs_total{status="failed"}[2h]))',
         "jobs_active": "sum(archetype_jobs_active)",
         "nlm_samples_2h": "sum(increase(archetype_nlm_phase_duration_seconds_count[2h]))",
+        "job_failure_reasons_2h": 'sum by (reason) (increase(archetype_job_failures_total[2h]))',
+        "db_idle_in_transaction": 'max(archetype_db_idle_in_transaction{job="archetype-api"})',
+        "job_queue_depth": 'max(archetype_job_queue_depth{job="archetype-api"})',
+        "reservation_missing": 'max(archetype_link_endpoint_reservation_missing{job=~"archetype-(api|scheduler)"})',
+        "reservation_orphaned": 'max(archetype_link_endpoint_reservation_orphaned{job=~"archetype-(api|scheduler)"})',
+        "reservation_conflicts": 'max(archetype_link_endpoint_reservation_conflicts{job=~"archetype-(api|scheduler)"})',
     }
     prom_results: dict[str, Any] = {}
     for name, expr in prom_queries.items():
@@ -547,12 +583,38 @@ async def build_support_bundle(
     )
 
     try:
-        loki_logs = await _query_loki_api_logs(time_window_hours)
+        prom_targets = await _query_prometheus_targets()
     except Exception as exc:
-        loki_logs = {"error": str(exc)}
+        prom_targets = {"error": str(exc)}
+    writer.add_json(
+        "observability/prometheus-targets.json",
+        sanitize_data(prom_targets, pii_safe=pii_safe, lab_alias=lab_alias, host_alias=host_alias),
+    )
+
+    try:
+        prom_alerts = await _query_prometheus_alerts()
+    except Exception as exc:
+        prom_alerts = {"error": str(exc)}
+    writer.add_json(
+        "observability/prometheus-alerts.json",
+        sanitize_data(prom_alerts, pii_safe=pii_safe, lab_alias=lab_alias, host_alias=host_alias),
+    )
+
+    loki_service_logs: dict[str, Any] = {}
+    for service in ("api", "worker", "scheduler", "agent"):
+        try:
+            loki_service_logs[service] = await _query_loki_service_logs(service, time_window_hours)
+        except Exception as exc:
+            loki_service_logs[service] = {"error": str(exc)}
+    writer.add_json(
+        "observability/loki-service-logs.json",
+        sanitize_data(loki_service_logs, pii_safe=pii_safe, lab_alias=lab_alias, host_alias=host_alias),
+    )
+
+    # Keep legacy file path for compatibility with existing tooling.
     writer.add_json(
         "observability/loki-api-logs.json",
-        sanitize_data(loki_logs, pii_safe=pii_safe, lab_alias=lab_alias, host_alias=host_alias),
+        sanitize_data(loki_service_logs.get("api", {}), pii_safe=pii_safe, lab_alias=lab_alias, host_alias=host_alias),
     )
 
     # Queue and system health snapshots

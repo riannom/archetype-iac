@@ -6,7 +6,7 @@ import json
 import zipfile
 from datetime import datetime, timedelta, timezone
 from io import BytesIO
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from sqlalchemy.orm import Session
@@ -18,6 +18,7 @@ from app.services.support_bundle import (
     _json_dumps,
     _model_to_dict,
     _safe_json_load,
+    build_support_bundle,
     sanitize_data,
 )
 
@@ -312,3 +313,165 @@ class TestBundleMetadata:
         builder.add_bytes("ok.txt", b"hi")
         builder.add_bytes("big.txt", b"too large content")
         assert len(builder.errors) == 1
+
+
+class TestBuildSupportBundleEndToEnd:
+    """End-to-end artifact contract tests for build_support_bundle()."""
+
+    @pytest.mark.asyncio
+    async def test_build_support_bundle_includes_expanded_observability_artifacts(
+        self,
+        test_db: Session,
+        test_user: models.User,
+        sample_lab: models.Lab,
+        sample_host: models.Host,
+        sample_job: models.Job,
+        monkeypatch,
+    ):
+        from app.services import support_bundle as support_bundle_module
+
+        sample_lab.agent_id = sample_host.id
+        test_db.add(sample_lab)
+        test_db.commit()
+
+        bundle = models.SupportBundle(
+            user_id=test_user.id,
+            status="running",
+            include_configs=False,
+            pii_safe=True,
+            time_window_hours=24,
+            options_json=json.dumps(
+                {"impacted_lab_ids": [sample_lab.id], "impacted_agent_ids": [sample_host.id]}
+            ),
+            incident_json=json.dumps(
+                {
+                    "summary": "Deploy issue",
+                    "repro_steps": "Click up",
+                    "expected_behavior": "Lab becomes ready",
+                    "actual_behavior": "Lab errors",
+                }
+            ),
+        )
+
+        async def _fake_query_prometheus(expr: str) -> dict:
+            return {"status": "success", "data": {"resultType": "vector", "result": []}, "expr": expr}
+
+        async def _fake_prom_targets() -> dict:
+            return {"status": "success", "data": {"activeTargets": [{"health": "up"}]}}
+
+        async def _fake_prom_alerts() -> dict:
+            return {"status": "success", "data": {"alerts": []}}
+
+        async def _fake_loki_service_logs(service: str, since_hours: int, limit: int = 500) -> dict:
+            return {
+                "status": "success",
+                "service": service,
+                "window_hours": since_hours,
+                "limit": limit,
+                "data": {"result": []},
+            }
+
+        monkeypatch.setattr(support_bundle_module, "_query_prometheus", _fake_query_prometheus)
+        monkeypatch.setattr(support_bundle_module, "_query_prometheus_targets", _fake_prom_targets)
+        monkeypatch.setattr(support_bundle_module, "_query_prometheus_alerts", _fake_prom_alerts)
+        monkeypatch.setattr(support_bundle_module, "_query_loki_service_logs", _fake_loki_service_logs)
+        monkeypatch.setattr(support_bundle_module.agent_client, "is_agent_online", lambda _host: False)
+
+        archive, metadata = await build_support_bundle(test_db, bundle)
+        assert isinstance(archive, bytes)
+        assert metadata["archive_size_bytes"] == len(archive)
+
+        with zipfile.ZipFile(BytesIO(archive), "r") as zf:
+            names = set(zf.namelist())
+            assert "observability/prometheus.json" in names
+            assert "observability/prometheus-targets.json" in names
+            assert "observability/prometheus-alerts.json" in names
+            assert "observability/loki-service-logs.json" in names
+            assert "observability/loki-api-logs.json" in names
+            assert f"labs/{sample_lab.id}/bundle.json" in names
+            assert f"agents/{sample_host.id}/snapshot.json" in names
+
+            prom_json = json.loads(zf.read("observability/prometheus.json"))
+            assert "targets_up_agent" in prom_json
+            assert "db_idle_in_transaction" in prom_json
+            assert "reservation_conflicts" in prom_json
+
+            prom_targets = json.loads(zf.read("observability/prometheus-targets.json"))
+            assert prom_targets["status"] == "success"
+
+            prom_alerts = json.loads(zf.read("observability/prometheus-alerts.json"))
+            assert prom_alerts["status"] == "success"
+
+            loki_services = json.loads(zf.read("observability/loki-service-logs.json"))
+            assert set(loki_services.keys()) == {"api", "worker", "scheduler", "agent"}
+            assert loki_services["worker"]["service"] == "worker"
+
+            loki_api = json.loads(zf.read("observability/loki-api-logs.json"))
+            assert loki_api["service"] == "api"
+
+            agent_snapshot = json.loads(zf.read(f"agents/{sample_host.id}/snapshot.json"))
+            assert agent_snapshot["online"] is False
+            assert "agent offline" in agent_snapshot["live"]["error"]
+
+            manifest = json.loads(zf.read("manifest.json"))
+            paths = {entry["path"] for entry in manifest["files"]}
+            assert "observability/prometheus-targets.json" in paths
+            assert "observability/loki-service-logs.json" in paths
+
+    @pytest.mark.asyncio
+    async def test_build_support_bundle_observability_failures_are_embedded_not_fatal(
+        self,
+        test_db: Session,
+        test_user: models.User,
+        sample_lab: models.Lab,
+        monkeypatch,
+    ):
+        from app.services import support_bundle as support_bundle_module
+
+        bundle = models.SupportBundle(
+            user_id=test_user.id,
+            status="running",
+            include_configs=False,
+            pii_safe=True,
+            time_window_hours=24,
+            options_json=json.dumps({"impacted_lab_ids": [sample_lab.id], "impacted_agent_ids": []}),
+            incident_json=json.dumps(
+                {
+                    "summary": "Deploy issue",
+                    "repro_steps": "Click up",
+                    "expected_behavior": "Lab becomes ready",
+                    "actual_behavior": "Lab errors",
+                }
+            ),
+        )
+
+        async def _fake_query_prometheus(_expr: str) -> dict:
+            return {"status": "success", "data": {"result": []}}
+
+        async def _raise_targets() -> dict:
+            raise RuntimeError("targets unavailable")
+
+        async def _raise_alerts() -> dict:
+            raise RuntimeError("alerts unavailable")
+
+        async def _fake_loki_service_logs(service: str, since_hours: int, limit: int = 500) -> dict:
+            if service == "scheduler":
+                raise RuntimeError("scheduler loki unavailable")
+            return {"status": "success", "service": service, "data": {"result": []}}
+
+        monkeypatch.setattr(support_bundle_module, "_query_prometheus", _fake_query_prometheus)
+        monkeypatch.setattr(support_bundle_module, "_query_prometheus_targets", _raise_targets)
+        monkeypatch.setattr(support_bundle_module, "_query_prometheus_alerts", _raise_alerts)
+        monkeypatch.setattr(support_bundle_module, "_query_loki_service_logs", _fake_loki_service_logs)
+
+        archive, _metadata = await build_support_bundle(test_db, bundle)
+        with zipfile.ZipFile(BytesIO(archive), "r") as zf:
+            prom_targets = json.loads(zf.read("observability/prometheus-targets.json"))
+            assert "targets unavailable" in prom_targets["error"]
+
+            prom_alerts = json.loads(zf.read("observability/prometheus-alerts.json"))
+            assert "alerts unavailable" in prom_alerts["error"]
+
+            loki_services = json.loads(zf.read("observability/loki-service-logs.json"))
+            assert "scheduler loki unavailable" in loki_services["scheduler"]["error"]
+            assert loki_services["api"]["status"] == "success"

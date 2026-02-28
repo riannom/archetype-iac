@@ -413,7 +413,7 @@ app.add_middleware(
 class AgentAuthMiddleware(BaseHTTPMiddleware):
     """Validate pre-shared secret on inbound requests from controller."""
 
-    EXEMPT_PATHS = {"/health", "/healthz"}
+    EXEMPT_PATHS = {"/health", "/healthz", "/metrics"}
 
     async def dispatch(self, request, call_next):
         # Skip auth if no secret configured (backward compat)

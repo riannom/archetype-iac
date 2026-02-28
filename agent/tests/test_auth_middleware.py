@@ -63,6 +63,13 @@ class TestAgentAuthMiddleware:
         assert resp.json().get("status") == "ok"
 
     @pytest.mark.usefixtures("_enable_auth")
+    def test_exempt_path_metrics(self, client: TestClient):
+        # /metrics must remain scrapeable by Prometheus even when auth is enabled.
+        resp = client.get("/metrics")
+        assert resp.status_code == 200
+        assert "text/plain" in resp.headers.get("content-type", "")
+
+    @pytest.mark.usefixtures("_enable_auth")
     def test_exempt_path_poap_prefix(self, client: TestClient):
         # POAP paths must be reachable without controller auth headers.
         # This endpoint returns 400 due to invalid path params, but should never
