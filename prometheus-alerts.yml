@@ -59,6 +59,28 @@ groups:
           summary: "High job failure rate detected"
           description: "More than 30% of jobs are failing in the last 5 minutes."
 
+      # Alert when DB session invalidation failures are observed.
+      - alert: DbSessionInvalidatedFailures
+        expr: |
+          sum(increase(archetype_job_failures_total{job=~"archetype-(api|worker)",reason="db_session_invalidated"}[15m])) > 0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "DB session invalidation failures detected"
+          description: "Detected job failures labeled db_session_invalidated in the last 15 minutes. Check worker/API transaction boundaries and rollback handling."
+
+      # Alert when deploy rollback logic is failing in production traffic.
+      - alert: DeployRollbackFailures
+        expr: |
+          sum(increase(archetype_job_failures_total{job=~"archetype-(api|worker)",reason="deploy_rollback_failed"}[15m])) > 0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Deploy rollback failures detected"
+          description: "Detected job failures labeled deploy_rollback_failed in the last 15 minutes. Inspect multi-host deploy rollback and orphan cleanup paths."
+
       # Alert when worker is executing jobs but key latency metrics are missing
       - alert: JobMetricsCoverageGap
         expr: |
