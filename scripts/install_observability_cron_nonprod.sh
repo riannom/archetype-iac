@@ -5,11 +5,17 @@ set -euo pipefail
 # Default: print only. Pass --apply to install into current user's crontab.
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-PYTHON_BIN="${PYTHON_BIN:-python3}"
 SCHEDULE="${SCHEDULE:-*/30 * * * *}"
 LOG_FILE="${LOG_FILE:-$ROOT_DIR/reports/observability/cron.log}"
+API_URL="${API_URL:-http://localhost:8000}"
+PROM_URL="${PROMETHEUS_URL:-http://localhost:9090}"
+CANARY_USERNAME="${CANARY_USERNAME:-admin@example.com}"
+CANARY_PASSWORD="${CANARY_PASSWORD:-changeme123}"
+CANARY_LAB_ID="${CANARY_LAB_ID:-}"
+CANARY_SYNC_NODE_ID="${CANARY_SYNC_NODE_ID:-}"
+CANARY_WINDOW="${CANARY_WINDOW:-30m}"
 
-ENTRY="$SCHEDULE cd $ROOT_DIR && $PYTHON_BIN scripts/observability_canary.py --apply --window 30m >> $LOG_FILE 2>&1"
+ENTRY="$SCHEDULE cd $ROOT_DIR && API_URL='$API_URL' PROMETHEUS_URL='$PROM_URL' CANARY_USERNAME='$CANARY_USERNAME' CANARY_PASSWORD='$CANARY_PASSWORD' CANARY_LAB_ID='$CANARY_LAB_ID' CANARY_SYNC_NODE_ID='$CANARY_SYNC_NODE_ID' CANARY_WINDOW='$CANARY_WINDOW' ./scripts/run_observability_canary_nonprod.sh >> $LOG_FILE 2>&1"
 ENTRY_DB="15 */6 * * * cd $ROOT_DIR && ./scripts/observability_db_report.sh 30 >> $LOG_FILE 2>&1"
 ENTRY_DRIFT="30 2 * * * cd $ROOT_DIR && ./scripts/link_reservation_drift_check.sh >> $LOG_FILE 2>&1"
 
@@ -19,6 +25,9 @@ echo "$ENTRY_DB"
 echo "$ENTRY_DRIFT"
 
 if [[ "${1:-}" != "--apply" ]]; then
+  if [[ -z "$CANARY_LAB_ID" || -z "$CANARY_SYNC_NODE_ID" ]]; then
+    echo "Info: CANARY_LAB_ID/CANARY_SYNC_NODE_ID are empty; canary will auto-discover a lab/node at runtime."
+  fi
   echo
   echo "Dry-run only. Re-run with --apply to install."
   exit 0

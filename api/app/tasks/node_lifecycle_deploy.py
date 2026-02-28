@@ -37,6 +37,42 @@ from app.tasks.node_lifecycle import (  # noqa: E402
 )
 
 
+def acquire_deploy_lock(lab_id: str, node_names: list[str], agent_id: str, timeout: int = 300):
+    from app.tasks.jobs import acquire_deploy_lock as _impl
+
+    return _impl(lab_id, node_names, agent_id, timeout=timeout)
+
+
+def release_deploy_lock(lab_id: str, node_names: list[str]) -> None:
+    from app.tasks.jobs import release_deploy_lock as _impl
+
+    _impl(lab_id, node_names)
+
+
+async def _update_node_placements(session, lab_id: str, agent_id: str, node_names: list[str], status: str = "deployed"):
+    from app.tasks.jobs import _update_node_placements as _impl
+
+    await _impl(session, lab_id, agent_id, node_names, status=status)
+
+
+async def _capture_node_ips(session, lab_id: str, agent):
+    from app.tasks.jobs import _capture_node_ips as _impl
+
+    await _impl(session, lab_id, agent)
+
+
+async def _cleanup_orphan_containers(session, lab_id: str, new_agent_id: str, old_agent_ids: set[str], log_parts: list[str]):
+    from app.tasks.jobs import _cleanup_orphan_containers as _impl
+
+    await _impl(session, lab_id, new_agent_id, old_agent_ids, log_parts)
+
+
+def get_device_service():
+    from app.services.device_service import get_device_service as _impl
+
+    return _impl()
+
+
 class DeploymentMixin:
     """Mixin providing deploy/start/stop methods for NodeLifecycleManager."""
 
@@ -53,14 +89,6 @@ class DeploymentMixin:
         Containerlab requires full topology context, so we include all nodes
         on this agent to prevent it from destroying existing containers.
         """
-        from app.tasks.jobs import (
-            acquire_deploy_lock,
-            release_deploy_lock,
-            _update_node_placements,
-            _capture_node_ips,
-            _cleanup_orphan_containers,
-        )
-
         self.log_parts.append("=== Phase 1: Deploy Topology ===")
 
         if not self.topo_service.has_nodes(self.lab.id):
@@ -139,6 +167,7 @@ class DeploymentMixin:
             return
 
         try:
+            self._release_db_transaction_for_io("topology deploy request")
             result = await agent_client.deploy_to_agent(
                 self.agent,
                 self.job.id,
@@ -293,14 +322,6 @@ class DeploymentMixin:
         Docker start alone doesn't recreate network interfaces.
         Containerlab --reconfigure destroys and recreates all veth pairs.
         """
-        from app.tasks.jobs import (
-            acquire_deploy_lock,
-            release_deploy_lock,
-            _update_node_placements,
-            _capture_node_ips,
-            _cleanup_orphan_containers,
-        )
-
         self.log_parts.append("")
         self.log_parts.append("=== Phase 2: Start Nodes (via redeploy) ===")
         self.log_parts.append(
@@ -396,6 +417,7 @@ class DeploymentMixin:
             return
 
         try:
+            self._release_db_transaction_for_io("topology redeploy request")
             result = await agent_client.deploy_to_agent(
                 self.agent,
                 self.job.id,
@@ -566,8 +588,6 @@ class DeploymentMixin:
         node_provider = get_image_provider(image)
 
         # Resolve hardware specs: per-node config > device overrides > vendor defaults
-        from app.services.device_service import get_device_service
-
         try:
             node_config = json.loads(db_node.config_json) if db_node.config_json else None
             hw_specs = get_device_service().resolve_hardware_specs(
@@ -585,6 +605,9 @@ class DeploymentMixin:
                     image_sha256 = img_entry.get("sha256")
 
             # Create container/VM
+            self._release_db_transaction_for_io(
+                f"create node {ns.node_name} on agent {self.agent.id}"
+            )
             create_result = await agent_client.create_node_on_agent(
                 self.agent,
                 self.lab.id,
@@ -624,6 +647,9 @@ class DeploymentMixin:
                     self.log_parts.append(f"    {ns.node_name} create: {line}")
 
             # Start container/VM
+            self._release_db_transaction_for_io(
+                f"start node {ns.node_name} on agent {self.agent.id}"
+            )
             start_result = await agent_client.start_node_on_agent(
                 self.agent,
                 self.lab.id,
@@ -694,11 +720,6 @@ class DeploymentMixin:
         Non-cEOS nodes deploy in parallel; cEOS nodes deploy
         sequentially with stagger delay. Returns list of deployed node names.
         """
-        from app.tasks.jobs import (
-            _update_node_placements,
-            _capture_node_ips,
-        )
-
         self.log_parts.append(phase_label)
 
         # Re-read desired_state to catch changes since job was queued
@@ -729,6 +750,7 @@ class DeploymentMixin:
         if non_ceos_nodes:
             self.log_parts.append(f"  Deploying {len(non_ceos_nodes)} non-cEOS node(s) in parallel")
             tasks = [self._deploy_single_node_with_retry(ns) for ns in non_ceos_nodes]
+            self._release_db_transaction_for_io("parallel non-cEOS deployment")
             results = await asyncio.gather(*tasks, return_exceptions=True)
             for ns, result in zip(non_ceos_nodes, results):
                 if isinstance(result, Exception):
@@ -1105,6 +1127,9 @@ class DeploymentMixin:
                 for a, _ in agent_node_map.values()
             ]
             try:
+                self._release_db_transaction_for_io(
+                    f"auto-extract before stop for lab {self.lab.id}"
+                )
                 results = await asyncio.wait_for(
                     asyncio.gather(*tasks, return_exceptions=True),
                     timeout=EXTRACTION_TIMEOUT,
@@ -1247,6 +1272,9 @@ class DeploymentMixin:
                 for _, cn in node_list
             ]
             try:
+                self._release_db_transaction_for_io(
+                    f"stop batch on {stop_agent.name or stop_agent.id}"
+                )
                 response = await agent_client.reconcile_nodes_on_agent(
                     stop_agent, self.lab.id, batch
                 )
@@ -1312,6 +1340,9 @@ class DeploymentMixin:
                 for _, cn in fallback_nodes
             ]
             try:
+                self._release_db_transaction_for_io(
+                    f"stop fallback batch on {self.agent.name or self.agent.id}"
+                )
                 response = await agent_client.reconcile_nodes_on_agent(
                     self.agent, self.lab.id, fallback_batch
                 )

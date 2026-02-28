@@ -32,6 +32,7 @@ class Config:
     scrape_wait_seconds: int
     job_timeout_seconds: int
     window: str
+    auto_discover: bool
 
 
 def _request_json(
@@ -107,6 +108,136 @@ def _wait_for_job(cfg: Config, token: str, job_id: str) -> dict:
             return last
         time.sleep(3)
     raise TimeoutError(f"Timed out waiting for job {job_id}; last_status={last.get('status')}")
+
+
+def _extract_labs(payload: dict) -> list[dict]:
+    labs = payload.get("labs")
+    if isinstance(labs, list):
+        return [lab for lab in labs if isinstance(lab, dict)]
+    return []
+
+
+def _extract_node_states(payload: dict) -> list[dict]:
+    nodes = payload.get("nodes")
+    if isinstance(nodes, list):
+        return [node for node in nodes if isinstance(node, dict)]
+    return []
+
+
+def _pick_sync_node_id(nodes: list[dict]) -> str | None:
+    if not nodes:
+        return None
+
+    def _matches(
+        node: dict,
+        *,
+        desired: set[str] | None = None,
+        actual: set[str] | None = None,
+    ) -> bool:
+        node_id = str(node.get("node_id") or "").strip()
+        if not node_id:
+            return False
+        if desired is not None and str(node.get("desired_state") or "").lower() not in desired:
+            return False
+        if actual is not None and str(node.get("actual_state") or "").lower() not in actual:
+            return False
+        return True
+
+    # Prefer nodes that are intended to run and currently active.
+    for node in nodes:
+        if _matches(node, desired={"running"}, actual={"running", "starting", "pending"}):
+            return str(node["node_id"])
+    for node in nodes:
+        if _matches(node, desired={"running"}):
+            return str(node["node_id"])
+    for node in nodes:
+        if _matches(node, actual={"running", "starting", "pending"}):
+            return str(node["node_id"])
+    for node in nodes:
+        if _matches(node):
+            return str(node["node_id"])
+    return None
+
+
+def _discover_lab_and_node(cfg: Config, token: str) -> tuple[str | None, str | None]:
+    if cfg.lab_id:
+        try:
+            payload = _request_json(
+                "GET",
+                f"{cfg.api_url}/labs/{cfg.lab_id}/nodes/states",
+                token=token,
+            )
+            node_id = _pick_sync_node_id(_extract_node_states(payload))
+            return cfg.lab_id, node_id
+        except Exception:
+            return cfg.lab_id, None
+
+    payload = _request_json(
+        "GET",
+        f"{cfg.api_url}/labs?skip=0&limit=200",
+        token=token,
+    )
+    labs = _extract_labs(payload)
+    if not labs:
+        return None, None
+
+    def _lab_rank(lab: dict) -> tuple[int, int]:
+        state = str(lab.get("state") or "").lower()
+        running_count = int(lab.get("running_count") or 0)
+        # Higher score first: running labs with running nodes.
+        return (2 if state == "running" else 0) + (1 if running_count > 0 else 0), running_count
+
+    ranked = sorted(labs, key=_lab_rank, reverse=True)
+    for lab in ranked:
+        lab_id = str(lab.get("id") or "").strip()
+        if not lab_id:
+            continue
+        try:
+            node_payload = _request_json(
+                "GET",
+                f"{cfg.api_url}/labs/{lab_id}/nodes/states",
+                token=token,
+            )
+            node_id = _pick_sync_node_id(_extract_node_states(node_payload))
+            if node_id:
+                return lab_id, node_id
+        except Exception:
+            continue
+
+    # Last resort: return best lab even if no node states are currently discoverable.
+    best_lab_id = str(ranked[0].get("id") or "").strip()
+    return best_lab_id or None, None
+
+
+def _ensure_apply_targets(cfg: Config, token: str) -> None:
+    if not cfg.apply:
+        return
+
+    missing_lab = not cfg.lab_id
+    missing_node = not cfg.sync_node_id
+    if not (missing_lab or missing_node):
+        return
+
+    if not cfg.auto_discover:
+        raise RuntimeError(
+            "--lab-id is required when --apply is set "
+            "(and --sync-node-id is recommended). "
+            "Use --auto-discover to select a non-prod lab/node automatically."
+        )
+
+    discovered_lab_id, discovered_node_id = _discover_lab_and_node(cfg, token)
+    if missing_lab and discovered_lab_id:
+        cfg.lab_id = discovered_lab_id
+    if missing_node and discovered_node_id:
+        cfg.sync_node_id = discovered_node_id
+
+    if not cfg.lab_id:
+        raise RuntimeError("Auto-discovery failed: no accessible labs were found")
+
+    if cfg.sync_node_id:
+        print(f"[canary] auto-discovered lab/node: {cfg.lab_id} / {cfg.sync_node_id}")
+    else:
+        print(f"[canary] auto-discovered lab: {cfg.lab_id} (no sync node found; running status probes only)")
 
 
 def _run_canary_traffic(cfg: Config, token: str) -> None:
@@ -209,6 +340,11 @@ def parse_args() -> Config:
     p.add_argument("--scrape-wait-seconds", type=int, default=20)
     p.add_argument("--job-timeout-seconds", type=int, default=1800)
     p.add_argument("--window", default="30m", help="Prometheus range window for increase() checks")
+    p.add_argument(
+        "--auto-discover",
+        action="store_true",
+        help="Auto-select a non-prod lab/node when --apply is set and IDs are omitted",
+    )
     a = p.parse_args()
     return Config(
         api_url=a.api_url.rstrip("/"),
@@ -223,6 +359,7 @@ def parse_args() -> Config:
         scrape_wait_seconds=max(0, a.scrape_wait_seconds),
         job_timeout_seconds=max(30, a.job_timeout_seconds),
         window=a.window,
+        auto_discover=a.auto_discover,
     )
 
 
@@ -230,6 +367,7 @@ def main() -> int:
     cfg = parse_args()
     try:
         token = _login(cfg)
+        _ensure_apply_targets(cfg, token)
         if cfg.apply:
             _run_canary_traffic(cfg, token)
             if cfg.scrape_wait_seconds:

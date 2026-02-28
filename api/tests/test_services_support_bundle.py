@@ -233,7 +233,8 @@ class TestCollectLabData:
         from app.services.support_bundle import _lab_export
 
         since = datetime.now(timezone.utc) - timedelta(hours=24)
-        result = _lab_export(test_db, sample_lab, since, include_configs=False)
+        until = datetime.now(timezone.utc)
+        result = _lab_export(test_db, sample_lab, since, until, include_configs=False)
         assert "metadata" in result
         assert result["metadata"]["id"] == sample_lab.id
         assert result["metadata"]["name"] == sample_lab.name
@@ -243,7 +244,8 @@ class TestCollectLabData:
         from app.services.support_bundle import _lab_export
 
         since = datetime.now(timezone.utc) - timedelta(hours=24)
-        result = _lab_export(test_db, sample_lab, since, include_configs=False)
+        until = datetime.now(timezone.utc)
+        result = _lab_export(test_db, sample_lab, since, until, include_configs=False)
         assert "topology_yaml" in result
         assert "topology_graph" in result
 
@@ -257,7 +259,8 @@ class TestCollectLabData:
 
         lab, nodes = sample_lab_with_nodes
         since = datetime.now(timezone.utc) - timedelta(hours=24)
-        result = _lab_export(test_db, lab, since, include_configs=False)
+        until = datetime.now(timezone.utc)
+        result = _lab_export(test_db, lab, since, until, include_configs=False)
         assert "node_states" in result
         assert len(result["node_states"]) == 2
 
@@ -271,8 +274,9 @@ class TestCollectLabData:
         from app.services.support_bundle import _lab_export
 
         since = datetime.now(timezone.utc) - timedelta(hours=24)
+        until = datetime.now(timezone.utc)
         with patch("app.services.support_bundle.get_log_content", return_value=""):
-            result = _lab_export(test_db, sample_lab, since, include_configs=False)
+            result = _lab_export(test_db, sample_lab, since, until, include_configs=False)
         assert "jobs" in result
         assert len(result["jobs"]) >= 1
 
@@ -353,7 +357,7 @@ class TestBuildSupportBundleEndToEnd:
             ),
         )
 
-        async def _fake_query_prometheus(expr: str) -> dict:
+        async def _fake_query_prometheus(expr: str, **_kwargs) -> dict:
             return {"status": "success", "data": {"resultType": "vector", "result": []}, "expr": expr}
 
         async def _fake_prom_targets() -> dict:
@@ -362,7 +366,7 @@ class TestBuildSupportBundleEndToEnd:
         async def _fake_prom_alerts() -> dict:
             return {"status": "success", "data": {"alerts": []}}
 
-        async def _fake_loki_service_logs(service: str, since_hours: int, limit: int = 500) -> dict:
+        async def _fake_loki_service_logs(service: str, since_hours: int, limit: int = 500, **_kwargs) -> dict:
             return {
                 "status": "success",
                 "service": service,
@@ -371,10 +375,14 @@ class TestBuildSupportBundleEndToEnd:
                 "data": {"result": []},
             }
 
+        async def _fake_loki_label_values(_label: str) -> dict:
+            return {"status": "success", "data": ["api", "worker", "scheduler", "agent"]}
+
         monkeypatch.setattr(support_bundle_module, "_query_prometheus", _fake_query_prometheus)
         monkeypatch.setattr(support_bundle_module, "_query_prometheus_targets", _fake_prom_targets)
         monkeypatch.setattr(support_bundle_module, "_query_prometheus_alerts", _fake_prom_alerts)
         monkeypatch.setattr(support_bundle_module, "_query_loki_service_logs", _fake_loki_service_logs)
+        monkeypatch.setattr(support_bundle_module, "_query_loki_label_values", _fake_loki_label_values)
         monkeypatch.setattr(support_bundle_module.agent_client, "is_agent_online", lambda _host: False)
 
         archive, metadata = await build_support_bundle(test_db, bundle)
@@ -445,7 +453,7 @@ class TestBuildSupportBundleEndToEnd:
             ),
         )
 
-        async def _fake_query_prometheus(_expr: str) -> dict:
+        async def _fake_query_prometheus(_expr: str, **_kwargs) -> dict:
             return {"status": "success", "data": {"result": []}}
 
         async def _raise_targets() -> dict:
@@ -454,15 +462,19 @@ class TestBuildSupportBundleEndToEnd:
         async def _raise_alerts() -> dict:
             raise RuntimeError("alerts unavailable")
 
-        async def _fake_loki_service_logs(service: str, since_hours: int, limit: int = 500) -> dict:
+        async def _fake_loki_service_logs(service: str, since_hours: int, limit: int = 500, **_kwargs) -> dict:
             if service == "scheduler":
                 raise RuntimeError("scheduler loki unavailable")
             return {"status": "success", "service": service, "data": {"result": []}}
+
+        async def _fake_loki_label_values(_label: str) -> dict:
+            return {"status": "success", "data": ["api", "worker", "scheduler", "agent"]}
 
         monkeypatch.setattr(support_bundle_module, "_query_prometheus", _fake_query_prometheus)
         monkeypatch.setattr(support_bundle_module, "_query_prometheus_targets", _raise_targets)
         monkeypatch.setattr(support_bundle_module, "_query_prometheus_alerts", _raise_alerts)
         monkeypatch.setattr(support_bundle_module, "_query_loki_service_logs", _fake_loki_service_logs)
+        monkeypatch.setattr(support_bundle_module, "_query_loki_label_values", _fake_loki_label_values)
 
         archive, _metadata = await build_support_bundle(test_db, bundle)
         with zipfile.ZipFile(BytesIO(archive), "r") as zf:
@@ -475,3 +487,191 @@ class TestBuildSupportBundleEndToEnd:
             loki_services = json.loads(zf.read("observability/loki-service-logs.json"))
             assert "scheduler loki unavailable" in loki_services["scheduler"]["error"]
             assert loki_services["api"]["status"] == "success"
+
+    @pytest.mark.asyncio
+    async def test_build_support_bundle_uses_incident_window_for_db_exports(
+        self,
+        test_db: Session,
+        test_user: models.User,
+        sample_lab: models.Lab,
+        monkeypatch,
+    ):
+        from app.services import support_bundle as support_bundle_module
+
+        now = datetime.now(timezone.utc)
+        incident_start = now - timedelta(hours=3)
+        incident_end = now - timedelta(hours=1)
+
+        old_job = models.Job(
+            lab_id=sample_lab.id,
+            user_id=test_user.id,
+            action="window_old",
+            status="failed",
+            created_at=now - timedelta(hours=30),
+        )
+        in_window_job = models.Job(
+            lab_id=sample_lab.id,
+            user_id=test_user.id,
+            action="window_in",
+            status="failed",
+            created_at=now - timedelta(hours=2),
+        )
+        old_audit = models.AuditLog(
+            event_type="window_old_audit",
+            user_id=test_user.id,
+            created_at=now - timedelta(hours=30),
+        )
+        in_window_audit = models.AuditLog(
+            event_type="window_in_audit",
+            user_id=test_user.id,
+            created_at=now - timedelta(hours=2),
+        )
+        test_db.add_all([old_job, in_window_job, old_audit, in_window_audit])
+        test_db.commit()
+
+        bundle = models.SupportBundle(
+            user_id=test_user.id,
+            status="running",
+            include_configs=False,
+            pii_safe=True,
+            time_window_hours=24,
+            options_json=json.dumps({"impacted_lab_ids": [sample_lab.id], "impacted_agent_ids": []}),
+            incident_json=json.dumps(
+                {
+                    "summary": "Historical incident",
+                    "repro_steps": "N/A",
+                    "expected_behavior": "N/A",
+                    "actual_behavior": "N/A",
+                    "incident_started_at": incident_start.isoformat(),
+                    "incident_ended_at": incident_end.isoformat(),
+                }
+            ),
+        )
+
+        async def _fake_query_prometheus(_expr: str, **_kwargs) -> dict:
+            return {"status": "success", "data": {"result": []}}
+
+        async def _fake_query_prometheus_targets() -> dict:
+            return {"status": "success", "data": {"activeTargets": []}}
+
+        async def _fake_query_prometheus_alerts() -> dict:
+            return {"status": "success", "data": {"alerts": []}}
+
+        async def _fake_loki_service_logs(_service: str, _since_hours: int, limit: int = 500, **_kwargs) -> dict:
+            return {"status": "success", "data": {"result": []}, "limit": limit}
+
+        async def _fake_loki_label_values(_label: str) -> dict:
+            return {"status": "success", "data": ["api", "worker", "scheduler", "agent"]}
+
+        monkeypatch.setattr(support_bundle_module, "_query_prometheus", _fake_query_prometheus)
+        monkeypatch.setattr(support_bundle_module, "_query_prometheus_targets", _fake_query_prometheus_targets)
+        monkeypatch.setattr(support_bundle_module, "_query_prometheus_alerts", _fake_query_prometheus_alerts)
+        monkeypatch.setattr(support_bundle_module, "_query_loki_service_logs", _fake_loki_service_logs)
+        monkeypatch.setattr(support_bundle_module, "_query_loki_label_values", _fake_loki_label_values)
+
+        archive, _metadata = await build_support_bundle(test_db, bundle)
+        with zipfile.ZipFile(BytesIO(archive), "r") as zf:
+            action_logs = json.loads(zf.read("api/action-logs.json"))
+            actions = {item["action"] for item in action_logs["jobs"]}
+            audit_events = {item["event_type"] for item in action_logs["audit_logs"]}
+            assert "window_in" in actions
+            assert "window_old" not in actions
+            assert "window_in_audit" in audit_events
+            assert "window_old_audit" not in audit_events
+
+            controller = json.loads(zf.read("system/controller.json"))
+            assert controller["collection_window"]["source"] == "incident_window"
+
+    @pytest.mark.asyncio
+    async def test_build_support_bundle_adds_completeness_warnings_and_runtime_circuit_breaker_snapshot(
+        self,
+        test_db: Session,
+        test_user: models.User,
+        sample_lab: models.Lab,
+        monkeypatch,
+    ):
+        from app.services import support_bundle as support_bundle_module
+
+        bundle = models.SupportBundle(
+            user_id=test_user.id,
+            status="running",
+            include_configs=False,
+            pii_safe=True,
+            time_window_hours=24,
+            options_json=json.dumps({"impacted_lab_ids": [sample_lab.id], "impacted_agent_ids": []}),
+            incident_json=json.dumps(
+                {
+                    "summary": "Coverage check",
+                    "repro_steps": "N/A",
+                    "expected_behavior": "N/A",
+                    "actual_behavior": "N/A",
+                }
+            ),
+        )
+
+        def _vector(value: float, metric: dict[str, str] | None = None) -> dict:
+            return {
+                "status": "success",
+                "data": {
+                    "resultType": "vector",
+                    "result": [
+                        {
+                            "metric": metric or {},
+                            "value": [int(datetime.now(timezone.utc).timestamp()), str(value)],
+                        }
+                    ],
+                },
+            }
+
+        async def _fake_query_prometheus(expr: str, **_kwargs) -> dict:
+            if expr.startswith("up{job="):
+                return _vector(1.0)
+            if expr == 'sum(increase(archetype_jobs_total{status="started"}[2h]))':
+                return _vector(1.0)
+            if expr == "sum(increase(archetype_job_duration_seconds_count[2h]))":
+                return _vector(0.0)
+            if expr == "sum(increase(archetype_job_queue_wait_seconds_count[2h]))":
+                return _vector(0.0)
+            if expr.startswith("archetype_circuit_breaker_state"):
+                return {
+                    "status": "success",
+                    "data": {
+                        "resultType": "vector",
+                        "result": [
+                            {
+                                "metric": {"handler_type": "lab_deleted", "job": "archetype-scheduler"},
+                                "value": [int(datetime.now(timezone.utc).timestamp()), "2"],
+                            }
+                        ],
+                    },
+                }
+            return {"status": "success", "data": {"resultType": "vector", "result": []}}
+
+        async def _fake_query_prometheus_targets() -> dict:
+            return {"status": "success", "data": {"activeTargets": [{"health": "up"}]}}
+
+        async def _fake_query_prometheus_alerts() -> dict:
+            return {"status": "success", "data": {"alerts": []}}
+
+        async def _fake_loki_service_logs(_service: str, _since_hours: int, limit: int = 500, **_kwargs) -> dict:
+            return {"status": "success", "data": {"result": []}, "limit": limit}
+
+        async def _fake_loki_label_values(_label: str) -> dict:
+            return {"status": "success", "data": ["agent"]}
+
+        monkeypatch.setattr(support_bundle_module, "_query_prometheus", _fake_query_prometheus)
+        monkeypatch.setattr(support_bundle_module, "_query_prometheus_targets", _fake_query_prometheus_targets)
+        monkeypatch.setattr(support_bundle_module, "_query_prometheus_alerts", _fake_query_prometheus_alerts)
+        monkeypatch.setattr(support_bundle_module, "_query_loki_service_logs", _fake_loki_service_logs)
+        monkeypatch.setattr(support_bundle_module, "_query_loki_label_values", _fake_loki_label_values)
+
+        archive, _metadata = await build_support_bundle(test_db, bundle)
+        with zipfile.ZipFile(BytesIO(archive), "r") as zf:
+            cb_state = json.loads(zf.read("system/circuit-breaker.json"))
+            assert cb_state["handlers"]["lab_deleted"]["state"] == "open"
+            assert cb_state["handlers"]["lab_deleted"]["state_value"] == 2.0
+
+            errors = json.loads(zf.read("errors.json"))["errors"]
+            assert any("Loki 'service' label missing expected value 'api'" in item for item in errors)
+            assert any("jobs started in 2h window but no archetype_job_duration_seconds samples" in item for item in errors)
+            assert any("jobs started in 2h window but no archetype_job_queue_wait_seconds samples" in item for item in errors)

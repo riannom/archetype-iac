@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import sys
 from contextvars import ContextVar
 from datetime import datetime, timezone
@@ -36,6 +37,11 @@ def generate_correlation_id() -> str:
     return str(uuid4())
 
 
+def _service_name() -> str:
+    value = (os.getenv("ARCHETYPE_SERVICE_NAME") or "").strip()
+    return value or "api"
+
+
 class JSONFormatter(logging.Formatter):
     """JSON log formatter for structured logging.
 
@@ -58,6 +64,7 @@ class JSONFormatter(logging.Formatter):
             "level": record.levelname,
             "logger": record.name,
             "message": record.getMessage(),
+            "service": _service_name(),
         }
 
         # Add correlation ID if available

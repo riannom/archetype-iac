@@ -29,6 +29,27 @@ logger = logging.getLogger(__name__)
 class AgentResolutionMixin:
     """Mixin providing agent resolution methods for NodeLifecycleManager."""
 
+    def _release_db_transaction_for_io(self, reason: str) -> None:
+        """Close open DB transactions before long agent I/O waits.
+
+        NodeLifecycleManager provides a richer override, but tests and some
+        isolated call sites instantiate this mixin directly.
+        """
+        session = getattr(self, "session", None)
+        if session is None:
+            return
+        has_pending_writes = bool(session.new or session.dirty or session.deleted)
+        try:
+            if has_pending_writes:
+                session.commit()
+            else:
+                session.rollback()
+        except Exception:
+            try:
+                session.rollback()
+            except Exception:
+                pass
+
     async def _get_candidate_agents(self) -> list[models.Host]:
         """Return online agents that support the required provider."""
         from app.agent_client import get_agent_providers
@@ -92,6 +113,9 @@ class AgentResolutionMixin:
                     )
                 else:
                     try:
+                        self._release_db_transaction_for_io(
+                            f"explicit placement ping for {ns.node_name}"
+                        )
                         await agent_client.ping_agent(host_agent)
                     except AgentUnavailableError:
                         explicit_placement_failures.append(
@@ -176,6 +200,9 @@ class AgentResolutionMixin:
                             )
                         else:
                             try:
+                                self._release_db_transaction_for_io(
+                                    f"sticky placement ping for {ns.node_name}"
+                                )
                                 await agent_client.ping_agent(host_agent)
                                 host_check = (True, None)
                             except AgentUnavailableError:
@@ -272,6 +299,7 @@ class AgentResolutionMixin:
         ping_tasks = [
             agent_client.ping_agent(cand) for cand in candidates
         ]
+        self._release_db_transaction_for_io("bin-pack candidate ping")
         ping_results = await asyncio.gather(
             *ping_tasks, return_exceptions=True
         )
@@ -290,6 +318,7 @@ class AgentResolutionMixin:
         cap_tasks = [
             agent_client.query_agent_capacity(c) for c in reachable
         ]
+        self._release_db_transaction_for_io("bin-pack capacity query")
         cap_results = await asyncio.gather(
             *cap_tasks, return_exceptions=True
         )

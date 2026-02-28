@@ -155,10 +155,140 @@ def _bundle_dir() -> Path:
     return path
 
 
-async def _query_prometheus(expr: str) -> dict[str, Any]:
+def _parse_iso_datetime(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _resolve_collection_window(incident: dict[str, Any], time_window_hours: int) -> tuple[datetime, datetime]:
+    now = _now_utc()
+    incident_started_at = _parse_iso_datetime(incident.get("incident_started_at"))
+    incident_ended_at = _parse_iso_datetime(incident.get("incident_ended_at"))
+    default_window = timedelta(hours=time_window_hours)
+
+    if incident_started_at and incident_ended_at:
+        since_dt = incident_started_at
+        until_dt = incident_ended_at
+    elif incident_started_at:
+        since_dt = incident_started_at
+        until_dt = incident_started_at + default_window
+    elif incident_ended_at:
+        until_dt = incident_ended_at
+        since_dt = incident_ended_at - default_window
+    else:
+        until_dt = now
+        since_dt = now - default_window
+
+    if until_dt > now:
+        until_dt = now
+    if since_dt > until_dt:
+        since_dt = until_dt - default_window
+
+    return since_dt, until_dt
+
+
+def _prometheus_scalar_sum(payload: dict[str, Any] | None) -> float | None:
+    if not isinstance(payload, dict):
+        return None
+    data = payload.get("data")
+    if not isinstance(data, dict):
+        return None
+    result = data.get("result")
+    if not isinstance(result, list):
+        return None
+
+    total = 0.0
+    saw_value = False
+    for row in result:
+        if not isinstance(row, dict):
+            continue
+        value = row.get("value")
+        if not (isinstance(value, list) and len(value) == 2):
+            continue
+        try:
+            total += float(value[1])
+            saw_value = True
+        except (TypeError, ValueError):
+            continue
+    return total if saw_value else 0.0
+
+
+def _loki_entry_count(payload: dict[str, Any] | None) -> int | None:
+    if not isinstance(payload, dict):
+        return None
+    if payload.get("error"):
+        return None
+    data = payload.get("data")
+    if not isinstance(data, dict):
+        return 0
+    result = data.get("result")
+    if not isinstance(result, list):
+        return 0
+    count = 0
+    for stream in result:
+        if not isinstance(stream, dict):
+            continue
+        values = stream.get("values")
+        if isinstance(values, list):
+            count += len(values)
+    return count
+
+
+def _build_completeness_warnings(
+    *,
+    prom_results: dict[str, Any],
+    loki_service_logs: dict[str, Any],
+    loki_service_label_values: list[str],
+) -> list[str]:
+    warnings: list[str] = []
+
+    jobs_started = _prometheus_scalar_sum(prom_results.get("jobs_started_2h")) or 0.0
+    duration_samples = _prometheus_scalar_sum(prom_results.get("job_duration_samples_2h")) or 0.0
+    queue_wait_samples = _prometheus_scalar_sum(prom_results.get("job_queue_wait_samples_2h")) or 0.0
+    if jobs_started > 0 and duration_samples <= 0:
+        warnings.append("Coverage gap: jobs started in 2h window but no archetype_job_duration_seconds samples")
+    if jobs_started > 0 and queue_wait_samples <= 0:
+        warnings.append("Coverage gap: jobs started in 2h window but no archetype_job_queue_wait_seconds samples")
+
+    target_by_service = {
+        "api": "targets_up_api",
+        "worker": "targets_up_worker",
+        "scheduler": "targets_up_scheduler",
+        "agent": "targets_up_agent",
+    }
+    label_values_set = {value.strip() for value in loki_service_label_values if value}
+    for service, target_key in target_by_service.items():
+        target_up = _prometheus_scalar_sum(prom_results.get(target_key)) or 0.0
+        if target_up < 1:
+            continue
+        if service not in label_values_set:
+            warnings.append(
+                f"Coverage gap: Loki 'service' label missing expected value '{service}' while target is up"
+            )
+            continue
+        log_count = _loki_entry_count(loki_service_logs.get(service))
+        if log_count == 0:
+            warnings.append(f"Coverage gap: no Loki log entries found for service '{service}' in collection window")
+        elif log_count is None:
+            warnings.append(f"Coverage gap: failed to query Loki entries for service '{service}'")
+
+    return warnings
+
+
+async def _query_prometheus(expr: str, *, evaluation_time: datetime | None = None) -> dict[str, Any]:
+    params: dict[str, Any] = {"query": expr}
+    if evaluation_time is not None:
+        params["time"] = evaluation_time.astimezone(timezone.utc).isoformat()
     return await _query_prometheus_api(
         "/api/v1/query",
-        params={"query": expr},
+        params=params,
         timeout=15.0,
     )
 
@@ -186,16 +316,29 @@ async def _query_prometheus_alerts() -> dict[str, Any]:
     return await _query_prometheus_api("/api/v1/alerts", timeout=20.0)
 
 
-async def _query_loki_service_logs(service: str, since_hours: int, limit: int = 500) -> dict[str, Any]:
-    seconds = max(1, since_hours) * 3600
-    start_ns = (int(_now_utc().timestamp()) - seconds) * 1_000_000_000
-    query = f'{{service="{service}"}} | json'
+async def _query_loki_service_logs(
+    service: str,
+    since_hours: int,
+    limit: int = 500,
+    *,
+    start_dt: datetime | None = None,
+    end_dt: datetime | None = None,
+) -> dict[str, Any]:
+    if start_dt is None:
+        seconds = max(1, since_hours) * 3600
+        start_dt = _now_utc() - timedelta(seconds=seconds)
+    if end_dt is None:
+        end_dt = _now_utc()
+    start_ns = int(start_dt.astimezone(timezone.utc).timestamp()) * 1_000_000_000
+    end_ns = int(end_dt.astimezone(timezone.utc).timestamp()) * 1_000_000_000
+    query = f'{{service="{service}"}}'
     async with httpx.AsyncClient(timeout=25.0) as client:
         resp = await client.get(
             f"{settings.loki_url}/loki/api/v1/query_range",
             params={
                 "query": query,
                 "start": start_ns,
+                "end": end_ns,
                 "limit": limit,
                 "direction": "backward",
             },
@@ -207,6 +350,13 @@ async def _query_loki_service_logs(service: str, since_hours: int, limit: int = 
 async def _query_loki_api_logs(since_hours: int, limit: int = 500) -> dict[str, Any]:
     # Backward-compatible wrapper used by tests/importers.
     return await _query_loki_service_logs("api", since_hours, limit=limit)
+
+
+async def _query_loki_label_values(label: str) -> dict[str, Any]:
+    async with httpx.AsyncClient(timeout=20.0) as client:
+        resp = await client.get(f"{settings.loki_url}/loki/api/v1/label/{label}/values")
+        resp.raise_for_status()
+        return resp.json()
 
 
 async def _collect_agent_snapshot(agent: models.Host) -> dict[str, Any]:
@@ -249,6 +399,7 @@ def _lab_export(
     session: Session,
     lab: models.Lab,
     since_dt: datetime,
+    until_dt: datetime,
     include_configs: bool,
 ) -> dict[str, Any]:
     service = TopologyService(session)
@@ -282,7 +433,11 @@ def _lab_export(
     )
     jobs = (
         session.query(models.Job)
-        .filter(models.Job.lab_id == lab.id, models.Job.created_at >= since_dt)
+        .filter(
+            models.Job.lab_id == lab.id,
+            models.Job.created_at >= since_dt,
+            models.Job.created_at <= until_dt,
+        )
         .order_by(models.Job.created_at.desc())
         .limit(MAX_JOBS_PER_LAB)
         .all()
@@ -396,7 +551,11 @@ def _lab_export(
     if include_configs:
         configs = (
             session.query(models.ConfigSnapshot)
-            .filter(models.ConfigSnapshot.lab_id == lab.id)
+            .filter(
+                models.ConfigSnapshot.lab_id == lab.id,
+                models.ConfigSnapshot.created_at >= since_dt,
+                models.ConfigSnapshot.created_at <= until_dt,
+            )
             .order_by(models.ConfigSnapshot.created_at.desc())
             .limit(200)
             .all()
@@ -421,10 +580,12 @@ async def build_support_bundle(
     session: Session,
     bundle: models.SupportBundle,
 ) -> tuple[bytes, dict[str, Any]]:
-    options = _safe_json_load(bundle.options_json)
-    incident = _safe_json_load(bundle.incident_json)
+    raw_options = _safe_json_load(bundle.options_json)
+    options = raw_options if isinstance(raw_options, dict) else {}
+    raw_incident = _safe_json_load(bundle.incident_json)
+    incident = raw_incident if isinstance(raw_incident, dict) else {"raw": raw_incident}
     time_window_hours = max(1, min(int(bundle.time_window_hours or 24), 168))
-    since_dt = _now_utc() - timedelta(hours=time_window_hours)
+    since_dt, until_dt = _resolve_collection_window(incident, time_window_hours)
     pii_safe = bool(bundle.pii_safe)
     include_configs = bool(bundle.include_configs)
 
@@ -466,6 +627,11 @@ async def build_support_bundle(
         "generated_at": _now_utc().isoformat(),
         "bundle_id": bundle.id,
         "time_window_hours": time_window_hours,
+        "collection_window": {
+            "start": since_dt.isoformat(),
+            "end": until_dt.isoformat(),
+            "source": "incident_window" if incident.get("incident_started_at") or incident.get("incident_ended_at") else "relative_time_window",
+        },
         "service": "archetype-api",
         "api_settings": {
             "provider": settings.provider,
@@ -486,14 +652,20 @@ async def build_support_bundle(
     # API action logs from DB-backed jobs and audit events.
     audit_logs = (
         session.query(models.AuditLog)
-        .filter(models.AuditLog.created_at >= since_dt)
+        .filter(
+            models.AuditLog.created_at >= since_dt,
+            models.AuditLog.created_at <= until_dt,
+        )
         .order_by(models.AuditLog.created_at.desc())
         .limit(2000)
         .all()
     )
     api_jobs = (
         session.query(models.Job)
-        .filter(models.Job.created_at >= since_dt)
+        .filter(
+            models.Job.created_at >= since_dt,
+            models.Job.created_at <= until_dt,
+        )
         .order_by(models.Job.created_at.desc())
         .limit(3000)
         .all()
@@ -538,7 +710,7 @@ async def build_support_bundle(
     # Lab artifacts and runtime state.
     for lab in selected_labs:
         try:
-            lab_payload = _lab_export(session, lab, since_dt, include_configs=include_configs)
+            lab_payload = _lab_export(session, lab, since_dt, until_dt, include_configs=include_configs)
             payload = sanitize_data(lab_payload, pii_safe=pii_safe, lab_alias=lab_alias, host_alias=host_alias)
             writer.add_json(f"labs/{lab.id}/bundle.json", payload)
         except Exception as exc:
@@ -562,6 +734,8 @@ async def build_support_bundle(
         "targets_up_worker": 'up{job="archetype-worker"}',
         "jobs_started_2h": 'sum(increase(archetype_jobs_total{status="started"}[2h]))',
         "jobs_failed_2h": 'sum(increase(archetype_jobs_total{status="failed"}[2h]))',
+        "job_duration_samples_2h": "sum(increase(archetype_job_duration_seconds_count[2h]))",
+        "job_queue_wait_samples_2h": "sum(increase(archetype_job_queue_wait_seconds_count[2h]))",
         "jobs_active": "sum(archetype_jobs_active)",
         "nlm_samples_2h": "sum(increase(archetype_nlm_phase_duration_seconds_count[2h]))",
         "job_failure_reasons_2h": 'sum by (reason) (increase(archetype_job_failures_total[2h]))',
@@ -574,7 +748,7 @@ async def build_support_bundle(
     prom_results: dict[str, Any] = {}
     for name, expr in prom_queries.items():
         try:
-            prom_results[name] = await _query_prometheus(expr)
+            prom_results[name] = await _query_prometheus(expr, evaluation_time=until_dt)
         except Exception as exc:
             prom_results[name] = {"error": str(exc)}
     writer.add_json(
@@ -603,7 +777,12 @@ async def build_support_bundle(
     loki_service_logs: dict[str, Any] = {}
     for service in ("api", "worker", "scheduler", "agent"):
         try:
-            loki_service_logs[service] = await _query_loki_service_logs(service, time_window_hours)
+            loki_service_logs[service] = await _query_loki_service_logs(
+                service,
+                time_window_hours,
+                start_dt=since_dt,
+                end_dt=until_dt,
+            )
         except Exception as exc:
             loki_service_logs[service] = {"error": str(exc)}
     writer.add_json(
@@ -616,6 +795,32 @@ async def build_support_bundle(
         "observability/loki-api-logs.json",
         sanitize_data(loki_service_logs.get("api", {}), pii_safe=pii_safe, lab_alias=lab_alias, host_alias=host_alias),
     )
+
+    loki_service_label_values: list[str] = []
+    try:
+        loki_service_labels = await _query_loki_label_values("service")
+        if isinstance(loki_service_labels, dict):
+            raw_values = loki_service_labels.get("data")
+            if isinstance(raw_values, list):
+                loki_service_label_values = [str(value) for value in raw_values]
+    except Exception as exc:
+        loki_service_labels = {"error": str(exc)}
+    writer.add_json(
+        "observability/loki-service-label-values.json",
+        sanitize_data(
+            loki_service_labels,
+            pii_safe=pii_safe,
+            lab_alias=lab_alias,
+            host_alias=host_alias,
+        ),
+    )
+
+    for warning in _build_completeness_warnings(
+        prom_results=prom_results,
+        loki_service_logs=loki_service_logs,
+        loki_service_label_values=loki_service_label_values,
+    ):
+        writer.errors.append(warning)
 
     # Queue and system health snapshots
     try:
@@ -636,14 +841,36 @@ async def build_support_bundle(
 
     # Circuit breaker state
     try:
-        from app.tasks.cleanup_handler import CleanupEventHandler
-        _handler = CleanupEventHandler()
-        cb = _handler.circuit_breaker
+        cb_metric = await _query_prometheus(
+            'archetype_circuit_breaker_state{job=~"archetype-(scheduler|api)"}',
+            evaluation_time=until_dt,
+        )
+        handlers: dict[str, Any] = {}
+        for row in cb_metric.get("data", {}).get("result", []):
+            metric = row.get("metric", {})
+            handler_type = str(metric.get("handler_type") or "unknown")
+            value = row.get("value")
+            state_value = 0.0
+            if isinstance(value, list) and len(value) == 2:
+                try:
+                    state_value = float(value[1])
+                except (TypeError, ValueError):
+                    state_value = 0.0
+            if state_value >= 2:
+                state_name = "open"
+            elif state_value >= 1:
+                state_name = "half_open"
+            else:
+                state_name = "closed"
+            handlers[handler_type] = {
+                "state": state_name,
+                "state_value": state_value,
+                "job": metric.get("job"),
+            }
         cb_state = {
-            "failures": dict(cb._failures),
-            "last_failure_times": {k: v for k, v in cb._last_failure_time.items()},
-            "max_failures": cb.max_failures,
-            "cooldown": cb.cooldown,
+            "source_metric": "archetype_circuit_breaker_state",
+            "as_of": until_dt.isoformat(),
+            "handlers": handlers,
         }
     except Exception as exc:
         cb_state = {"error": str(exc)}

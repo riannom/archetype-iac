@@ -116,6 +116,36 @@ def _record_failed(
     )
 
 
+def _reset_session_after_db_error(session, *, context: str) -> None:
+    """Best-effort rollback to recover a failed SQLAlchemy session."""
+    try:
+        session.rollback()
+    except Exception as rollback_error:
+        logger.warning(
+            "Failed to rollback DB session after %s: %s",
+            context,
+            rollback_error,
+        )
+
+
+def _release_db_transaction_for_io(session, *, context: str) -> None:
+    """Close open transaction boundaries before long external awaits."""
+    has_pending_writes = bool(session.new or session.dirty or session.deleted)
+    try:
+        if has_pending_writes:
+            session.commit()
+        else:
+            session.rollback()
+    except Exception as exc:
+        logger.warning(
+            "Failed to release DB transaction before %s: %s",
+            context,
+            exc,
+        )
+        _reset_session_after_db_error(session, context=context)
+        raise
+
+
 async def _run_job_preflight_checks(
     session,
     lab: models.Lab,
@@ -127,6 +157,10 @@ async def _run_job_preflight_checks(
         return True, None
 
     try:
+        _release_db_transaction_for_io(
+            session,
+            context=f"agent preflight connectivity check for lab {lab.id}",
+        )
         await agent_client.get_lab_status_from_agent(agent, lab.id)
     except Exception as e:
         return False, (
@@ -144,6 +178,10 @@ async def _run_job_preflight_checks(
             image_refs = topo_service.get_required_images(lab.id)
             if image_refs:
                 image_to_nodes = topo_service.get_image_to_nodes_map(lab.id)
+                _release_db_transaction_for_io(
+                    session,
+                    context=f"image preflight check for lab {lab.id}",
+                )
                 all_ready, missing, _ = await ensure_images_for_deployment(
                     agent.id,
                     image_refs,
@@ -349,6 +387,10 @@ async def _auto_extract_configs_before_destroy(
         )
 
     except Exception as e:
+        _reset_session_after_db_error(
+            session,
+            context=f"auto-extract before destroy for lab {lab.id}",
+        )
         logger.warning(f"Error during auto-extract before destroy: {e}")
         # Continue with destroy even if extraction fails
 
@@ -388,6 +430,10 @@ async def _dispatch_webhook(
             nodes=nodes,
         )
     except Exception as e:
+        _reset_session_after_db_error(
+            session,
+            context=f"dispatching webhook {event_type} for lab {lab.id}",
+        )
         # Don't fail the job if webhook dispatch fails
         logger.warning(f"Webhook dispatch failed for {event_type}: {e}")
 
@@ -435,6 +481,10 @@ async def _capture_node_ips(session, lab_id: str, agent: models.Host) -> None:
         logger.info(f"Captured management IPs for {len(nodes)} nodes in lab {lab_id}")
 
     except Exception as e:
+        _reset_session_after_db_error(
+            session,
+            context=f"capturing node IPs for lab {lab_id}",
+        )
         logger.warning(f"Failed to capture node IPs for lab {lab_id}: {e}")
         # Don't fail the job - IP capture is best-effort
 
@@ -523,6 +573,10 @@ async def _update_node_placements(
                 )
 
     except Exception as e:
+        _reset_session_after_db_error(
+            session,
+            context=f"updating node placements for lab {lab_id}",
+        )
         logger.warning(f"Failed to update node placements for lab {lab_id}: {e}")
         # Don't fail the job - placement tracking is best-effort
 
@@ -635,6 +689,10 @@ async def _cleanup_orphan_containers(
                 log_parts.append(f"  Orphan cleanup: no stale containers found on {old_agent.name}")
 
     except Exception as e:
+        _reset_session_after_db_error(
+            session,
+            context=f"orphan cleanup for lab {lab_id}",
+        )
         logger.warning(f"Error during orphan cleanup for lab {lab_id}: {e}")
         log_parts.append(f"Warning: Orphan cleanup error: {e}")
 
@@ -721,6 +779,10 @@ async def run_agent_job(
                 logger.warning(f"Job {job_id} failed: no healthy agent available for provider {provider}")
                 return
 
+            _release_db_transaction_for_io(
+                session,
+                context=f"preflight checks for job {job_id}",
+            )
             preflight_ok, preflight_error = await _run_job_preflight_checks(
                 session, lab, agent, action,
             )
@@ -762,6 +824,10 @@ async def run_agent_job(
                     # Build JSON topology from database (source of truth)
                     topo_service = TopologyService(session)
                     topology_json = topo_service.build_deploy_topology(lab_id, agent.id)
+                    _release_db_transaction_for_io(
+                        session,
+                        context=f"deploy request for job {job_id}",
+                    )
                     result = await agent_client.deploy_to_agent(
                         agent, job_id, lab_id,
                         topology=topology_json,  # Use JSON, not YAML
@@ -770,6 +836,10 @@ async def run_agent_job(
                 elif action == "down":
                     # Auto-extract configs before destroying (if enabled)
                     await _auto_extract_configs_before_destroy(session, lab, agent)
+                    _release_db_transaction_for_io(
+                        session,
+                        context=f"destroy request for job {job_id}",
+                    )
                     result = await agent_client.destroy_on_agent(agent, job_id, lab_id)
                 else:
                     # Note: node:start/stop actions are deprecated - use sync:node:{id} instead
@@ -792,13 +862,25 @@ async def run_agent_job(
                     if action == "up":
                         update_lab_state(session, lab_id, LabState.RUNNING.value, agent_id=agent.id)
                         # Capture management IPs for IaC workflows
+                        _release_db_transaction_for_io(
+                            session,
+                            context=f"capture node IPs for job {job_id}",
+                        )
                         await _capture_node_ips(session, lab_id, agent)
                         # Dispatch webhook for successful deploy
+                        _release_db_transaction_for_io(
+                            session,
+                            context=f"deploy webhook dispatch for job {job_id}",
+                        )
                         await _dispatch_webhook("lab.deploy_complete", lab, job, session)
                         asyncio.create_task(emit_deploy_finished(lab_id, agent_id=agent.id, job_id=job_id))
                     elif action == "down":
                         update_lab_state(session, lab_id, LabState.STOPPED.value)
                         # Dispatch webhook for destroy complete
+                        _release_db_transaction_for_io(
+                            session,
+                            context=f"destroy webhook dispatch for job {job_id}",
+                        )
                         await _dispatch_webhook("lab.destroy_complete", lab, job, session)
                         asyncio.create_task(emit_destroy_finished(lab_id, agent_id=agent.id, job_id=job_id))
 
@@ -818,8 +900,16 @@ async def run_agent_job(
 
                     # Dispatch webhook for failed job
                     if action == "up":
+                        _release_db_transaction_for_io(
+                            session,
+                            context=f"failed deploy webhook dispatch for job {job_id}",
+                        )
                         await _dispatch_webhook("lab.deploy_failed", lab, job, session)
                     else:
+                        _release_db_transaction_for_io(
+                            session,
+                            context=f"failed job webhook dispatch for job {job_id}",
+                        )
                         await _dispatch_webhook("job.failed", lab, job, session)
                     asyncio.create_task(emit_job_failed(lab_id, job_id=job_id, job_action=action))
 
@@ -900,6 +990,10 @@ async def run_agent_job(
                 logger.exception(f"Job {job_id} failed with unexpected error: {e}")
 
         except Exception as e:
+            _reset_session_after_db_error(
+                session,
+                context=f"critical error handling for job {job_id}",
+            )
             # Catch-all for any errors during error handling itself
             logger.exception(f"Critical error in job {job_id}: {e}")
 
@@ -1002,6 +1096,10 @@ async def run_multihost_deploy(
             update_lab_state(session, lab_id, LabState.STARTING.value)
 
             # Dispatch webhook for deploy started
+            _release_db_transaction_for_io(
+                session,
+                context=f"deploy-started webhook for job {job_id}",
+            )
             await _dispatch_webhook("lab.deploy_started", lab, job, session)
 
             # Map host_id to agent objects
@@ -1012,6 +1110,10 @@ async def run_multihost_deploy(
                 agent = session.get(models.Host, host_id)
                 if agent and agent_client.is_agent_online(agent):
                     try:
+                        _release_db_transaction_for_io(
+                            session,
+                            context=f"multihost preflight on host {host_id}",
+                        )
                         await agent_client.get_lab_status_from_agent(agent, lab_id)
                     except Exception as e:
                         missing_hosts.append(f"{host_id} (preflight connectivity failed: {e})")
@@ -1099,6 +1201,10 @@ async def run_multihost_deploy(
                 )
 
             # Wait for all deployments
+            _release_db_transaction_for_io(
+                session,
+                context=f"multihost deploy gather for job {job_id}",
+            )
             results = await asyncio.gather(*deploy_tasks, return_exceptions=True)
 
             deploy_success = True
@@ -1137,6 +1243,10 @@ async def run_multihost_deploy(
 
                 if rollback_tasks:
                     log_parts.append(f"Rolling back hosts: {', '.join(rollback_hosts)}")
+                    _release_db_transaction_for_io(
+                        session,
+                        context=f"multihost rollback gather for job {job_id}",
+                    )
                     rollback_results = await asyncio.gather(*rollback_tasks, return_exceptions=True)
 
                     for agent_name, rb_result in zip(rollback_hosts, rollback_results):
@@ -1161,6 +1271,10 @@ async def run_multihost_deploy(
             # This handles both link types and creates/updates LinkState records
             from app.tasks.link_orchestration import create_deployment_links
 
+            _release_db_transaction_for_io(
+                session,
+                context=f"multihost link creation for job {job_id}",
+            )
             links_ok, links_failed = await create_deployment_links(
                 session, lab_id, host_to_agent, log_parts
             )
@@ -1184,6 +1298,10 @@ async def run_multihost_deploy(
             for host_id, agent in host_to_agent.items():
                 node_names = host_node_names.get(host_id, [])
                 if node_names:
+                    _release_db_transaction_for_io(
+                        session,
+                        context=f"placement update for host {host_id} in job {job_id}",
+                    )
                     await _update_node_placements(session, lab_id, agent.id, node_names)
 
             # Mark job as completed
@@ -1207,11 +1325,19 @@ async def run_multihost_deploy(
 
             # Capture management IPs from all agents for IaC workflows
             for agent in host_to_agent.values():
+                _release_db_transaction_for_io(
+                    session,
+                    context=f"capture node IPs for host {agent.id} in job {job_id}",
+                )
                 await _capture_node_ips(session, lab_id, agent)
 
             session.commit()
 
             # Dispatch webhook for successful deploy
+            _release_db_transaction_for_io(
+                session,
+                context=f"deploy-complete webhook for job {job_id}",
+            )
             await _dispatch_webhook("lab.deploy_complete", lab, job, session)
             asyncio.create_task(emit_deploy_finished(lab_id, job_id=job_id))
 
@@ -1331,6 +1457,10 @@ async def run_multihost_destroy(
             # First, tear down VXLAN tunnels and clean up VxlanTunnel records
             from app.tasks.link_orchestration import teardown_deployment_links
 
+            _release_db_transaction_for_io(
+                session,
+                context=f"multihost link teardown for job {job_id}",
+            )
             tunnels_ok, tunnels_failed = await teardown_deployment_links(
                 session, lab_id, host_to_agent, log_parts
             )
@@ -1346,6 +1476,10 @@ async def run_multihost_destroy(
                 )
 
             # Wait for all destroys
+            _release_db_transaction_for_io(
+                session,
+                context=f"multihost destroy gather for job {job_id}",
+            )
             results = await asyncio.gather(*destroy_tasks, return_exceptions=True)
 
             all_success = tunnels_failed == 0 and not missing_hosts and not unavailable_hosts
@@ -1424,10 +1558,18 @@ async def run_multihost_destroy(
 
             if all_success:
                 # Dispatch webhook for destroy complete
+                _release_db_transaction_for_io(
+                    session,
+                    context=f"destroy-complete webhook for job {job_id}",
+                )
                 await _dispatch_webhook("lab.destroy_complete", lab, job, session)
                 asyncio.create_task(emit_destroy_finished(lab_id, job_id=job_id))
             else:
                 # Surface partial-destroy as a warning failure event to operators.
+                _release_db_transaction_for_io(
+                    session,
+                    context=f"destroy-warning webhook for job {job_id}",
+                )
                 await _dispatch_webhook("job.failed", lab, job, session)
                 asyncio.create_task(
                     emit_job_failed(lab_id, job_id=job_id, job_action="down")
@@ -1584,6 +1726,10 @@ async def _create_cross_host_links_if_ready(
                 agent = session.get(models.Host, host_id)
                 if not agent or not agent_client.is_agent_online(agent):
                     continue
+                _release_db_transaction_for_io(
+                    session,
+                    context=f"overlay status probe for lab {lab_id}",
+                )
                 status = await agent_client.get_overlay_status_from_agent(agent)
                 tunnels = [t for t in status.get("tunnels", []) if t.get("lab_id") == lab_id]
                 link_tunnels = [t for t in status.get("link_tunnels", []) if t.get("lab_id") == lab_id]
@@ -1629,6 +1775,10 @@ async def _create_cross_host_links_if_ready(
             return
 
         try:
+            _release_db_transaction_for_io(
+                session,
+                context=f"cross-host link creation for lab {lab_id}",
+            )
             links_ok, links_failed = await create_deployment_links(
                 session, lab_id, host_to_agent, log_parts
             )

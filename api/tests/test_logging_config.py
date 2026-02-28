@@ -128,9 +128,42 @@ class TestJSONFormatter:
         assert "level" in parsed
         assert "logger" in parsed
         assert "message" in parsed
+        assert "service" in parsed
         assert parsed["level"] == "WARNING"
         assert parsed["logger"] == "test.module"
         assert parsed["message"] == "Warning message"
+
+    def test_format_uses_default_service_name(self):
+        """JSON logs default service to api when env var is absent."""
+        with patch.dict("os.environ", {}, clear=True):
+            record = logging.LogRecord(
+                name="test.module",
+                level=logging.INFO,
+                pathname="test.py",
+                lineno=1,
+                msg="Service default test",
+                args=(),
+                exc_info=None,
+            )
+            output = self.formatter.format(record)
+            parsed = json.loads(output)
+            assert parsed["service"] == "api"
+
+    def test_format_uses_env_service_name(self):
+        """JSON logs include ARCHETYPE_SERVICE_NAME when set."""
+        with patch.dict("os.environ", {"ARCHETYPE_SERVICE_NAME": "scheduler"}, clear=True):
+            record = logging.LogRecord(
+                name="test.module",
+                level=logging.INFO,
+                pathname="test.py",
+                lineno=1,
+                msg="Service env test",
+                args=(),
+                exc_info=None,
+            )
+            output = self.formatter.format(record)
+            parsed = json.loads(output)
+            assert parsed["service"] == "scheduler"
 
     def test_format_timestamp_is_iso8601(self):
         """Test that timestamp is in ISO8601 format."""

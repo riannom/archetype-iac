@@ -227,6 +227,33 @@ class TestCaptureNodeIps:
             # Should not raise
             await _capture_node_ips(test_db, lab.id, sample_host)
 
+    @pytest.mark.asyncio
+    async def test_commit_failure_rolls_back_session(
+        self, test_db: Session, test_user: models.User, sample_host: models.Host
+    ):
+        """Commit failures trigger rollback in best-effort IP capture."""
+        lab = _make_lab(test_db, test_user)
+        ns = _make_node_state(test_db, lab, node_id="n1", node_name="r1")
+
+        agent_status = {
+            "nodes": [
+                {"name": "r1", "ip_addresses": ["10.0.0.1"]},
+            ]
+        }
+
+        with patch(
+            "app.tasks.jobs.agent_client.get_lab_status_from_agent",
+            new_callable=AsyncMock,
+            return_value=agent_status,
+        ):
+            with patch.object(test_db, "commit", side_effect=RuntimeError("commit failed")):
+                with patch.object(test_db, "rollback", wraps=test_db.rollback) as mock_rollback:
+                    await _capture_node_ips(test_db, lab.id, sample_host)
+
+        assert mock_rollback.call_count >= 1
+        test_db.refresh(ns)
+        assert ns.management_ip is None
+
 
 # ---------------------------------------------------------------------------
 # 2. _dispatch_webhook

@@ -60,6 +60,7 @@ services:
       # Logging
       - LOG_FORMAT=${LOG_FORMAT:-json}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - ARCHETYPE_SERVICE_NAME=api
       - LOKI_URL=${LOKI_URL:-http://loki:3100}
       # Agent auth
       - AGENT_SECRET=${AGENT_SECRET:-}
@@ -105,6 +106,7 @@ services:
       - WORKSPACE=${WORKSPACE:-/var/lib/archetype}
       - LOG_FORMAT=${LOG_FORMAT:-json}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - ARCHETYPE_SERVICE_NAME=scheduler
       - LOKI_URL=${LOKI_URL:-http://loki:3100}
       - AGENT_SECRET=${AGENT_SECRET:-}
       - INTERNAL_URL=${INTERNAL_URL:-http://localhost:8000}
@@ -152,6 +154,7 @@ services:
       - JWT_SECRET=${JWT_SECRET:-CHANGE_ME_IN_PRODUCTION}
       - LOG_FORMAT=${LOG_FORMAT:-json}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - ARCHETYPE_SERVICE_NAME=worker
       - WORKER_METRICS_PORT=${WORKER_METRICS_PORT:-8003}
       - AGENT_SECRET=${AGENT_SECRET:-}
       - WORKER_EXECUTION_MODE=${WORKER_EXECUTION_MODE:-simple}

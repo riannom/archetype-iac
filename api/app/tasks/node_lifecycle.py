@@ -184,6 +184,34 @@ class NodeLifecycleManager(AgentResolutionMixin, DeploymentMixin):
             groups.setdefault(device_type, []).append(ns)
         return [(k, groups[k]) for k in sorted(groups.keys())]
 
+    def _release_db_transaction_for_io(self, reason: str) -> None:
+        """Close any open transaction before long external I/O awaits.
+
+        Sync jobs perform many DB reads/writes and then wait on agent/network calls.
+        Closing the transaction boundary before waits prevents idle-in-transaction
+        timeouts and reduces session invalidation cascades.
+        """
+        has_pending_writes = bool(
+            self.session.new or self.session.dirty or self.session.deleted
+        )
+        try:
+            if has_pending_writes:
+                self.session.commit()
+            else:
+                self.session.rollback()
+        except Exception as exc:
+            logger.warning(
+                "Sync job %s failed to release DB transaction before %s: %s",
+                self.job.id,
+                reason,
+                exc,
+            )
+            try:
+                self.session.rollback()
+            except Exception:
+                pass
+            raise
+
     async def execute(self) -> LifecycleResult:
         """Main orchestrator — calls phases in order."""
         # Phase: Load and validate
@@ -198,6 +226,7 @@ class NodeLifecycleManager(AgentResolutionMixin, DeploymentMixin):
         await self._set_transitional_states()
 
         # Phase: Resolve agents (may spawn sub-jobs for other agents)
+        self._release_db_transaction_for_io("agent resolution")
         if not await self._resolve_agents():
             if self.job.status == JobStatus.FAILED.value:
                 record_job_failed(self.job.action, failure_message=self.job.log_path)
@@ -249,11 +278,13 @@ class NodeLifecycleManager(AgentResolutionMixin, DeploymentMixin):
         # Phase: Migration detection (AFTER resource check — Phase 2.2)
         nodes_to_start_or_deploy = nodes_need_deploy + nodes_need_start
         if nodes_to_start_or_deploy:
+            self._release_db_transaction_for_io("migration detection")
             await self._handle_migration(nodes_to_start_or_deploy)
 
         # Phase: Image sync check
         _timing_extras = {"lab_id": str(self.lab.id), "job_id": str(self.job.id)}
         if nodes_to_start_or_deploy:
+            self._release_db_transaction_for_io("image sync check")
             async with AsyncTimedOperation(
                 histogram=nlm_phase_duration,
                 labels={
@@ -294,6 +325,7 @@ class NodeLifecycleManager(AgentResolutionMixin, DeploymentMixin):
         # Phase: Deploy undeployed nodes
         if nodes_need_deploy:
             for device_type, grouped_nodes in self._group_nodes_by_device_type(nodes_need_deploy):
+                self._release_db_transaction_for_io("deploy phase")
                 async with AsyncTimedOperation(
                     histogram=nlm_phase_duration,
                     labels={
@@ -313,6 +345,7 @@ class NodeLifecycleManager(AgentResolutionMixin, DeploymentMixin):
         # Phase: Start stopped nodes (via redeploy)
         if nodes_need_start:
             for device_type, grouped_nodes in self._group_nodes_by_device_type(nodes_need_start):
+                self._release_db_transaction_for_io("start phase")
                 async with AsyncTimedOperation(
                     histogram=nlm_phase_duration,
                     labels={
@@ -332,6 +365,7 @@ class NodeLifecycleManager(AgentResolutionMixin, DeploymentMixin):
         # Phase: Stop running nodes
         if nodes_need_stop:
             for device_type, grouped_nodes in self._group_nodes_by_device_type(nodes_need_stop):
+                self._release_db_transaction_for_io("stop phase")
                 async with AsyncTimedOperation(
                     histogram=nlm_phase_duration,
                     labels={
@@ -354,9 +388,11 @@ class NodeLifecycleManager(AgentResolutionMixin, DeploymentMixin):
             if ns.actual_state == NodeActualState.RUNNING.value and not ns.is_ready
         ]
         if deployed_and_started:
+            self._release_db_transaction_for_io("readiness polling")
             await self._wait_for_readiness(deployed_and_started)
 
         # Phase: Post-operation cleanup (cross-host links)
+        self._release_db_transaction_for_io("post-operation cleanup")
         async with AsyncTimedOperation(
             histogram=nlm_phase_duration,
             labels={
@@ -756,6 +792,9 @@ class NodeLifecycleManager(AgentResolutionMixin, DeploymentMixin):
 
                     for node_name in node_names:
                         try:
+                            self._release_db_transaction_for_io(
+                                f"migration destroy {node_name} on {old_agent.name}"
+                            )
                             result = await agent_client.destroy_node_on_agent(
                                 old_agent,
                                 self.lab.id,
@@ -856,6 +895,9 @@ class NodeLifecycleManager(AgentResolutionMixin, DeploymentMixin):
                             self.lab.id, node_name
                         )
                         try:
+                            self._release_db_transaction_for_io(
+                                f"migration stop probe {node_name} on {other_agent.name}"
+                            )
                             result = await agent_client.container_action(
                                 other_agent,
                                 container_name,
@@ -942,6 +984,7 @@ class NodeLifecycleManager(AgentResolutionMixin, DeploymentMixin):
             progress_message=f"Checking images on {self.agent.name}...",
         )
 
+        self._release_db_transaction_for_io("image sync coordination")
         syncing_nodes, failed_nodes, sync_log = (
             await check_and_start_image_sync(
                 host_id=self.agent.id,
@@ -1026,10 +1069,12 @@ class NodeLifecycleManager(AgentResolutionMixin, DeploymentMixin):
         from app.tasks.jobs import _create_cross_host_links_if_ready
         from app.tasks.link_reconciliation import reconcile_lab_links
 
+        self._release_db_transaction_for_io("cross-host link creation")
         await _create_cross_host_links_if_ready(
             self.session, self.lab.id, self.log_parts,
         )
         try:
+            self._release_db_transaction_for_io("post-op link reconciliation")
             reconcile_result = await reconcile_lab_links(self.session, self.lab.id)
             if reconcile_result["checked"] or reconcile_result["errors"]:
                 self.log_parts.append(
@@ -1241,6 +1286,9 @@ class NodeLifecycleManager(AgentResolutionMixin, DeploymentMixin):
                     ) if db_node else None
                     provider_type = get_image_provider(image) if image else None
 
+                    self._release_db_transaction_for_io(
+                        f"readiness probe for {ns.node_name}"
+                    )
                     result = await agent_client.check_node_readiness(
                         self.agent, self.lab.id, ns.node_name,
                         kind=kind, provider_type=provider_type,
