@@ -1,7 +1,5 @@
 import { isExternalNetworkNode, Link, Node } from '../types';
 
-type Endpoint = 'source' | 'target';
-
 interface Point {
   x: number;
   y: number;
@@ -12,24 +10,6 @@ interface Rect {
   top: number;
   right: number;
   bottom: number;
-}
-
-interface LabelCandidate {
-  x: number;
-  y: number;
-  t: number;
-  offset: number;
-}
-
-interface LabelRequest {
-  key: string;
-  linkId: string;
-  endpoint: Endpoint;
-  text: string;
-  from: Point;
-  to: Point;
-  index: number;
-  count: number;
 }
 
 interface EndpointPlacement {
@@ -78,160 +58,75 @@ function getNodeRect(node: Node): Rect {
   };
 }
 
-function intersects(a: Rect, b: Rect): boolean {
+function rectsOverlap(a: Rect, b: Rect): boolean {
   return !(a.right <= b.left || a.left >= b.right || a.bottom <= b.top || a.top >= b.bottom);
 }
 
-function overlapArea(a: Rect, b: Rect): number {
-  if (!intersects(a, b)) return 0;
-  const width = Math.min(a.right, b.right) - Math.max(a.left, b.left);
-  const height = Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top);
-  return width * height;
-}
-
-function pointDistanceToSegment(point: Point, a: Point, b: Point): number {
-  const dx = b.x - a.x;
-  const dy = b.y - a.y;
-  const lengthSq = dx * dx + dy * dy;
-  if (lengthSq === 0) {
-    const ddx = point.x - a.x;
-    const ddy = point.y - a.y;
-    return Math.sqrt(ddx * ddx + ddy * ddy);
-  }
-  const t = clamp(((point.x - a.x) * dx + (point.y - a.y) * dy) / lengthSq, 0, 1);
-  const projX = a.x + t * dx;
-  const projY = a.y + t * dy;
-  const ddx = point.x - projX;
-  const ddy = point.y - projY;
-  return Math.sqrt(ddx * ddx + ddy * ddy);
-}
-
-function buildEndpointIndices(links: Link[]): {
-  sourceIndices: Map<string, Map<string, number>>;
-  targetIndices: Map<string, Map<string, number>>;
-  sourceCounts: Map<string, number>;
-  targetCounts: Map<string, number>;
-} {
-  const sourceIndices = new Map<string, Map<string, number>>();
-  const targetIndices = new Map<string, Map<string, number>>();
-  const sourceCounts = new Map<string, number>();
-  const targetCounts = new Map<string, number>();
-
-  links.forEach((link) => {
-    if (!sourceIndices.has(link.source)) {
-      sourceIndices.set(link.source, new Map());
-      sourceCounts.set(link.source, 0);
-    }
-    const sourceIndex = sourceCounts.get(link.source) ?? 0;
-    sourceIndices.get(link.source)!.set(link.id, sourceIndex);
-    sourceCounts.set(link.source, sourceIndex + 1);
-
-    if (!targetIndices.has(link.target)) {
-      targetIndices.set(link.target, new Map());
-      targetCounts.set(link.target, 0);
-    }
-    const targetIndex = targetCounts.get(link.target) ?? 0;
-    targetIndices.get(link.target)!.set(link.id, targetIndex);
-    targetCounts.set(link.target, targetIndex + 1);
-  });
-
-  return { sourceIndices, targetIndices, sourceCounts, targetCounts };
-}
-
-function buildCandidates(request: LabelRequest): LabelCandidate[] {
-  const dx = request.to.x - request.from.x;
-  const dy = request.to.y - request.from.y;
+/**
+ * Place a label directly on the link line near its endpoint.
+ * Only nudges perpendicular when the on-line position overlaps a node.
+ */
+function placeLabel(
+  from: Point,
+  to: Point,
+  text: string,
+  nodeRects: Rect[],
+  placedRects: Rect[],
+): EndpointPlacement {
+  const dx = to.x - from.x;
+  const dy = to.y - from.y;
   const length = Math.sqrt(dx * dx + dy * dy);
-  if (length <= 0.01) return [];
+  if (length <= 0.01) return { x: from.x, y: from.y + 30 };
 
   const unitX = dx / length;
   const unitY = dy / length;
   const perpX = -unitY;
   const perpY = unitX;
 
-  const baseDistance = 58;
-  const baseT = clamp(baseDistance / length, 0.16, 0.42);
-  const centeredIndex = request.index - (request.count - 1) / 2;
-  const baseStagger = centeredIndex * 10;
-  const offsetSteps = [
-    baseStagger,
-    baseStagger + 12,
-    baseStagger - 12,
-    baseStagger + 24,
-    baseStagger - 24,
-    baseStagger + 36,
-    baseStagger - 36,
-    baseStagger + 40,
-    baseStagger - 40,
-    0,
-  ];
+  // Place at ~55px from endpoint along the link, capped at 35% of link length
+  const baseT = clamp(55 / length, 0.15, 0.40);
+
+  // Try positions along the link first (staying ON the line), then with perpendicular nudges
   const tSteps = [
     baseT,
-    clamp(baseT + 0.06, 0.12, 0.88),
-    clamp(baseT - 0.06, 0.12, 0.88),
-    clamp(baseT + 0.12, 0.12, 0.88),
-    clamp(baseT - 0.12, 0.12, 0.88),
-    clamp(baseT + 0.18, 0.12, 0.88),
+    clamp(baseT + 0.08, 0.10, 0.45),
+    clamp(baseT - 0.06, 0.08, 0.45),
+    clamp(baseT + 0.16, 0.10, 0.50),
   ];
+  const perpNudges = [0, 16, -16, 32, -32];
 
-  const candidates: LabelCandidate[] = [];
-  tSteps.forEach((t) => {
-    const lineX = request.from.x + unitX * length * t;
-    const lineY = request.from.y + unitY * length * t;
-    offsetSteps.forEach((offset) => {
-      candidates.push({
-        x: lineX + perpX * offset,
-        y: lineY + perpY * offset,
-        t,
-        offset,
-      });
-    });
-  });
-  return candidates;
-}
+  for (const t of tSteps) {
+    const lineX = from.x + unitX * length * t;
+    const lineY = from.y + unitY * length * t;
 
-function scoreCandidate(
-  candidate: LabelCandidate,
-  request: LabelRequest,
-  placedRects: Rect[],
-  nodeRects: Rect[],
-  segmentA: Point,
-  segmentB: Point
-): number {
-  let score = 0;
-  const rect = estimateLabelRect(candidate.x, candidate.y, request.text);
+    for (const nudge of perpNudges) {
+      const x = lineX + perpX * nudge;
+      const y = lineY + perpY * nudge;
+      const rect = estimateLabelRect(x, y, text);
 
-  // Node overlap: moderate penalty — a label slightly clipping a node edge is
-  // preferable to a label floating far from its link in dense topologies.
-  nodeRects.forEach((nodeRect) => {
-    const area = overlapArea(rect, nodeRect);
-    if (area > 0) score += 2000 + area * 6;
-  });
+      let overlaps = false;
+      for (const nodeRect of nodeRects) {
+        if (rectsOverlap(rect, nodeRect)) { overlaps = true; break; }
+      }
+      if (!overlaps) {
+        for (const placed of placedRects) {
+          if (rectsOverlap(rect, placed)) { overlaps = true; break; }
+        }
+      }
 
-  // Label-on-label overlap: high penalty — overlapping labels are unreadable.
-  placedRects.forEach((placedRect) => {
-    const area = overlapArea(rect, placedRect);
-    if (area > 0) score += 8500 + area * 10;
-  });
+      if (!overlaps) {
+        placedRects.push(rect);
+        return { x: clamp(x, 12, CANVAS_SIZE - 12), y: clamp(y, 12, CANVAS_SIZE - 12) };
+      }
+    }
+  }
 
-  const edgeOverflow =
-    Math.max(0, -rect.left) +
-    Math.max(0, -rect.top) +
-    Math.max(0, rect.right - CANVAS_SIZE) +
-    Math.max(0, rect.bottom - CANVAS_SIZE);
-  score += edgeOverflow * 60;
-
-  const centeredIndex = request.index - (request.count - 1) / 2;
-  const preferredOffset = centeredIndex * 10;
-  score += Math.abs(candidate.offset - preferredOffset) * 1.5;
-
-  // Distance from link: strong penalty with ramp — labels must stay close
-  // to the link they describe, even at the cost of minor node overlap.
-  const distanceToLink = pointDistanceToSegment({ x: candidate.x, y: candidate.y }, segmentA, segmentB);
-  score += distanceToLink * 8;
-  if (distanceToLink > 25) score += (distanceToLink - 25) * 12;
-
-  return score;
+  // Fallback: on the line at base position — never flee far from the endpoint
+  const x = from.x + unitX * length * baseT;
+  const y = from.y + unitY * length * baseT;
+  const rect = estimateLabelRect(x, y, text);
+  placedRects.push(rect);
+  return { x: clamp(x, 12, CANVAS_SIZE - 12), y: clamp(y, 12, CANVAS_SIZE - 12) };
 }
 
 export function computeLinkLabelPlacements(nodes: Node[], links: Link[]): Map<string, LinkLabelPlacement> {
@@ -241,73 +136,34 @@ export function computeLinkLabelPlacements(nodes: Node[], links: Link[]): Map<st
   const placements = new Map<string, LinkLabelPlacement>();
   const placedRects: Rect[] = [];
 
-  const { sourceIndices, targetIndices, sourceCounts, targetCounts } = buildEndpointIndices(links);
-  const requests: LabelRequest[] = [];
-
   links.forEach((link) => {
     const source = nodeMap.get(link.source);
     const target = nodeMap.get(link.target);
     if (!source || !target) return;
 
+    const placement: LinkLabelPlacement = {};
+
     if (link.sourceInterface) {
-      requests.push({
-        key: `${link.id}:source`,
-        linkId: link.id,
-        endpoint: 'source',
-        text: link.sourceInterface,
-        from: { x: source.x, y: source.y },
-        to: { x: target.x, y: target.y },
-        index: sourceIndices.get(link.source)?.get(link.id) ?? 0,
-        count: sourceCounts.get(link.source) ?? 1,
-      });
+      placement.source = placeLabel(
+        { x: source.x, y: source.y },
+        { x: target.x, y: target.y },
+        link.sourceInterface,
+        nodeRects,
+        placedRects,
+      );
     }
 
     if (link.targetInterface) {
-      requests.push({
-        key: `${link.id}:target`,
-        linkId: link.id,
-        endpoint: 'target',
-        text: link.targetInterface,
-        from: { x: target.x, y: target.y },
-        to: { x: source.x, y: source.y },
-        index: targetIndices.get(link.target)?.get(link.id) ?? 0,
-        count: targetCounts.get(link.target) ?? 1,
-      });
+      placement.target = placeLabel(
+        { x: target.x, y: target.y },
+        { x: source.x, y: source.y },
+        link.targetInterface,
+        nodeRects,
+        placedRects,
+      );
     }
-  });
 
-  requests.sort((a, b) => {
-    if (b.count !== a.count) return b.count - a.count;
-    if (b.text.length !== a.text.length) return b.text.length - a.text.length;
-    return a.key.localeCompare(b.key);
-  });
-
-  requests.forEach((request) => {
-    const segmentA = request.from;
-    const segmentB = request.to;
-    const candidates = buildCandidates(request);
-    if (candidates.length === 0) return;
-
-    let best = candidates[0];
-    let bestScore = Number.POSITIVE_INFINITY;
-
-    candidates.forEach((candidate) => {
-      const score = scoreCandidate(candidate, request, placedRects, nodeRects, segmentA, segmentB);
-      if (score < bestScore) {
-        best = candidate;
-        bestScore = score;
-      }
-    });
-
-    const rect = estimateLabelRect(best.x, best.y, request.text);
-    placedRects.push(rect);
-
-    const current = placements.get(request.linkId) ?? {};
-    current[request.endpoint] = {
-      x: clamp(best.x, 12, CANVAS_SIZE - 12),
-      y: clamp(best.y, 12, CANVAS_SIZE - 12),
-    };
-    placements.set(request.linkId, current);
+    placements.set(link.id, placement);
   });
 
   return placements;
