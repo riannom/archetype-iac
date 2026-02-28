@@ -429,3 +429,13 @@
 **Fix**: Updated all 14 test files to use `patch("agent.routers.<module>.X")` matching where each function is now defined and looked up. Also caught single-quoted strings (`patch('agent.main.X')`) missed by the initial double-quoted bulk replace.
 
 **Rule**: When extracting code to new modules, update ALL mock patch targets in tests. `patch("old.module.func")` silently succeeds even if `func` no longer lives there — it just creates an unused mock. Search for BOTH `"old.module.` AND `'old.module.` patterns. Verify by checking that mocked functions are actually called (assert_called, assert_awaited).
+
+## 2026-02-27: CSS transform stacking contexts break SVG z-index for port labels
+
+**Bug**: Canvas port labels (interface names like "eth0", "eth1") were rendered as SVG `<text>` elements within the same SVG layer as links. The zoom container's CSS `transform` creates a new stacking context, causing HTML node divs (with `z-index: 10`) to always render above earlier SVG layers regardless of CSS z-index values. When a new node was added near existing nodes, the 48x48 node div plus name label occluded port labels on nearby links.
+
+**Impact**: Port assignment labels invisible on newly connected nodes, especially when nodes were placed close together.
+
+**Fix**: Moved port label rendering to a completely separate SVG overlay element positioned AFTER all node divs in the DOM, with explicit `zIndex: 20`. This ensures labels always render above node elements.
+
+**Rule**: When mixing SVG elements and HTML divs inside a CSS-transformed container, z-index between the two element types is unreliable. To guarantee SVG elements appear above HTML divs, place them in a separate positioned layer after the HTML elements in DOM order.

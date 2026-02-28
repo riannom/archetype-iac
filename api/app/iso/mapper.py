@@ -138,6 +138,9 @@ def create_device_config_from_node_def(node_def: ParsedNodeDefinition) -> dict:
     if node_id_lower.startswith("iol") or "iol" in node_id_lower:
         # IOL (IOS on Linux) devices use .bin files
         supported_kinds = ["iol"]
+    elif node_def.libvirt_driver == "docker":
+        # Docker-based devices (utility containers like chrome, dnsmasq, etc.)
+        supported_kinds = ["docker"]
     else:
         # Default for VMs (qcow2)
         supported_kinds = ["qcow2"]
