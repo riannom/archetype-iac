@@ -967,16 +967,6 @@ const Canvas: React.FC<CanvasProps> = ({
               }
             }
 
-            const labelPlacement = linkLabelPlacements.get(link.id);
-            const sourceLabelX = labelPlacement?.source?.x;
-            const sourceLabelY = labelPlacement?.source?.y;
-            const targetLabelX = labelPlacement?.target?.x;
-            const targetLabelY = labelPlacement?.target?.y;
-
-            // Label styling for better contrast
-            const labelColor = effectiveMode === 'dark' ? '#E7E5E4' : '#44403C';
-            const labelStroke = effectiveMode === 'dark' ? '#1C1917' : '#FFFFFF';
-
             // Scenario highlight: check if this link matches the active scenario step
             const isScenarioHighlighted = highlightedLinkNodes && (
               (source.name === highlightedLinkNodes.a && target.name === highlightedLinkNodes.b) ||
@@ -1005,43 +995,7 @@ const Canvas: React.FC<CanvasProps> = ({
                   strokeDasharray={isExternalLink ? "6 4" : undefined}
                   className={draggingNode ? '' : 'transition-[stroke,stroke-width] duration-150'}
                 />
-                {/* Port labels */}
-                {link.sourceInterface && sourceLabelX !== undefined && sourceLabelY !== undefined && (
-                  <text
-                    x={sourceLabelX}
-                    y={sourceLabelY}
-                    fill={labelColor}
-                    stroke={labelStroke}
-                    strokeWidth="3"
-                    paintOrder="stroke"
-                    fontSize="11"
-                    fontWeight="700"
-                    textAnchor="middle"
-                    dominantBaseline="middle"
-                    className="pointer-events-none select-none"
-                    style={{ fontFamily: 'ui-monospace, monospace' }}
-                  >
-                    {link.sourceInterface}
-                  </text>
-                )}
-                {link.targetInterface && targetLabelX !== undefined && targetLabelY !== undefined && (
-                  <text
-                    x={targetLabelX}
-                    y={targetLabelY}
-                    fill={labelColor}
-                    stroke={labelStroke}
-                    strokeWidth="3"
-                    paintOrder="stroke"
-                    fontSize="11"
-                    fontWeight="700"
-                    textAnchor="middle"
-                    dominantBaseline="middle"
-                    className="pointer-events-none select-none"
-                    style={{ fontFamily: 'ui-monospace, monospace' }}
-                  >
-                    {link.targetInterface}
-                  </text>
-                )}
+                {/* Port labels rendered in overlay SVG above nodes */}
               </g>
             );
           })}
@@ -1351,6 +1305,65 @@ const Canvas: React.FC<CanvasProps> = ({
             </div>
           );
         })}
+
+        {/* Port label overlay - rendered above nodes so labels are never hidden behind node divs */}
+        <svg className="absolute inset-0 w-[5000px] h-[5000px] pointer-events-none" style={{ overflow: 'visible', zIndex: 20 }}>
+          {links.map(link => {
+            const source = nodeMap.get(link.source);
+            const target = nodeMap.get(link.target);
+            if (!source || !target) return null;
+
+            const labelPlacement = linkLabelPlacements.get(link.id);
+            const sourceLabelX = labelPlacement?.source?.x;
+            const sourceLabelY = labelPlacement?.source?.y;
+            const targetLabelX = labelPlacement?.target?.x;
+            const targetLabelY = labelPlacement?.target?.y;
+
+            const labelColor = effectiveMode === 'dark' ? '#E7E5E4' : '#44403C';
+            const labelStroke = effectiveMode === 'dark' ? '#1C1917' : '#FFFFFF';
+
+            return (
+              <g key={link.id}>
+                {link.sourceInterface && sourceLabelX !== undefined && sourceLabelY !== undefined && (
+                  <text
+                    x={sourceLabelX}
+                    y={sourceLabelY}
+                    fill={labelColor}
+                    stroke={labelStroke}
+                    strokeWidth="3"
+                    paintOrder="stroke"
+                    fontSize="11"
+                    fontWeight="700"
+                    textAnchor="middle"
+                    dominantBaseline="middle"
+                    className="select-none"
+                    style={{ fontFamily: 'ui-monospace, monospace' }}
+                  >
+                    {link.sourceInterface}
+                  </text>
+                )}
+                {link.targetInterface && targetLabelX !== undefined && targetLabelY !== undefined && (
+                  <text
+                    x={targetLabelX}
+                    y={targetLabelY}
+                    fill={labelColor}
+                    stroke={labelStroke}
+                    strokeWidth="3"
+                    paintOrder="stroke"
+                    fontSize="11"
+                    fontWeight="700"
+                    textAnchor="middle"
+                    dominantBaseline="middle"
+                    className="select-none"
+                    style={{ fontFamily: 'ui-monospace, monospace' }}
+                  >
+                    {link.targetInterface}
+                  </text>
+                )}
+              </g>
+            );
+          })}
+        </svg>
       </div>
 
       <div className="absolute bottom-6 left-6 flex flex-col gap-2 z-30">
