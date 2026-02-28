@@ -1,10 +1,7 @@
 """Tests for Prometheus metrics module."""
 from __future__ import annotations
 
-from datetime import datetime, timezone
-from unittest.mock import MagicMock, patch
-
-import pytest
+from unittest.mock import MagicMock
 from sqlalchemy.orm import Session
 
 from app import models
@@ -304,6 +301,32 @@ class TestInferJobFailureReason:
         from app.metrics import infer_job_failure_reason
         result = infer_job_failure_reason("Connection refused")
         assert result == "agent_connection_refused"
+
+    def test_infer_db_session_invalidated(self):
+        """SQLAlchemy invalid transaction errors are classified."""
+        from app.metrics import infer_job_failure_reason
+        result = infer_job_failure_reason("Can't reconnect until invalid transaction is rolled back")
+        assert result == "db_session_invalidated"
+
+    def test_infer_db_idle_transaction_timeout(self):
+        """Idle transaction timeout errors are classified."""
+        from app.metrics import infer_job_failure_reason
+        result = infer_job_failure_reason("terminating connection due to idle-in-transaction timeout")
+        assert result == "db_idle_transaction_timeout"
+
+    def test_infer_db_connection_closed(self):
+        """Unexpected DB connection close errors are classified."""
+        from app.metrics import infer_job_failure_reason
+        result = infer_job_failure_reason("server closed the connection unexpectedly")
+        assert result == "db_connection_closed"
+
+    def test_infer_orm_row_stale(self):
+        """Stale ORM row errors are classified."""
+        from app.metrics import infer_job_failure_reason
+        result = infer_job_failure_reason(
+            "Instance '<NodeState>' has been deleted, or its row is otherwise not present."
+        )
+        assert result == "orm_row_stale"
 
 
 class TestReconciliationMetrics:

@@ -61,6 +61,16 @@ SELECT
     WHEN log_path LIKE 'Job timed out after 300s%' THEN 'timeout_300s'
     WHEN log_path LIKE 'Job timed out after 1200s%' THEN 'timeout_1200s'
     WHEN log_path ILIKE '%timed out after%' THEN 'timeout'
+    WHEN log_path ILIKE '%this session''s transaction has been rolled back%' THEN 'db_session_invalidated'
+    WHEN log_path ILIKE '%session is in ''inactive'' state%' THEN 'db_session_invalidated'
+    WHEN log_path ILIKE '%can''t reconnect until invalid transaction is rolled back%' THEN 'db_session_invalidated'
+    WHEN log_path ILIKE '%idle-in-transaction timeout%' THEN 'db_idle_transaction_timeout'
+    WHEN log_path ILIKE '%terminating connection due to idle-in-transaction timeout%' THEN 'db_idle_transaction_timeout'
+    WHEN log_path ILIKE '%server closed the connection unexpectedly%' THEN 'db_connection_closed'
+    WHEN log_path ILIKE '%connection not open%' THEN 'db_connection_closed'
+    WHEN log_path ILIKE '%row is otherwise not present%' THEN 'orm_row_stale'
+    WHEN log_path ILIKE '%objectdeletederror%' THEN 'orm_row_stale'
+    WHEN log_path ILIKE '%staledataerror%' THEN 'orm_row_stale'
     WHEN log_path LIKE 'Parent job completed or missing%' THEN 'orphaned_child'
     WHEN log_path ILIKE '%No image found%' THEN 'missing_image'
     WHEN log_path ILIKE '%docker image not found%' THEN 'missing_image'
@@ -119,6 +129,16 @@ WITH classified AS (
       WHEN log_path LIKE 'Job timed out after 300s%' THEN 'timeout_300s'
       WHEN log_path LIKE 'Job timed out after 1200s%' THEN 'timeout_1200s'
       WHEN log_path ILIKE '%timed out after%' THEN 'timeout'
+      WHEN log_path ILIKE '%this session''s transaction has been rolled back%' THEN 'db_session_invalidated'
+      WHEN log_path ILIKE '%session is in ''inactive'' state%' THEN 'db_session_invalidated'
+      WHEN log_path ILIKE '%can''t reconnect until invalid transaction is rolled back%' THEN 'db_session_invalidated'
+      WHEN log_path ILIKE '%idle-in-transaction timeout%' THEN 'db_idle_transaction_timeout'
+      WHEN log_path ILIKE '%terminating connection due to idle-in-transaction timeout%' THEN 'db_idle_transaction_timeout'
+      WHEN log_path ILIKE '%server closed the connection unexpectedly%' THEN 'db_connection_closed'
+      WHEN log_path ILIKE '%connection not open%' THEN 'db_connection_closed'
+      WHEN log_path ILIKE '%row is otherwise not present%' THEN 'orm_row_stale'
+      WHEN log_path ILIKE '%objectdeletederror%' THEN 'orm_row_stale'
+      WHEN log_path ILIKE '%staledataerror%' THEN 'orm_row_stale'
       WHEN log_path ILIKE '%per-link tunnel creation failed%' THEN 'link_tunnel_creation_failed'
       WHEN log_path ILIKE '%completed with % error%' THEN 'partial_failure'
       ELSE 'other'
@@ -134,10 +154,22 @@ SELECT
     WHEN failure_class='timeout_300s' THEN 'Check agent preflight reachability and queue pressure; review job timeouts before retry.'
     WHEN failure_class='link_tunnel_creation_failed' THEN 'Inspect OVS/VXLAN drift (duplicate tunnels, stale ports) and reconcile overlays.'
     WHEN failure_class='partial_failure' THEN 'Review per-host sub-errors and reconcile only failed hosts/endpoints.'
+    WHEN failure_class='db_session_invalidated' THEN 'Inspect API worker DB transaction handling and check for missing rollback() around exceptions.'
+    WHEN failure_class='db_idle_transaction_timeout' THEN 'Investigate long-running idle transactions and query/commit boundaries in API/scheduler jobs.'
+    WHEN failure_class='db_connection_closed' THEN 'Check Postgres restarts/network churn and verify SQLAlchemy pool_recycle/pool_pre_ping behavior.'
+    WHEN failure_class='orm_row_stale' THEN 'Check concurrent state mutation paths and stale ORM instances before update/delete operations.'
     ELSE 'n/a'
   END AS recommended_action
 FROM classified
-WHERE failure_class IN ('timeout_300s', 'link_tunnel_creation_failed', 'partial_failure')
+WHERE failure_class IN (
+  'timeout_300s',
+  'link_tunnel_creation_failed',
+  'partial_failure',
+  'db_session_invalidated',
+  'db_idle_transaction_timeout',
+  'db_connection_closed',
+  'orm_row_stale'
+)
 GROUP BY failure_class
 ORDER BY failures DESC, failure_class;
 "
@@ -154,6 +186,16 @@ WITH classified AS (
       WHEN log_path LIKE 'Job timed out after 300s%' THEN 'timeout_300s'
       WHEN log_path ILIKE '%per-link tunnel creation failed%' THEN 'link_tunnel_creation_failed'
       WHEN log_path ILIKE '%completed with % error%' THEN 'partial_failure'
+      WHEN log_path ILIKE '%this session''s transaction has been rolled back%' THEN 'db_session_invalidated'
+      WHEN log_path ILIKE '%session is in ''inactive'' state%' THEN 'db_session_invalidated'
+      WHEN log_path ILIKE '%can''t reconnect until invalid transaction is rolled back%' THEN 'db_session_invalidated'
+      WHEN log_path ILIKE '%idle-in-transaction timeout%' THEN 'db_idle_transaction_timeout'
+      WHEN log_path ILIKE '%terminating connection due to idle-in-transaction timeout%' THEN 'db_idle_transaction_timeout'
+      WHEN log_path ILIKE '%server closed the connection unexpectedly%' THEN 'db_connection_closed'
+      WHEN log_path ILIKE '%connection not open%' THEN 'db_connection_closed'
+      WHEN log_path ILIKE '%row is otherwise not present%' THEN 'orm_row_stale'
+      WHEN log_path ILIKE '%objectdeletederror%' THEN 'orm_row_stale'
+      WHEN log_path ILIKE '%staledataerror%' THEN 'orm_row_stale'
       ELSE 'other'
     END AS failure_class
   FROM jobs
@@ -166,7 +208,15 @@ SELECT
   split_part(action,':',1) AS action_root,
   sample
 FROM classified
-WHERE failure_class IN ('timeout_300s', 'link_tunnel_creation_failed', 'partial_failure')
+WHERE failure_class IN (
+  'timeout_300s',
+  'link_tunnel_creation_failed',
+  'partial_failure',
+  'db_session_invalidated',
+  'db_idle_transaction_timeout',
+  'db_connection_closed',
+  'orm_row_stale'
+)
 ORDER BY created_at DESC
 LIMIT 25;
 "
@@ -181,6 +231,16 @@ WITH classified AS (
       WHEN log_path ILIKE '%preflight connectivity check failed%' THEN 'known'
       WHEN log_path ILIKE '%preflight image check failed%' THEN 'known'
       WHEN log_path ILIKE '%job timed out after%' THEN 'known'
+      WHEN log_path ILIKE '%this session''s transaction has been rolled back%' THEN 'known'
+      WHEN log_path ILIKE '%session is in ''inactive'' state%' THEN 'known'
+      WHEN log_path ILIKE '%can''t reconnect until invalid transaction is rolled back%' THEN 'known'
+      WHEN log_path ILIKE '%idle-in-transaction timeout%' THEN 'known'
+      WHEN log_path ILIKE '%terminating connection due to idle-in-transaction timeout%' THEN 'known'
+      WHEN log_path ILIKE '%server closed the connection unexpectedly%' THEN 'known'
+      WHEN log_path ILIKE '%connection not open%' THEN 'known'
+      WHEN log_path ILIKE '%row is otherwise not present%' THEN 'known'
+      WHEN log_path ILIKE '%objectdeletederror%' THEN 'known'
+      WHEN log_path ILIKE '%staledataerror%' THEN 'known'
       WHEN log_path ILIKE '%parent job completed or missing%' THEN 'known'
       WHEN log_path ILIKE '%image not found%' OR log_path ILIKE '%no image found%' THEN 'known'
       WHEN log_path ILIKE '%no healthy agent available%' THEN 'known'

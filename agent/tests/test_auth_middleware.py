@@ -9,6 +9,10 @@ from fastapi.testclient import TestClient
 from agent.config import settings
 from agent.main import app
 
+DEFAULT_METRICS_ALLOWLIST = (
+    "127.0.0.1/32,::1/128,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,localhost,testclient"
+)
+
 
 @pytest.fixture()
 def _enable_auth(monkeypatch):
@@ -16,6 +20,12 @@ def _enable_auth(monkeypatch):
     monkeypatch.setattr(settings, "controller_secret", "test-secret")
     yield
     monkeypatch.setattr(settings, "controller_secret", "")
+
+
+@pytest.fixture(autouse=True)
+def _reset_metrics_allowlist(monkeypatch):
+    """Reset metrics allowlist between tests."""
+    monkeypatch.setattr(settings, "metrics_allowed_cidrs", DEFAULT_METRICS_ALLOWLIST)
 
 
 @pytest.fixture()
@@ -68,6 +78,31 @@ class TestAgentAuthMiddleware:
         resp = client.get("/metrics")
         assert resp.status_code == 200
         assert "text/plain" in resp.headers.get("content-type", "")
+
+    @pytest.mark.usefixtures("_enable_auth")
+    def test_metrics_denied_when_client_not_allowlisted(self, client: TestClient, monkeypatch):
+        monkeypatch.setattr(settings, "metrics_allowed_cidrs", "127.0.0.1/32")
+        resp = client.get("/metrics")
+        assert resp.status_code == 403
+        assert "Metrics access denied" in resp.json()["detail"]
+
+    def test_metrics_allowlist_allows_cidr_match(self, monkeypatch):
+        from agent.main import _is_metrics_client_allowed
+
+        monkeypatch.setattr(settings, "metrics_allowed_cidrs", "10.0.0.0/8")
+        assert _is_metrics_client_allowed("10.44.1.20") is True
+
+    def test_metrics_allowlist_allows_literal_host(self, monkeypatch):
+        from agent.main import _is_metrics_client_allowed
+
+        monkeypatch.setattr(settings, "metrics_allowed_cidrs", "prometheus.internal")
+        assert _is_metrics_client_allowed("prometheus.internal") is True
+
+    def test_metrics_allowlist_rejects_non_matching_host(self, monkeypatch):
+        from agent.main import _is_metrics_client_allowed
+
+        monkeypatch.setattr(settings, "metrics_allowed_cidrs", "10.0.0.0/8")
+        assert _is_metrics_client_allowed("203.0.113.20") is False
 
     @pytest.mark.usefixtures("_enable_auth")
     def test_exempt_path_poap_prefix(self, client: TestClient):

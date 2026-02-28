@@ -13,8 +13,10 @@ from __future__ import annotations
 
 import asyncio
 import hmac
+import ipaddress
 import os
 from contextlib import asynccontextmanager
+from functools import lru_cache
 from typing import Any
 
 from fastapi import FastAPI
@@ -410,12 +412,73 @@ app.add_middleware(
 )
 
 
+@lru_cache(maxsize=64)
+def _parse_metrics_allowlist(
+    raw_allowlist: str,
+) -> tuple[tuple[ipaddress.IPv4Network | ipaddress.IPv6Network, ...], frozenset[str]]:
+    """Parse comma-separated CIDR/host allowlist for /metrics."""
+    networks: list[ipaddress.IPv4Network | ipaddress.IPv6Network] = []
+    literal_hosts: set[str] = set()
+    for part in raw_allowlist.split(","):
+        token = part.strip()
+        if not token:
+            continue
+        try:
+            networks.append(ipaddress.ip_network(token, strict=False))
+        except ValueError:
+            literal_hosts.add(token.lower())
+    return tuple(networks), frozenset(literal_hosts)
+
+
+def _client_host_from_request(request) -> str | None:
+    client = getattr(request, "client", None)
+    if client and getattr(client, "host", None):
+        return str(client.host)
+    forwarded = request.headers.get("x-forwarded-for", "")
+    if forwarded:
+        first_hop = forwarded.split(",", 1)[0].strip()
+        if first_hop:
+            return first_hop
+    return None
+
+
+def _is_metrics_client_allowed(client_host: str | None) -> bool:
+    raw_allowlist = (settings.metrics_allowed_cidrs or "").strip()
+    if not raw_allowlist or raw_allowlist == "*":
+        return True
+
+    networks, literal_hosts = _parse_metrics_allowlist(raw_allowlist)
+    if not client_host:
+        return False
+
+    host_value = client_host.strip().lower()
+    if not host_value:
+        return False
+    if host_value in literal_hosts:
+        return True
+
+    try:
+        addr = ipaddress.ip_address(host_value)
+    except ValueError:
+        return False
+
+    for network in networks:
+        if addr.version == network.version and addr in network:
+            return True
+    return False
+
+
 class AgentAuthMiddleware(BaseHTTPMiddleware):
     """Validate pre-shared secret on inbound requests from controller."""
 
-    EXEMPT_PATHS = {"/health", "/healthz", "/metrics"}
+    EXEMPT_PATHS = {"/health", "/healthz"}
 
     async def dispatch(self, request, call_next):
+        if request.url.path == "/metrics":
+            if not _is_metrics_client_allowed(_client_host_from_request(request)):
+                return JSONResponse(status_code=403, content={"detail": "Metrics access denied"})
+            return await call_next(request)
+
         # Skip auth if no secret configured (backward compat)
         if not settings.controller_secret:
             return await call_next(request)

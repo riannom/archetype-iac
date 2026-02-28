@@ -157,6 +157,10 @@ Nightly gate recommendation for hot-connect reliability:
 2. Require `missing_reservations=0`, `orphaned_reservations=0`, and `conflicting_endpoints=0`.
 3. If gate fails, run link reservation health inspection via `GET /system/link-reservations/health` and triage before business-hours changes.
 
+Support-bundle-first triage flow (artifacts, sequencing, and escalation packet):
+
+- `docs/support-bundle-triage.md`
+
 ## Confidence Gate (Build/Test Progress)
 
 The repository includes a scaffolded impact-aware confidence gate that is focused on code-build/test progression rather than product behavior.

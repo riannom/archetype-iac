@@ -131,6 +131,10 @@ class Settings(BaseSettings):
     # Logging configuration
     log_format: str = "json"  # "json" or "text"
     log_level: str = "INFO"
+    # Comma-separated list of CIDRs and/or literal hosts allowed to scrape /metrics.
+    metrics_allowed_cidrs: str = (
+        "127.0.0.1/32,::1/128,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,localhost,testclient"
+    )
 
     # === Docker OVS Plugin Settings ===
 

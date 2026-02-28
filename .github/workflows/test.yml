@@ -260,6 +260,74 @@ jobs:
           cd agent
           pytest tests/ -v --tb=short --cov=agent --cov-report=term-missing --cov-report=xml:../reports/agent-coverage.xml --cov-fail-under=50
 
+  observability-guardrails:
+    name: Observability Guardrails
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build and start observability stack
+        env:
+          ADMIN_EMAIL: admin@example.com
+          ADMIN_PASSWORD: changeme123
+          AGENT_SECRET: ci-observability-secret
+          ARCHETYPE_AGENT_METRICS_ALLOWED_CIDRS: 127.0.0.1/32,::1/128,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16
+        run: |
+          set -euo pipefail
+          docker compose -f docker-compose.gui.yml up -d --build \
+            postgres redis api scheduler worker agent loki prometheus
+
+      - name: Wait for API and Prometheus readiness
+        run: |
+          set -euo pipefail
+          for _ in $(seq 1 120); do
+            if curl -fsS http://localhost:8000/healthz >/dev/null && curl -fsS http://localhost:9090/-/ready >/dev/null; then
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "API/Prometheus readiness timeout" >&2
+          exit 1
+
+      - name: Run explicit observability regression tests
+        run: |
+          set -euo pipefail
+          docker compose -f docker-compose.gui.yml exec -T api /bin/sh -lc \
+            'cd /app && pytest -q tests/test_services_support_bundle.py'
+          docker compose -f docker-compose.gui.yml exec -T agent /bin/sh -lc \
+            'cd /app && pytest -q tests/test_auth_middleware.py'
+
+      - name: Run observability canary target-health gate
+        run: |
+          set -euo pipefail
+          sleep 40
+          make observability-canary
+
+      - name: Capture observability logs on failure
+        if: failure()
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/observability-logs
+          docker compose -f docker-compose.gui.yml ps > /tmp/observability-logs/compose-ps.txt || true
+          docker compose -f docker-compose.gui.yml logs --no-color --timestamps > /tmp/observability-logs/compose.log || true
+          for svc in api scheduler worker agent prometheus loki postgres redis; do
+            docker compose -f docker-compose.gui.yml logs --no-color --timestamps "$svc" > "/tmp/observability-logs/${svc}.log" || true
+          done
+
+      - name: Upload observability failure logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: observability-guardrails-logs
+          path: /tmp/observability-logs
+          if-no-files-found: warn
+
+      - name: Tear down observability stack
+        if: always()
+        run: docker compose -f docker-compose.gui.yml down -v --remove-orphans
+
   frontend-tests:
     name: Frontend Tests
     runs-on: ubuntu-latest
