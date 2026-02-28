@@ -161,10 +161,8 @@ function buildCandidates(request: LabelRequest): LabelCandidate[] {
     baseStagger - 24,
     baseStagger + 36,
     baseStagger - 36,
-    baseStagger + 48,
-    baseStagger - 48,
-    baseStagger + 64,
-    baseStagger - 64,
+    baseStagger + 40,
+    baseStagger - 40,
     0,
   ];
   const tSteps = [
@@ -203,11 +201,14 @@ function scoreCandidate(
   let score = 0;
   const rect = estimateLabelRect(candidate.x, candidate.y, request.text);
 
+  // Node overlap: moderate penalty — a label slightly clipping a node edge is
+  // preferable to a label floating far from its link in dense topologies.
   nodeRects.forEach((nodeRect) => {
     const area = overlapArea(rect, nodeRect);
-    if (area > 0) score += 10000 + area * 12;
+    if (area > 0) score += 2000 + area * 6;
   });
 
+  // Label-on-label overlap: high penalty — overlapping labels are unreadable.
   placedRects.forEach((placedRect) => {
     const area = overlapArea(rect, placedRect);
     if (area > 0) score += 8500 + area * 10;
@@ -224,8 +225,11 @@ function scoreCandidate(
   const preferredOffset = centeredIndex * 10;
   score += Math.abs(candidate.offset - preferredOffset) * 1.5;
 
+  // Distance from link: strong penalty with ramp — labels must stay close
+  // to the link they describe, even at the cost of minor node overlap.
   const distanceToLink = pointDistanceToSegment({ x: candidate.x, y: candidate.y }, segmentA, segmentB);
-  score += distanceToLink * 3;
+  score += distanceToLink * 8;
+  if (distanceToLink > 25) score += (distanceToLink - 25) * 12;
 
   return score;
 }
