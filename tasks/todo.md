@@ -1,3 +1,13 @@
+# Observability Follow-ups
+
+- [ ] Trigger `.github/workflows/observability-maintenance.yml` via `workflow_dispatch` with `mode=all` on branch `observability-maintenance-ci` once GitHub CLI auth is fixed.
+- [ ] Verify the uploaded `observability-maintenance-*` artifact includes:
+  - `support-bundle-triage.log`
+  - `support-bundle-triage.zip`
+  - `canary.log`
+  - `db-report-30d.log`
+  - `link-reservation-drift.log`
+
 # Move Docker Management Interfaces to OVS
 
 ## Phase 1: Remove Dead Docker Bridge Management Code
