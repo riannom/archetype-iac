@@ -302,6 +302,19 @@ jobs:
           docker compose -f docker-compose.gui.yml exec -T agent /bin/sh -lc \
             'cd /app && pytest -q tests/test_auth_middleware.py'
 
+      - name: Run support bundle triage drill
+        env:
+          ADMIN_EMAIL: admin@example.com
+          ADMIN_PASSWORD: changeme123
+        run: |
+          set -euo pipefail
+          python3 scripts/support_bundle_triage_drill.py \
+            --api-url http://localhost:8000 \
+            --username "${ADMIN_EMAIL}" \
+            --password "${ADMIN_PASSWORD}" \
+            --compose-file docker-compose.gui.yml \
+            --output-zip /tmp/support-bundle-triage.zip
+
       - name: Run observability canary target-health gate
         run: |
           set -euo pipefail
@@ -318,6 +331,9 @@ jobs:
           for svc in api scheduler worker agent prometheus loki postgres redis; do
             docker compose -f docker-compose.gui.yml logs --no-color --timestamps "$svc" > "/tmp/observability-logs/${svc}.log" || true
           done
+          if [ -f /tmp/support-bundle-triage.zip ]; then
+            cp /tmp/support-bundle-triage.zip /tmp/observability-logs/
+          fi
 
       - name: Upload observability failure logs
         if: failure()
