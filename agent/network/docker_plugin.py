@@ -43,7 +43,6 @@ Usage:
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import os
 import secrets
@@ -123,9 +122,9 @@ class EndpointState:
     container_name: str | None = None
 
 
-from agent.network.plugin_state import PluginStateMixin
-from agent.network.plugin_handlers import PluginHandlersMixin
-from agent.network.plugin_vlan import PluginVlanMixin
+from agent.network.plugin_state import PluginStateMixin  # noqa: E402
+from agent.network.plugin_handlers import PluginHandlersMixin  # noqa: E402
+from agent.network.plugin_vlan import PluginVlanMixin  # noqa: E402
 
 
 class DockerOVSPlugin(PluginStateMixin, PluginHandlersMixin, PluginVlanMixin):

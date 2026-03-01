@@ -14,7 +14,6 @@ from sqlalchemy.orm import Session
 from app import models, schemas
 from app.config import settings
 from app.jobs import has_conflicting_job as _has_conflicting_job
-from app.services.topology import TopologyService
 from app.state import NodeActualState, NodeDesiredState
 from app.utils.async_tasks import safe_create_task
 

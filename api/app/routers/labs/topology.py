@@ -27,12 +27,11 @@ from app.storage import write_layout
 from app.utils.http import raise_not_found
 from app.utils.lab import (
     get_lab_or_404,
-    get_lab_provider,
     require_lab_editor,
     update_lab_provider_from_nodes,
 )
 
-from ._shared import _zip_safe_name, get_config_by_device
+from ._shared import _zip_safe_name
 from .crud import _upsert_node_states
 from .link_states import _upsert_link_states
 

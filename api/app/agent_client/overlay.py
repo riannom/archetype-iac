@@ -11,7 +11,6 @@ from app import models
 from app.agent_client.http import (
     _agent_request,
     _safe_agent_request,
-    AgentError,
     VTEP_OPERATION_TIMEOUT,
 )
 from app.agent_client.selection import (

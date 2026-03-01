@@ -13,14 +13,12 @@ import re
 import socket
 import time
 from pathlib import Path
-from typing import Any
 
 from agent.config import settings
-from agent.readiness import ReadinessResult, get_libvirt_probe, get_readiness_timeout
+from agent.readiness import ReadinessResult, get_libvirt_probe
 from agent.vendors import (
     get_console_method,
     get_libvirt_config,
-    get_vendor_config,
 )
 
 logger = logging.getLogger(__name__)

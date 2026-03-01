@@ -9,7 +9,6 @@ from __future__ import annotations
 import asyncio
 import concurrent.futures
 import json
-import time
 from functools import partial
 import hashlib
 import logging

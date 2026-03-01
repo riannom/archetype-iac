@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import socket
-from datetime import datetime, timedelta, timezone
+from datetime import timezone
 
 from sqlalchemy import func
 from sqlalchemy.orm import Session

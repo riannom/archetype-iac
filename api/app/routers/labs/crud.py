@@ -11,18 +11,16 @@ import logging
 import shutil
 import sys
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app import db, models, schemas
 from app.auth import get_current_user
-from app.config import settings
-from app.enums import GlobalRole, LabRole
+from app.enums import GlobalRole
 from app.events.publisher import emit_lab_deleted
 from app.services.permissions import PermissionService
 from app.state import (
-    HostStatus,
     JobStatus,
     LabState,
     NodeActualState,

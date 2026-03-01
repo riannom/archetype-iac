@@ -26,7 +26,7 @@ from app.state import (
     NodeActualState,
     NodeDesiredState,
 )
-from app.utils.http import raise_not_found, raise_unavailable
+from app.utils.http import raise_not_found
 from app.utils.lab import get_lab_or_404, get_lab_provider, get_lab_with_role
 from app.utils.nodes import get_node_placement_mapping
 
@@ -62,7 +62,7 @@ async def check_nodes_ready(
     - actual_state is "running"
     - is_ready flag is True (boot sequence complete)
     """
-    from app.utils.lab import get_lab_provider, get_node_provider
+    from app.utils.lab import get_node_provider
 
     lab = get_lab_or_404(lab_id, database, current_user)
     _ensure_node_states_exist(database, lab.id)
@@ -212,7 +212,7 @@ async def poll_nodes_ready(
         X-Readiness-Status: "complete" if all ready, "timeout" if timed out
     """
     from fastapi.responses import JSONResponse
-    from app.utils.lab import get_lab_provider, get_node_provider
+    from app.utils.lab import get_node_provider
 
     # Validate parameters
     timeout = min(max(timeout, 10), 600)  # 10s to 10min

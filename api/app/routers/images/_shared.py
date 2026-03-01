@@ -1,7 +1,6 @@
 """Shared state, utilities, and Pydantic models for the images package."""
 from __future__ import annotations
 
-import asyncio
 import json
 import lzma
 import os
@@ -12,8 +11,6 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
-from typing import AsyncGenerator
-from uuid import uuid4
 
 import threading as _threading
 from pydantic import BaseModel, Field

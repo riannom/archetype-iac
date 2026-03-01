@@ -15,7 +15,6 @@ from agent.network.docker_plugin import (
     EndpointState,
     LINKED_VLAN_END,
     LINKED_VLAN_START,
-    NetworkState,
     VLAN_RANGE_END,
     VLAN_RANGE_START,
 )

@@ -45,8 +45,6 @@ from ._shared import (
     _sanitize_upload_filename,
     _send_sse_event,
     _update_progress,
-    _upload_lock,
-    _upload_progress,
     _write_content_to_tempfile,
     threading,
 )

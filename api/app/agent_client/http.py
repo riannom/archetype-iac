@@ -218,7 +218,6 @@ async def _agent_request(
 
 
 def _agent_online_cutoff(timeout_seconds: int | None = None) -> datetime:
-    from datetime import timezone
 
     if timeout_seconds is None:
         timeout_seconds = settings.agent_stale_timeout
