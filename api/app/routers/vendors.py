@@ -136,6 +136,19 @@ def count_catalog_images_for_device(database: Session, device_id: str) -> int:
     return _count_catalog_images_for_device(database, device_id)
 
 
+def _using_default_vendor_registry_loader() -> bool:
+    """True when /vendors is using the normal runtime vendor loader."""
+    from agent import vendors as agent_vendors
+
+    loader = getattr(agent_vendors, "get_vendors_for_ui", None)
+    if loader is None:
+        return False
+    return (
+        getattr(loader, "__module__", "") == "agent.vendors"
+        and getattr(loader, "__name__", "") == "get_vendors_for_ui"
+    )
+
+
 def _normalize_scope_token(value: object | None) -> str | None:
     from app.image_store import normalize_default_device_scope_id
 
@@ -245,7 +258,11 @@ def list_vendors(
     Hidden devices are filtered out.
     """
     current_user = get_current_user_optional(request, database)
-    if current_user is None and not catalog_is_seeded(database):
+    if (
+        current_user is None
+        and _using_default_vendor_registry_loader()
+        and not catalog_is_seeded(database)
+    ):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Could not validate credentials",
