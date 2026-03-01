@@ -3,11 +3,11 @@ from __future__ import annotations
 
 from collections import defaultdict
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
 from app import models
-from app.auth import get_current_user
+from app.auth import get_current_user, get_current_user_optional
 from app.db import get_db
 from app.services.device_constraints import validate_minimum_hardware
 
@@ -233,8 +233,8 @@ def _get_identity_map(database: Session) -> dict:
 
 @router.get("")
 def list_vendors(
+    request: Request,
     database: Session = Depends(get_db),
-    current_user: models.User = Depends(get_current_user),
 ) -> list[dict]:
     """Return vendor configurations for frontend device catalog.
 
@@ -244,6 +244,14 @@ def list_vendors(
     merged with any custom device types defined per installation.
     Hidden devices are filtered out.
     """
+    current_user = get_current_user_optional(request, database)
+    if current_user is None and not catalog_is_seeded(database):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Could not validate credentials",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
     from agent.vendors import get_vendors_for_ui
     from app.image_store import load_custom_devices
 
