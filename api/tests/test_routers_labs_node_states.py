@@ -11,16 +11,14 @@ This module tests:
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
-import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
 from app import models
-from app.state import JobStatus, NodeActualState, NodeDesiredState
+from app.state import NodeActualState
 
 
 # ---------------------------------------------------------------------------
@@ -145,7 +143,7 @@ class TestListNodeStates:
     ):
         """Node states include host_id and host_name from placements."""
         node_def = _make_node_def(test_db, sample_lab, host_id=sample_host.id)
-        ns = _make_node_state(test_db, sample_lab, "n1", node_def.container_name)
+        _make_node_state(test_db, sample_lab, "n1", node_def.container_name)
 
         # Create placement
         placement = models.NodePlacement(

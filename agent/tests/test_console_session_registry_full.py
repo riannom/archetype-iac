@@ -8,8 +8,6 @@ PtyInjector I/O, and piggyback extraction/command orchestrators.
 from __future__ import annotations
 
 import asyncio
-import threading
-from dataclasses import dataclass
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -17,7 +15,6 @@ import pytest
 from agent import console_session_registry as registry
 from agent.console_session_registry import (
     ActiveConsoleSession,
-    PtyInjector,
     _clean_config,
     _contains_cli_error,
     get_console_control_state,

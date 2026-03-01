@@ -7,9 +7,8 @@ get_tunnel_status, and simple accessors.
 from __future__ import annotations
 
 import json
-from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock
 
 import pytest
 

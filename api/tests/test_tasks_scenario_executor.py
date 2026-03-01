@@ -1,9 +1,7 @@
 """Tests for app/tasks/scenario_executor.py — Scenario engine executor."""
 from __future__ import annotations
 
-import asyncio
 from contextlib import contextmanager
-from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 

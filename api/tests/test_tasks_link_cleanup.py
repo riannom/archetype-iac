@@ -1,7 +1,6 @@
 """Tests for link cleanup operations for orphaned records."""
 from __future__ import annotations
 
-import json
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 

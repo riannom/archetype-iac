@@ -5,11 +5,9 @@ previously only stubbed via AsyncMock.
 
 from __future__ import annotations
 
-import asyncio
-import os
 from datetime import datetime, timezone
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -18,8 +16,6 @@ from agent.network.docker_plugin import (
     EndpointState,
     LabBridge,
     NetworkState,
-    VLAN_RANGE_START,
-    VLAN_RANGE_END,
     LINKED_VLAN_START,
     LINKED_VLAN_END,
 )

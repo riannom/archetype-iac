@@ -7,7 +7,6 @@ Covers: declare-state, create/delete tunnel, bridge-ports, set-port-vlan,
 """
 from __future__ import annotations
 
-import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 

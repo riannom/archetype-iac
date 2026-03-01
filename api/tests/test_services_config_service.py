@@ -11,7 +11,6 @@ from __future__ import annotations
 import json
 import zipfile
 from datetime import datetime, timedelta, timezone
-from uuid import uuid4
 
 import pytest
 
@@ -218,7 +217,7 @@ class TestSetActiveConfig:
         snap_a1, _, _ = snapshots
 
         svc = ConfigService(test_db)
-        result = svc.set_active_config(node_a.id, snap_a1.id)
+        svc.set_active_config(node_a.id, snap_a1.id)
         test_db.commit()
 
         test_db.refresh(node_a)

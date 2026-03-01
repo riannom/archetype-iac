@@ -21,9 +21,7 @@ from agent.registration import (
 )
 from agent.schemas import (
     AgentStatus,
-    HeartbeatRequest,
     HeartbeatResponse,
-    RegistrationResponse,
 )
 from agent.schemas.common import AgentCapabilities, AgentInfo
 

@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -266,7 +266,6 @@ class TestMaybeCleanupLablessContainers:
         recon._lab_orphan_check_counter = 0
 
         # Mock the session so we can track if cleanup runs
-        cleanup_ran = False
 
         # The function increments counter and returns early if below interval
         # We patch _LAB_ORPHAN_CHECK_INTERVAL to something > 1

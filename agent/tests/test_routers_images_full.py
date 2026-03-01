@@ -7,10 +7,8 @@ Covers: list_images, receive_image (docker + file-based), pull progress,
 """
 from __future__ import annotations
 
-import json
 import os
 import time
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -23,7 +21,6 @@ from agent.routers.images import (
     _load_persisted_transfer_state,
     _persist_transfer_state,
     _clear_persisted_transfer_state,
-    _TRANSFER_STATE_FILE,
 )
 from agent.schemas import DockerImageInfo, ImagePullProgress
 

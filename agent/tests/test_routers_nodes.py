@@ -6,15 +6,12 @@ using TestClient with mocked providers.
 from __future__ import annotations
 
 import asyncio
-from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import pytest
 from fastapi.testclient import TestClient
 
 from agent.main import app
 from agent.providers.base import NodeActionResult, NodeStatus
-from agent.schemas import CreateNodeRequest, StartNodeRequest
 
 
 def _run(coro):

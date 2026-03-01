@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 
 import pytest
@@ -121,7 +121,7 @@ class TestReconcileLinkStates:
         """Links with desired=up and actual=down should be created."""
         from app.tasks.link_reconciliation import reconcile_link_states
 
-        link = _make_link_state(
+        _make_link_state(
             test_db, sample_lab.id,
             desired_state="up", actual_state="down",
             source_host_id=sample_host.id, target_host_id=sample_host.id,
@@ -142,7 +142,7 @@ class TestReconcileLinkStates:
         """Links with desired=down and actual=up should be torn down."""
         from app.tasks.link_reconciliation import reconcile_link_states
 
-        link = _make_link_state(
+        _make_link_state(
             test_db, sample_lab.id,
             desired_state="down", actual_state="up",
             source_host_id=sample_host.id, target_host_id=sample_host.id,
@@ -163,7 +163,7 @@ class TestReconcileLinkStates:
         """Links with offline agent hosts are skipped."""
         from app.tasks.link_reconciliation import reconcile_link_states
 
-        link = _make_link_state(
+        _make_link_state(
             test_db, sample_lab.id,
             desired_state="up", actual_state="down",
             source_host_id=offline_host.id, target_host_id=offline_host.id,
@@ -181,7 +181,7 @@ class TestReconcileLinkStates:
         """Cross-host links in error state should attempt partial recovery."""
         from app.tasks.link_reconciliation import reconcile_link_states
 
-        link = _make_link_state(
+        _make_link_state(
             test_db, sample_lab.id,
             desired_state="up", actual_state="error",
             source_host_id=multiple_hosts[0].id,

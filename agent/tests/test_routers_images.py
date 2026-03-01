@@ -5,10 +5,7 @@ active transfers, and persisted transfer state recovery.
 """
 from __future__ import annotations
 
-import io
-import json
 import os
-import subprocess
 import time
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -22,7 +19,6 @@ from agent.routers.images import (
     _image_pull_jobs,
     _load_persisted_transfer_state,
     _persist_transfer_state,
-    _TRANSFER_STATE_FILE,
 )
 from agent.schemas import DockerImageInfo, ImagePullProgress
 
@@ -94,7 +90,7 @@ class TestReceiveDockerImage:
         fake_result.stdout = "Loaded image: ceos:4.28.0F"
         fake_result.stderr = ""
 
-        with patch("agent.routers.images.subprocess.run", return_value=fake_result) as mock_run:
+        with patch("agent.routers.images.subprocess.run", return_value=fake_result):
             resp = client.post(
                 "/images/receive",
                 data={

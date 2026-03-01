@@ -7,12 +7,8 @@ Covers: _get_lock, is_extraction_active, extraction_session,
 """
 from __future__ import annotations
 
-import os
-import signal
-import subprocess
 import threading
 import time
-from contextlib import contextmanager
 from unittest.mock import MagicMock, patch
 
 import pytest

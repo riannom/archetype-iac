@@ -1,8 +1,7 @@
 """Tests for job orchestration functions in app.tasks.jobs."""
 from __future__ import annotations
 
-import json
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
