@@ -39,6 +39,8 @@ COPY VERSION ./VERSION
 # Copy agent modules needed by API
 RUN mkdir -p agent
 COPY agent/vendors.py ./agent/vendors.py
+COPY agent/vendor_schema.py ./agent/vendor_schema.py
+COPY agent/vendor_registry.py ./agent/vendor_registry.py
 RUN touch agent/__init__.py
 
 ARG GIT_SHA=unknown
