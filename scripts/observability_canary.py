@@ -251,12 +251,19 @@ def _run_canary_traffic(cfg: Config, token: str) -> None:
 
     if cfg.sync_node_id:
         print(f"[canary] sync node desired-state running: {cfg.sync_node_id}")
-        _request_json(
-            "PUT",
-            f"{cfg.api_url}/labs/{cfg.lab_id}/nodes/{cfg.sync_node_id}/desired-state",
-            token=token,
-            payload={"state": "running"},
-        )
+        try:
+            _request_json(
+                "PUT",
+                f"{cfg.api_url}/labs/{cfg.lab_id}/nodes/{cfg.sync_node_id}/desired-state",
+                token=token,
+                payload={"state": "running"},
+            )
+        except urllib.error.HTTPError as exc:
+            # In CI and constrained labs, node sync can fail (for example when OVS is unavailable).
+            # Keep canary traffic flowing and rely on coverage checks to enforce observability signal.
+            print(f"[warn] sync desired-state request failed ({exc.code}: {exc.reason}); continuing")
+        except Exception as exc:
+            print(f"[warn] sync desired-state request failed ({exc}); continuing")
 
     if cfg.run_up_down:
         print("[canary] running lab up/down")

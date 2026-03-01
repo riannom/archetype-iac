@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 import sys
+import urllib.error
 
 
 def _load_module():
@@ -215,3 +216,40 @@ def test_apply_mode_passes_with_status_probe_samples():
 
     failures = module._print_coverage(cfg)
     assert failures == 0
+
+
+def test_run_canary_traffic_ignores_sync_http_errors():
+    module = _load_module()
+    cfg = module.Config(
+        api_url="http://api.local",
+        prometheus_url="http://prom.local",
+        username="user",
+        password="pass",
+        lab_id="lab-1",
+        sync_node_id="node-1",
+        apply=True,
+        run_up_down=False,
+        status_probes=3,
+        scrape_wait_seconds=0,
+        job_timeout_seconds=30,
+        window="30m",
+        auto_discover=False,
+    )
+
+    calls: list[tuple[str, str]] = []
+
+    def fake_request_json(method, url, *, token=None, form=None, payload=None):
+        calls.append((method, url))
+        if method == "GET" and url == "http://api.local/labs/lab-1/status":
+            return {}
+        if method == "PUT" and url == "http://api.local/labs/lab-1/nodes/node-1/desired-state":
+            raise urllib.error.HTTPError(url=url, code=500, msg="Internal Server Error", hdrs=None, fp=None)
+        raise AssertionError(f"Unexpected API call: {method} {url}")
+
+    module._request_json = fake_request_json
+    module.time.sleep = lambda _seconds: None
+
+    module._run_canary_traffic(cfg, token="token")
+
+    assert calls.count(("GET", "http://api.local/labs/lab-1/status")) == 3
+    assert ("PUT", "http://api.local/labs/lab-1/nodes/node-1/desired-state") in calls
