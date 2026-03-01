@@ -23,19 +23,16 @@ Implementation:
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
-import re
 import secrets
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any
 
 import docker
 from docker.errors import NotFound
 
 from agent.config import settings
-from agent.network.cmd import run_cmd as _shared_run_cmd, ovs_vsctl as _shared_ovs_vsctl, ip_link_exists as _shared_ip_link_exists
+from agent.network.cmd import run_cmd as _shared_run_cmd, ovs_vsctl as _shared_ovs_vsctl
 from agent.providers.naming import docker_container_name as _build_container_name, DOCKER_PREFIX as CONTAINER_PREFIX
 from agent.network.overlay_vxlan import (
     create_vxlan_device as _create_vxlan_device_impl,

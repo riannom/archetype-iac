@@ -195,7 +195,7 @@ def _catalog_tables_available(session: Session) -> bool:
 # Re-exports from companion modules
 # ---------------------------------------------------------------------------
 
-from .catalog_identity import (  # noqa: E402
+from .catalog_identity import (  # noqa: F401, E402
     DesiredCatalogDevice,
     _acquire_catalog_identity_advisory_lock,
     _build_alias_index,
@@ -210,7 +210,7 @@ from .catalog_identity import (  # noqa: E402
     resolve_catalog_device_id,
 )
 
-from .catalog_query import (  # noqa: E402
+from .catalog_query import (  # noqa: F401, E402
     _build_index_stamp,
     _ensure_device_type,
     _ensure_unknown_vendor,

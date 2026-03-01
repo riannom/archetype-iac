@@ -15,12 +15,11 @@ from typing import Any, TYPE_CHECKING
 
 from agent.config import settings
 from agent.network.cmd import (
-    run_cmd as _shared_run_cmd,
     ovs_vsctl as _shared_ovs_vsctl,
 )
 
 if TYPE_CHECKING:
-    from agent.network.overlay import OverlayManager, LinkTunnel
+    from agent.network.overlay import OverlayManager
 
 logger = logging.getLogger(__name__)
 

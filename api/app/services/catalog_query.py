@@ -4,7 +4,6 @@ from __future__ import annotations
 import logging
 import os
 from collections import defaultdict
-from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
 
@@ -16,7 +15,6 @@ from app import models
 from .catalog_service import (
     _CACHE_LOCK,
     _IMAGE_INDEX_CACHE_BY_BIND,
-    AliasIndex,
     CatalogAliasConflictError,
     CatalogImageNotFoundError,
     ImageIndexCache,

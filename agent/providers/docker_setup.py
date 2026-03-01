@@ -18,7 +18,6 @@ from agent.vendors import (
     get_config_by_device,
     get_container_config,
     is_ceos_kind,
-    is_cjunos_kind,
 )
 
 if TYPE_CHECKING:

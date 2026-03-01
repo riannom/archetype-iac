@@ -11,8 +11,6 @@ from .aliases import (
     canonicalize_device_ids,
     get_image_default_device_scopes,
     get_vendor_for_device,
-    image_matches_device,
-    is_image_default_for_device,
     normalize_default_device_scope_id,
     normalize_default_device_scope_ids,
 )

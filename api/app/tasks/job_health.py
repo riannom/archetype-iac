@@ -25,7 +25,6 @@ from app.state import (
     HostStatus,
     JobStatus,
     LabState,
-    NodeActualState,
 )
 
 logger = logging.getLogger(__name__)

@@ -29,7 +29,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -37,7 +36,7 @@ from pathlib import Path
 from typing import Any
 
 import docker
-from docker.errors import NotFound, APIError, DockerException, ImageNotFound
+from docker.errors import NotFound, APIError, ImageNotFound
 from docker.types import IPAMConfig
 
 from agent.config import settings
@@ -58,10 +57,8 @@ from agent.providers.base import (
 from agent.schemas import DeployTopology
 from agent.vendors import (
     get_config_by_device,
-    get_config_extraction_settings,
     get_console_credentials,
     get_console_method,
-    get_container_config,
     get_console_shell,
     is_ceos_kind,
     is_cjunos_kind,
@@ -79,7 +76,6 @@ from agent.providers.docker_config_extract import (
     extract_config_via_docker,
     extract_config_via_ssh,
     extract_config_via_nvram,
-    _parse_iol_nvram,
 )
 from agent.providers.docker_networks import (
     create_lab_networks as _create_lab_networks_impl,
@@ -272,66 +268,6 @@ class ParsedTopology:
         if node:
             return node.log_name()
         return node_name
-
-
-def _parse_iol_nvram(data: bytes) -> str | None:
-    """Parse an IOL NVRAM binary file and extract the startup config.
-
-    IOL NVRAM format:
-    - Binary header (variable length, typically 76+ bytes)
-    - The config is stored as plain text after a header section
-    - Config starts after the binary preamble and ends at a null byte or EOF
-    - Multiple config sections may exist; we want the startup-config
-
-    The header contains magic bytes and size fields. We search for the
-    config section which starts with known IOS config patterns.
-    """
-    if not data or len(data) < 64:
-        return None
-
-    # Strategy: find the first occurrence of a typical IOS config line
-    # IOL NVRAM stores configs as plain ASCII text after binary headers
-    config_markers = [
-        b"\nversion ",
-        b"\nhostname ",
-        b"\nno service ",
-        b"\nservice ",
-        b"\n!\n",
-    ]
-
-    earliest_pos = len(data)
-    for marker in config_markers:
-        pos = data.find(marker)
-        if pos != -1 and pos < earliest_pos:
-            earliest_pos = pos
-
-    if earliest_pos >= len(data):
-        return None
-
-    # Back up to include the marker's leading newline
-    config_start = earliest_pos + 1  # skip the leading \n
-
-    # Find config end: look for null bytes or the "end" marker
-    config_bytes = data[config_start:]
-
-    # Trim at first null byte (binary data after config)
-    null_pos = config_bytes.find(b"\x00")
-    if null_pos != -1:
-        config_bytes = config_bytes[:null_pos]
-
-    # Decode as ASCII, ignoring errors from any remaining binary
-    config_text = config_bytes.decode("ascii", errors="ignore")
-
-    # Trim to the last "end" statement if present
-    end_pos = config_text.rfind("\nend")
-    if end_pos != -1:
-        config_text = config_text[: end_pos + 4]  # include "end"
-
-    config_text = config_text.strip()
-    if len(config_text) < 10:
-        return None
-
-    return config_text
 
 
 class DockerProvider(Provider, VlanPersistenceMixin):

@@ -6,13 +6,16 @@ import json
 import logging
 from collections import defaultdict
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 from sqlalchemy import text as sa_text
 from sqlalchemy.orm import Session
 
 from app import models
+
+if TYPE_CHECKING:
+    from .catalog_service import AliasIndex
 
 from .catalog_service import (
     _ALIAS_TYPE_RANK,
@@ -503,9 +506,7 @@ def ensure_catalog_identity_synced(
             raise
 
 
-def _build_alias_index(session: Session) -> "AliasIndex":
-    from .catalog_service import AliasIndex
-
+def _build_alias_index(session: Session) -> AliasIndex:
     canonical_by_type_id: dict[str, str] = {}
     type_id_by_canonical: dict[str, str] = {}
     canonical_to_aliases: dict[str, set[str]] = defaultdict(set)
@@ -589,7 +590,7 @@ def get_catalog_identity_map(session: Session) -> dict[str, Any]:
     }
 
 
-def _resolve_token_to_canonical_set(alias_index: "AliasIndex", device_id: str | None) -> set[str]:
+def _resolve_token_to_canonical_set(alias_index: AliasIndex, device_id: str | None) -> set[str]:
     normalized = _normalize_token(device_id)
     if not normalized:
         return set()

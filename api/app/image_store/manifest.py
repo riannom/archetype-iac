@@ -14,7 +14,6 @@ from .aliases import (
     _maybe_correct_device_via_filename,
     canonicalize_device_id,
     canonicalize_device_ids,
-    get_image_default_device_scopes,
     get_vendor_for_device,
     image_matches_device,
     is_image_default_for_device,

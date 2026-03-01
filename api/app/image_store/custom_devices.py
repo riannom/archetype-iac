@@ -10,7 +10,6 @@ from app.services.device_constraints import validate_minimum_hardware
 from .aliases import (
     canonicalize_device_id,
     get_vendor_for_device,
-    normalize_default_device_scope_id,
 )
 from .paths import custom_devices_path, hidden_devices_path, rules_path
 

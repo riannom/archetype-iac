@@ -1,7 +1,6 @@
 """QCOW2/IOL device detection and filename-based classification."""
 from __future__ import annotations
 
-import json
 import logging
 import re
 
