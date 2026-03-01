@@ -23,7 +23,7 @@ from uuid import uuid4
 
 import redis
 
-from app import models
+from app import agent_client, models  # noqa: F401 -- agent_client used in function body + patched by tests
 from app.config import settings
 from app.db import get_redis, get_session
 from app.tasks.migration_cleanup import process_pending_migration_cleanups
@@ -249,8 +249,6 @@ async def reconcile_managed_interfaces():
     interface state and updates sync_status/current_mtu accordingly.
     Runs less frequently than state reconciliation (called externally).
     """
-    from app import agent_client  # noqa: F811 -- intentional local re-import
-
     with get_session() as session:
         interfaces = session.query(models.AgentManagedInterface).all()
         if not interfaces:
