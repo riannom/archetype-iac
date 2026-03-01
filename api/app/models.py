@@ -923,6 +923,30 @@ class Node(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
+    def __init__(self, **kwargs):
+        # Backward-compatibility aliases used by legacy tests and fixtures.
+        if "name" in kwargs and "display_name" not in kwargs:
+            kwargs["display_name"] = kwargs.pop("name")
+        if "kind" in kwargs and "node_type" not in kwargs:
+            kwargs["node_type"] = kwargs.pop("kind")
+        super().__init__(**kwargs)
+
+    @property
+    def name(self) -> str:
+        return self.display_name
+
+    @name.setter
+    def name(self, value: str) -> None:
+        self.display_name = value
+
+    @property
+    def kind(self) -> str:
+        return self.node_type
+
+    @kind.setter
+    def kind(self, value: str) -> None:
+        self.node_type = value
+
 
 class Link(Base):
     """Topology link definition - replaces YAML links section.

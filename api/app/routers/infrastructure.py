@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from app import db, models
+from app import agent_client, db, models
 from app.auth import get_current_admin, get_current_user
 from app.utils.http import require_admin, raise_not_found
 from app.schemas import (
@@ -273,7 +273,6 @@ async def test_mtu_between_agents(
     supports the configured MTU. Also detects link type (direct/routed)
     via TTL analysis.
     """
-    from app import agent_client
 
     # Get source and target agents
     source_agent = database.get(models.Host, request.source_agent_id)
@@ -474,7 +473,6 @@ async def test_all_agent_pairs(
     Runs MTU tests between all pairs of online agents in both directions.
     Returns aggregated results.
     """
-    from app import agent_client
 
     # Get all online agents
     agents = (
@@ -575,7 +573,6 @@ async def get_agent_interfaces(
     Returns all interfaces with their MTU, identifies the default route
     interface, and detects which network manager is in use on the agent.
     """
-    from app import agent_client
 
     # Get the agent
     agent = database.get(models.Host, agent_id)
@@ -587,6 +584,18 @@ async def get_agent_interfaces(
 
     try:
         result = await agent_client.get_agent_interface_details(agent)
+        normalized_interfaces = []
+        default_route = result.get("default_route_interface")
+        for iface in result.get("interfaces", []):
+            iface_data = dict(iface)
+            iface_data.setdefault("is_physical", True)
+            iface_data.setdefault("is_default_route", iface_data.get("name") == default_route)
+            iface_data.setdefault("state", "unknown")
+            normalized_interfaces.append(iface_data)
+        result = {
+            **result,
+            "interfaces": normalized_interfaces,
+        }
         return InterfaceDetailsResponseOut(**result)
     except Exception as e:
         logger.error(f"Failed to get interfaces from agent {agent_id}: {e}")
@@ -606,7 +615,6 @@ async def set_agent_interface_mtu(
     Requires admin access. Applies the MTU change and optionally persists
     it across reboots (based on detected network manager).
     """
-    from app import agent_client
 
     require_admin(current_user)
 
@@ -687,7 +695,6 @@ async def update_agent_network_config(
     Requires admin access. Optionally applies the MTU change immediately
     if the agent is online.
     """
-    from app import agent_client
 
     require_admin(current_user)
 
@@ -954,7 +961,6 @@ async def apply_transport_config(
     Requires admin access. Useful when an agent's transport config
     needs to be re-provisioned after manual intervention.
     """
-    from app import agent_client
 
     require_admin(current_user)
 
@@ -1073,7 +1079,6 @@ async def create_managed_interface(
     current_user: models.User = Depends(get_current_user),
 ) -> AgentManagedInterfaceOut:
     """Create and provision a managed interface on an agent host."""
-    from app import agent_client
 
     require_admin(current_user)
 
@@ -1165,7 +1170,6 @@ async def update_managed_interface(
     current_user: models.User = Depends(get_current_user),
 ) -> AgentManagedInterfaceOut:
     """Update a managed interface (MTU, IP)."""
-    from app import agent_client
 
     require_admin(current_user)
 
@@ -1215,7 +1219,6 @@ async def delete_managed_interface(
     current_user: models.User = Depends(get_current_user),
 ) -> dict:
     """Delete a managed interface from the agent and remove the record."""
-    from app import agent_client
 
     require_admin(current_user)
 

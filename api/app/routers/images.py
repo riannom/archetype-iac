@@ -9,14 +9,15 @@ import shutil
 import subprocess
 import tarfile
 import tempfile
-import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from typing import AsyncGenerator
 from uuid import uuid4
 
 import httpx
+import threading as _threading
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
@@ -44,6 +45,7 @@ from app.image_store import (
     update_image_entry,
 )
 from app.jobs import get_queue
+from app.services.resource_monitor import PressureLevel, ResourceMonitor
 from app.services.catalog_service import (
     CatalogAliasConflictError,
     CatalogImageNotFoundError,
@@ -55,8 +57,13 @@ from app.services.catalog_service import (
     list_catalog_library_images,
     resolve_catalog_device_id,
 )
+from app.utils.image_integrity import compute_sha256, validate_qcow2
 
 router = APIRouter(prefix="/images", tags=["images"])
+
+# Module-local thread shim so tests can monkeypatch img.threading.Thread
+# without affecting global threading behavior in other subsystems.
+threading = SimpleNamespace(Lock=_threading.Lock, Thread=_threading.Thread)
 
 # Track upload progress for polling
 _upload_progress: dict[str, dict] = {}
@@ -387,7 +394,6 @@ def load_image(
     Requires admin access.
     """
 
-    from app.services.resource_monitor import ResourceMonitor, PressureLevel
     if ResourceMonitor.check_disk_pressure() == PressureLevel.CRITICAL:
         raise HTTPException(status_code=507, detail="Insufficient disk space for upload")
 
@@ -438,7 +444,6 @@ def init_chunk_upload(
     current_user: models.User = Depends(get_current_admin),
 ):
     """Initialize a chunked upload for docker/qcow2 image files."""
-    from app.services.resource_monitor import PressureLevel, ResourceMonitor
 
     if ResourceMonitor.check_disk_pressure() == PressureLevel.CRITICAL:
         raise HTTPException(status_code=507, detail="Insufficient disk space for upload")
@@ -1601,7 +1606,6 @@ def _detect_qcow2(destination: Path) -> dict[str, object]:
     Used in two-phase upload mode to present detection results for user
     confirmation before committing to the manifest.
     """
-    from app.utils.image_integrity import compute_sha256, validate_qcow2
 
     manifest = load_manifest()
     potential_id = f"qcow2:{destination.name}"
@@ -1736,7 +1740,6 @@ def _finalize_qcow2_upload(destination: Path, *, auto_build: bool = True) -> dic
     One-shot convenience that runs detection + registration in sequence.
     Used by auto_confirm=True (default) and the legacy single-file upload.
     """
-    from app.utils.image_integrity import compute_sha256, validate_qcow2
 
     manifest = load_manifest()
     potential_id = f"qcow2:{destination.name}"
@@ -1768,21 +1771,21 @@ def _finalize_qcow2_upload(destination: Path, *, auto_build: bool = True) -> dic
 
 @router.post("/qcow2")
 def upload_qcow2(
-    file: UploadFile = File(...),
+    file: UploadFile | str | None = File(default=None),
     current_user: models.User = Depends(get_current_admin),
     auto_build: bool = Query(default=True, description="Auto-trigger vrnetlab Docker build"),
 ) -> dict[str, object]:
 
-    from app.services.resource_monitor import ResourceMonitor, PressureLevel
     if ResourceMonitor.check_disk_pressure() == PressureLevel.CRITICAL:
         raise HTTPException(status_code=507, detail="Insufficient disk space for upload")
 
-    if not file.filename:
+    filename = None if file is None or isinstance(file, str) else getattr(file, "filename", None)
+    if not filename:
         raise HTTPException(status_code=400, detail="Missing filename")
-    if not file.filename.lower().endswith((".qcow2", ".qcow")):
+    if not filename.lower().endswith((".qcow2", ".qcow")):
         raise HTTPException(status_code=400, detail="File must be a qcow2 image")
 
-    destination = qcow2_path(Path(file.filename).name)
+    destination = qcow2_path(Path(filename).name)
     try:
         with destination.open("wb") as handle:
             shutil.copyfileobj(file.file, handle)
@@ -1793,7 +1796,7 @@ def upload_qcow2(
 
 @router.post("/iol")
 def upload_iol(
-    file: UploadFile = File(...),
+    file: UploadFile | str | None = File(default=None),
     current_user: models.User = Depends(get_current_admin),
 ) -> dict[str, object]:
     """Upload an IOL binary and automatically build a Docker image.
@@ -1804,15 +1807,15 @@ def upload_iol(
 
     Requires admin access.
     """
-    from app.services.resource_monitor import ResourceMonitor, PressureLevel
     if ResourceMonitor.check_disk_pressure() == PressureLevel.CRITICAL:
         raise HTTPException(status_code=507, detail="Insufficient disk space for upload")
 
-    if not file.filename:
+    filename = None if file is None or isinstance(file, str) else getattr(file, "filename", None)
+    if not filename:
         raise HTTPException(status_code=400, detail="Missing filename")
 
     # Detect device type from filename
-    device_id = detect_iol_device_type(file.filename)
+    device_id = detect_iol_device_type(filename)
     if not device_id:
         raise HTTPException(
             status_code=400,
@@ -1822,15 +1825,15 @@ def upload_iol(
 
     # Check for duplicate
     manifest = load_manifest()
-    potential_id = f"iol:{Path(file.filename).name}"
+    potential_id = f"iol:{Path(filename).name}"
     if find_image_by_id(manifest, potential_id):
         raise HTTPException(
             status_code=409,
-            detail=f"IOL image '{file.filename}' already exists in the library"
+            detail=f"IOL image '{filename}' already exists in the library"
         )
 
     # Save the binary
-    destination = iol_path(Path(file.filename).name)
+    destination = iol_path(Path(filename).name)
     try:
         with destination.open("wb") as handle:
             shutil.copyfileobj(file.file, handle)
@@ -1874,7 +1877,6 @@ def backfill_checksums(
     Only processes images that don't already have a sha256 field.
     """
 
-    from app.utils.image_integrity import compute_sha256
 
     manifest = load_manifest()
     updated = 0
