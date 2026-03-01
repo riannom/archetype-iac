@@ -1,0 +1,222 @@
+"""Client for communicating with Archetype agents.
+
+This package is split into sub-modules by concern but re-exports ALL public
+symbols here so that existing ``from app import agent_client`` followed by
+``agent_client.foo()`` continues to work unchanged.
+"""
+
+# Re-export metric used by tests patching "app.agent_client.agent_operation_duration"
+from app.metrics import agent_operation_duration  # noqa: F401
+
+# --- http.py: Core HTTP, retry logic, exception classes, module-level state ---
+from app.agent_client.http import (  # noqa: F401
+    AgentError,
+    AgentJobError,
+    AgentUnavailableError,
+    MAX_RETRIES,
+    VTEP_OPERATION_TIMEOUT,
+    _agent_online_cutoff,
+    _agent_request,
+    _get_agent_auth_headers,
+    _safe_agent_request,
+    _timed_node_operation,
+    close_http_client,
+    get_http_client,
+    with_retry,
+)
+
+# --- selection.py: Agent discovery, health, URL helpers ---
+from app.agent_client.selection import (  # noqa: F401
+    _data_plane_mtu_ok,
+    agent_supports_vxlan,
+    check_agent_health,
+    count_active_jobs,
+    count_active_jobs_by_agent,
+    get_agent_by_name,
+    get_agent_console_url,
+    get_agent_for_lab,
+    get_agent_for_node,
+    get_healthy_agent,
+    get_agent_max_jobs,
+    get_agent_providers,
+    get_agent_url,
+    get_all_agents,
+    is_agent_online,
+    mark_agent_offline,
+    ping_agent,
+    query_agent_capacity,
+    resolve_agent_ip,
+    resolve_data_plane_ip,
+    update_stale_agents,
+)
+
+# --- overlay.py: VXLAN/overlay tunnel management ---
+from app.agent_client.overlay import (  # noqa: F401
+    attach_container_on_agent,
+    attach_overlay_interface_on_agent,
+    cleanup_overlay_on_agent,
+    compute_vxlan_port_name,
+    declare_overlay_state_on_agent,
+    detach_overlay_interface_on_agent,
+    get_cleanup_audit_from_agent,
+    get_overlay_status_from_agent,
+    reconcile_vxlan_ports_on_agent,
+    setup_cross_host_link_v2,
+)
+
+# --- node_ops.py: Per-node + lab-level operations ---
+from app.agent_client.node_ops import (  # noqa: F401
+    check_node_readiness,
+    cleanup_lab_orphans,
+    cleanup_orphans_on_agent,
+    container_action,
+    create_node_on_agent,
+    deploy_to_agent,
+    destroy_container_on_agent,
+    destroy_lab_on_agent,
+    destroy_node_on_agent,
+    destroy_on_agent,
+    discover_labs_on_agent,
+    force_release_lock,
+    get_agent_images,
+    get_agent_lock_status,
+    get_lab_status_from_agent,
+    get_node_runtime_profile,
+    reconcile_nodes_on_agent,
+    release_agent_lock,
+    start_node_on_agent,
+    stop_node_on_agent,
+)
+
+# --- links.py: Link management ---
+from app.agent_client.links import (  # noqa: F401
+    connect_external_on_agent,
+    create_link_on_agent,
+    declare_port_state_on_agent,
+    delete_link_on_agent,
+    detach_external_on_agent,
+    get_interface_vlan_from_agent,
+    get_lab_port_state,
+    get_lab_ports_from_agent,
+    list_links_on_agent,
+    repair_endpoints_on_agent,
+    set_port_vlan_on_agent,
+)
+
+# --- maintenance.py: MTU, interfaces, cleanup, configs, exec, OVS status ---
+from app.agent_client.maintenance import (  # noqa: F401
+    cleanup_agent_workspace,
+    cleanup_workspaces_on_agent,
+    exec_node_on_agent,
+    extract_configs_on_agent,
+    extract_node_config_on_agent,
+    get_agent_boot_logs,
+    get_agent_interface_details,
+    get_agent_ovs_flows,
+    get_ovs_status_from_agent,
+    prune_docker_on_agent,
+    provision_interface_on_agent,
+    set_agent_interface_mtu,
+    test_mtu_on_agent,
+    update_config_on_agent,
+)
+
+
+__all__ = [
+    # Exceptions
+    "AgentError",
+    "AgentJobError",
+    "AgentUnavailableError",
+    # HTTP primitives and module-level state
+    "MAX_RETRIES",
+    "VTEP_OPERATION_TIMEOUT",
+    "_agent_online_cutoff",
+    "_agent_request",
+    "_get_agent_auth_headers",
+    "_safe_agent_request",
+    "_timed_node_operation",
+    "close_http_client",
+    "get_http_client",
+    "with_retry",
+    # Agent discovery, health, URL helpers
+    "_data_plane_mtu_ok",
+    "agent_supports_vxlan",
+    "check_agent_health",
+    "count_active_jobs",
+    "count_active_jobs_by_agent",
+    "get_agent_by_name",
+    "get_agent_console_url",
+    "get_agent_for_lab",
+    "get_agent_for_node",
+    "get_healthy_agent",
+    "get_agent_max_jobs",
+    "get_agent_providers",
+    "get_agent_url",
+    "get_all_agents",
+    "is_agent_online",
+    "mark_agent_offline",
+    "ping_agent",
+    "query_agent_capacity",
+    "resolve_agent_ip",
+    "resolve_data_plane_ip",
+    "update_stale_agents",
+    # Overlay/VXLAN
+    "attach_container_on_agent",
+    "attach_overlay_interface_on_agent",
+    "cleanup_overlay_on_agent",
+    "compute_vxlan_port_name",
+    "declare_overlay_state_on_agent",
+    "detach_overlay_interface_on_agent",
+    "get_cleanup_audit_from_agent",
+    "get_overlay_status_from_agent",
+    "reconcile_vxlan_ports_on_agent",
+    "setup_cross_host_link_v2",
+    # Node/lab operations
+    "check_node_readiness",
+    "cleanup_lab_orphans",
+    "cleanup_orphans_on_agent",
+    "container_action",
+    "create_node_on_agent",
+    "deploy_to_agent",
+    "destroy_container_on_agent",
+    "destroy_lab_on_agent",
+    "destroy_node_on_agent",
+    "destroy_on_agent",
+    "discover_labs_on_agent",
+    "force_release_lock",
+    "get_agent_images",
+    "get_agent_lock_status",
+    "get_lab_status_from_agent",
+    "get_node_runtime_profile",
+    "reconcile_nodes_on_agent",
+    "release_agent_lock",
+    "start_node_on_agent",
+    "stop_node_on_agent",
+    # Links
+    "connect_external_on_agent",
+    "create_link_on_agent",
+    "declare_port_state_on_agent",
+    "delete_link_on_agent",
+    "detach_external_on_agent",
+    "get_interface_vlan_from_agent",
+    "get_lab_port_state",
+    "get_lab_ports_from_agent",
+    "list_links_on_agent",
+    "repair_endpoints_on_agent",
+    "set_port_vlan_on_agent",
+    # Maintenance
+    "cleanup_agent_workspace",
+    "cleanup_workspaces_on_agent",
+    "exec_node_on_agent",
+    "extract_configs_on_agent",
+    "extract_node_config_on_agent",
+    "get_agent_boot_logs",
+    "get_agent_interface_details",
+    "get_agent_ovs_flows",
+    "get_ovs_status_from_agent",
+    "prune_docker_on_agent",
+    "provision_interface_on_agent",
+    "set_agent_interface_mtu",
+    "test_mtu_on_agent",
+    "update_config_on_agent",
+]
