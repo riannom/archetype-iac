@@ -5,7 +5,7 @@ import TopBar from './components/TopBar';
 import PropertiesPanel from './components/PropertiesPanel';
 import ConsoleManager from './components/ConsoleManager';
 import RuntimeControl from './components/RuntimeControl';
-import TaskLogPanel, { TaskLogEntry, DockedConsole } from './components/TaskLogPanel';
+import TaskLogPanel, { TaskLogEntry } from './components/TaskLogPanel';
 import Auth from './components/Auth';
 import Dashboard from './components/Dashboard';
 import SystemStatusStrip from './components/SystemStatusStrip';
@@ -18,13 +18,10 @@ import LogsView from './components/LogsView';
 import VerificationPanel from './components/VerificationPanel';
 import ScenarioPanel from './components/ScenarioPanel';
 import InfraView from './components/InfraView';
-import { Annotation, AnnotationType, CanvasTool, ConsoleWindow, DeviceModel, DeviceType, LabLayout, Link, Node, ExternalNetworkNode, DeviceNode, isExternalNetworkNode, isDeviceNode } from './types';
+import { Annotation, AnnotationType, CanvasTool, DeviceModel, Link, Node, ExternalNetworkNode, DeviceNode, isExternalNetworkNode, isDeviceNode } from './types';
 import { API_BASE_URL, apiRequest, rawApiRequest } from '../api';
-import { TopologyGraph } from '../types';
 import { usePortManager } from './hooks/usePortManager';
-import { usePersistedState } from './hooks/usePersistedState';
-import { useLabStateWS, JobProgressData, ScenarioStepData } from './hooks/useLabStateWS';
-import { NodeStateEntry, NodeStateData, NodeRuntimeStatus, mapActualToRuntime } from '../types/nodeState';
+import { useLabStateWS } from './hooks/useLabStateWS';
 import { useTheme } from '../theme/index';
 import { useUser } from '../contexts/UserContext';
 import { canViewInfrastructure } from '../utils/permissions';
@@ -39,110 +36,14 @@ import {
   isInstantiableImageKind,
   requiresRunnableImage,
 } from '../utils/deviceModels';
+import { generateContainerName } from './studioUtils';
+import { useLabTopology } from './hooks/useLabTopology';
+import { useNodeStates, RuntimeStatus } from './hooks/useNodeStates';
+import { useConsoleManager } from './hooks/useConsoleManager';
+import { useJobTracking } from './hooks/useJobTracking';
+import { useLabDataLoading, LabSummary } from './hooks/useLabDataLoading';
 import './studio.css';
 import 'xterm/css/xterm.css';
-
-interface LabSummary {
-  id: string;
-  name: string;
-  created_at?: string;
-  node_count?: number;
-  running_count?: number;
-  container_count?: number;
-  vm_count?: number;
-}
-
-interface NodeReadinessHint {
-  is_ready: boolean;
-  actual_state: string;
-  progress_percent?: number | null;
-  message?: string | null;
-}
-
-// RuntimeStatus is an alias for NodeRuntimeStatus for backward compatibility
-type RuntimeStatus = NodeRuntimeStatus;
-
-/**
- * Generate a container name from a display name.
- * Container names must be valid for containerlab (lowercase, alphanumeric + underscore).
- * This name is immutable after first creation - display names can change freely.
- */
-const generateContainerName = (displayName: string): string => {
-  return displayName
-    .toLowerCase()
-    .replace(/[^a-z0-9_]/g, '_')  // Replace invalid chars with underscore
-    .replace(/^[^a-z_]/, 'n')     // Ensure starts with letter or underscore
-    .replace(/_+/g, '_')          // Collapse multiple underscores
-    .substring(0, 20);            // Limit length
-};
-
-const buildGraphNodes = (graph: TopologyGraph, models: DeviceModel[]): Node[] => {
-  const modelMap = new Map(models.map((model) => [model.id, model]));
-  return graph.nodes.map((node, index) => {
-    const column = index % 5;
-    const row = Math.floor(index / 5);
-
-    // Handle external network nodes
-    if ((node as any).node_type === 'external') {
-      const extNode: ExternalNetworkNode = {
-        id: node.id,
-        nodeType: 'external',
-        name: node.name || node.id,
-        managedInterfaceId: (node as any).managed_interface_id,
-        managedInterfaceName: (node as any).managed_interface_name,
-        managedInterfaceHostId: (node as any).managed_interface_host_id,
-        managedInterfaceHostName: (node as any).managed_interface_host_name,
-        connectionType: (node as any).connection_type || undefined,
-        parentInterface: (node as any).parent_interface,
-        vlanId: (node as any).vlan_id,
-        bridgeName: (node as any).bridge_name,
-        host: (node as any).host,
-        x: 220 + column * 160,
-        y: 180 + row * 140,
-      };
-      return extNode;
-    }
-
-    // Handle device nodes
-    const modelId = node.device || node.id;
-    const model = modelMap.get(modelId);
-    const deviceNode: DeviceNode = {
-      id: node.id,
-      nodeType: 'device',
-      name: node.name || node.id,
-      container_name: node.container_name || undefined, // Preserve container_name from backend
-      type: model?.type || DeviceType.CONTAINER,
-      model: model?.id || modelId,
-      version: node.version || model?.versions?.[0] || 'default',
-      x: 220 + column * 160,
-      y: 180 + row * 140,
-      cpu: node.cpu || model?.cpu || 1,
-      memory: node.memory || model?.memory || 1024,
-      disk_driver: node.disk_driver ?? undefined,
-      nic_driver: node.nic_driver ?? undefined,
-      machine_type: node.machine_type ?? undefined,
-      host: (node as any).host, // Preserve host from backend for multi-host placement
-    };
-    return deviceNode;
-  });
-};
-
-const buildGraphLinks = (graph: TopologyGraph): Link[] => {
-  return graph.links
-    .map((link, index) => {
-      if (!link.endpoints || link.endpoints.length < 2) return null;
-      const [source, target] = link.endpoints;
-      return {
-        id: `link-${index}-${source.node}-${target.node}`,
-        source: source.node,
-        target: target.node,
-        type: 'p2p',
-        sourceInterface: source.ifname || undefined,
-        targetInterface: target.ifname || undefined,
-      };
-    })
-    .filter(Boolean) as Link[];
-};
 
 const StudioPage: React.FC = () => {
   const { effectiveMode } = useTheme();
@@ -151,26 +52,9 @@ const StudioPage: React.FC = () => {
   const { imageLibrary } = useImageLibrary();
   const { deviceModels, deviceCategories, refresh: refreshDeviceCatalog } = useDeviceCatalog();
   const showAdminStrip = canViewInfrastructure(user ?? null);
-  const [labs, setLabs] = useState<LabSummary[]>([]);
   const [activeLab, setActiveLab] = useState<LabSummary | null>(null);
   const [view, setView] = useState<'designer' | 'configs' | 'logs' | 'runtime' | 'tests' | 'scenarios' | 'infra'>('designer');
   const isDesignerView = view === 'designer';
-  const [nodes, setNodes] = useState<Node[]>([]);
-  const [links, setLinks] = useState<Link[]>([]);
-  const [annotations, setAnnotations] = useState<Annotation[]>([]);
-  const [nodeStates, setNodeStates] = useState<Record<string, NodeStateEntry>>({});
-  // Derive runtimeStates from nodeStates — single source of truth
-  const runtimeStates = useMemo(() => {
-    const result: Record<string, RuntimeStatus> = {};
-    for (const [nodeId, state] of Object.entries(nodeStates)) {
-      const status = mapActualToRuntime(state.actual_state, state.desired_state, state.will_retry, state.display_state);
-      if (status !== null) result[nodeId] = status;
-    }
-    return result;
-  }, [nodeStates]);
-  const [consoleWindows, setConsoleWindows] = useState<ConsoleWindow[]>([]);
-  const [dockedConsoles, setDockedConsoles] = useState<DockedConsole[]>([]);
-  const [activeBottomTabId, setActiveBottomTabId] = useState<string>('log');
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
@@ -179,27 +63,12 @@ const StudioPage: React.FC = () => {
   const [activeTool, setActiveTool] = useState<CanvasTool>('pointer');
   const [showYamlModal, setShowYamlModal] = useState(false);
   const [yamlContent, setYamlContent] = useState('');
-  const [agents, setAgents] = useState<{ id: string; name: string }[]>(() => {
-    return [];
-  });
   const [showAgentIndicators, setShowAgentIndicators] = useState<boolean>(() => {
     return localStorage.getItem('archetype_show_agent_indicators') !== 'false';
   });
   const [authRequired, setAuthRequired] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
   const [authLoading, setAuthLoading] = useState(false);
-  const [taskLog, setTaskLog] = useState<TaskLogEntry[]>([]);
-  const [isTaskLogVisible, setIsTaskLogVisible] = usePersistedState('archetype-tasklog-visible', true);
-  const [taskLogAutoRefresh, setTaskLogAutoRefresh] = usePersistedState('archetype-tasklog-auto-refresh', true);
-  const [taskLogClearedAt, setTaskLogClearedAt] = useState<number>(() => {
-    const stored = localStorage.getItem('archetype_tasklog_cleared_at');
-    return stored ? parseInt(stored, 10) : 0;
-  });
-  const [jobs, setJobs] = useState<any[]>([]);
-  const prevJobsRef = useRef<Map<string, string>>(new Map());
-  const isInitialJobLoadRef = useRef(true);
-  const [labStatuses, setLabStatuses] = useState<Record<string, { running: number; total: number }>>({});
-  const [nodeReadinessHints, setNodeReadinessHints] = useState<Record<string, NodeReadinessHint>>({});
   // Config viewer modal state
   const [configViewerOpen, setConfigViewerOpen] = useState(false);
   const [configViewerNode, setConfigViewerNode] = useState<{ id: string; name: string } | null>(null);
@@ -210,180 +79,76 @@ const StudioPage: React.FC = () => {
   // Task log entry modal (for non-job entries)
   const [taskLogEntryModalOpen, setTaskLogEntryModalOpen] = useState(false);
   const [taskLogEntryModalEntry, setTaskLogEntryModalEntry] = useState<TaskLogEntry | null>(null);
-  // Lab verification test state
-  const [testResults, setTestResults] = useState<import('../studio/types').TestResult[]>([]);
-  const [testSummary, setTestSummary] = useState<{ total: number; passed: number; failed: number; errors: number } | null>(null);
-  const [testRunning, setTestRunning] = useState(false);
-  // Scenario engine state
-  const [scenarioSteps, setScenarioSteps] = useState<ScenarioStepData[]>([]);
-  const [activeScenarioJobId, setActiveScenarioJobId] = useState<string | null>(null);
-  // Track pending node operations to prevent race conditions from rapid clicks
-  const [pendingNodeOps, setPendingNodeOps] = useState<Set<string>>(new Set());
-  // Tracks optimistic updates: nodeId -> expiry timestamp. Prevents polling/WS from
-  // overwriting transitional states (stopping/starting) before the server catches up.
-  const optimisticGuardRef = useRef<Map<string, number>>(new Map());
-  const layoutDirtyRef = useRef(false);
-  const saveLayoutTimeoutRef = useRef<number | null>(null);
-  const topologyDirtyRef = useRef(false);
+
   const initialNodeSyncLabRef = useRef<string | null>(null);
-  const saveTopologyTimeoutRef = useRef<number | null>(null);
-  // Refs to track current state for debounced saves (avoids stale closure issues)
-  const nodesRef = useRef<Node[]>([]);
-  const linksRef = useRef<Link[]>([]);
-  const annotationsRef = useRef<Annotation[]>([]);
-  const [systemMetrics, setSystemMetrics] = useState<{
-    agents: { online: number; total: number };
-    containers: { running: number; total: number };
-    cpu_percent: number;
-    memory_percent: number;
-    memory?: {
-      used_gb: number;
-      total_gb: number;
-      percent: number;
-    };
-    storage?: {
-      used_gb: number;
-      total_gb: number;
-      percent: number;
-    };
-    labs_running: number;
-    labs_total: number;
-    per_host?: {
-      id: string;
-      name: string;
-      cpu_percent: number;
-      memory_percent: number;
-      memory_used_gb: number;
-      memory_total_gb: number;
-      storage_percent: number;
-      storage_used_gb: number;
-      storage_total_gb: number;
-      containers_running: number;
-      started_at: string | null;
-    }[];
-    is_multi_host?: boolean;
-  } | null>(null);
+
+  const isUnauthorized = (error: unknown) => error instanceof Error && error.message.toLowerCase().includes('unauthorized');
+
+  const studioRequest = useCallback(
+    async <T,>(path: string, options: RequestInit = {}) => {
+      try {
+        return await apiRequest<T>(path, options);
+      } catch (error) {
+        if (isUnauthorized(error)) {
+          setAuthRequired(true);
+        }
+        throw error;
+      }
+    },
+    []
+  );
+
+  // --- Hook compositions ---
+
+  const {
+    labs, setLabs, agents, labStatuses, systemMetrics,
+    loadLabs,
+  } = useLabDataLoading({ studioRequest, activeLab });
+
+  const {
+    loadJobs,
+    addTaskLogEntry, clearTaskLog, filteredTaskLog,
+    isTaskLogVisible, setIsTaskLogVisible,
+    taskLogAutoRefresh, setTaskLogAutoRefresh,
+    handleWSJobProgress, handleWSTestResult, handleWSScenarioStep,
+    testResults, setTestResults, testSummary, setTestSummary,
+    testRunning, setTestRunning,
+    scenarioSteps, activeScenarioJobId, setActiveScenarioJobId,
+    resetJobTracking,
+  } = useJobTracking({ studioRequest, addNotification });
+
+  const {
+    nodes, setNodes, links, setLinks, annotations, setAnnotations,
+    nodesRef, linksRef, layoutDirtyRef,
+    saveLayout, triggerLayoutSave, triggerTopologySave, flushTopologySave,
+  } = useLabTopology({
+    activeLab,
+    deviceModels,
+    studioRequest,
+    addTaskLogEntry,
+  });
+
+  const {
+    nodeStates, setNodeStates, runtimeStates,
+    nodeReadinessHints, pendingNodeOps, setPendingNodeOps,
+    optimisticGuardRef,
+    handleWSNodeStateChange,
+    loadNodeStates, loadNodeReadiness, refreshNodeStatesFromAgent,
+  } = useNodeStates({
+    activeLabId: activeLab?.id || null,
+    studioRequest,
+    addNotification,
+  });
+
+  const consoleManager = useConsoleManager({
+    nodes,
+    preferences,
+  });
 
   // Port manager for interface auto-assignment
   const portManager = usePortManager(nodes, links);
 
   // WebSocket hook for real-time state updates
-  // Updates nodeStates; runtimeStates are derived automatically via useMemo
-  const handleWSNodeStateChange = useCallback((nodeId: string, wsState: NodeStateData) => {
-    // Update nodeStates record — runtimeStates derived automatically
-    setNodeStates((prev) => {
-      const guardExpiry = optimisticGuardRef.current.get(nodeId);
-      const isGuarded = guardExpiry && Date.now() < guardExpiry;
-      const localState = prev[nodeId];
-
-      // During optimistic guard window: only accept WS updates that show
-      // equal or forward progress (e.g., stopping→stopped is OK, stopping→running is not)
-      if (isGuarded && localState) {
-        const localActual = localState.actual_state;
-        const wsDisplay = wsState.display_state;
-        // If local state is transitional and WS shows a non-matching transitional or
-        // the wrong terminal state, preserve the local optimistic state
-        if (localActual === 'stopping' && wsDisplay && wsDisplay !== 'stopping' && wsDisplay !== 'stopped' && wsDisplay !== 'error') {
-          return prev;
-        }
-        if (localActual === 'starting' && wsDisplay && wsDisplay !== 'starting' && wsDisplay !== 'running' && wsDisplay !== 'error') {
-          return prev;
-        }
-        // Forward progress — clear the guard since server has caught up
-        optimisticGuardRef.current.delete(nodeId);
-      }
-
-      return {
-        ...prev,
-        [nodeId]: {
-          ...prev[nodeId],
-          id: wsState.node_id,
-          lab_id: activeLab?.id || '',
-          node_id: wsState.node_id,
-          node_name: wsState.node_name,
-          desired_state: wsState.desired_state,
-          actual_state: wsState.actual_state,
-          error_message: wsState.error_message,
-          is_ready: wsState.is_ready,
-          host_id: wsState.host_id ?? prev[nodeId]?.host_id,
-          host_name: wsState.host_name ?? prev[nodeId]?.host_name,
-          // Preserve image-sync fields when WS payload omits them.
-          // Clear only when server explicitly sends null.
-          image_sync_status:
-            wsState.image_sync_status !== undefined
-              ? wsState.image_sync_status
-              : prev[nodeId]?.image_sync_status,
-          image_sync_message:
-            wsState.image_sync_message !== undefined
-              ? wsState.image_sync_message
-              : prev[nodeId]?.image_sync_message,
-          will_retry: wsState.will_retry,
-          enforcement_attempts: wsState.enforcement_attempts,
-          max_enforcement_attempts: wsState.max_enforcement_attempts,
-          display_state: wsState.display_state,
-          starting_started_at: wsState.starting_started_at,
-          created_at: prev[nodeId]?.created_at || new Date().toISOString(),
-          updated_at: new Date().toISOString(),
-        } as NodeStateEntry,
-      };
-    });
-
-    // Show toast for nodes entering error state (suppress if will_retry)
-    if (wsState.actual_state === 'error' && wsState.error_message && !wsState.will_retry) {
-      addNotification(
-        'error',
-        `Node Error: ${wsState.node_name}`,
-        wsState.error_message
-      );
-    }
-  }, [activeLab?.id, addNotification]);
-
-  // Handle WebSocket job progress - show toast for job failures/completions
-  const handleWSJobProgress = useCallback((job: JobProgressData) => {
-    const prefix = job.action.startsWith('sync:') ? 'sync-' : '';
-    if (job.status === 'failed' && job.error_message) {
-      addNotification(
-        'error',
-        `Job Failed: ${job.action}`,
-        job.error_message,
-        { jobId: job.job_id, category: `${prefix}job-failed` }
-      );
-    } else if (job.status === 'completed') {
-      addNotification(
-        'success',
-        `Job Completed: ${job.action}`,
-        job.progress_message || 'Operation completed successfully',
-        { jobId: job.job_id, category: `${prefix}job-complete` }
-      );
-    }
-  }, [addNotification]);
-
-  // Handle WebSocket test results
-  const handleWSTestResult = useCallback((data: import('./hooks/useLabStateWS').TestResultData) => {
-    setTestResults(prev => [...prev, data.result]);
-    setTestSummary(data.summary);
-    if (data.summary.passed + data.summary.failed + data.summary.errors >= data.summary.total) {
-      setTestRunning(false);
-    }
-  }, []);
-
-  const handleWSScenarioStep = useCallback((data: ScenarioStepData) => {
-    if (data.step_index === -1) {
-      // Completion signal
-      setActiveScenarioJobId(null);
-      return;
-    }
-    setScenarioSteps(prev => {
-      const existing = prev.findIndex(s => s.step_index === data.step_index);
-      if (existing >= 0) {
-        const next = [...prev];
-        next[existing] = data;
-        return next;
-      }
-      return [...prev, data];
-    });
-  }, []);
-
   const {
     isConnected: wsConnected,
     reconnectAttempts: wsReconnectAttempts,
@@ -396,11 +161,6 @@ const StudioPage: React.FC = () => {
     enabled: !!activeLab,
   });
 
-  // Keep refs in sync with state for debounced saves (avoids stale closure issues)
-  useEffect(() => { nodesRef.current = nodes; }, [nodes]);
-  useEffect(() => { linksRef.current = links; }, [links]);
-  useEffect(() => { annotationsRef.current = annotations; }, [annotations]);
-
   // ESC key returns to pointer tool
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -411,22 +171,6 @@ const StudioPage: React.FC = () => {
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [activeTool]);
-
-  const addTaskLogEntry = useCallback((level: TaskLogEntry['level'], message: string, jobId?: string) => {
-    const id = `log-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-    setTaskLog((prev) => [...prev.slice(-99), { id, timestamp: new Date(), level, message, jobId }]);
-  }, []);
-
-  const clearTaskLog = useCallback(() => {
-    const now = Date.now();
-    setTaskLogClearedAt(now);
-    localStorage.setItem('archetype_tasklog_cleared_at', now.toString());
-  }, []);
-
-  const filteredTaskLog = useMemo(
-    () => taskLog.filter((entry) => entry.timestamp.getTime() > taskLogClearedAt),
-    [taskLog, taskLogClearedAt]
-  );
 
   // Derive canvas highlights from the currently-running scenario step
   const activeScenarioHighlights = useMemo(() => {
@@ -464,424 +208,11 @@ const StudioPage: React.FC = () => {
     return { activeNodeNames, activeLinkName, stepName: runningStep.step_name };
   }, [activeScenarioJobId, scenarioSteps]);
 
-  const isUnauthorized = (error: unknown) => error instanceof Error && error.message.toLowerCase().includes('unauthorized');
-
-  const studioRequest = useCallback(
-    async <T,>(path: string, options: RequestInit = {}) => {
-      try {
-        return await apiRequest<T>(path, options);
-      } catch (error) {
-        if (isUnauthorized(error)) {
-          setAuthRequired(true);
-        }
-        throw error;
-      }
-    },
-    []
-  );
-
-  // Build current layout from state
-  const buildLayoutFromState = useCallback(
-    (currentNodes: Node[], currentAnnotations: Annotation[]): LabLayout => {
-      const nodeLayouts: Record<string, { x: number; y: number; label?: string; color?: string }> = {};
-      currentNodes.forEach((node) => {
-        nodeLayouts[node.id] = {
-          x: node.x,
-          y: node.y,
-          label: node.label,
-        };
-      });
-      return {
-        version: 1,
-        nodes: nodeLayouts,
-        annotations: currentAnnotations.map((ann) => ({
-          id: ann.id,
-          type: ann.type,
-          x: ann.x,
-          y: ann.y,
-          width: ann.width,
-          height: ann.height,
-          text: ann.text,
-          color: ann.color,
-          fontSize: ann.fontSize,
-          targetX: ann.targetX,
-          targetY: ann.targetY,
-          zIndex: ann.zIndex,
-        })),
-      };
-    },
-    []
-  );
-
-  // Save layout to backend (debounced)
-  const saveLayout = useCallback(
-    async (labId: string, currentNodes: Node[], currentAnnotations: Annotation[]) => {
-      if (currentNodes.length === 0) return;
-      const layout = buildLayoutFromState(currentNodes, currentAnnotations);
-      try {
-        await studioRequest(`/labs/${labId}/layout`, {
-          method: 'PUT',
-          body: JSON.stringify(layout),
-        });
-        layoutDirtyRef.current = false;
-      } catch (error) {
-        console.error('Failed to save layout:', error);
-      }
-    },
-    [buildLayoutFromState, studioRequest]
-  );
-
-  // Trigger debounced layout save
-  // Uses refs to read current state at save time, avoiding stale closure issues
-  const triggerLayoutSave = useCallback(() => {
-    if (!activeLab) return;
-    layoutDirtyRef.current = true;
-    if (saveLayoutTimeoutRef.current) {
-      window.clearTimeout(saveLayoutTimeoutRef.current);
-    }
-    const labId = activeLab.id;
-    saveLayoutTimeoutRef.current = window.setTimeout(() => {
-      if (layoutDirtyRef.current) {
-        // Read current state from refs to get latest values
-        saveLayout(labId, nodesRef.current, annotationsRef.current);
-      }
-    }, 500);
-  }, [activeLab, saveLayout]);
-
-  // Save topology to backend (auto-save on changes)
-  const saveTopology = useCallback(
-    async (labId: string, currentNodes: Node[], currentLinks: Link[], rethrowOnError = false) => {
-      if (currentNodes.length === 0) return;
-      const graph: TopologyGraph = {
-        nodes: currentNodes.map((node) => {
-          // Handle external network nodes
-          if (isExternalNetworkNode(node)) {
-            return {
-              id: node.id,
-              name: node.name,
-              node_type: 'external',
-              managed_interface_id: node.managedInterfaceId,
-              connection_type: node.connectionType,
-              parent_interface: node.parentInterface,
-              vlan_id: node.vlanId,
-              bridge_name: node.bridgeName,
-              host: node.host,
-            };
-          }
-          // Handle device nodes
-          const deviceNode = node as DeviceNode;
-          return {
-            id: node.id,
-            name: node.name,
-            node_type: 'device',
-            // Include container_name for backend container identity (immutable after first save)
-            container_name: deviceNode.container_name,
-            device: deviceNode.model,
-            version: deviceNode.version,
-            host: deviceNode.host,
-            // Hardware spec overrides (only include when explicitly set by user)
-            cpu: deviceNode.cpu,
-            memory: deviceNode.memory,
-            ...(deviceNode.disk_driver ? { disk_driver: deviceNode.disk_driver } : {}),
-            ...(deviceNode.nic_driver ? { nic_driver: deviceNode.nic_driver } : {}),
-            ...(deviceNode.machine_type ? { machine_type: deviceNode.machine_type } : {}),
-          };
-        }),
-        links: currentLinks.map((link) => ({
-          endpoints: [
-            { node: link.source, ifname: link.sourceInterface },
-            { node: link.target, ifname: link.targetInterface },
-          ],
-        })),
-      };
-      try {
-        await studioRequest(`/labs/${labId}/update-topology`, {
-          method: 'POST',
-          body: JSON.stringify(graph),
-        });
-        topologyDirtyRef.current = false;
-        addTaskLogEntry('info', 'Topology auto-saved');
-      } catch (error) {
-        console.error('Failed to save topology:', error);
-        if (rethrowOnError) {
-          throw error;
-        }
-      }
-    },
-    [studioRequest, addTaskLogEntry]
-  );
-
-  // Trigger debounced topology save
-  // Uses refs to read current state at save time, avoiding stale closure issues
-  const triggerTopologySave = useCallback(() => {
-    if (!activeLab) return;
-    topologyDirtyRef.current = true;
-    if (saveTopologyTimeoutRef.current) {
-      window.clearTimeout(saveTopologyTimeoutRef.current);
-    }
-    const labId = activeLab.id;
-    saveTopologyTimeoutRef.current = window.setTimeout(() => {
-      if (topologyDirtyRef.current) {
-        // Read current state from refs to get latest values
-        saveTopology(labId, nodesRef.current, linksRef.current);
-      }
-    }, 2000); // 2 second debounce for topology saves
-  }, [activeLab, saveTopology]);
-
-  // Flush any pending topology save immediately (for use before deploy)
-  // Returns a promise that resolves when the save is complete
-  const flushTopologySave = useCallback(async () => {
-    if (!activeLab) return;
-    // Cancel pending debounced save
-    if (saveTopologyTimeoutRef.current) {
-      window.clearTimeout(saveTopologyTimeoutRef.current);
-      saveTopologyTimeoutRef.current = null;
-    }
-    // If dirty, save immediately
-    if (topologyDirtyRef.current) {
-      await saveTopology(activeLab.id, nodesRef.current, linksRef.current, true);
-    }
-  }, [activeLab, saveTopology]);
-
-  const loadLabs = useCallback(async () => {
-    const data = await studioRequest<{ labs: LabSummary[] }>('/labs');
-    setLabs(data.labs || []);
-  }, [studioRequest]);
-
-  const loadAgents = useCallback(async () => {
-    try {
-      const data = await studioRequest<{ id: string; name: string; address: string; status: string }[]>('/agents');
-      setAgents((data || []).filter((a) => a.status === 'online').map((a) => ({ id: a.id, name: a.name })));
-    } catch {
-      // Agents may not be available
-    }
-  }, [studioRequest]);
-
-  const loadSystemMetrics = useCallback(async () => {
-    try {
-      const data = await studioRequest<{
-        agents: { online: number; total: number };
-        containers: { running: number; total: number };
-        cpu_percent: number;
-        memory_percent: number;
-        memory?: { used_gb: number; total_gb: number; percent: number };
-        storage?: { used_gb: number; total_gb: number; percent: number };
-        labs_running: number;
-        labs_total: number;
-        per_host?: {
-          id: string;
-          name: string;
-          cpu_percent: number;
-          memory_percent: number;
-          memory_used_gb: number;
-          memory_total_gb: number;
-          storage_percent: number;
-          storage_used_gb: number;
-          storage_total_gb: number;
-          containers_running: number;
-          started_at: string | null;
-        }[];
-        is_multi_host?: boolean;
-      }>('/dashboard/metrics');
-      setSystemMetrics(data);
-    } catch {
-      // Metrics endpoint may fail - that's ok
-    }
-  }, [studioRequest]);
-
-  const loadLabStatuses = useCallback(async (labIds: string[]) => {
-    const statuses: Record<string, { running: number; total: number }> = {};
-    await Promise.all(
-      labIds.map(async (labId) => {
-        try {
-          const statusData = await studioRequest<{ nodes?: { name: string; status: string }[] }>(`/labs/${labId}/status`);
-          if (statusData.nodes) {
-            const running = statusData.nodes.filter((n) => n.status === 'running').length;
-            statuses[labId] = { running, total: statusData.nodes.length };
-          }
-        } catch {
-          // Lab may not be deployed - that's ok
-        }
-      })
-    );
-    setLabStatuses(statuses);
-  }, [studioRequest]);
-
-  const loadLayout = useCallback(async (labId: string): Promise<LabLayout | null> => {
-    try {
-      return await studioRequest<LabLayout>(`/labs/${labId}/layout`);
-    } catch {
-      // Layout not found is expected for new labs
-      return null;
-    }
-  }, [studioRequest]);
-
-  const loadGraph = useCallback(async (labId: string) => {
-    try {
-      const graph = await studioRequest<TopologyGraph>(`/labs/${labId}/export-graph`);
-      const layout = await loadLayout(labId);
-
-      // Build nodes with layout positions if available
-      let newNodes = buildGraphNodes(graph, deviceModels);
-      if (layout?.nodes) {
-        newNodes = newNodes.map((node) => {
-          const nodeLayout = layout.nodes[node.id];
-          if (nodeLayout) {
-            return {
-              ...node,
-              x: nodeLayout.x,
-              y: nodeLayout.y,
-              label: nodeLayout.label ?? node.label,
-            };
-          }
-          return node;
-        });
-      }
-      setNodes(newNodes);
-      setLinks(buildGraphLinks(graph));
-
-      // Restore annotations from layout
-      if (layout?.annotations && layout.annotations.length > 0) {
-        setAnnotations(
-          layout.annotations.map((ann) => ({
-            id: ann.id,
-            type: (ann.type === 'caption' ? 'text' : ann.type) as AnnotationType,
-            x: ann.x,
-            y: ann.y,
-            width: ann.width,
-            height: ann.height,
-            text: ann.text,
-            color: ann.color,
-            fontSize: ann.fontSize,
-            targetX: ann.targetX,
-            targetY: ann.targetY,
-            zIndex: ann.zIndex,
-          }))
-        );
-      } else {
-        setAnnotations([]);
-      }
-
-      layoutDirtyRef.current = false;
-    } catch {
-      // New lab with no topology - clear state
-      setNodes([]);
-      setLinks([]);
-      setAnnotations([]);
-      layoutDirtyRef.current = false;
-    }
-  }, [deviceModels, studioRequest, loadLayout]);
-
-  // Load node states from the backend (per-node desired/actual state)
-  // runtimeStates are derived automatically via useMemo
-  const loadNodeStates = useCallback(async (labId: string, _currentNodes: Node[]) => {
-    try {
-      const data = await studioRequest<{ nodes: NodeStateEntry[] }>(`/labs/${labId}/nodes/states`);
-      const statesByNodeId: Record<string, NodeStateEntry> = {};
-
-      (data.nodes || []).forEach((state) => {
-        statesByNodeId[state.node_id] = state;
-      });
-
-      // Merge with existing state, preserving optimistic transitional states
-      // that the server hasn't caught up with yet
-      setNodeStates(prev => {
-        const now = Date.now();
-        const merged = { ...statesByNodeId };
-        for (const [id, guardExpiry] of optimisticGuardRef.current.entries()) {
-          if (now < guardExpiry && prev[id] && merged[id]) {
-            const localActual = prev[id].actual_state;
-            const serverDisplay = merged[id].display_state;
-            // Keep local optimistic state if server hasn't reflected the transition yet
-            if (localActual === 'stopping' && serverDisplay !== 'stopping' && serverDisplay !== 'stopped' && serverDisplay !== 'error') {
-              merged[id] = { ...merged[id], actual_state: 'stopping', display_state: 'stopping' };
-            } else if (localActual === 'starting' && serverDisplay !== 'starting' && serverDisplay !== 'running' && serverDisplay !== 'error') {
-              merged[id] = { ...merged[id], actual_state: 'starting', display_state: 'starting' };
-            } else {
-              // Server caught up — clear the guard
-              optimisticGuardRef.current.delete(id);
-            }
-          }
-        }
-        return merged;
-      });
-    } catch {
-      // Node states endpoint may fail for new labs - use job-based fallback
-    }
-  }, [studioRequest]);
-
-  const loadJobs = useCallback(async (labId: string, _currentNodes: Node[]) => {
-    // Also load jobs for job log display
-    const data = await studioRequest<{ jobs: any[] }>(`/labs/${labId}/jobs`);
-    setJobs(data.jobs || []);
-  }, [studioRequest]);
-
-  const loadNodeReadiness = useCallback(async (labId: string) => {
-    try {
-      const data = await studioRequest<{ nodes: Array<NodeReadinessHint & { node_id: string }> }>(
-        `/labs/${labId}/nodes/ready`
-      );
-      const hints: Record<string, NodeReadinessHint> = {};
-      for (const node of data.nodes || []) {
-        hints[node.node_id] = {
-          is_ready: !!node.is_ready,
-          actual_state: node.actual_state,
-          progress_percent: node.progress_percent,
-          message: node.message,
-        };
-      }
-      setNodeReadinessHints(hints);
-    } catch {
-      // Keep previous hints when readiness endpoint is unavailable
-    }
-  }, [studioRequest]);
-
-  // Refresh node states from the agent (queries actual container status)
-  // This is called once when entering a lab to ensure states are fresh
-  const refreshNodeStatesFromAgent = useCallback(async (labId: string) => {
-    try {
-      await studioRequest(`/labs/${labId}/nodes/refresh`, { method: 'POST' });
-    } catch {
-      // Agent may be unavailable - states will still load from DB
-      console.warn('Failed to refresh node states from agent');
-    }
-  }, [studioRequest]);
-
   // Prevent fixed-position console windows from causing document-level horizontal scrollbar
   useEffect(() => {
     document.documentElement.style.overflowX = 'hidden';
     return () => { document.documentElement.style.overflowX = ''; };
   }, []);
-
-  useEffect(() => {
-    loadLabs();
-    loadSystemMetrics();
-    loadAgents();
-  }, [loadLabs, loadSystemMetrics, loadAgents]);
-
-  // Load lab statuses when labs change
-  useEffect(() => {
-    if (labs.length > 0 && !activeLab) {
-      loadLabStatuses(labs.map((lab) => lab.id));
-    }
-  }, [labs, activeLab, loadLabStatuses]);
-
-  // Poll for system metrics (both dashboard and lab views)
-  useEffect(() => {
-    const timer = setInterval(() => {
-      loadSystemMetrics();
-      // Only poll lab statuses when on dashboard
-      if (!activeLab && labs.length > 0) {
-        loadLabStatuses(labs.map((lab) => lab.id));
-      }
-    }, 10000);
-    return () => clearInterval(timer);
-  }, [activeLab, labs, loadSystemMetrics, loadLabStatuses]);
-
-  useEffect(() => {
-    if (!activeLab) return;
-    loadGraph(activeLab.id);
-  }, [activeLab, loadGraph]);
 
   // On lab entry, force a deterministic sync sequence:
   // refresh from agent first, then load node states/jobs.
@@ -935,104 +266,7 @@ const StudioPage: React.FC = () => {
     return () => clearInterval(timer);
   }, [activeLab, nodes, loadNodeStates, loadJobs, loadNodeReadiness, wsConnected]);
 
-  // Cleanup: save layout/topology and clear timeouts on unmount
-  useEffect(() => {
-    return () => {
-      if (saveLayoutTimeoutRef.current) {
-        window.clearTimeout(saveLayoutTimeoutRef.current);
-      }
-      if (saveTopologyTimeoutRef.current) {
-        window.clearTimeout(saveTopologyTimeoutRef.current);
-      }
-    };
-  }, []);
-
-  // Track job status changes, log them, and trigger notifications
-  useEffect(() => {
-    const prevStatuses = prevJobsRef.current;
-    const newStatuses = new Map<string, string>();
-
-    // On initial load, just populate the ref without logging
-    // This prevents re-logging all existing jobs on page refresh
-    if (isInitialJobLoadRef.current && jobs.length > 0) {
-      for (const job of jobs) {
-        newStatuses.set(job.id, job.status);
-      }
-      prevJobsRef.current = newStatuses;
-      isInitialJobLoadRef.current = false;
-      return;
-    }
-
-    // Determine notification category prefix based on job action
-    const categoryPrefix = (action: string) => action.startsWith('sync:') ? 'sync-' : '';
-    const maybeLogJobEvent = (
-      level: TaskLogEntry['level'],
-      message: string,
-      jobId: string
-    ) => {
-      if (taskLogAutoRefresh) {
-        addTaskLogEntry(level, message, jobId);
-      }
-    };
-
-    for (const job of jobs) {
-      const jobKey = job.id;
-      const prevStatus = prevStatuses.get(jobKey);
-      newStatuses.set(jobKey, job.status);
-      const prefix = categoryPrefix(job.action);
-
-      if (prevStatus && prevStatus !== job.status) {
-        const actionLabel = job.action.startsWith('node:')
-          ? `Node ${job.action.split(':')[1]} (${job.action.split(':')[2]})`
-          : job.action.toUpperCase();
-
-        if (job.status === 'running') {
-          maybeLogJobEvent('info', `Job running: ${actionLabel}`, job.id);
-          addNotification('info', `${actionLabel} started`, undefined, {
-            jobId: job.id, labId: job.lab_id, category: `${prefix}job-start`,
-          });
-        } else if (job.status === 'completed') {
-          maybeLogJobEvent('success', `Job completed: ${actionLabel}`, job.id);
-          addNotification('success', `${actionLabel} completed`, undefined, {
-            jobId: job.id, labId: job.lab_id, category: `${prefix}job-complete`,
-          });
-        } else if (job.status === 'failed') {
-          const errorDetail = job.error_summary ? `: ${job.error_summary}` : '';
-          maybeLogJobEvent('error', `Job failed: ${actionLabel}${errorDetail}`, job.id);
-          addNotification('error', `${actionLabel} failed`, job.error_summary || 'Check logs for details', {
-            jobId: job.id, labId: job.lab_id, category: `${prefix}job-failed`,
-          });
-        }
-      } else if (!prevStatus) {
-        // New job - log based on its initial status
-        const actionLabel = job.action.startsWith('node:')
-          ? `Node ${job.action.split(':')[1]} (${job.action.split(':')[2]})`
-          : job.action.toUpperCase();
-
-        if (job.status === 'queued') {
-          maybeLogJobEvent('info', `Job queued: ${actionLabel}`, job.id);
-        } else if (job.status === 'running') {
-          maybeLogJobEvent('info', `Job running: ${actionLabel}`, job.id);
-          addNotification('info', `${actionLabel} started`, undefined, {
-            jobId: job.id, labId: job.lab_id, category: `${prefix}job-start`,
-          });
-        } else if (job.status === 'completed') {
-          maybeLogJobEvent('success', `Job completed: ${actionLabel}`, job.id);
-          addNotification('success', `${actionLabel} completed`, undefined, {
-            jobId: job.id, labId: job.lab_id, category: `${prefix}job-complete`,
-          });
-        } else if (job.status === 'failed') {
-          const errorDetail = job.error_summary ? `: ${job.error_summary}` : '';
-          maybeLogJobEvent('error', `Job failed: ${actionLabel}${errorDetail}`, job.id);
-          addNotification('error', `${actionLabel} failed`, job.error_summary || 'Check logs for details', {
-            jobId: job.id, labId: job.lab_id, category: `${prefix}job-failed`,
-          });
-        }
-      }
-    }
-
-    prevJobsRef.current = newStatuses;
-  }, [jobs, addTaskLogEntry, addNotification, taskLogAutoRefresh]);
+  // --- Event handlers ---
 
   const handleCreateLab = async () => {
     const name = `Project_${labs.length + 1}`;
@@ -1045,20 +279,11 @@ const StudioPage: React.FC = () => {
     if (activeLab && layoutDirtyRef.current && nodes.length > 0) {
       saveLayout(activeLab.id, nodes, annotations);
     }
-    // Clear any pending save timeout
-    if (saveLayoutTimeoutRef.current) {
-      window.clearTimeout(saveLayoutTimeoutRef.current);
-      saveLayoutTimeoutRef.current = null;
-    }
     // Reset job tracking for new lab context
-    setJobs([]);
-    prevJobsRef.current = new Map();
-    isInitialJobLoadRef.current = true;
+    resetJobTracking();
     setActiveLab(lab);
     setAnnotations([]);
-    setConsoleWindows([]);
-    setDockedConsoles([]);
-    setActiveBottomTabId('log');
+    consoleManager.resetConsoles();
     setSelectedId(null);
     setView('designer');
   };
@@ -1067,11 +292,9 @@ const StudioPage: React.FC = () => {
     if (!activeLab) return;
     const confirmed = window.confirm('Are you sure you want to exit the lab?');
     if (!confirmed) return;
-    setConsoleWindows([]);
-    setDockedConsoles([]);
-    setActiveBottomTabId('log');
+    consoleManager.resetConsoles();
     setActiveLab(null);
-  }, [activeLab]);
+  }, [activeLab, consoleManager]);
 
   const handleLogout = useCallback(() => {
     localStorage.removeItem('token');
@@ -1079,10 +302,8 @@ const StudioPage: React.FC = () => {
     setAuthRequired(true);
     setAuthError(null);
     setActiveLab(null);
-    setConsoleWindows([]);
-    setDockedConsoles([]);
-    setActiveBottomTabId('log');
-  }, [clearUser]);
+    consoleManager.resetConsoles();
+  }, [clearUser, consoleManager]);
 
   const handleDeleteLab = async (labId: string) => {
     await studioRequest(`/labs/${labId}`, { method: 'DELETE' });
@@ -1154,7 +375,7 @@ const StudioPage: React.FC = () => {
       memory: model.memory || 1024,
       // Don't bake vendor defaults into per-node config; let the backend
       // resolve disk_driver/nic_driver/machine_type through its layered
-      // resolution (vendor config → image manifest → device overrides).
+      // resolution (vendor config -> image manifest -> device overrides).
     };
     setNodes((prev) => [...prev, newNode]);
     // Don't set any status for new nodes - they should show no status icon until deployed
@@ -1204,7 +425,7 @@ const StudioPage: React.FC = () => {
     setSelectedId(id);
     setActiveTool('pointer');
     triggerLayoutSave();
-  }, [effectiveMode, triggerLayoutSave]);
+  }, [effectiveMode, triggerLayoutSave, setAnnotations]);
 
   const handleUpdateStatus = useCallback(async (nodeId: string, status: RuntimeStatus): Promise<void> => {
     if (!activeLab) return;
@@ -1232,7 +453,7 @@ const StudioPage: React.FC = () => {
         await flushTopologySave();
       }
 
-      // Optimistically update nodeStates — runtimeStates derived automatically
+      // Optimistically update nodeStates -- runtimeStates derived automatically
       const transitionalState = status === 'stopped' ? 'stopping' : 'starting';
       optimisticGuardRef.current.set(nodeId, Date.now() + 5000);
       setNodeStates((prev) => ({
@@ -1287,44 +508,11 @@ const StudioPage: React.FC = () => {
         return next;
       });
     }
-  }, [activeLab, nodes, pendingNodeOps, studioRequest, addTaskLogEntry, loadNodeStates, loadJobs, flushTopologySave]);
+  }, [activeLab, nodes, pendingNodeOps, studioRequest, addTaskLogEntry, loadNodeStates, loadJobs, flushTopologySave, setPendingNodeOps, setNodeStates, optimisticGuardRef]);
 
-  const handleOpenConsole = (nodeId: string) => {
-    const node = nodes.find((n) => n.id === nodeId);
-    if (!node) return;
-
-    const openInPanel = preferences?.canvas_settings?.consoleInBottomPanel ?? false;
-
-    if (openInPanel) {
-      // Check if already docked
-      if (dockedConsoles.some((c) => c.nodeId === nodeId)) {
-        setActiveBottomTabId(nodeId);
-        setIsTaskLogVisible(true);
-        return;
-      }
-      // Add to docked consoles
-      setDockedConsoles((prev) => [...prev, { nodeId, nodeName: node.name }]);
-      setActiveBottomTabId(nodeId);
-      setIsTaskLogVisible(true);
-    } else {
-      // Existing floating window logic
-      setConsoleWindows((prev) => {
-        const existingWin = prev.find((win) => win.deviceIds.includes(nodeId));
-        if (existingWin) {
-          return prev.map((win) => (win.id === existingWin.id ? { ...win, activeDeviceId: nodeId } : win));
-        }
-        const newWin: ConsoleWindow = {
-          id: Math.random().toString(36).slice(2, 9),
-          deviceIds: [nodeId],
-          activeDeviceId: nodeId,
-          x: 100,
-          y: 100,
-          isExpanded: true,
-        };
-        return [...prev, newWin];
-      });
-    }
-  };
+  const handleOpenConsole = useCallback((nodeId: string) => {
+    consoleManager.handleOpenConsole(nodeId, setIsTaskLogVisible);
+  }, [consoleManager, setIsTaskLogVisible]);
 
   const handleExtractNodeConfig = useCallback(async (nodeId: string) => {
     if (!activeLab) return;
@@ -1359,169 +547,9 @@ const StudioPage: React.FC = () => {
     }
   }, [activeLab, nodes, studioRequest, addTaskLogEntry, addNotification]);
 
-  // Merge all tabs from source window into target window
-  const handleMergeWindows = useCallback((sourceWindowId: string, targetWindowId: string) => {
-    setConsoleWindows((prev) => {
-      const sourceWin = prev.find((w) => w.id === sourceWindowId);
-      const targetWin = prev.find((w) => w.id === targetWindowId);
-      if (!sourceWin || !targetWin) return prev;
-
-      // Merge deviceIds, using Set to deduplicate
-      const mergedDeviceIds = [...new Set([...targetWin.deviceIds, ...sourceWin.deviceIds])];
-
-      return prev
-        .filter((w) => w.id !== sourceWindowId) // Remove source window
-        .map((w) =>
-          w.id === targetWindowId
-            ? { ...w, deviceIds: mergedDeviceIds }
-            : w
-        );
-    });
-  }, []);
-
-  // Split a tab out of a window into a new separate window
-  const handleSplitTab = useCallback((windowId: string, deviceId: string, x: number, y: number) => {
-    setConsoleWindows((prev) => {
-      const sourceWin = prev.find((w) => w.id === windowId);
-      if (!sourceWin || sourceWin.deviceIds.length <= 1) return prev;
-
-      // Create new window for the split tab
-      const newWin: ConsoleWindow = {
-        id: Math.random().toString(36).slice(2, 9),
-        deviceIds: [deviceId],
-        activeDeviceId: deviceId,
-        x: Math.max(0, x),
-        y: Math.max(0, y),
-        isExpanded: true,
-      };
-
-      // Remove tab from source window
-      const updatedWindows = prev.map((w) => {
-        if (w.id !== windowId) return w;
-        const newDeviceIds = w.deviceIds.filter((id) => id !== deviceId);
-        return {
-          ...w,
-          deviceIds: newDeviceIds,
-          activeDeviceId: w.activeDeviceId === deviceId ? newDeviceIds[0] : w.activeDeviceId,
-        };
-      });
-
-      return [...updatedWindows, newWin];
-    });
-  }, []);
-
-  // Reorder tabs within a console window
-  const handleReorderTab = useCallback((windowId: string, fromIndex: number, toIndex: number) => {
-    setConsoleWindows((prev) =>
-      prev.map((win) => {
-        if (win.id !== windowId) return win;
-        const newDeviceIds = [...win.deviceIds];
-        const [movedId] = newDeviceIds.splice(fromIndex, 1);
-        // Adjust toIndex if moving right (since we removed an element)
-        const adjustedTo = toIndex > fromIndex ? toIndex - 1 : toIndex;
-        newDeviceIds.splice(adjustedTo, 0, movedId);
-        return { ...win, deviceIds: newDeviceIds };
-      })
-    );
-  }, []);
-
-  // Toggle minimize state of a console window
-  const handleToggleMinimize = useCallback((windowId: string) => {
-    setConsoleWindows((prev) =>
-      prev.map((win) =>
-        win.id === windowId ? { ...win, isExpanded: !win.isExpanded } : win
-      )
-    );
-  }, []);
-
-  // Undock a console from the bottom panel to a floating window
-  const handleUndockConsole = useCallback((nodeId: string, x: number, y: number) => {
-    // Remove from docked
-    setDockedConsoles((prev) => prev.filter((c) => c.nodeId !== nodeId));
-    if (activeBottomTabId === nodeId) {
-      setActiveBottomTabId('log');
-    }
-
-    // Add to floating windows
-    const newWin: ConsoleWindow = {
-      id: Math.random().toString(36).slice(2, 9),
-      deviceIds: [nodeId],
-      activeDeviceId: nodeId,
-      x: Math.max(0, x),
-      y: Math.max(0, y),
-      isExpanded: true,
-    };
-    setConsoleWindows((prev) => [...prev, newWin]);
-  }, [activeBottomTabId]);
-
-  // Dock a floating window to the bottom panel
   const handleDockWindow = useCallback((windowId: string) => {
-    const win = consoleWindows.find((w) => w.id === windowId);
-    if (!win) return;
-
-    // Add all tabs to docked
-    win.deviceIds.forEach((nodeId) => {
-      const node = nodes.find((n) => n.id === nodeId);
-      if (!node) return;
-      if (dockedConsoles.some((c) => c.nodeId === nodeId)) return;
-      setDockedConsoles((prev) => [...prev, { nodeId, nodeName: node.name }]);
-    });
-
-    setActiveBottomTabId(win.activeDeviceId);
-    setIsTaskLogVisible(true);
-
-    // Remove floating window
-    setConsoleWindows((prev) => prev.filter((w) => w.id !== windowId));
-  }, [consoleWindows, nodes, dockedConsoles]);
-
-  // Close a floating console window
-  const handleCloseConsoleWindow = useCallback((id: string) => {
-    setConsoleWindows((prev) => prev.filter((win) => win.id !== id));
-  }, []);
-
-  // Close a tab within a console window
-  const handleCloseConsoleTab = useCallback((winId: string, nodeId: string) => {
-    setConsoleWindows((prev) =>
-      prev
-        .map((win) => {
-          if (win.id !== winId) return win;
-          const nextIds = win.deviceIds.filter((did) => did !== nodeId);
-          const nextActive = win.activeDeviceId === nodeId ? nextIds[0] || '' : win.activeDeviceId;
-          return { ...win, deviceIds: nextIds, activeDeviceId: nextActive };
-        })
-        .filter((win) => win.deviceIds.length > 0)
-    );
-  }, []);
-
-  // Set active tab in a console window
-  const handleSetActiveConsoleTab = useCallback((winId: string, nodeId: string) => {
-    setConsoleWindows((prev) => prev.map((win) => (win.id === winId ? { ...win, activeDeviceId: nodeId } : win)));
-  }, []);
-
-  // Update console window position
-  const handleUpdateConsoleWindowPos = useCallback((id: string, x: number, y: number) => {
-    setConsoleWindows((prev) => prev.map((win) => (win.id === id ? { ...win, x, y } : win)));
-  }, []);
-
-  // Close a docked console tab
-  const handleCloseDockedConsole = useCallback((nodeId: string) => {
-    setDockedConsoles((prev) => prev.filter((c) => c.nodeId !== nodeId));
-    if (activeBottomTabId === nodeId) {
-      setActiveBottomTabId('log');
-    }
-  }, [activeBottomTabId]);
-
-  // Reorder docked console tabs
-  const handleReorderDockedTab = useCallback((fromIndex: number, toIndex: number) => {
-    setDockedConsoles((prev) => {
-      const newTabs = [...prev];
-      const [movedTab] = newTabs.splice(fromIndex, 1);
-      // Adjust toIndex if moving right (since we removed an element)
-      const adjustedTo = toIndex > fromIndex ? toIndex - 1 : toIndex;
-      newTabs.splice(adjustedTo, 0, movedTab);
-      return newTabs;
-    });
-  }, []);
+    consoleManager.handleDockWindow(windowId, setIsTaskLogVisible);
+  }, [consoleManager, setIsTaskLogVisible]);
 
   const handleOpenConfigViewer = useCallback((nodeId?: string, nodeName?: string, snapshotContent?: string, snapshotLabel?: string) => {
     if (nodeId && nodeName) {
@@ -1561,18 +589,17 @@ const StudioPage: React.FC = () => {
       setTestRunning(false);
       addNotification('error', 'Test run failed', e.message || 'Failed to start tests');
     }
-  }, [activeLab?.id, testRunning, addNotification]);
+  }, [activeLab?.id, testRunning, addNotification, setTestResults, setTestSummary, setTestRunning]);
 
   const handleStartScenario = useCallback(async (filename: string) => {
     if (!activeLab?.id || activeScenarioJobId) return;
-    setScenarioSteps([]);
     try {
       const data = await apiRequest<{ job_id: string }>(`/labs/${activeLab.id}/scenarios/${filename}/execute`, { method: 'POST' });
       setActiveScenarioJobId(data.job_id);
     } catch (e: any) {
       addNotification('error', 'Scenario failed', e.message || 'Failed to start scenario');
     }
-  }, [activeLab?.id, activeScenarioJobId, addNotification]);
+  }, [activeLab?.id, activeScenarioJobId, addNotification, setActiveScenarioJobId]);
 
   const handleCloseConfigViewer = useCallback(() => {
     setConfigViewerOpen(false);
@@ -1603,12 +630,12 @@ const StudioPage: React.FC = () => {
   const handleNodeMove = useCallback((id: string, x: number, y: number) => {
     setNodes((prev) => prev.map((node) => (node.id === id ? { ...node, x, y } : node)));
     triggerLayoutSave();
-  }, [triggerLayoutSave]);
+  }, [triggerLayoutSave, setNodes]);
 
   const handleAnnotationMove = useCallback((id: string, x: number, y: number) => {
     setAnnotations((prev) => prev.map((ann) => (ann.id === id ? { ...ann, x, y } : ann)));
     triggerLayoutSave();
-  }, [triggerLayoutSave]);
+  }, [triggerLayoutSave, setAnnotations]);
 
   const handleConnect = (sourceId: string, targetId: string) => {
     const exists = links.find(
@@ -2183,18 +1210,18 @@ const StudioPage: React.FC = () => {
         <div className={isDesignerView ? '' : 'hidden'} aria-hidden={!isDesignerView}>
           <ConsoleManager
             labId={activeLab.id}
-            windows={consoleWindows}
+            windows={consoleManager.consoleWindows}
             nodes={nodes}
             nodeStates={nodeStates}
             isVisible={isDesignerView}
-            onCloseWindow={handleCloseConsoleWindow}
-            onCloseTab={handleCloseConsoleTab}
-            onSetActiveTab={handleSetActiveConsoleTab}
-            onUpdateWindowPos={handleUpdateConsoleWindowPos}
-            onMergeWindows={handleMergeWindows}
-            onSplitTab={handleSplitTab}
-            onReorderTab={handleReorderTab}
-            onToggleMinimize={handleToggleMinimize}
+            onCloseWindow={consoleManager.handleCloseConsoleWindow}
+            onCloseTab={consoleManager.handleCloseConsoleTab}
+            onSetActiveTab={consoleManager.handleSetActiveConsoleTab}
+            onUpdateWindowPos={consoleManager.handleUpdateConsoleWindowPos}
+            onMergeWindows={consoleManager.handleMergeWindows}
+            onSplitTab={consoleManager.handleSplitTab}
+            onReorderTab={consoleManager.handleReorderTab}
+            onToggleMinimize={consoleManager.handleToggleMinimize}
             onDockWindow={handleDockWindow}
           />
         </div>
@@ -2208,12 +1235,12 @@ const StudioPage: React.FC = () => {
         onToggleAutoUpdate={setTaskLogAutoRefresh}
         onEntryClick={handleTaskLogEntryClick}
         showConsoles={isDesignerView}
-        consoleTabs={dockedConsoles}
-        activeTabId={activeBottomTabId}
-        onSelectTab={setActiveBottomTabId}
-        onCloseConsoleTab={handleCloseDockedConsole}
-        onUndockConsole={handleUndockConsole}
-        onReorderTab={handleReorderDockedTab}
+        consoleTabs={consoleManager.dockedConsoles}
+        activeTabId={consoleManager.activeBottomTabId}
+        onSelectTab={consoleManager.setActiveBottomTabId}
+        onCloseConsoleTab={consoleManager.handleCloseDockedConsole}
+        onUndockConsole={consoleManager.handleUndockConsole}
+        onReorderTab={consoleManager.handleReorderDockedTab}
         labId={activeLab?.id}
         nodeStates={nodeStates}
         wsConnected={wsConnected}

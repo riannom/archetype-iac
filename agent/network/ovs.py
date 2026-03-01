@@ -41,16 +41,25 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import secrets
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import docker
-from docker.errors import NotFound
 
 from agent.config import settings
 from agent.network.cmd import run_cmd as _shared_run_cmd, ovs_vsctl as _shared_ovs_vsctl, ip_link_exists as _shared_ip_link_exists
+from agent.network.ovs_provision import (
+    cleanup_stale_port as _cleanup_stale_port_impl,
+    delete_port as _delete_port_impl,
+    discover_existing_state as _discover_existing_state_impl,
+    generate_port_name as _generate_port_name_impl,
+    get_container_pid as _get_container_pid_impl,
+    handle_container_restart as _handle_container_restart_impl,
+    host_veth_peer_missing as _host_veth_peer_missing_impl,
+    is_port_stale as _is_port_stale_impl,
+    provision_interface as _provision_interface_impl,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -451,25 +460,7 @@ class OVSNetworkManager:
         Returns:
             PID if container is running, None otherwise
         """
-        def _sync_get_pid() -> int | None:
-            try:
-                container = self.docker.containers.get(container_name)
-                if container.status != "running":
-                    logger.warning(f"Container {container_name} is not running")
-                    return None
-                pid = container.attrs["State"]["Pid"]
-                if not pid:
-                    logger.warning(f"Could not get PID for container {container_name}")
-                    return None
-                return pid
-            except NotFound:
-                logger.warning(f"Container {container_name} not found")
-                return None
-            except Exception as e:
-                logger.error(f"Error getting container PID: {e}")
-                return None
-
-        return await asyncio.to_thread(_sync_get_pid)
+        return await _get_container_pid_impl(self.docker, container_name)
 
     def _generate_port_name(self, container_name: str, interface_name: str) -> str:
         """Generate OVS port name for a container interface.
@@ -484,20 +475,7 @@ class OVSNetworkManager:
         Returns:
             Port name (max 15 chars)
         """
-        # Extract last part of container name (node name)
-        parts = container_name.split("-")
-        node_suffix = parts[-1][:4] if parts else container_name[:4]
-
-        # Simplify interface name (eth1 -> e1, Ethernet1 -> E1)
-        iface_short = interface_name.replace("Ethernet", "E").replace("eth", "e")[:3]
-
-        # Add random suffix for uniqueness
-        suffix = secrets.token_hex(2)
-
-        # vh-{node}-{iface}-{rand} = 2 + 1 + 4 + 1 + 3 + 1 + 4 = 16
-        # Trim to fit 15 chars
-        port_name = f"vh{node_suffix}{iface_short}{suffix}"[:15]
-        return port_name
+        return _generate_port_name_impl(container_name, interface_name)
 
     async def _discover_existing_state(self) -> None:
         """Discover existing OVS ports and rebuild internal state.
@@ -508,151 +486,7 @@ class OVSNetworkManager:
         Uses batched OVS queries and direct sysfs reads to avoid spawning
         hundreds of subprocesses (which previously took ~60s on restart).
         """
-        # List all ports on the bridge
-        code, stdout, _ = await self._ovs_vsctl("list-ports", self._bridge_name)
-        if code != 0 or not stdout.strip():
-            return
-
-        ports = stdout.strip().split("\n")
-        vh_ports = [p for p in ports if p.startswith("vh")]
-        if not vh_ports:
-            return
-
-        discovered_count = 0
-
-        # --- Batch 1: Get all port VLAN tags in one OVS call ---
-        port_tags: dict[str, int] = {}
-        code, json_out, _ = await self._ovs_vsctl(
-            "--format=json", "--", "--columns=name,tag", "list", "Port",
-        )
-        if code == 0 and json_out.strip():
-            try:
-                data = json.loads(json_out)
-                for row in data.get("data", []):
-                    # Row format: [name, tag] where tag is int or ["set", []]
-                    name = row[0]
-                    tag = row[1]
-                    if isinstance(tag, int) and tag > 0:
-                        port_tags[name] = tag
-            except (json.JSONDecodeError, IndexError, TypeError) as e:
-                logger.debug(f"Failed to parse batch port tags: {e}")
-
-        # --- Batch 2: Read ifindex from sysfs directly (no subprocess) ---
-        def _read_ifindexes(port_names: list[str]) -> dict[str, str]:
-            """Read ifindex for each port from /sys/class/net/{port}/ifindex."""
-            result = {}
-            for name in port_names:
-                try:
-                    idx = Path(f"/sys/class/net/{name}/ifindex").read_text().strip()
-                    if idx:
-                        result[name] = idx
-                except (OSError, ValueError):
-                    pass
-            return result
-
-        port_ifindexes = await asyncio.to_thread(
-            _read_ifindexes, [p for p in vh_ports if p in port_tags]
-        )
-
-        # --- Build container interface map (same as before) ---
-        container_ifindex_map: dict[str, tuple[str, str, str]] = {}
-        try:
-            def _get_containers():
-                return self.docker.containers.list(
-                    filters={"label": "archetype.lab_id"}
-                )
-
-            containers = await asyncio.to_thread(_get_containers)
-            for container in containers:
-                pid = container.attrs.get("State", {}).get("Pid")
-                if not pid:
-                    continue
-
-                lab_id = (container.labels or {}).get("archetype.lab_id", "_unknown")
-                code, ns_stdout, _ = await self._run_cmd([
-                    "nsenter", "-t", str(pid), "-n",
-                    "ip", "-o", "link", "show",
-                ])
-                if code != 0:
-                    continue
-
-                for line in ns_stdout.split("\n"):
-                    if not line.strip():
-                        continue
-
-                    # Example: "2: eth1@if123: <...>"
-                    parts = line.split(":")
-                    if len(parts) < 2:
-                        continue
-
-                    iface = parts[1].strip().split("@")[0]
-                    if iface in ("lo", "eth0"):
-                        continue
-
-                    if "@if" not in parts[1]:
-                        continue
-
-                    peer_idx = parts[1].split("@if")[1].split(":")[0].strip()
-                    if not peer_idx:
-                        continue
-
-                    container_ifindex_map[peer_idx] = (container.name, iface, lab_id)
-        except Exception as e:
-            logger.debug(f"Error building container interface map: {e}")
-
-        # --- Match ports to containers using pre-fetched data ---
-        for port_name in vh_ports:
-            vlan_tag = port_tags.get(port_name)
-            if vlan_tag is None:
-                continue
-
-            ifindex = port_ifindexes.get(port_name)
-            if not ifindex:
-                continue
-
-            match = container_ifindex_map.get(ifindex)
-            if match:
-                container_name, interface_name, lab_id = match
-                port_key = f"{container_name}:{interface_name}"
-
-                port = OVSPort(
-                    port_name=port_name,
-                    container_name=container_name,
-                    interface_name=interface_name,
-                    vlan_tag=vlan_tag,
-                    lab_id=lab_id,
-                )
-                self._ports[port_key] = port
-                self._vlan_allocator._allocated[port_key] = vlan_tag
-                discovered_count += 1
-
-        if discovered_count > 0:
-            logger.info(f"Discovered {discovered_count} existing OVS ports after restart")
-
-        # Discover links by finding ports that share VLAN tags
-        vlan_to_ports: dict[int, list[str]] = {}
-        for key, port in self._ports.items():
-            if port.vlan_tag not in vlan_to_ports:
-                vlan_to_ports[port.vlan_tag] = []
-            vlan_to_ports[port.vlan_tag].append(key)
-
-        # Create link records for VLAN tags shared by exactly 2 ports
-        for vlan_tag, port_keys in vlan_to_ports.items():
-            if len(port_keys) == 2:
-                port_a = self._ports[port_keys[0]]
-                self._ports[port_keys[1]]
-                link_id = f"{port_keys[0]}-{port_keys[1]}"
-                link = OVSLink(
-                    link_id=link_id,
-                    lab_id=port_a.lab_id,
-                    port_a=port_keys[0],
-                    port_b=port_keys[1],
-                    vlan_tag=vlan_tag,
-                )
-                self._links[link.key] = link
-
-        if self._links:
-            logger.info(f"Discovered {len(self._links)} existing OVS links")
+        await _discover_existing_state_impl(self)
 
     async def initialize(self) -> None:
         """Initialize OVS bridge if it doesn't exist.
@@ -719,115 +553,9 @@ class OVSNetworkManager:
         Raises:
             RuntimeError: If provisioning fails
         """
-        if not self._initialized:
-            await self.initialize()
-
-        port_key = f"{container_name}:{interface_name}"
-
-        # Check if already provisioned
-        if port_key in self._ports:
-            logger.debug(f"Interface already provisioned: {port_key}")
-            return self._ports[port_key].vlan_tag
-
-        # Get container PID
-        pid = await self._get_container_pid(container_name)
-        if pid is None:
-            raise RuntimeError(f"Container {container_name} is not running")
-
-        # Generate port name
-        port_name = self._generate_port_name(container_name, interface_name)
-
-        # Allocate VLAN tag for isolation
-        vlan_tag = self._vlan_allocator.allocate(port_key)
-
-        # Create veth pair
-        veth_cont = f"vc{secrets.token_hex(4)}"[:15]  # Container-side name (temporary)
-
-        # Delete if exists (from previous run)
-        if await self._ip_link_exists(port_name):
-            await self._run_cmd(["ip", "link", "delete", port_name])
-
-        try:
-            # Create veth pair
-            code, _, stderr = await self._run_cmd([
-                "ip", "link", "add", port_name, "type", "veth", "peer", "name", veth_cont
-            ])
-            if code != 0:
-                raise RuntimeError(f"Failed to create veth pair: {stderr}")
-
-            # Set MTU on veth pair for jumbo frame support
-            if settings.local_mtu > 0:
-                await self._run_cmd([
-                    "ip", "link", "set", port_name, "mtu", str(settings.local_mtu)
-                ])
-                await self._run_cmd([
-                    "ip", "link", "set", veth_cont, "mtu", str(settings.local_mtu)
-                ])
-
-            # Add host-side to OVS bridge with VLAN tag
-            code, _, stderr = await self._ovs_vsctl(
-                "add-port", self._bridge_name, port_name,
-                f"tag={vlan_tag}",
-                "--", "set", "interface", port_name, "type=system"
-            )
-            if code != 0:
-                await self._run_cmd(["ip", "link", "delete", port_name])
-                raise RuntimeError(f"Failed to add port to OVS: {stderr}")
-
-            # Bring host-side up
-            await self._run_cmd(["ip", "link", "set", port_name, "up"])
-
-            # Move container-side to container namespace
-            code, _, stderr = await self._run_cmd([
-                "ip", "link", "set", veth_cont, "netns", str(pid)
-            ])
-            if code != 0:
-                await self._ovs_vsctl("del-port", self._bridge_name, port_name)
-                await self._run_cmd(["ip", "link", "delete", port_name])
-                raise RuntimeError(f"Failed to move veth to container: {stderr}")
-
-            # Rename interface inside container
-            code, _, stderr = await self._run_cmd([
-                "nsenter", "-t", str(pid), "-n",
-                "ip", "link", "set", veth_cont, "name", interface_name
-            ])
-            if code != 0:
-                logger.warning(f"Failed to rename interface to {interface_name}: {stderr}")
-
-            # Bring interface up inside container
-            await self._run_cmd([
-                "nsenter", "-t", str(pid), "-n",
-                "ip", "link", "set", interface_name, "up"
-            ])
-
-            # Track the port
-            port = OVSPort(
-                port_name=port_name,
-                container_name=container_name,
-                interface_name=interface_name,
-                vlan_tag=vlan_tag,
-                lab_id=lab_id,
-            )
-            self._ports[port_key] = port
-
-            logger.info(
-                f"Provisioned {container_name}:{interface_name} -> "
-                f"OVS port {port_name} (VLAN {vlan_tag})"
-            )
-            return vlan_tag
-
-        except Exception as e:
-            # Cleanup on failure
-            self._vlan_allocator.release(port_key)
-            try:
-                await self._ovs_vsctl("del-port", self._bridge_name, port_name)
-            except Exception:
-                pass
-            try:
-                await self._run_cmd(["ip", "link", "delete", port_name])
-            except Exception:
-                pass
-            raise RuntimeError(f"Failed to provision interface: {e}")
+        return await _provision_interface_impl(
+            self, container_name, interface_name, lab_id,
+        )
 
     async def hot_connect(
         self,
@@ -1114,39 +842,7 @@ class OVSNetworkManager:
         Returns:
             True if deleted successfully
         """
-        key = f"{container_name}:{interface_name}"
-        port = self._ports.get(key)
-
-        if not port:
-            logger.warning(f"Port not found for deletion: {key}")
-            return False
-
-        # Remove from OVS
-        code, _, stderr = await self._ovs_vsctl(
-            "--if-exists", "del-port", self._bridge_name, port.port_name
-        )
-        if code != 0:
-            logger.warning(f"Failed to delete OVS port {port.port_name}: {stderr}")
-
-        # Delete veth pair (removing one end deletes both)
-        await self._run_cmd(["ip", "link", "delete", port.port_name])
-
-        # Release VLAN
-        self._vlan_allocator.release(key)
-
-        # Remove from tracking
-        del self._ports[key]
-
-        # Remove any links involving this port
-        links_to_remove = [
-            link_key for link_key, link in self._links.items()
-            if link.port_a == key or link.port_b == key
-        ]
-        for link_key in links_to_remove:
-            del self._links[link_key]
-
-        logger.info(f"Deleted port: {key}")
-        return True
+        return await _delete_port_impl(self, container_name, interface_name)
 
     async def cleanup_lab(self, lab_id: str) -> dict[str, Any]:
         """Clean up all OVS resources for a lab.
@@ -1256,22 +952,7 @@ class OVSNetworkManager:
         - iflink <= 0 or iflink == ifindex strongly indicates no live peer.
         Returns False when the check is inconclusive.
         """
-
-        def _read_sysfs_peer_state() -> bool | None:
-            try:
-                ifindex = int(Path(f"/sys/class/net/{port_name}/ifindex").read_text().strip())
-                iflink = int(Path(f"/sys/class/net/{port_name}/iflink").read_text().strip())
-            except (FileNotFoundError, ValueError, OSError):
-                return None
-
-            if iflink <= 0:
-                return True
-            if iflink == ifindex:
-                return True
-            return False
-
-        missing = await asyncio.to_thread(_read_sysfs_peer_state)
-        return bool(missing) if missing is not None else False
+        return await _host_veth_peer_missing_impl(port_name)
 
     async def is_port_stale(self, port: OVSPort) -> bool:
         """Check if an OVS port is stale (host-side exists but container peer missing).
@@ -1286,25 +967,7 @@ class OVSNetworkManager:
         Returns:
             True if the port is stale (needs reprovisioning), False if healthy
         """
-        # Check if host-side veth exists
-        if not await self._ip_link_exists(port.port_name):
-            # Host-side doesn't exist - not stale, just missing entirely
-            return False
-
-        # Get container PID
-        pid = await self._get_container_pid(port.container_name)
-        if pid is None:
-            # Fallback heuristic when container PID is unavailable.
-            return await self._host_veth_peer_missing(port.port_name)
-
-        # Check if interface exists inside container namespace
-        code, stdout, _ = await self._run_cmd([
-            "nsenter", "-t", str(pid), "-n",
-            "ip", "link", "show", port.interface_name
-        ])
-
-        # If the interface doesn't exist inside container, port is stale
-        return code != 0
+        return await _is_port_stale_impl(self, port)
 
     async def _cleanup_stale_port(self, port: OVSPort) -> None:
         """Remove a stale OVS port and release resources.
@@ -1315,34 +978,7 @@ class OVSNetworkManager:
         Args:
             port: OVS port to clean up
         """
-        key = port.key
-
-        # Remove from OVS bridge
-        code, _, stderr = await self._ovs_vsctl(
-            "--if-exists", "del-port", self._bridge_name, port.port_name
-        )
-        if code != 0:
-            logger.warning(f"Failed to delete OVS port {port.port_name}: {stderr}")
-
-        # Delete host-side veth (if it exists)
-        if await self._ip_link_exists(port.port_name):
-            await self._run_cmd(["ip", "link", "delete", port.port_name])
-
-        # Release VLAN allocation
-        self._vlan_allocator.release(key)
-
-        # Remove from port tracking
-        self._ports.pop(key, None)
-
-        # Remove any links involving this port
-        links_to_remove = [
-            link_key for link_key, link in self._links.items()
-            if link.port_a == key or link.port_b == key
-        ]
-        for link_key in links_to_remove:
-            del self._links[link_key]
-
-        logger.debug(f"Cleaned up stale port: {key}")
+        await _cleanup_stale_port_impl(self, port)
 
     async def handle_container_restart(
         self,
@@ -1367,113 +1003,9 @@ class OVSNetworkManager:
         Returns:
             Summary dict with counts of reprovisioned ports/links and any errors
         """
-        result = {
-            "ports_reprovisioned": 0,
-            "links_reconnected": 0,
-            "errors": [],
-        }
-
-        # Get all ports for this container
-        ports = self.get_ports_for_container(container_name)
-        if not ports:
-            logger.debug(f"No tracked OVS ports for container {container_name}")
-            return result
-
-        # Check which ports are stale and collect link info before cleanup
-        stale_ports: list[OVSPort] = []
-        port_links: dict[str, list[tuple[str, str, str, str]]] = {}  # port_key -> [(cont_a, if_a, cont_b, if_b), ...]
-
-        for port in ports:
-            try:
-                if await self.is_port_stale(port):
-                    stale_ports.append(port)
-
-                    # Find connected links for this port
-                    port_key = port.key
-                    connected_links = []
-                    for link in self._links.values():
-                        if link.port_a == port_key:
-                            # Parse the other endpoint
-                            other_key = link.port_b
-                            parts = other_key.split(":", 1)
-                            if len(parts) == 2:
-                                connected_links.append((
-                                    port.container_name, port.interface_name,
-                                    parts[0], parts[1]
-                                ))
-                        elif link.port_b == port_key:
-                            other_key = link.port_a
-                            parts = other_key.split(":", 1)
-                            if len(parts) == 2:
-                                connected_links.append((
-                                    parts[0], parts[1],
-                                    port.container_name, port.interface_name
-                                ))
-
-                    if connected_links:
-                        port_links[port_key] = connected_links
-
-            except Exception as e:
-                result["errors"].append(f"Error checking port {port.key}: {e}")
-
-        if not stale_ports:
-            logger.debug(f"No stale OVS ports for container {container_name}")
-            return result
-
-        logger.info(
-            f"Container {container_name} restart detected - "
-            f"reprovisioning {len(stale_ports)} stale OVS interfaces"
+        return await _handle_container_restart_impl(
+            self, container_name, lab_id,
         )
-
-        # Clean up stale ports and reprovision
-        for port in stale_ports:
-            port_key = port.key
-            interface_name = port.interface_name
-
-            try:
-                # Cleanup the stale port
-                await self._cleanup_stale_port(port)
-
-                # Reprovision fresh veth pair
-                await self.provision_interface(
-                    container_name=container_name,
-                    interface_name=interface_name,
-                    lab_id=lab_id,
-                )
-                result["ports_reprovisioned"] += 1
-
-                # Reconnect any links that were previously connected
-                if port_key in port_links:
-                    for link_endpoints in port_links[port_key]:
-                        cont_a, if_a, cont_b, if_b = link_endpoints
-                        try:
-                            await self.hot_connect(
-                                container_a=cont_a,
-                                iface_a=if_a,
-                                container_b=cont_b,
-                                iface_b=if_b,
-                                lab_id=lab_id,
-                            )
-                            result["links_reconnected"] += 1
-                        except Exception as e:
-                            result["errors"].append(
-                                f"Failed to reconnect link {cont_a}:{if_a} <-> {cont_b}:{if_b}: {e}"
-                            )
-
-            except Exception as e:
-                result["errors"].append(f"Failed to reprovision {interface_name}: {e}")
-
-        if result["ports_reprovisioned"] > 0:
-            logger.info(
-                f"Reprovisioned {result['ports_reprovisioned']} interfaces, "
-                f"reconnected {result['links_reconnected']} links for {container_name}"
-            )
-
-        if result["errors"]:
-            for error in result["errors"]:
-                logger.warning(error)
-
-        return result
 
     def get_link_by_endpoints(
         self,
