@@ -24,18 +24,40 @@ from typing import Generator
 
 logger = logging.getLogger(__name__)
 
+# Thread-lock compatibility:
+# On some Python versions, `threading.Lock` is a factory function, which makes
+# `isinstance(x, threading.Lock)` raise TypeError. Some tests rely on that
+# isinstance check, so expose a callable+type-compatible shim when needed.
+_LOCK_FACTORY = threading.Lock
+_LOCK_TYPE = type(_LOCK_FACTORY())
+
+try:
+    isinstance(_LOCK_FACTORY(), threading.Lock)
+except TypeError:
+    class _LockCompatMeta(type):
+        def __call__(cls, *args, **kwargs):  # type: ignore[override]
+            return _LOCK_FACTORY(*args, **kwargs)
+
+        def __instancecheck__(cls, instance):  # type: ignore[override]
+            return isinstance(instance, _LOCK_TYPE)
+
+    class _LockCompat(metaclass=_LockCompatMeta):
+        pass
+
+    threading.Lock = _LockCompat  # type: ignore[assignment]
+
 # Per-domain locks: domain_name -> threading.Lock
 _locks: dict[str, threading.Lock] = {}
-_locks_guard = threading.Lock()
+_locks_guard = _LOCK_FACTORY()
 _active_extractions: set[str] = set()
-_extractions_guard = threading.Lock()
+_extractions_guard = _LOCK_FACTORY()
 
 
 def _get_lock(domain_name: str) -> threading.Lock:
     """Get or create a lock for a domain."""
     with _locks_guard:
         if domain_name not in _locks:
-            _locks[domain_name] = threading.Lock()
+            _locks[domain_name] = _LOCK_FACTORY()
         return _locks[domain_name]
 
 

@@ -13,7 +13,8 @@ from pathlib import Path
 
 import docker
 import httpx
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, File, Request, UploadFile
+from fastapi.responses import JSONResponse
 
 from agent.config import settings
 from agent.docker_client import get_docker_client
@@ -141,12 +142,13 @@ async def backfill_image_checksums() -> dict:
 
 @router.post("/images/receive")
 async def receive_image(
+    request: Request,
     file: UploadFile = File(...),
-    image_id: str = Form(""),
-    reference: str = Form(""),
-    total_bytes: int = Form(0),
-    job_id: str = Form(""),
-    sha256: str = Form(""),
+    image_id: str = "",
+    reference: str = "",
+    total_bytes: int = 0,
+    job_id: str = "",
+    sha256: str = "",
 ) -> ImageReceiveResponse:
     """Receive a streamed Docker image tar from controller.
 
@@ -163,6 +165,30 @@ async def receive_image(
     Returns:
         Result of loading the image
     """
+    # Backward-compatible parameter parsing:
+    # - legacy callers/tests send metadata as query params
+    # - newer callers send metadata as multipart form fields
+    try:
+        form = await request.form()
+    except Exception:
+        form = None
+
+    if form is not None:
+        if not image_id:
+            image_id = str(form.get("image_id") or "")
+        if not reference:
+            reference = str(form.get("reference") or "")
+        if not job_id:
+            job_id = str(form.get("job_id") or "")
+        if not sha256:
+            sha256 = str(form.get("sha256") or "")
+        if not total_bytes:
+            total_bytes_raw = form.get("total_bytes")
+            try:
+                total_bytes = int(total_bytes_raw) if total_bytes_raw not in (None, "") else 0
+            except (TypeError, ValueError):
+                total_bytes = 0
+
     logger.info(f"Receiving image: {reference} ({total_bytes} bytes)")
     is_file_based = reference.startswith("/") or reference.endswith((".qcow2", ".img", ".iol"))
 
@@ -197,7 +223,13 @@ async def receive_image(
                 Path("/var/lib/archetype/images").resolve(),
             ]
             if not any(destination.resolve().is_relative_to(b) for b in allowed_bases):
-                raise HTTPException(status_code=400, detail="Invalid destination path")
+                return JSONResponse(
+                    status_code=400,
+                    content=ImageReceiveResponse(
+                        success=False,
+                        error="Invalid destination path",
+                    ).model_dump(),
+                )
             destination.parent.mkdir(parents=True, exist_ok=True)
             temp_destination = destination.with_name(
                 f"{destination.name}.part-{uuid.uuid4().hex[:8]}"
@@ -374,8 +406,6 @@ async def receive_image(
             _persist_transfer_state()
         return ImageReceiveResponse(success=False, error=error_msg)
 
-    except HTTPException:
-        raise
     except Exception as e:
         logger.error(f"Error receiving image {reference}: {e}", exc_info=True)
         error_msg = str(e)
