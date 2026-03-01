@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import ast
 import json
 import os
 import re
@@ -13,7 +14,6 @@ TARGETS = [
     ("web", "web/src", "web/src", {".ts", ".tsx"}),
 ]
 
-IMPORT_RE = re.compile(r"^(?:from|import)\s+([a-zA-Z0-9_\.]+)")
 REQ_RE = re.compile(r"require\(['\"]([^'\"]+)['\"]\)")
 ESM_RE = re.compile(r"from\s+['\"]([^'\"]+)['\"]")
 
@@ -54,12 +54,26 @@ def scan_imports_py(path):
     imports = set()
     try:
         with open(path, "r", encoding="utf-8", errors="ignore") as handle:
-            for line in handle:
-                match = IMPORT_RE.match(line.strip())
-                if match:
-                    imports.add(match.group(1))
-    except OSError:
-        pass
+            source = handle.read()
+        tree = ast.parse(source, filename=path)
+    except (OSError, SyntaxError):
+        return imports
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                imports.add(alias.name)
+        elif isinstance(node, ast.ImportFrom):
+            if not node.module:
+                continue
+            imports.add(node.module)
+            for alias in node.names:
+                if alias.name == "*":
+                    continue
+                # Add potential submodule for patterns like:
+                # `from app.routers import support`.
+                imports.add(f"{node.module}.{alias.name}")
+
     return imports
 
 
