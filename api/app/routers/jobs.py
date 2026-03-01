@@ -31,6 +31,13 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["jobs"])
 
 
+def get_agent_providers(host: models.Host) -> list[str]:
+    """Compatibility wrapper for tests monkeypatching app.routers.jobs."""
+    from app.agent_client import get_agent_providers as _get_agent_providers
+
+    return _get_agent_providers(host)
+
+
 def _extract_error_summary(log_content: str | None, status: str) -> str | None:
     """Extract an informative error summary from job log content.
 
@@ -171,7 +178,7 @@ async def lab_up(
     # Note: get_agent_for_lab/get_agent_by_name are async def but contain
     # zero awaits (pure DB queries), so we inline the checks here.
     def _sync_validate():
-        from app.agent_client import _agent_online_cutoff, get_agent_providers
+        from app.agent_client import _agent_online_cutoff
         from sqlalchemy import or_, func as sa_func
 
         with get_session() as database:
@@ -289,6 +296,7 @@ async def lab_up(
             image_refs = []
             image_to_nodes = {}
             target_host_id = None
+            target_sync_strategy = settings.image_sync_fallback_strategy
             if settings.image_sync_enabled and settings.image_sync_pre_deploy_check:
                 image_refs = service.get_required_images(lab.id)
                 if image_refs:
@@ -306,9 +314,18 @@ async def lab_up(
                         )
                         if target_agent:
                             target_host_id = target_agent.id
+                            target_sync_strategy = (
+                                target_agent.image_sync_strategy
+                                or settings.image_sync_fallback_strategy
+                            )
                     else:
                         # Single-host: use first available agent
                         target_host_id = agents[0].id if agents else None
+                        if agents:
+                            target_sync_strategy = (
+                                agents[0].image_sync_strategy
+                                or settings.image_sync_fallback_strategy
+                            )
 
             return {
                 "lab_id": lab.id,
@@ -317,6 +334,7 @@ async def lab_up(
                 "image_refs": image_refs,
                 "image_to_nodes": image_to_nodes,
                 "target_host_id": target_host_id,
+                "target_sync_strategy": target_sync_strategy,
             }
 
     phase1 = await asyncio.to_thread(_sync_validate)
@@ -338,14 +356,21 @@ async def lab_up(
             image_to_nodes=phase1["image_to_nodes"],
         )
         if not all_ready and missing:
-            missing_str = ", ".join(missing[:3])
-            if len(missing) > 3:
-                missing_str += f" (+{len(missing) - 3} more)"
-            raise HTTPException(
-                status_code=503,
-                detail=f"Required images not available on agent: {missing_str}. "
-                       f"Upload images or manually sync them to the agent."
-            )
+            if phase1.get("target_sync_strategy") == "on_demand":
+                logger.warning(
+                    "Image pre-deploy check incomplete for lab %s; continuing due on_demand strategy: %s",
+                    real_lab_id,
+                    ", ".join(missing[:3]),
+                )
+            else:
+                missing_str = ", ".join(missing[:3])
+                if len(missing) > 3:
+                    missing_str += f" (+{len(missing) - 3} more)"
+                raise HTTPException(
+                    status_code=503,
+                    detail=f"Required images not available on agent: {missing_str}. "
+                           f"Upload images or manually sync them to the agent."
+                )
 
     # Phase 3: Create job and set desired states in worker thread
     def _sync_create_job():
@@ -426,7 +451,7 @@ async def lab_down(
 
             if not is_multihost:
                 # Pre-check: at least one healthy agent with this provider exists
-                from app.agent_client import _agent_online_cutoff, get_agent_providers
+                from app.agent_client import _agent_online_cutoff
                 cutoff = _agent_online_cutoff()
                 agents = (
                     database.query(models.Host)
@@ -510,7 +535,7 @@ async def lab_restart(
             lab_provider = get_lab_provider(lab)
 
             # Pre-check: at least one healthy agent with this provider
-            from app.agent_client import _agent_online_cutoff, get_agent_providers
+            from app.agent_client import _agent_online_cutoff
             cutoff = _agent_online_cutoff()
             agents = (
                 database.query(models.Host)

@@ -1686,7 +1686,16 @@ class OVSNetworkManager:
             )
             if code != 0:
                 # Cleanup local side
-                await self._ovs_vsctl("del-port", self._bridge_name, patch_local)
+                try:
+                    await self._ovs_vsctl("del-port", self._bridge_name, patch_local)
+                except Exception:
+                    # Cleanup must never mask the primary remote-port failure.
+                    logger.debug(
+                        "Best-effort cleanup failed for local patch %s on %s",
+                        patch_local,
+                        self._bridge_name,
+                        exc_info=True,
+                    )
                 raise RuntimeError(f"Failed to create remote patch: {stderr}")
         else:
             # Target is Linux bridge - use veth pair

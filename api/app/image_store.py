@@ -980,7 +980,17 @@ def detect_device_from_filename(filename: str) -> tuple[str | None, str | None]:
 
 def _extract_version(filename: str) -> str | None:
     match = re.search(r"(\d+(?:\.\d+){1,3}[A-Za-z0-9]*)", filename)
-    return match.group(1) if match else None
+    if not match:
+        return None
+
+    version = match.group(1)
+
+    # For file artifacts, trim trailing single-letter train suffixes (for example
+    # "4.28.0F.tar" -> "4.28.0"). Keep docker tag suffixes intact.
+    if ":" not in filename and re.fullmatch(r"\d+(?:\.\d+){1,3}[A-Za-z]", version):
+        return version[:-1]
+
+    return version
 
 
 def get_vendor_for_device(device_id: str) -> str | None:

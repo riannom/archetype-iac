@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 from app import agent_client, models
 from app.config import settings
 from app.services.interface_naming import normalize_interface
+from app.tasks.live_links import teardown_link
 
 logger = logging.getLogger(__name__)
 
@@ -56,8 +57,6 @@ async def _cleanup_deleted_links(
     This prevents stale VXLAN overlays from persisting after interface renames
     (e.g., Ethernet -> eth) or topology updates.
     """
-    from app.tasks.live_links import teardown_link
-
     query = session.query(models.LinkState).filter(
         models.LinkState.desired_state == "deleted"
     )

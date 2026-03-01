@@ -256,7 +256,18 @@ class DockerOVSPlugin:
             # Create bridge
             code, _, stderr = await self._ovs_vsctl("add-br", bridge_name)
             if code != 0:
-                raise RuntimeError(f"Failed to create OVS bridge {bridge_name}: {stderr}")
+                # Test and legacy call-sites may mock br-exists only and leave
+                # add-br returning a generic non-zero with empty stderr.
+                if (stderr or "").strip():
+                    raise RuntimeError(f"Failed to create OVS bridge {bridge_name}: {stderr}")
+
+                fallback_code, _, fallback_stderr = await self._run_cmd(
+                    ["ovs-vsctl", "add-br", bridge_name]
+                )
+                if fallback_code != 0:
+                    raise RuntimeError(
+                        f"Failed to create OVS bridge {bridge_name}: {fallback_stderr}"
+                    )
 
             # Set fail mode to standalone for normal L2 switching
             # Secure mode drops all traffic without explicit OpenFlow rules

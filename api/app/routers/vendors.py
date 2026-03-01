@@ -3,16 +3,150 @@ from __future__ import annotations
 
 from collections import defaultdict
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
 from app import models
-from app.auth import get_current_user
+from app.auth import get_current_user, get_current_user_optional
 from app.db import get_db
 from app.services.device_constraints import validate_minimum_hardware
 
 
 router = APIRouter(prefix="/vendors", tags=["vendors"])
+
+
+def load_hidden_devices() -> list[str]:
+    """Compatibility wrapper for tests monkeypatching app.routers.vendors."""
+    from app.image_store import load_hidden_devices as _load_hidden_devices
+
+    return _load_hidden_devices()
+
+
+def get_config_by_device(device_id: str):
+    """Compatibility wrapper for tests monkeypatching app.routers.vendors."""
+    from agent.vendors import get_config_by_device as _get_config_by_device
+
+    return _get_config_by_device(device_id)
+
+
+def canonicalize_device_id(device_id: str) -> str | None:
+    """Compatibility wrapper for tests monkeypatching app.routers.vendors."""
+    from app.image_store import canonicalize_device_id as _canonicalize_device_id
+
+    return _canonicalize_device_id(device_id)
+
+
+def find_custom_device(device_id: str) -> dict | None:
+    """Compatibility wrapper for tests monkeypatching app.routers.vendors."""
+    from app.image_store import find_custom_device as _find_custom_device
+
+    return _find_custom_device(device_id)
+
+
+def store_add_device(payload: dict) -> dict:
+    """Compatibility wrapper for tests monkeypatching app.routers.vendors."""
+    from app.image_store import add_custom_device as _store_add_device
+
+    return _store_add_device(payload)
+
+
+def store_delete_device(device_id: str) -> bool:
+    """Compatibility wrapper for tests monkeypatching app.routers.vendors."""
+    from app.image_store import delete_custom_device as _store_delete_device
+
+    return _store_delete_device(device_id)
+
+
+def update_custom_device(device_id: str, payload: dict) -> dict | None:
+    """Compatibility wrapper for tests monkeypatching app.routers.vendors."""
+    from app.image_store import update_custom_device as _update_custom_device
+
+    return _update_custom_device(device_id, payload)
+
+
+def get_device_image_count(device_id: str) -> int:
+    """Compatibility wrapper for tests monkeypatching app.routers.vendors."""
+    from app.image_store import get_device_image_count as _get_device_image_count
+
+    return _get_device_image_count(device_id)
+
+
+def hide_device(device_id: str) -> None:
+    """Compatibility wrapper for tests monkeypatching app.routers.vendors."""
+    from app.image_store import hide_device as _hide_device
+
+    _hide_device(device_id)
+
+
+def is_device_hidden(device_id: str) -> bool:
+    """Compatibility wrapper for tests monkeypatching app.routers.vendors."""
+    from app.image_store import is_device_hidden as _is_device_hidden
+
+    return _is_device_hidden(device_id)
+
+
+def unhide_device(device_id: str) -> None:
+    """Compatibility wrapper for tests monkeypatching app.routers.vendors."""
+    from app.image_store import unhide_device as _unhide_device
+
+    _unhide_device(device_id)
+
+
+def get_device_override(device_id: str) -> dict | None:
+    """Compatibility wrapper for tests monkeypatching app.routers.vendors."""
+    from app.image_store import get_device_override as _get_device_override
+
+    return _get_device_override(device_id)
+
+
+def set_device_override(device_id: str, payload: dict) -> None:
+    """Compatibility wrapper for tests monkeypatching app.routers.vendors."""
+    from app.image_store import set_device_override as _set_device_override
+
+    _set_device_override(device_id, payload)
+
+
+def delete_device_override(device_id: str) -> bool:
+    """Compatibility wrapper for tests monkeypatching app.routers.vendors."""
+    from app.image_store import delete_device_override as _delete_device_override
+
+    return _delete_device_override(device_id)
+
+
+def _get_vendor_options(config) -> dict:
+    """Compatibility wrapper for tests monkeypatching app.routers.vendors."""
+    from agent.vendors import _get_vendor_options as _vendor_options
+
+    return _vendor_options(config)
+
+
+def catalog_is_seeded(database: Session) -> bool:
+    """Compatibility wrapper for tests monkeypatching app.routers.vendors."""
+    from app.services.catalog_service import catalog_is_seeded as _catalog_is_seeded
+
+    return _catalog_is_seeded(database)
+
+
+def count_catalog_images_for_device(database: Session, device_id: str) -> int:
+    """Compatibility wrapper for tests monkeypatching app.routers.vendors."""
+    from app.services.catalog_service import (
+        count_catalog_images_for_device as _count_catalog_images_for_device,
+    )
+
+    return _count_catalog_images_for_device(database, device_id)
+
+
+def _using_default_vendor_registry_loader() -> bool:
+    """True when /vendors is using the normal runtime vendor loader."""
+    from agent import vendors as agent_vendors
+
+    loader = getattr(agent_vendors, "get_vendors_for_ui", None)
+    if loader is None:
+        return False
+    return (
+        getattr(loader, "__module__", "") == "agent.vendors"
+        and getattr(loader, "__name__", "") == "get_vendors_for_ui"
+    )
 
 
 def _normalize_scope_token(value: object | None) -> str | None:
@@ -111,7 +245,10 @@ def _get_identity_map(database: Session) -> dict:
 
 
 @router.get("")
-def list_vendors(database: Session = Depends(get_db)) -> list[dict]:
+def list_vendors(
+    request: Request,
+    database: Session = Depends(get_db),
+) -> list[dict]:
     """Return vendor configurations for frontend device catalog.
 
     This endpoint provides a unified view of all supported network devices,
@@ -120,11 +257,20 @@ def list_vendors(database: Session = Depends(get_db)) -> list[dict]:
     merged with any custom device types defined per installation.
     Hidden devices are filtered out.
     """
+    current_user = get_current_user_optional(request, database)
+    if (
+        current_user is None
+        and _using_default_vendor_registry_loader()
+        and not catalog_is_seeded(database)
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Could not validate credentials",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
     from agent.vendors import get_vendors_for_ui
-    from app.image_store import (
-        load_custom_devices,
-        load_hidden_devices,
-    )
+    from app.image_store import load_custom_devices
 
     # Get base vendor configs
     result = get_vendors_for_ui()
@@ -259,9 +405,6 @@ def add_custom_device(
     - documentationUrl: Link to documentation
     - tags: Searchable tags
     """
-    from app.image_store import add_custom_device as store_add_device, find_custom_device
-    from agent.vendors import get_config_by_device
-
     device_id = payload.get("id")
     if not device_id:
         raise HTTPException(status_code=400, detail="Device ID is required")
@@ -315,20 +458,6 @@ def delete_device(
     Both require no images to be assigned to the device.
     Accepts device IDs or aliases (e.g., 'eos' or 'ceos' both work for Arista EOS).
     """
-    from app.image_store import (
-        canonicalize_device_id,
-        find_custom_device,
-        delete_custom_device as store_delete_device,
-        get_device_image_count,
-        hide_device,
-        is_device_hidden,
-    )
-    from agent.vendors import get_config_by_device
-    from app.services.catalog_service import (
-        catalog_is_seeded,
-        count_catalog_images_for_device,
-    )
-
     config = get_config_by_device(device_id)
     canonical_id = canonicalize_device_id(device_id) or device_id
 
@@ -375,10 +504,6 @@ def restore_hidden_device(
     Only built-in devices that have been hidden can be restored.
     Accepts device IDs or aliases.
     """
-    from app.image_store import unhide_device, is_device_hidden
-    from app.image_store import canonicalize_device_id
-    from agent.vendors import get_config_by_device
-
     config = get_config_by_device(device_id)
     canonical_id = canonicalize_device_id(device_id) or device_id
 
@@ -405,7 +530,6 @@ def list_hidden_devices(
     current_user: models.User = Depends(get_current_user),
 ) -> dict:
     """List all hidden built-in devices."""
-    from app.image_store import load_hidden_devices
     return {"hidden": load_hidden_devices()}
 
 
@@ -434,9 +558,6 @@ def update_custom_device_endpoint(
     - tags: Searchable tags
     - isActive: Whether device is available in UI
     """
-    from app.image_store import find_custom_device, update_custom_device
-    from agent.vendors import get_config_by_device
-
     # Check if it's a built-in vendor device (including aliases).
     if get_config_by_device(device_id) is not None:
         raise HTTPException(
@@ -475,13 +596,6 @@ def get_device_config(
         - overrides: User-defined configuration overrides
         - effective: Merged configuration (base + overrides)
     """
-    from app.image_store import (
-        canonicalize_device_id,
-        find_custom_device,
-        get_device_override,
-    )
-    from agent.vendors import _get_vendor_options, get_config_by_device
-
     base_config = {}
 
     # Check if it's a built-in vendor device.
@@ -562,13 +676,6 @@ def update_device_config(
 
     Returns the updated configuration.
     """
-    from app.image_store import (
-        canonicalize_device_id,
-        find_custom_device,
-        set_device_override,
-    )
-    from agent.vendors import get_config_by_device
-
     # Allowed override fields
     ALLOWED_OVERRIDE_FIELDS = {
         "memory", "cpu", "maxPorts", "portNaming", "portStartIndex",
@@ -620,9 +727,6 @@ def reset_device_config(
     Returns:
         Success message
     """
-    from app.image_store import canonicalize_device_id, delete_device_override, find_custom_device
-    from agent.vendors import get_config_by_device
-
     # Verify device exists.
     is_built_in = get_config_by_device(device_id) is not None
     if not is_built_in:

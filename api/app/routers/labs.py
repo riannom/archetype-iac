@@ -41,7 +41,13 @@ from app.services.link_reservations import (
     sync_link_endpoint_reservations,
 )
 from app.jobs import has_conflicting_job as _has_conflicting_job
-from app.tasks.live_links import create_link_if_ready, _build_host_to_agent_map, teardown_link
+from app.tasks.live_links import (
+    _build_host_to_agent_map,
+    create_link_if_ready,
+    process_link_changes,
+    teardown_link,
+)
+from app.tasks.live_nodes import process_node_changes
 from app.tasks.link_reconciliation import reconcile_lab_links
 from app.services import interface_mapping as interface_mapping_service
 from app.utils.async_tasks import safe_create_task
@@ -64,6 +70,13 @@ router = APIRouter(tags=["labs"])
 def has_conflicting_job(*args, **kwargs):
     """Backward-compatible export for tests monkeypatching app.routers.labs."""
     return _has_conflicting_job(*args, **kwargs)
+
+
+def get_config_by_device(device_id: str):
+    """Backward-compatible export for tests monkeypatching app.routers.labs."""
+    from agent.vendors import get_config_by_device as _get_config_by_device
+
+    return _get_config_by_device(device_id)
 
 
 def _zip_safe_name(value: str) -> str:
@@ -394,7 +407,6 @@ def list_labs(
     )
 
     # Determine VM vs container by device type using vendor registry.
-    from agent.vendors import get_config_by_device
 
     device_nodes = (
         database.query(models.Node.lab_id, models.Node.device)
@@ -424,7 +436,6 @@ def list_labs(
 
 def _populate_lab_counts(database: Session, lab_out: schemas.LabOut) -> None:
     """Populate node_count, running_count, container_count, vm_count for a single lab."""
-    from agent.vendors import get_config_by_device
 
     total = (
         database.query(func.count(models.Node.id))
@@ -618,7 +629,12 @@ async def update_topology_from_yaml(
 
     # Store topology in database (source of truth)
     service = TopologyService(database)
-    service.update_from_yaml(lab.id, payload.content)
+    try:
+        service.update_from_yaml(lab.id, payload.content)
+    except yaml.YAMLError as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid YAML: {exc}") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     # Update lab provider based on node image types
     # This ensures VMs (IOSv, etc.) use libvirt and containers use docker
@@ -635,7 +651,6 @@ async def update_topology_from_yaml(
 
     # Trigger live link operations in background if there are changes
     if added_link_names or removed_link_info:
-        from app.tasks.live_links import process_link_changes
         safe_create_task(
             process_link_changes(lab.id, added_link_names, removed_link_info, current_user.id),
             name=f"live_links:{lab.id}"
@@ -643,7 +658,6 @@ async def update_topology_from_yaml(
 
     # Trigger live node operations in background if there are changes
     if added_node_ids or removed_node_info:
-        from app.tasks.live_nodes import process_node_changes
         safe_create_task(
             process_node_changes(lab.id, added_node_ids, removed_node_info),
             name=f"live_nodes:{lab.id}"
@@ -707,7 +721,6 @@ async def update_topology(
 
     # Trigger live link operations in background if there are changes
     if added_link_names or removed_link_info:
-        from app.tasks.live_links import process_link_changes
         safe_create_task(
             process_link_changes(lab.id, added_link_names, removed_link_info, current_user.id),
             name=f"live_links_update:{lab.id}"
@@ -715,7 +728,6 @@ async def update_topology(
 
     # Trigger live node operations in background if there are changes
     if added_node_ids or removed_node_info:
-        from app.tasks.live_nodes import process_node_changes
         safe_create_task(
             process_node_changes(lab.id, added_node_ids, removed_node_info),
             name=f"live_nodes_update:{lab.id}"

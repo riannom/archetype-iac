@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from app import db, models, schemas
+from app import agent_client, db, models, schemas
 from app.auth import get_current_user
 from app.services.topology import TopologyService
 from app.services.state_machine import NodeStateMachine
@@ -22,7 +22,6 @@ from app.utils.nodes import get_node_placement_mapping
 # labs.py imports this module only after these helpers are defined.
 from app.routers.labs import (
     _converge_stopped_error_state,
-    _create_node_sync_job,
     _enrich_node_state,
     _ensure_node_states_exist,
     _get_or_create_node_state,
@@ -44,6 +43,13 @@ def _has_conflicting_job(*args, **kwargs):
     return labs_router.has_conflicting_job(*args, **kwargs)
 
 
+def _create_node_sync_job(*args, **kwargs):
+    """Resolve via labs module so existing monkeypatch targets keep working."""
+    from app.routers import labs as labs_router
+
+    return labs_router._create_node_sync_job(*args, **kwargs)
+
+
 @router.get("/labs/{lab_id}/nodes/states")
 async def list_node_states(
     lab_id: str,
@@ -56,7 +62,6 @@ async def list_node_states(
     Auto-creates missing NodeState records for labs with existing topologies.
     Auto-refreshes stale pending states if no active jobs are running.
     """
-    from app import agent_client
     from app.utils.lab import get_lab_provider
 
     lab = get_lab_or_404(lab_id, database, current_user)
@@ -380,7 +385,6 @@ async def refresh_node_states(
     Queries all agents that have nodes for this lab and updates the NodeState
     records to match. Use this when states appear out of sync with reality.
     """
-    from app import agent_client
     from app.utils.lab import get_lab_provider
 
     lab = get_lab_or_404(lab_id, database, current_user)

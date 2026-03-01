@@ -8,7 +8,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, HTTPException
+import httpx
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field, ConfigDict
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
@@ -25,6 +26,17 @@ from app.utils.http import require_admin
 router = APIRouter(prefix="/agents", tags=["agents"])
 
 
+async def verify_agent_secret_required(request: Request) -> None:
+    """Require a bearer header, then verify token when a secret is configured."""
+    auth = request.headers.get("authorization", "")
+    if not auth.startswith("Bearer "):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Missing agent authorization",
+        )
+    await verify_agent_secret(request)
+
+
 def get_latest_agent_version() -> str:
     """Get the latest available agent version.
 
@@ -35,6 +47,13 @@ def get_latest_agent_version() -> str:
     """
     from app.routers.system import get_version
     return get_version()
+
+
+def _get_agent_auth_headers() -> dict[str, str]:
+    """Compatibility wrapper for tests monkeypatching app.routers.agents."""
+    from app.agent_client import _get_agent_auth_headers as _agent_auth_headers
+
+    return _agent_auth_headers()
 
 
 # --- Request/Response Schemas ---
@@ -123,7 +142,7 @@ class DashboardMetrics(BaseModel):
 @router.post("/register", response_model=RegistrationResponse)
 async def register_agent(
     request: RegistrationRequest,
-    _auth: None = Depends(verify_agent_secret),
+    _auth: None = Depends(verify_agent_secret_required),
 ) -> RegistrationResponse:
     """Register a new agent or update existing registration.
 
@@ -470,7 +489,7 @@ def heartbeat(
     agent_id: str,
     request: HeartbeatRequest,
     database: Session = Depends(db.get_db),
-    _auth: None = Depends(verify_agent_secret),
+    _auth: None = Depends(verify_agent_secret_required),
 ) -> HeartbeatResponse:
     """Receive heartbeat from agent."""
     host = database.get(models.Host, agent_id)
@@ -976,8 +995,6 @@ async def list_agent_interfaces(
 
     Used for external network configuration (VLAN parent interfaces).
     """
-    import httpx
-
     host = database.get(models.Host, agent_id)
     if not host:
         raise HTTPException(status_code=404, detail="Agent not found")
@@ -986,7 +1003,6 @@ async def list_agent_interfaces(
         raise HTTPException(status_code=503, detail="Agent is offline")
 
     try:
-        from app.agent_client import _get_agent_auth_headers
         async with httpx.AsyncClient(timeout=10.0) as client:
             response = await client.get(f"{host.address}/interfaces", headers=_get_agent_auth_headers())
             response.raise_for_status()
@@ -1007,8 +1023,6 @@ async def list_agent_bridges(
 
     Used for external network configuration (bridge mode).
     """
-    import httpx
-
     host = database.get(models.Host, agent_id)
     if not host:
         raise HTTPException(status_code=404, detail="Agent not found")
@@ -1017,7 +1031,6 @@ async def list_agent_bridges(
         raise HTTPException(status_code=503, detail="Agent is offline")
 
     try:
-        from app.agent_client import _get_agent_auth_headers
         async with httpx.AsyncClient(timeout=10.0) as client:
             response = await client.get(f"{host.address}/bridges", headers=_get_agent_auth_headers())
             response.raise_for_status()
@@ -1094,7 +1107,6 @@ async def trigger_agent_update(
     Creates an update job and sends the update request to the agent.
     The agent reports progress via callbacks.
     """
-    import httpx
     import logging
     logger = logging.getLogger(__name__)
 
@@ -1172,7 +1184,6 @@ async def trigger_agent_update(
 
     # Send update request to agent with commit SHA as target
     try:
-        from app.agent_client import _get_agent_auth_headers
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.post(
                 f"http://{host.address}/update",
@@ -1244,7 +1255,6 @@ async def trigger_bulk_update(
     Creates DB jobs sequentially (shared session), then fires HTTP requests
     to agents in parallel via asyncio.gather for faster bulk updates.
     """
-    import httpx
     import logging
     logging.getLogger(__name__)
 
@@ -1307,7 +1317,6 @@ async def trigger_bulk_update(
     async def _dispatch_update(agent_id: str, job_id: str, address: str) -> dict:
         callback_url = f"{settings.internal_url}/callbacks/update/{job_id}"
         try:
-            from app.agent_client import _get_agent_auth_headers
             async with httpx.AsyncClient(timeout=30.0) as client:
                 resp = await client.post(
                     f"http://{address}/update",
