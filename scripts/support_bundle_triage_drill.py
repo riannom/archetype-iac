@@ -72,7 +72,11 @@ from uuid import uuid4
 from app import models
 from app.db import get_session
 
+triage_marker = "[support-bundle-triage-drill]"
+triage_action = "support:bundle-triage-drill"
+triage_lab_prefix = "ci-triage-lab-"
 message = (
+    f"{triage_marker} "
     "ERROR: this session's transaction has been rolled back after an exception. "
     "Automatic recovery attempted but rollback failed while cleaning up."
 )
@@ -88,11 +92,11 @@ with get_session() as session:
         raise RuntimeError("No super_admin user found for support-bundle drill")
 
     lab = models.Lab(
-        name=f"ci-triage-lab-{uuid4().hex[:8]}",
+        name=f"{triage_lab_prefix}{uuid4().hex[:8]}",
         owner_id=user.id,
         provider="docker",
         state="error",
-        state_error="Synthetic support-bundle triage drill",
+        state_error=f"{triage_marker} Synthetic support-bundle triage drill",
     )
     session.add(lab)
     session.commit()
@@ -101,7 +105,7 @@ with get_session() as session:
     job = models.Job(
         lab_id=lab.id,
         user_id=user.id,
-        action="up",
+        action=triage_action,
         status="failed",
         log_path=message,
     )
@@ -190,7 +194,7 @@ def _wait_for_bundle(
             token=token,
         )
         status = str(last.get("status") or "").lower()
-        if status == "completed":
+        if status in {"completed", "completed_with_warnings"}:
             return last
         if status == "failed":
             raise RuntimeError(
@@ -203,11 +207,13 @@ def _wait_for_bundle(
     )
 
 
-def _validate_bundle(bundle_zip: bytes, *, lab_id: str) -> None:
+def _validate_bundle(bundle_zip: bytes, *, lab_id: str, allow_completeness_warnings: bool) -> None:
     required_files = {
         "manifest.json",
         "incident/user-report.json",
         "system/controller.json",
+        "system/control-plane-health.json",
+        "system/queue-status.json",
         "api/action-logs.json",
         "observability/prometheus.json",
         "observability/prometheus-targets.json",
@@ -226,6 +232,27 @@ def _validate_bundle(bundle_zip: bytes, *, lab_id: str) -> None:
             )
         if seeded_lab_path not in names:
             raise RuntimeError(f"Bundle missing seeded lab artifact: {seeded_lab_path}")
+
+        control_plane = json.loads(zf.read("system/control-plane-health.json").decode())
+        for key in ("api", "scheduler", "worker", "agent", "queue_snapshot"):
+            if key not in control_plane:
+                raise RuntimeError(f"Control-plane health snapshot missing '{key}' section")
+
+        manifest = json.loads(zf.read("manifest.json").decode())
+        manifest_errors_raw = manifest.get("errors", []) if isinstance(manifest, dict) else []
+        manifest_errors = [str(item) for item in manifest_errors_raw if str(item).strip()] if isinstance(manifest_errors_raw, list) else []
+        if manifest_errors and not allow_completeness_warnings:
+            critical_markers = ("Coverage gap:", "Failed ")
+            critical = [
+                item for item in manifest_errors
+                if item.startswith(critical_markers)
+            ]
+            if critical:
+                joined = "; ".join(critical[:6])
+                raise RuntimeError(
+                    "Bundle completeness warnings detected (critical): "
+                    f"{joined}"
+                )
 
         lab_payload = json.loads(zf.read(seeded_lab_path).decode())
         jobs = lab_payload.get("jobs")
@@ -257,6 +284,11 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--timeout-seconds", type=int, default=180)
     p.add_argument("--poll-seconds", type=int, default=2)
     p.add_argument("--output-zip", default="")
+    p.add_argument(
+        "--allow-completeness-warnings",
+        action="store_true",
+        help="Allow bundle manifest completeness warnings without failing the drill",
+    )
     return p.parse_args()
 
 
@@ -295,7 +327,11 @@ def main() -> int:
                 handle.write(bundle_zip)
             print(f"[triage-drill] wrote bundle archive: {args.output_zip}")
 
-        _validate_bundle(bundle_zip, lab_id=lab_id)
+        _validate_bundle(
+            bundle_zip,
+            lab_id=lab_id,
+            allow_completeness_warnings=bool(args.allow_completeness_warnings),
+        )
         print("[triage-drill] validation passed")
         return 0
     except Exception as exc:

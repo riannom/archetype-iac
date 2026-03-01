@@ -14,6 +14,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
 import pytest
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app import models
@@ -264,19 +265,77 @@ class TestCreateLinkIfReady:
 
         host_to_agent = {sample_host.id: sample_host}
 
-        with patch("app.tasks.live_links.agent_client") as mock_client, \
-             patch("app.tasks.live_links.verify_link_connected", new_callable=AsyncMock, return_value=(True, None)), \
-             patch("app.tasks.live_links.update_interface_mappings", new_callable=AsyncMock), \
-             patch("app.tasks.live_links.claim_link_endpoints", return_value=(True, [])):
-            mock_client.create_link_on_agent = AsyncMock(return_value={
-                "success": True, "vlan_tag": 100,
-            })
-
+        with patch(
+            "app.tasks.live_links.create_same_host_link",
+            new_callable=AsyncMock,
+            return_value=True,
+        ), patch(
+            "app.tasks.live_links.claim_link_endpoints",
+            return_value=(True, []),
+        ):
             result = await create_link_if_ready(
                 test_db, sample_lab.id, link, host_to_agent,
             )
 
         assert result is True
+
+
+class TestReconcileLabLinks:
+    """Tests for reconcile_lab_links error recovery."""
+
+    @pytest.mark.asyncio
+    async def test_db_error_on_one_link_does_not_break_entire_reconcile(
+        self, test_db: Session, sample_lab: models.Lab, sample_host: models.Host,
+    ):
+        from app.tasks.link_reconciliation import reconcile_lab_links
+
+        _make_link_state(
+            test_db,
+            sample_lab.id,
+            link_name="R1:eth1-R2:eth1",
+            desired_state="up",
+            actual_state="up",
+            source_host_id=sample_host.id,
+            target_host_id=sample_host.id,
+        )
+        _make_link_state(
+            test_db,
+            sample_lab.id,
+            link_name="R2:eth2-R3:eth2",
+            source_node="archetype-test-r2",
+            target_node="archetype-test-r3",
+            desired_state="up",
+            actual_state="up",
+            source_host_id=sample_host.id,
+            target_host_id=sample_host.id,
+        )
+
+        calls = {"count": 0}
+
+        async def _verify_with_first_call_db_error(session, _link, _host_to_agent):
+            calls["count"] += 1
+            if calls["count"] == 1:
+                session.execute(text("SELECT * FROM __definitely_missing_table__"))
+            return True, None
+
+        with patch(
+            "app.tasks.link_reconciliation._cleanup_deleted_links",
+            new_callable=AsyncMock,
+            return_value=0,
+        ), patch(
+            "app.tasks.link_reconciliation.verify_link_connected",
+            side_effect=_verify_with_first_call_db_error,
+        ):
+            results = await reconcile_lab_links(test_db, sample_lab.id)
+
+        assert calls["count"] == 2
+        assert results["checked"] == 2
+        assert results["errors"] >= 1
+        assert results["valid"] >= 1
+
+
+class TestCreateLinkIfReadyAdditional:
+    """Additional create_link_if_ready behaviors."""
 
     @pytest.mark.asyncio
     async def test_source_not_running_skips(

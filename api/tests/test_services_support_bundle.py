@@ -13,7 +13,6 @@ from sqlalchemy.orm import Session
 
 from app import models
 from app.services.support_bundle import (
-    MAX_BUNDLE_BYTES,
     ZipBuilder,
     _json_dumps,
     _model_to_dict,
@@ -77,6 +76,18 @@ class TestZipBuilder:
         builder.add_bytes("test.txt", content)
         expected_hash = hashlib.sha256(content).hexdigest()
         assert builder.files[0]["sha256"] == expected_hash
+
+
+def test_resolve_worker_metrics_urls_includes_host_mode_fallbacks(monkeypatch):
+    from app.services import support_bundle as support_bundle_module
+
+    monkeypatch.setattr(support_bundle_module, "WORKER_METRICS_URLS_RAW", "")
+    monkeypatch.setattr(support_bundle_module, "WORKER_METRICS_URL", "http://worker:8003/metrics")
+
+    urls = support_bundle_module._resolve_worker_metrics_urls()
+    assert "http://worker:8003/metrics" in urls
+    assert "http://local-agent:8003/metrics" in urls
+    assert "http://host.docker.internal:8003/metrics" in urls
 
 
 class TestSanitizeData:
@@ -280,6 +291,28 @@ class TestCollectLabData:
         assert "jobs" in result
         assert len(result["jobs"]) >= 1
 
+    def test_lab_export_preserves_log_tail_for_truncated_logs(
+        self,
+        test_db: Session,
+        sample_lab: models.Lab,
+        sample_job: models.Job,
+    ):
+        """Long logs keep both early context and final failure markers."""
+        from app.services.support_bundle import MAX_LOG_BYTES_PER_JOB, _lab_export
+
+        tail_marker = "TAIL_FAILURE_MARKER"
+        long_log = ("A" * (MAX_LOG_BYTES_PER_JOB + 200)) + tail_marker
+        since = datetime.now(timezone.utc) - timedelta(hours=24)
+        until = datetime.now(timezone.utc)
+        with patch("app.services.support_bundle.get_log_content", return_value=long_log):
+            result = _lab_export(test_db, sample_lab, since, until, include_configs=False)
+
+        assert result["jobs"], "Expected at least one job in export"
+        exported = result["jobs"][0]
+        assert exported["log_truncated"] is True
+        assert exported["log_excerpt_strategy"] in {"head_tail", "tail_only"}
+        assert tail_marker in exported["log_excerpt"]
+
 
 class TestCollectSystemData:
     """Tests for system-level data collection."""
@@ -378,11 +411,25 @@ class TestBuildSupportBundleEndToEnd:
         async def _fake_loki_label_values(_label: str) -> dict:
             return {"status": "success", "data": ["api", "worker", "scheduler", "agent"]}
 
+        async def _fake_service_health(_url: str, **_kwargs) -> dict:
+            return {"status": "ok"}
+
+        async def _fake_probe_http_endpoint(_url: str, **_kwargs) -> dict:
+            return {
+                "status_code": 200,
+                "ok": True,
+                "content_type": "text/plain",
+                "content_length": 120,
+                "line_count": 6,
+            }
+
         monkeypatch.setattr(support_bundle_module, "_query_prometheus", _fake_query_prometheus)
         monkeypatch.setattr(support_bundle_module, "_query_prometheus_targets", _fake_prom_targets)
         monkeypatch.setattr(support_bundle_module, "_query_prometheus_alerts", _fake_prom_alerts)
         monkeypatch.setattr(support_bundle_module, "_query_loki_service_logs", _fake_loki_service_logs)
         monkeypatch.setattr(support_bundle_module, "_query_loki_label_values", _fake_loki_label_values)
+        monkeypatch.setattr(support_bundle_module, "_query_service_health", _fake_service_health)
+        monkeypatch.setattr(support_bundle_module, "_probe_http_endpoint", _fake_probe_http_endpoint)
         monkeypatch.setattr(support_bundle_module.agent_client, "is_agent_online", lambda _host: False)
 
         archive, metadata = await build_support_bundle(test_db, bundle)
@@ -396,6 +443,7 @@ class TestBuildSupportBundleEndToEnd:
             assert "observability/prometheus-alerts.json" in names
             assert "observability/loki-service-logs.json" in names
             assert "observability/loki-api-logs.json" in names
+            assert "system/control-plane-health.json" in names
             assert f"labs/{sample_lab.id}/bundle.json" in names
             assert f"agents/{sample_host.id}/snapshot.json" in names
 
@@ -416,6 +464,14 @@ class TestBuildSupportBundleEndToEnd:
 
             loki_api = json.loads(zf.read("observability/loki-api-logs.json"))
             assert loki_api["service"] == "api"
+
+            control_plane = json.loads(zf.read("system/control-plane-health.json"))
+            assert control_plane["scheduler"]["payload"]["status"] == "ok"
+            assert control_plane["worker"]["probe"]["ok"] is True
+            assert control_plane["agent"]["sample_count"] == 1
+            assert control_plane["agent"]["sampled_agents"][0]["payload"]["status"] == "ok"
+            assert "queue_depth" in control_plane["queue_snapshot"]
+            assert "job_queue_depth" in control_plane["prometheus_signals"]
 
             agent_snapshot = json.loads(zf.read(f"agents/{sample_host.id}/snapshot.json"))
             assert agent_snapshot["online"] is False
@@ -470,11 +526,19 @@ class TestBuildSupportBundleEndToEnd:
         async def _fake_loki_label_values(_label: str) -> dict:
             return {"status": "success", "data": ["api", "worker", "scheduler", "agent"]}
 
+        async def _fake_service_health(_url: str, **_kwargs) -> dict:
+            return {"status": "ok"}
+
+        async def _fake_probe_http_endpoint(_url: str, **_kwargs) -> dict:
+            return {"status_code": 503, "ok": False, "content_type": "text/plain", "content_length": 0, "line_count": 0}
+
         monkeypatch.setattr(support_bundle_module, "_query_prometheus", _fake_query_prometheus)
         monkeypatch.setattr(support_bundle_module, "_query_prometheus_targets", _raise_targets)
         monkeypatch.setattr(support_bundle_module, "_query_prometheus_alerts", _raise_alerts)
         monkeypatch.setattr(support_bundle_module, "_query_loki_service_logs", _fake_loki_service_logs)
         monkeypatch.setattr(support_bundle_module, "_query_loki_label_values", _fake_loki_label_values)
+        monkeypatch.setattr(support_bundle_module, "_query_service_health", _fake_service_health)
+        monkeypatch.setattr(support_bundle_module, "_probe_http_endpoint", _fake_probe_http_endpoint)
 
         archive, _metadata = await build_support_bundle(test_db, bundle)
         with zipfile.ZipFile(BytesIO(archive), "r") as zf:
@@ -563,11 +627,19 @@ class TestBuildSupportBundleEndToEnd:
         async def _fake_loki_label_values(_label: str) -> dict:
             return {"status": "success", "data": ["api", "worker", "scheduler", "agent"]}
 
+        async def _fake_service_health(_url: str, **_kwargs) -> dict:
+            return {"status": "ok"}
+
+        async def _fake_probe_http_endpoint(_url: str, **_kwargs) -> dict:
+            return {"status_code": 200, "ok": True, "content_type": "text/plain", "content_length": 32, "line_count": 2}
+
         monkeypatch.setattr(support_bundle_module, "_query_prometheus", _fake_query_prometheus)
         monkeypatch.setattr(support_bundle_module, "_query_prometheus_targets", _fake_query_prometheus_targets)
         monkeypatch.setattr(support_bundle_module, "_query_prometheus_alerts", _fake_query_prometheus_alerts)
         monkeypatch.setattr(support_bundle_module, "_query_loki_service_logs", _fake_loki_service_logs)
         monkeypatch.setattr(support_bundle_module, "_query_loki_label_values", _fake_loki_label_values)
+        monkeypatch.setattr(support_bundle_module, "_query_service_health", _fake_service_health)
+        monkeypatch.setattr(support_bundle_module, "_probe_http_endpoint", _fake_probe_http_endpoint)
 
         archive, _metadata = await build_support_bundle(test_db, bundle)
         with zipfile.ZipFile(BytesIO(archive), "r") as zf:
@@ -659,11 +731,21 @@ class TestBuildSupportBundleEndToEnd:
         async def _fake_loki_label_values(_label: str) -> dict:
             return {"status": "success", "data": ["agent"]}
 
+        async def _fake_service_health(url: str, **_kwargs) -> dict:
+            if "scheduler" in url:
+                return {"status": "degraded", "monitors": {"dead": ["state_reconciliation_monitor"]}}
+            return {"status": "ok"}
+
+        async def _fake_probe_http_endpoint(_url: str, **_kwargs) -> dict:
+            return {"status_code": 200, "ok": True, "content_type": "text/plain", "content_length": 64, "line_count": 3}
+
         monkeypatch.setattr(support_bundle_module, "_query_prometheus", _fake_query_prometheus)
         monkeypatch.setattr(support_bundle_module, "_query_prometheus_targets", _fake_query_prometheus_targets)
         monkeypatch.setattr(support_bundle_module, "_query_prometheus_alerts", _fake_query_prometheus_alerts)
         monkeypatch.setattr(support_bundle_module, "_query_loki_service_logs", _fake_loki_service_logs)
         monkeypatch.setattr(support_bundle_module, "_query_loki_label_values", _fake_loki_label_values)
+        monkeypatch.setattr(support_bundle_module, "_query_service_health", _fake_service_health)
+        monkeypatch.setattr(support_bundle_module, "_probe_http_endpoint", _fake_probe_http_endpoint)
 
         archive, _metadata = await build_support_bundle(test_db, bundle)
         with zipfile.ZipFile(BytesIO(archive), "r") as zf:
@@ -675,3 +757,86 @@ class TestBuildSupportBundleEndToEnd:
             assert any("Loki 'service' label missing expected value 'api'" in item for item in errors)
             assert any("jobs started in 2h window but no archetype_job_duration_seconds samples" in item for item in errors)
             assert any("jobs started in 2h window but no archetype_job_queue_wait_seconds samples" in item for item in errors)
+            assert any("scheduler /healthz reported status 'degraded'" in item for item in errors)
+
+    @pytest.mark.asyncio
+    async def test_build_support_bundle_flags_prometheus_query_failures_and_worker_probe_fallback(
+        self,
+        test_db: Session,
+        test_user: models.User,
+        sample_lab: models.Lab,
+        monkeypatch,
+    ):
+        from app.services import support_bundle as support_bundle_module
+
+        bundle = models.SupportBundle(
+            user_id=test_user.id,
+            status="running",
+            include_configs=False,
+            pii_safe=True,
+            time_window_hours=24,
+            options_json=json.dumps({"impacted_lab_ids": [sample_lab.id], "impacted_agent_ids": []}),
+            incident_json=json.dumps(
+                {
+                    "summary": "Coverage check",
+                    "repro_steps": "N/A",
+                    "expected_behavior": "N/A",
+                    "actual_behavior": "N/A",
+                }
+            ),
+        )
+
+        async def _raise_prometheus(_expr: str, **_kwargs) -> dict:
+            raise RuntimeError("prometheus unavailable")
+
+        async def _raise_targets() -> dict:
+            raise RuntimeError("targets unavailable")
+
+        async def _raise_alerts() -> dict:
+            raise RuntimeError("alerts unavailable")
+
+        async def _fake_loki_service_logs(_service: str, _since_hours: int, limit: int = 500, **_kwargs) -> dict:
+            return {"status": "success", "data": {"result": []}, "limit": limit}
+
+        async def _fake_loki_label_values(_label: str) -> dict:
+            return {"status": "success", "data": ["api", "worker", "scheduler", "agent"]}
+
+        async def _fake_service_health(_url: str, **_kwargs) -> dict:
+            return {"status": "ok"}
+
+        async def _fake_probe_http_endpoint(url: str, **_kwargs) -> dict:
+            if "worker:8003" in url:
+                raise RuntimeError("name resolution failed")
+            return {
+                "status_code": 200,
+                "ok": True,
+                "content_type": "text/plain",
+                "content_length": 64,
+                "line_count": 3,
+            }
+
+        monkeypatch.setattr(support_bundle_module, "_query_prometheus", _raise_prometheus)
+        monkeypatch.setattr(support_bundle_module, "_query_prometheus_targets", _raise_targets)
+        monkeypatch.setattr(support_bundle_module, "_query_prometheus_alerts", _raise_alerts)
+        monkeypatch.setattr(support_bundle_module, "_query_loki_service_logs", _fake_loki_service_logs)
+        monkeypatch.setattr(support_bundle_module, "_query_loki_label_values", _fake_loki_label_values)
+        monkeypatch.setattr(support_bundle_module, "_query_service_health", _fake_service_health)
+        monkeypatch.setattr(support_bundle_module, "_probe_http_endpoint", _fake_probe_http_endpoint)
+        monkeypatch.setattr(
+            support_bundle_module,
+            "WORKER_METRICS_URLS",
+            ["http://worker:8003/metrics", "http://host.docker.internal:8003/metrics"],
+        )
+
+        archive, _metadata = await build_support_bundle(test_db, bundle)
+        with zipfile.ZipFile(BytesIO(archive), "r") as zf:
+            control_plane = json.loads(zf.read("system/control-plane-health.json"))
+            worker = control_plane["worker"]
+            assert worker["url"] == "http://host.docker.internal:8003/metrics"
+            assert worker["probe"]["ok"] is True
+            assert any("worker:8003" in item for item in worker.get("probe_attempt_errors", []))
+
+            errors = json.loads(zf.read("errors.json"))["errors"]
+            assert any("failed to query Prometheus signal 'targets_up_api'" in item for item in errors)
+            assert any("failed to query Prometheus targets snapshot" in item for item in errors)
+            assert any("failed to query Prometheus alerts snapshot" in item for item in errors)

@@ -1086,7 +1086,14 @@ class NodeLifecycleManager(AgentResolutionMixin, DeploymentMixin):
                     f"skipped={reconcile_result['skipped']}"
                 )
         except Exception as e:
+            # Reconciliation can fail after a DB error (e.g. statement timeout).
+            # Reset session state so finalize() can still persist job outcome.
+            try:
+                self.session.rollback()
+            except Exception:
+                pass
             logger.warning(f"Post-op link reconciliation failed for lab {self.lab.id}: {e}")
+            self.log_parts.append(f"WARNING: Post-op link reconciliation failed: {e}")
 
     async def _reconcile_node_placement_statuses(self) -> None:
         """Align node_placements.status with final per-node outcomes.

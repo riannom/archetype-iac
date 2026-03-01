@@ -321,6 +321,14 @@ def _print_coverage(cfg: Config) -> int:
     elif values["job_series_present"] > 0:
         print("[info] job metric series present but no new starts in window")
 
+    if cfg.apply:
+        if values["api_get_lab_status_samples"] <= 0:
+            print("[fail] controlled status probes generated no api_get_lab_status samples")
+            failures += 1
+        if cfg.run_up_down and values["jobs_started"] <= 0:
+            print("[fail] --run-up-down requested but no jobs_started samples observed")
+            failures += 1
+
     if failures == 0:
         print("[ok] coverage checks passed")
     return failures
@@ -337,7 +345,7 @@ def parse_args() -> Config:
     p.add_argument("--apply", action="store_true", help="Generate controlled traffic")
     p.add_argument("--run-up-down", action="store_true", help="Include lab up/down cycle (requires --apply)")
     p.add_argument("--status-probes", type=int, default=3)
-    p.add_argument("--scrape-wait-seconds", type=int, default=20)
+    p.add_argument("--scrape-wait-seconds", type=int, default=65)
     p.add_argument("--job-timeout-seconds", type=int, default=1800)
     p.add_argument("--window", default="30m", help="Prometheus range window for increase() checks")
     p.add_argument(

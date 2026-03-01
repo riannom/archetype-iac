@@ -5,6 +5,7 @@ import json
 import logging
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse
@@ -20,10 +21,48 @@ from app.utils.async_tasks import safe_create_task
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/support-bundles", tags=["support"])
+DOWNLOADABLE_BUNDLE_STATUSES = {"completed", "completed_with_warnings"}
 
 
 def _now_utc() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _safe_json_load(value: str | None) -> dict[str, Any]:
+    if not value:
+        return {}
+    try:
+        data = json.loads(value)
+    except Exception:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _bundle_out(bundle: models.SupportBundle) -> schemas.SupportBundleOut:
+    base = schemas.SupportBundleOut.model_validate(bundle).model_dump()
+    options = _safe_json_load(bundle.options_json)
+    manifest = options.get("manifest")
+    errors = []
+    if isinstance(manifest, dict):
+        raw_errors = manifest.get("errors")
+        if isinstance(raw_errors, list):
+            errors = [str(item) for item in raw_errors if str(item).strip()]
+
+    warning_count = len(errors)
+    warnings_preview = errors[:20]
+    if bundle.status in ("pending", "running"):
+        completeness_status = "pending"
+    elif bundle.status == "failed":
+        completeness_status = "unknown"
+    elif bundle.status == "completed_with_warnings":
+        completeness_status = "warning"
+    else:
+        completeness_status = "warning" if warning_count > 0 else "ok"
+
+    base["completeness_status"] = completeness_status
+    base["completeness_warning_count"] = warning_count
+    base["completeness_warnings"] = warnings_preview
+    return schemas.SupportBundleOut(**base)
 
 
 @router.post("", response_model=schemas.SupportBundleOut)
@@ -70,7 +109,7 @@ async def create_support_bundle(
         run_bundle_generation(bundle.id),
         name=f"support-bundle:{bundle.id}",
     )
-    return schemas.SupportBundleOut.model_validate(bundle)
+    return _bundle_out(bundle)
 
 
 @router.get("/{bundle_id}", response_model=schemas.SupportBundleOut)
@@ -84,7 +123,7 @@ def get_support_bundle(
     bundle = database.get(models.SupportBundle, bundle_id)
     if not bundle:
         raise HTTPException(status_code=404, detail="Support bundle not found")
-    return schemas.SupportBundleOut.model_validate(bundle)
+    return _bundle_out(bundle)
 
 
 @router.get("/{bundle_id}/download")
@@ -98,7 +137,7 @@ def download_support_bundle(
     bundle = database.get(models.SupportBundle, bundle_id)
     if not bundle:
         raise HTTPException(status_code=404, detail="Support bundle not found")
-    if bundle.status != "completed":
+    if bundle.status not in DOWNLOADABLE_BUNDLE_STATUSES:
         raise HTTPException(status_code=409, detail=f"Support bundle is {bundle.status}")
     if not bundle.file_path:
         raise HTTPException(status_code=404, detail="Bundle file missing")
@@ -132,4 +171,4 @@ def list_support_bundles(
         .limit(limit)
         .all()
     )
-    return [schemas.SupportBundleOut.model_validate(bundle) for bundle in bundles]
+    return [_bundle_out(bundle) for bundle in bundles]

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 from app import models
 from app.auth import create_access_token, hash_password
 from app.config import settings
@@ -64,6 +66,8 @@ def test_create_and_list_support_bundles_super_admin(test_client, test_db, monke
     assert body["status"] == "pending"
     assert body["pii_safe"] is True
     assert body["include_configs"] is False
+    assert body["completeness_status"] == "pending"
+    assert body["completeness_warning_count"] == 0
 
     list_resp = test_client.get("/support-bundles", headers=headers)
     assert list_resp.status_code == 200
@@ -96,3 +100,69 @@ def test_download_support_bundle_completed(test_client, test_db, monkeypatch, tm
     resp = test_client.get(f"/support-bundles/{bundle.id}/download", headers=headers)
     assert resp.status_code == 200
     assert resp.headers["content-type"].startswith("application/zip")
+
+
+def test_download_support_bundle_completed_with_warnings(test_client, test_db, monkeypatch, tmp_path):
+    headers = _super_admin_headers(test_db, monkeypatch)
+    user_id = test_db.query(models.User.id).first()[0]
+
+    bundle_file = tmp_path / "bundle-warn.zip"
+    bundle_file.write_bytes(b"zip-content")
+    bundle = models.SupportBundle(
+        user_id=user_id,
+        status="completed_with_warnings",
+        include_configs=False,
+        pii_safe=True,
+        time_window_hours=24,
+        options_json="{}",
+        incident_json="{}",
+        file_path=str(bundle_file),
+        size_bytes=bundle_file.stat().st_size,
+    )
+    test_db.add(bundle)
+    test_db.commit()
+    test_db.refresh(bundle)
+
+    resp = test_client.get(f"/support-bundles/{bundle.id}/download", headers=headers)
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("application/zip")
+
+
+def test_get_support_bundle_includes_completeness_warnings(test_client, test_db, monkeypatch):
+    headers = _super_admin_headers(test_db, monkeypatch)
+    user_id = test_db.query(models.User.id).first()[0]
+    bundle = models.SupportBundle(
+        user_id=user_id,
+        status="completed_with_warnings",
+        include_configs=False,
+        pii_safe=True,
+        time_window_hours=24,
+        options_json=json.dumps(
+            {
+                "manifest": {
+                    "errors": [
+                        "Coverage gap: no Loki log entries found for service 'api' in collection window",
+                        "Coverage gap: failed to query Loki entries for service 'worker'",
+                    ]
+                }
+            }
+        ),
+        incident_json="{}",
+        file_path="/tmp/does-not-matter.zip",
+        size_bytes=123,
+    )
+    test_db.add(bundle)
+    test_db.commit()
+    test_db.refresh(bundle)
+
+    resp = test_client.get(f"/support-bundles/{bundle.id}", headers=headers)
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["completeness_status"] == "warning"
+    assert body["completeness_warning_count"] == 2
+    assert len(body["completeness_warnings"]) == 2
+
+
+def test_support_bundle_status_column_fits_completed_with_warnings():
+    status_col = models.SupportBundle.__table__.c.status
+    assert getattr(status_col.type, "length", None) >= len("completed_with_warnings")

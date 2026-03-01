@@ -58,7 +58,7 @@ class SupportBundle(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
     user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"), index=True)
-    status: Mapped[str] = mapped_column(String(20), default="pending", index=True)
+    status: Mapped[str] = mapped_column(String(32), default="pending", index=True)
     include_configs: Mapped[bool] = mapped_column(default=False)
     pii_safe: Mapped[bool] = mapped_column(default=True)
     time_window_hours: Mapped[int] = mapped_column(default=24)

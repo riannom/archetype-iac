@@ -340,10 +340,13 @@ export interface SupportBundleCreate {
 export interface SupportBundle {
   id: string;
   user_id: string;
-  status: "pending" | "running" | "completed" | "failed";
+  status: "pending" | "running" | "completed" | "completed_with_warnings" | "failed";
   include_configs: boolean;
   pii_safe: boolean;
   time_window_hours: number;
+  completeness_status?: "pending" | "ok" | "warning" | "unknown";
+  completeness_warning_count?: number;
+  completeness_warnings?: string[];
   size_bytes?: number | null;
   error_message?: string | null;
   started_at?: string | null;

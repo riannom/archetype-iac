@@ -1,0 +1,213 @@
+name: Observability Maintenance
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Maintenance mode to run
+        required: true
+        default: all
+        type: choice
+        options:
+          - all
+          - canary
+          - db-report
+          - drift-check
+  schedule:
+    - cron: "*/30 * * * *"
+    - cron: "15 */6 * * *"
+    - cron: "30 2 * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: observability-maintenance
+  cancel-in-progress: false
+
+jobs:
+  maintenance:
+    name: Scheduled Observability Maintenance
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve maintenance mode
+        id: mode
+        run: |
+          set -euo pipefail
+
+          run_canary=false
+          run_db_report=false
+          run_drift=false
+
+          if [ "${GITHUB_EVENT_NAME}" = "schedule" ]; then
+            case "${{ github.event.schedule }}" in
+              "*/30 * * * *")
+                run_canary=true
+                ;;
+              "15 */6 * * *")
+                run_db_report=true
+                ;;
+              "30 2 * * *")
+                run_drift=true
+                ;;
+              *)
+                echo "Unknown schedule trigger: ${{ github.event.schedule }}" >&2
+                exit 1
+                ;;
+            esac
+          else
+            mode="${{ github.event.inputs.mode }}"
+            case "$mode" in
+              all)
+                run_canary=true
+                run_db_report=true
+                run_drift=true
+                ;;
+              canary)
+                run_canary=true
+                ;;
+              db-report)
+                run_db_report=true
+                ;;
+              drift-check)
+                run_drift=true
+                ;;
+              *)
+                echo "Unknown workflow_dispatch mode: $mode" >&2
+                exit 1
+                ;;
+            esac
+          fi
+
+          run_any=false
+          if [ "$run_canary" = "true" ] || [ "$run_db_report" = "true" ] || [ "$run_drift" = "true" ]; then
+            run_any=true
+          fi
+
+          {
+            echo "run_canary=$run_canary"
+            echo "run_db_report=$run_db_report"
+            echo "run_drift=$run_drift"
+            echo "run_any=$run_any"
+          } >> "$GITHUB_OUTPUT"
+
+          echo "run_canary=$run_canary"
+          echo "run_db_report=$run_db_report"
+          echo "run_drift=$run_drift"
+
+      - name: Prepare artifact directory
+        run: mkdir -p /tmp/observability-maintenance
+
+      - name: Build and start observability stack
+        if: steps.mode.outputs.run_any == 'true'
+        env:
+          ADMIN_EMAIL: admin@example.com
+          ADMIN_PASSWORD: changeme123
+          AGENT_SECRET: ci-observability-secret
+          ARCHETYPE_AGENT_METRICS_ALLOWED_CIDRS: 127.0.0.1/32,::1/128,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16
+        run: |
+          set -euo pipefail
+          docker compose -f docker-compose.gui.yml up -d --build \
+            postgres redis api scheduler worker agent loki prometheus
+
+      - name: Wait for required readiness checks
+        if: steps.mode.outputs.run_any == 'true'
+        run: |
+          set -euo pipefail
+
+          # Postgres is required for DB report and drift checks.
+          if [ "${{ steps.mode.outputs.run_db_report }}" = "true" ] || [ "${{ steps.mode.outputs.run_drift }}" = "true" ]; then
+            pg_ready=false
+            for _ in $(seq 1 90); do
+              if docker compose -f docker-compose.gui.yml exec -T postgres pg_isready -U archetype >/dev/null 2>&1; then
+                pg_ready=true
+                break
+              fi
+              sleep 2
+            done
+            if [ "$pg_ready" != "true" ]; then
+              echo "Postgres readiness timeout" >&2
+              exit 1
+            fi
+          fi
+
+          # API + Prometheus are required for canary and support-bundle drill.
+          if [ "${{ steps.mode.outputs.run_canary }}" = "true" ]; then
+            for _ in $(seq 1 120); do
+              if curl -fsS http://localhost:8000/healthz >/dev/null \
+                && curl -fsS http://localhost:9090/-/ready >/dev/null; then
+                exit 0
+              fi
+              sleep 2
+            done
+            echo "API/Prometheus readiness timeout" >&2
+            exit 1
+          fi
+
+      - name: Run canary + support bundle triage drill
+        if: steps.mode.outputs.run_canary == 'true'
+        env:
+          ADMIN_EMAIL: admin@example.com
+          ADMIN_PASSWORD: changeme123
+        run: |
+          set -euo pipefail
+          python3 scripts/support_bundle_triage_drill.py \
+            --api-url http://localhost:8000 \
+            --username "${ADMIN_EMAIL}" \
+            --password "${ADMIN_PASSWORD}" \
+            --compose-file docker-compose.gui.yml \
+            --output-zip /tmp/observability-maintenance/support-bundle-triage.zip \
+            2>&1 | tee /tmp/observability-maintenance/support-bundle-triage.log
+
+          python3 scripts/observability_canary.py \
+            --apply \
+            --auto-discover \
+            --api-url http://localhost:8000 \
+            --prometheus-url http://localhost:9090 \
+            --username "${ADMIN_EMAIL}" \
+            --password "${ADMIN_PASSWORD}" \
+            --status-probes 3 \
+            --scrape-wait-seconds 65 \
+            --window 30m \
+            2>&1 | tee /tmp/observability-maintenance/canary.log
+
+      - name: Run DB observability report
+        if: steps.mode.outputs.run_db_report == 'true'
+        run: |
+          set -euo pipefail
+          ./scripts/observability_db_report.sh 30 \
+            2>&1 | tee /tmp/observability-maintenance/db-report-30d.log
+
+      - name: Run link reservation drift self-check
+        if: steps.mode.outputs.run_drift == 'true'
+        run: |
+          set -euo pipefail
+          ./scripts/link_reservation_drift_check.sh \
+            2>&1 | tee /tmp/observability-maintenance/link-reservation-drift.log
+
+      - name: Capture compose logs on failure
+        if: failure()
+        run: |
+          set -euo pipefail
+          docker compose -f docker-compose.gui.yml ps > /tmp/observability-maintenance/compose-ps.txt || true
+          docker compose -f docker-compose.gui.yml logs --no-color --timestamps > /tmp/observability-maintenance/compose.log || true
+          for svc in api scheduler worker agent prometheus loki postgres redis; do
+            docker compose -f docker-compose.gui.yml logs --no-color --timestamps "$svc" > "/tmp/observability-maintenance/${svc}.log" || true
+          done
+
+      - name: Upload maintenance artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: observability-maintenance-${{ github.run_id }}-${{ github.run_attempt }}
+          path: /tmp/observability-maintenance
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Tear down observability stack
+        if: always()
+        run: docker compose -f docker-compose.gui.yml down -v --remove-orphans

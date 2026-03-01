@@ -25,6 +25,43 @@ MAX_LOG_BYTES_PER_JOB = 50_000
 MAX_JOBS_PER_LAB = 100
 
 PROMETHEUS_URL = os.getenv("PROMETHEUS_URL", "http://prometheus:9090")
+SCHEDULER_HEALTH_URL = os.getenv("SCHEDULER_HEALTH_URL", "http://scheduler:8002/healthz")
+WORKER_METRICS_URL = os.getenv("WORKER_METRICS_URL", "http://worker:8003/metrics")
+WORKER_METRICS_URLS_RAW = os.getenv("WORKER_METRICS_URLS", "")
+AGENT_HEALTH_PATH = os.getenv("AGENT_HEALTH_PATH", "/healthz")
+
+
+def _resolve_worker_metrics_urls() -> list[str]:
+    urls: list[str] = []
+    if WORKER_METRICS_URLS_RAW:
+        urls.extend(item.strip() for item in WORKER_METRICS_URLS_RAW.split(",") if item.strip())
+    urls.append(WORKER_METRICS_URL)
+    # docker-compose.gui.yml runs worker in host network mode by default.
+    # The API service can reach host-mode services through the local-agent alias.
+    urls.append("http://local-agent:8003/metrics")
+    # Keep host.docker.internal as a secondary fallback for environments that provide it.
+    urls.append("http://host.docker.internal:8003/metrics")
+
+    unique: list[str] = []
+    for url in urls:
+        if url and url not in unique:
+            unique.append(url)
+    return unique
+
+
+WORKER_METRICS_URLS = _resolve_worker_metrics_urls()
+
+
+def _int_env(name: str, default: int, *, minimum: int, maximum: int) -> int:
+    raw = os.getenv(name, str(default))
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        value = default
+    return max(minimum, min(value, maximum))
+
+
+MAX_AGENT_HEALTH_PROBES = _int_env("MAX_AGENT_HEALTH_PROBES", 20, minimum=1, maximum=100)
 
 SENSITIVE_KEY_PATTERN = re.compile(
     r"(password|secret|token|authorization|api[_-]?key|private[_-]?key|cookie|session)",
@@ -241,13 +278,60 @@ def _loki_entry_count(payload: dict[str, Any] | None) -> int | None:
     return count
 
 
+def _build_log_excerpt(raw_log: str, max_chars: int) -> tuple[str, bool, str, int, int]:
+    """Build a bounded log excerpt while preserving both early and late context."""
+    source_bytes = len(raw_log.encode("utf-8", errors="replace"))
+    source_chars = len(raw_log)
+    if max_chars <= 0:
+        return "", source_chars > 0, "empty", source_bytes, source_chars
+
+    if source_chars <= max_chars:
+        return raw_log, False, "full", source_bytes, 0
+
+    marker = "\n...[TRUNCATED]...\n"
+    keep_chars = max_chars - len(marker)
+    if keep_chars <= 1:
+        return raw_log[-max_chars:], True, "tail_only", source_bytes, source_chars - max_chars
+
+    head_chars = keep_chars // 2
+    tail_chars = keep_chars - head_chars
+    excerpt = f"{raw_log[:head_chars]}{marker}{raw_log[-tail_chars:]}"
+    return excerpt, True, "head_tail", source_bytes, source_chars - max_chars
+
+
 def _build_completeness_warnings(
     *,
     prom_results: dict[str, Any],
+    prom_targets: dict[str, Any],
+    prom_alerts: dict[str, Any],
     loki_service_logs: dict[str, Any],
     loki_service_label_values: list[str],
+    control_plane_health: dict[str, Any],
 ) -> list[str]:
     warnings: list[str] = []
+
+    critical_prom_signals = (
+        "targets_up_api",
+        "targets_up_scheduler",
+        "targets_up_worker",
+        "targets_up_agent",
+        "jobs_started_2h",
+        "job_duration_samples_2h",
+        "job_queue_wait_samples_2h",
+        "jobs_active",
+        "job_queue_depth",
+    )
+    for signal in critical_prom_signals:
+        payload = prom_results.get(signal)
+        if isinstance(payload, dict) and payload.get("error"):
+            warnings.append(
+                f"Coverage gap: failed to query Prometheus signal '{signal}'"
+            )
+
+    if isinstance(prom_targets, dict) and prom_targets.get("error"):
+        warnings.append("Coverage gap: failed to query Prometheus targets snapshot")
+    if isinstance(prom_alerts, dict) and prom_alerts.get("error"):
+        warnings.append("Coverage gap: failed to query Prometheus alerts snapshot")
 
     jobs_started = _prometheus_scalar_sum(prom_results.get("jobs_started_2h")) or 0.0
     duration_samples = _prometheus_scalar_sum(prom_results.get("job_duration_samples_2h")) or 0.0
@@ -278,6 +362,47 @@ def _build_completeness_warnings(
             warnings.append(f"Coverage gap: no Loki log entries found for service '{service}' in collection window")
         elif log_count is None:
             warnings.append(f"Coverage gap: failed to query Loki entries for service '{service}'")
+
+    api_target_up = _prometheus_scalar_sum(prom_results.get("targets_up_api")) or 0.0
+    if api_target_up >= 1:
+        api_health = control_plane_health.get("api")
+        if not isinstance(api_health, dict):
+            warnings.append("Coverage gap: api /healthz snapshot missing while Prometheus target is up")
+        elif api_health.get("error"):
+            warnings.append("Coverage gap: api /healthz unavailable while Prometheus target is up")
+
+    scheduler_target_up = _prometheus_scalar_sum(prom_results.get("targets_up_scheduler")) or 0.0
+    if scheduler_target_up >= 1:
+        scheduler_health = control_plane_health.get("scheduler")
+        if not isinstance(scheduler_health, dict):
+            warnings.append("Coverage gap: scheduler /healthz snapshot missing while Prometheus target is up")
+        elif scheduler_health.get("error"):
+            warnings.append("Coverage gap: scheduler /healthz unavailable while Prometheus target is up")
+        else:
+            payload = scheduler_health.get("payload")
+            status = ""
+            if isinstance(payload, dict):
+                status = str(payload.get("status") or "").strip().lower()
+            if status and status != "ok":
+                warnings.append(
+                    f"Coverage gap: scheduler /healthz reported status '{status}' while Prometheus target is up"
+                )
+            elif not status:
+                warnings.append("Coverage gap: scheduler /healthz payload missing status while Prometheus target is up")
+
+    worker_target_up = _prometheus_scalar_sum(prom_results.get("targets_up_worker")) or 0.0
+    if worker_target_up >= 1:
+        worker_health = control_plane_health.get("worker")
+        if not isinstance(worker_health, dict):
+            warnings.append("Coverage gap: worker /metrics probe missing while Prometheus target is up")
+        else:
+            worker_probe = worker_health.get("probe")
+            if not isinstance(worker_probe, dict):
+                warnings.append("Coverage gap: worker /metrics probe payload missing while Prometheus target is up")
+            elif worker_probe.get("error"):
+                warnings.append("Coverage gap: worker /metrics probe unavailable while Prometheus target is up")
+            elif worker_probe.get("ok") is False:
+                warnings.append("Coverage gap: worker /metrics probe unhealthy while Prometheus target is up")
 
     return warnings
 
@@ -357,6 +482,26 @@ async def _query_loki_label_values(label: str) -> dict[str, Any]:
         resp = await client.get(f"{settings.loki_url}/loki/api/v1/label/{label}/values")
         resp.raise_for_status()
         return resp.json()
+
+
+async def _query_service_health(url: str, *, timeout: float = 8.0) -> dict[str, Any]:
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        resp = await client.get(url)
+        resp.raise_for_status()
+        return resp.json()
+
+
+async def _probe_http_endpoint(url: str, *, timeout: float = 8.0) -> dict[str, Any]:
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        resp = await client.get(url)
+        body_text = resp.text or ""
+        return {
+            "status_code": resp.status_code,
+            "ok": resp.is_success,
+            "content_type": resp.headers.get("content-type"),
+            "content_length": len(body_text),
+            "line_count": body_text.count("\n") + (1 if body_text else 0),
+        }
 
 
 async def _collect_agent_snapshot(agent: models.Host) -> dict[str, Any]:
@@ -446,7 +591,10 @@ def _lab_export(
     job_exports: list[dict[str, Any]] = []
     for job in jobs:
         raw_log = get_log_content(job.log_path) or ""
-        log_excerpt = raw_log[:MAX_LOG_BYTES_PER_JOB]
+        log_excerpt, log_truncated, excerpt_strategy, source_bytes, truncated_chars = _build_log_excerpt(
+            raw_log,
+            MAX_LOG_BYTES_PER_JOB,
+        )
         job_exports.append(
             {
                 "id": job.id,
@@ -458,7 +606,11 @@ def _lab_export(
                 "completed_at": job.completed_at.isoformat() if job.completed_at else None,
                 "retry_count": job.retry_count,
                 "log_excerpt": log_excerpt,
-                "log_truncated": len(raw_log) > len(log_excerpt),
+                "log_truncated": log_truncated,
+                "log_excerpt_strategy": excerpt_strategy,
+                "log_source_chars": len(raw_log),
+                "log_source_bytes": source_bytes,
+                "log_truncated_chars": truncated_chars,
             }
         )
 
@@ -815,13 +967,6 @@ async def build_support_bundle(
         ),
     )
 
-    for warning in _build_completeness_warnings(
-        prom_results=prom_results,
-        loki_service_logs=loki_service_logs,
-        loki_service_label_values=loki_service_label_values,
-    ):
-        writer.errors.append(warning)
-
     # Queue and system health snapshots
     try:
         from app.db import get_redis as _get_redis
@@ -838,6 +983,97 @@ async def build_support_bundle(
         "system/queue-status.json",
         sanitize_data(queue_status, pii_safe=pii_safe, lab_alias=lab_alias, host_alias=host_alias),
     )
+
+    control_plane_health: dict[str, Any] = {
+        "prometheus_signals": {
+            "targets_up_api": _prometheus_scalar_sum(prom_results.get("targets_up_api")) or 0.0,
+            "targets_up_scheduler": _prometheus_scalar_sum(prom_results.get("targets_up_scheduler")) or 0.0,
+            "targets_up_worker": _prometheus_scalar_sum(prom_results.get("targets_up_worker")) or 0.0,
+            "targets_up_agent": _prometheus_scalar_sum(prom_results.get("targets_up_agent")) or 0.0,
+            "job_queue_depth": _prometheus_scalar_sum(prom_results.get("job_queue_depth")) or 0.0,
+            "jobs_active": _prometheus_scalar_sum(prom_results.get("jobs_active")) or 0.0,
+        },
+        "queue_snapshot": queue_status,
+    }
+
+    health_endpoints = {
+        "api": f"{settings.internal_url.rstrip('/')}/healthz",
+        "scheduler": SCHEDULER_HEALTH_URL,
+    }
+    for service, endpoint in health_endpoints.items():
+        try:
+            payload = await _query_service_health(endpoint)
+            control_plane_health[service] = {"url": endpoint, "payload": payload}
+        except Exception as exc:
+            control_plane_health[service] = {"url": endpoint, "error": str(exc)}
+
+    worker_health: dict[str, Any] = {
+        "url": WORKER_METRICS_URLS[0] if WORKER_METRICS_URLS else WORKER_METRICS_URL,
+        "urls": WORKER_METRICS_URLS,
+    }
+    probe_attempt_errors: list[str] = []
+    for endpoint in WORKER_METRICS_URLS:
+        try:
+            probe = await _probe_http_endpoint(endpoint)
+            worker_health["url"] = endpoint
+            worker_health["probe"] = probe
+            if probe.get("ok"):
+                break
+            probe_attempt_errors.append(
+                f"{endpoint}: unhealthy probe (status_code={probe.get('status_code')})"
+            )
+        except Exception as exc:
+            probe_attempt_errors.append(f"{endpoint}: {exc}")
+    else:
+        worker_health["probe"] = {
+            "error": "; ".join(probe_attempt_errors) if probe_attempt_errors else "worker metrics probe failed"
+        }
+
+    if probe_attempt_errors:
+        worker_health["probe_attempt_errors"] = probe_attempt_errors
+    control_plane_health["worker"] = worker_health
+
+    sampled_agents = selected_agents[:MAX_AGENT_HEALTH_PROBES]
+    agents_health: dict[str, Any] = {
+        "health_path": AGENT_HEALTH_PATH,
+        "sample_count": len(sampled_agents),
+        "sampled_agents": [],
+    }
+    if len(selected_agents) > len(sampled_agents):
+        agents_health["omitted_count"] = len(selected_agents) - len(sampled_agents)
+
+    for host in sampled_agents:
+        agent_url = f"{agent_client.get_agent_url(host).rstrip('/')}{AGENT_HEALTH_PATH}"
+        entry: dict[str, Any] = {
+            "id": host.id,
+            "name": host.name,
+            "address": host.address,
+            "url": agent_url,
+            "db_status": host.status,
+            "last_heartbeat": host.last_heartbeat.isoformat() if host.last_heartbeat else None,
+        }
+        try:
+            payload = await _query_service_health(agent_url)
+            entry["payload"] = payload
+        except Exception as exc:
+            entry["error"] = str(exc)
+        agents_health["sampled_agents"].append(entry)
+    control_plane_health["agent"] = agents_health
+
+    writer.add_json(
+        "system/control-plane-health.json",
+        sanitize_data(control_plane_health, pii_safe=pii_safe, lab_alias=lab_alias, host_alias=host_alias),
+    )
+
+    for warning in _build_completeness_warnings(
+        prom_results=prom_results,
+        prom_targets=prom_targets,
+        prom_alerts=prom_alerts,
+        loki_service_logs=loki_service_logs,
+        loki_service_label_values=loki_service_label_values,
+        control_plane_health=control_plane_health,
+    ):
+        writer.errors.append(warning)
 
     # Circuit breaker state
     try:
@@ -954,7 +1190,10 @@ async def run_bundle_generation(bundle_id: str) -> None:
             output_path = _bundle_dir() / f"{bundle_id}.zip"
             output_path.write_bytes(archive)
 
-            bundle.status = "completed"
+            manifest = metadata.get("manifest", {})
+            manifest_errors = manifest.get("errors") if isinstance(manifest, dict) else []
+            has_warnings = isinstance(manifest_errors, list) and len(manifest_errors) > 0
+            bundle.status = "completed_with_warnings" if has_warnings else "completed"
             bundle.file_path = str(output_path)
             bundle.size_bytes = len(archive)
             bundle.completed_at = _now_utc()

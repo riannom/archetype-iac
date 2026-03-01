@@ -1309,6 +1309,9 @@ class SupportBundleOut(BaseModel):
     error_message: str | None = None
     started_at: datetime | None = None
     completed_at: datetime | None = None
+    completeness_status: Literal["pending", "ok", "warning", "unknown"] = "pending"
+    completeness_warning_count: int = 0
+    completeness_warnings: list[str] = Field(default_factory=list)
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)

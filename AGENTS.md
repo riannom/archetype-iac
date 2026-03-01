@@ -17,7 +17,7 @@
   - `make observability-canary` — run observability canary checks (read-only by default).
   - `make observability-db-report` — print DB-backed duration/failure diagnostics (30-day default).
   - `make observability-canary-nonprod` — run controlled non-prod canary traffic and coverage checks.
-  - `make observability-maintenance-nonprod` — run canary + DB report bundle and write timestamped logs under `reports/observability/`.
+  - `make observability-maintenance-nonprod` — run canary + support-bundle triage drill + DB report bundle and write timestamped logs under `reports/observability/`.
   - `make observability-cron-install` — print suggested non-prod cron entries (use `./scripts/install_observability_cron_nonprod.sh --apply` to install).
   - `make iso-metadata-parity ISO=<path-to-iso> [JSON_OUT=reports/iso-parity.json]` — show parsed→stored→runtime metadata parity per ISO node definition.
   - `make confidence-gate [BASE=origin/main] [CONFIDENCE_FILES="<paths>"] [CONFIDENCE_RULES=scripts/confidence_gate_rules.json] [CONFIDENCE_MIN_SCORE=0]` — plan minimal relevant build/test checks and write `reports/confidence-gate/latest.json`.
@@ -33,6 +33,7 @@
   - `python3 scripts/backfill_device_image_catalog_db.py --manifest /var/lib/archetype/images/manifest.json` — dry-run DB catalog backfill (`--apply` to persist) after Alembic revisions `055` and `056`.
   - `python3 scripts/catalog_manifest_drift_check.py --manifest /var/lib/archetype/images/manifest.json` — compare manifest and catalog projection (`--json-out <path>` and `--fail-on-drift` supported).
   - `python3 scripts/observability_canary.py --apply --lab-id <lab_id> --sync-node-id <node_id> --run-up-down` — generate controlled traffic (status/sync/up/down) and validate metric coverage.
+  - `./scripts/run_support_bundle_triage_nonprod.sh` — seed deterministic failure signals, generate a support bundle via API, and validate triage artifact completeness.
   - `./scripts/observability_db_report.sh [days]` — query Postgres for long-running tasks, failure rates, and failure classes.
   - `./scripts/run_observability_canary_nonprod.sh` — wrapper for scheduled non-prod canary runs (`CANARY_LAB_ID` and `CANARY_SYNC_NODE_ID` required).
   - `./scripts/run_observability_maintenance_nonprod.sh` — runs canary + DB report and stores logs in `reports/observability/`.

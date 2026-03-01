@@ -55,6 +55,28 @@
       ],
       "required": true
     },
+    "test-support-bundle-triage-drill-script": {
+      "description": "Script-level regression for support-bundle triage drill validation contract",
+      "command": [
+        "python3",
+        "-m",
+        "pytest",
+        "-q",
+        "tests/scripts/test_support_bundle_triage_drill.py"
+      ],
+      "required": true
+    },
+    "test-prometheus-alert-rules": {
+      "description": "Alert-rule regression checks for required observability alerts",
+      "command": [
+        "python3",
+        "-m",
+        "pytest",
+        "-q",
+        "tests/test_prometheus_alert_rules.py"
+      ],
+      "required": true
+    },
     "test-api-observability-regression": {
       "description": "Targeted API regression for best-effort rollback handling",
       "command": [
@@ -132,10 +154,26 @@
       ],
       "globs": [
         "scripts/observability_canary.py",
-        "tests/scripts/test_observability_canary.py"
+        "scripts/support_bundle_triage_drill.py",
+        "tests/scripts/test_observability_canary.py",
+        "tests/scripts/test_support_bundle_triage_drill.py"
       ],
       "checks": [
-        "test-observability-canary-script"
+        "test-observability-canary-script",
+        "test-support-bundle-triage-drill-script"
+      ]
+    },
+    {
+      "name": "observability-alert-rules",
+      "areas": [
+        "observability"
+      ],
+      "globs": [
+        "prometheus-alerts.yml",
+        "tests/test_prometheus_alert_rules.py"
+      ],
+      "checks": [
+        "test-prometheus-alert-rules"
       ]
     },
     {

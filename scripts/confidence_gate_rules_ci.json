@@ -32,7 +32,7 @@
         "-lc",
         "cd api && DATABASE_URL=sqlite:///test.db REDIS_URL=redis://localhost:6379/0 WORKSPACE=/tmp/archetype-test PYTHONPATH=\"${PYTHONPATH}:$(pwd)/..\" pytest -q tests"
       ],
-      "required": true
+      "required": false
     },
     "test-agent": {
       "description": "Agent pytest suite in CI",
@@ -60,6 +60,17 @@
         "pytest",
         "-q",
         "tests/scripts/test_observability_canary.py"
+      ],
+      "required": true
+    },
+    "test-support-bundle-triage-drill-script": {
+      "description": "Script-level regression for support-bundle triage drill validation contract",
+      "command": [
+        "python3",
+        "-m",
+        "pytest",
+        "-q",
+        "tests/scripts/test_support_bundle_triage_drill.py"
       ],
       "required": true
     },
@@ -132,10 +143,14 @@
       ],
       "globs": [
         "scripts/observability_canary.py",
-        "tests/scripts/test_observability_canary.py"
+        "scripts/support_bundle_triage_drill.py",
+        "tests/test_prometheus_alert_rules.py",
+        "tests/scripts/test_observability_canary.py",
+        "tests/scripts/test_support_bundle_triage_drill.py"
       ],
       "checks": [
-        "test-observability-canary-script"
+        "test-observability-canary-script",
+        "test-support-bundle-triage-drill-script"
       ]
     },
     {

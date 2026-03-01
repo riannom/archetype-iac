@@ -139,7 +139,14 @@ This model is the source of truth for how image assignment (`device_id` and `com
 
 ## Observability Operations
 
-Use the non-prod maintenance bundle to produce periodic canary, DB, and link-reservation drift logs:
+Primary automation runs in CI via the scheduled workflow:
+
+- `.github/workflows/observability-maintenance.yml`
+  - `*/30 * * * *` controlled canary + support-bundle triage drill
+  - `15 */6 * * *` DB observability report
+  - `30 2 * * *` link reservation drift self-check
+
+For local/manual runs, use the non-prod maintenance bundle:
 
 ```bash
 ./scripts/run_observability_maintenance_nonprod.sh
@@ -148,6 +155,8 @@ Use the non-prod maintenance bundle to produce periodic canary, DB, and link-res
 This writes timestamped artifacts under `reports/observability/`, including:
 
 - `canary_<timestamp>.log`
+- `support_bundle_triage_<timestamp>.log`
+- `support_bundle_triage_<timestamp>.zip`
 - `db_report_<timestamp>.log`
 - `link_reservation_drift_<timestamp>.log`
 
