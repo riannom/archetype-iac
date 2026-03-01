@@ -138,13 +138,28 @@ class OverlayBridge:
     tracks the VLAN tag and associated ports for a link.
     """
 
-    name: str  # OVS bridge name (always arch-ovs)
-    vni: int  # Associated VNI
-    vlan_tag: int  # VLAN tag for isolation
-    lab_id: str
-    link_id: str
+    name: str = ""  # OVS bridge name (always arch-ovs)
+    vni: int = 0  # Associated VNI
+    vlan_tag: int = 0  # VLAN tag for isolation
+    lab_id: str = ""
+    link_id: str = ""
+    # Backward-compatible aliases expected by older tests/call-sites.
+    interface_name: str = ""
+    bridge_name: str = ""
     tenant_mtu: int = 0  # MTU for tenant interfaces (0 = use default)
     veth_pairs: list[tuple[str, str]] = field(default_factory=list)  # (host_end, container_end)
+
+    def __post_init__(self) -> None:
+        # Accept legacy construction styles that used bridge_name/interface_name
+        # instead of name/link_id.
+        if not self.name:
+            self.name = self.bridge_name or self.interface_name or settings.ovs_bridge_name
+        if not self.bridge_name:
+            self.bridge_name = self.name
+        if not self.interface_name:
+            self.interface_name = self.name
+        if not self.link_id:
+            self.link_id = str(self.vni)
 
     @property
     def key(self) -> str:

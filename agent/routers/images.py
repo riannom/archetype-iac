@@ -5,13 +5,15 @@ import asyncio
 import json
 import logging
 import os
+import subprocess
+import tempfile
 import time
 import uuid
 from pathlib import Path
 
 import docker
 import httpx
-from fastapi import APIRouter, HTTPException, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 
 from agent.config import settings
 from agent.docker_client import get_docker_client
@@ -139,12 +141,12 @@ async def backfill_image_checksums() -> dict:
 
 @router.post("/images/receive")
 async def receive_image(
-    file: UploadFile,
-    image_id: str = "",
-    reference: str = "",
-    total_bytes: int = 0,
-    job_id: str = "",
-    sha256: str = "",
+    file: UploadFile = File(...),
+    image_id: str = Form(""),
+    reference: str = Form(""),
+    total_bytes: int = Form(0),
+    job_id: str = Form(""),
+    sha256: str = Form(""),
 ) -> ImageReceiveResponse:
     """Receive a streamed Docker image tar from controller.
 
@@ -161,10 +163,6 @@ async def receive_image(
     Returns:
         Result of loading the image
     """
-    import os
-    import subprocess
-    import tempfile
-
     logger.info(f"Receiving image: {reference} ({total_bytes} bytes)")
     is_file_based = reference.startswith("/") or reference.endswith((".qcow2", ".img", ".iol"))
 
@@ -376,6 +374,8 @@ async def receive_image(
             _persist_transfer_state()
         return ImageReceiveResponse(success=False, error=error_msg)
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error receiving image {reference}: {e}", exc_info=True)
         error_msg = str(e)
