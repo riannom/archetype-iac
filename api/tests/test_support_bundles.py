@@ -163,6 +163,87 @@ def test_get_support_bundle_includes_completeness_warnings(test_client, test_db,
     assert len(body["completeness_warnings"]) == 2
 
 
+def test_get_support_bundle_warning_preview_is_capped(test_client, test_db, monkeypatch):
+    headers = _super_admin_headers(test_db, monkeypatch)
+    user_id = test_db.query(models.User.id).first()[0]
+    errors = [f"warning-{idx}" for idx in range(25)]
+    bundle = models.SupportBundle(
+        user_id=user_id,
+        status="completed",
+        include_configs=False,
+        pii_safe=True,
+        time_window_hours=24,
+        options_json=json.dumps({"manifest": {"errors": errors}}),
+        incident_json="{}",
+        file_path="/tmp/does-not-matter.zip",
+        size_bytes=123,
+    )
+    test_db.add(bundle)
+    test_db.commit()
+    test_db.refresh(bundle)
+
+    resp = test_client.get(f"/support-bundles/{bundle.id}", headers=headers)
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["completeness_status"] == "warning"
+    assert body["completeness_warning_count"] == 25
+    assert len(body["completeness_warnings"]) == 20
+    assert body["completeness_warnings"][0] == "warning-0"
+
+
+def test_download_support_bundle_pending_returns_409(test_client, test_db, monkeypatch):
+    headers = _super_admin_headers(test_db, monkeypatch)
+    user_id = test_db.query(models.User.id).first()[0]
+    bundle = models.SupportBundle(
+        user_id=user_id,
+        status="pending",
+        include_configs=False,
+        pii_safe=True,
+        time_window_hours=24,
+        options_json="{}",
+        incident_json="{}",
+        file_path=None,
+        size_bytes=None,
+    )
+    test_db.add(bundle)
+    test_db.commit()
+    test_db.refresh(bundle)
+
+    resp = test_client.get(f"/support-bundles/{bundle.id}/download", headers=headers)
+    assert resp.status_code == 409
+    assert "Support bundle is pending" in resp.json()["detail"]
+
+
+def test_download_support_bundle_missing_file_returns_404(test_client, test_db, monkeypatch):
+    headers = _super_admin_headers(test_db, monkeypatch)
+    user_id = test_db.query(models.User.id).first()[0]
+    bundle = models.SupportBundle(
+        user_id=user_id,
+        status="completed",
+        include_configs=False,
+        pii_safe=True,
+        time_window_hours=24,
+        options_json="{}",
+        incident_json="{}",
+        file_path="/tmp/this-path-does-not-exist.zip",
+        size_bytes=0,
+    )
+    test_db.add(bundle)
+    test_db.commit()
+    test_db.refresh(bundle)
+
+    resp = test_client.get(f"/support-bundles/{bundle.id}/download", headers=headers)
+    assert resp.status_code == 404
+    assert resp.json()["detail"] == "Bundle file missing"
+
+
+def test_get_support_bundle_not_found_returns_404(test_client, test_db, monkeypatch):
+    headers = _super_admin_headers(test_db, monkeypatch)
+    resp = test_client.get("/support-bundles/nonexistent-id", headers=headers)
+    assert resp.status_code == 404
+    assert resp.json()["detail"] == "Support bundle not found"
+
+
 def test_support_bundle_status_column_fits_completed_with_warnings():
     status_col = models.SupportBundle.__table__.c.status
     assert getattr(status_col.type, "length", None) >= len("completed_with_warnings")

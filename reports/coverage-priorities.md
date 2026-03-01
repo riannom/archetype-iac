@@ -1,31 +1,78 @@
 # Coverage Priorities Summary
 
-Generated: 2026-02-05
+Generated: 2026-03-01
+Worktree: `worktree/test-coverage-gap-plan-20260301`
 
-## Snapshot (import-based coverage map)
+## Scope and Inputs
 
-- API: 75 source files, 39 covered, 36 uncovered.
-- Agent: 41 source files, 15 covered, 26 uncovered.
-- Web: 156 source files, 67 covered, 89 uncovered.
+- Regenerated import-map coverage via `python3 scripts/coverage_map.py`.
+- Updated `scripts/coverage_map.py`:
+  - Python import parsing now uses AST (`Import` + `ImportFrom`) and handles submodules from `from x import y`.
+  - TypeScript/TSX parsing now detects standard `import ... from`, side-effect imports, and `export ... from`.
+  - Test-file detection now avoids false positives for production files such as `api/app/tasks/test_runner.py`.
+- Reviewed support-bundle and observability regression tests:
+  - `api/tests/test_support_bundles.py`
+  - `api/tests/test_services_support_bundle.py`
+  - `tests/scripts/test_support_bundle_triage_drill.py`
+  - `tests/test_prometheus_alert_rules.py`
+  - `tests/test_grafana_dashboards.py`
 
-Note: This report is based on direct imports in test files and does not represent runtime line coverage.
+Note: this import-map is a static signal. It does not prove branch/line runtime coverage.
 
-## Priority Focus Areas
+## Current Snapshot (Import-Map)
 
-### API
-- State and enforcement logic: `api/app/services/state_machine.py`, `api/app/tasks/state_enforcement.py`.
-- Link validation and reconciliation: `api/app/services/link_validator.py`, `api/app/tasks/link_reconciliation.py`, `api/app/tasks/live_links.py`.
-- Interface mapping and device catalog logic: `api/app/services/interface_mapping.py`, `api/app/services/device_service.py`.
+- API: 125 source, 125 covered, 0 uncovered.
+- Agent: 82 source, 82 covered, 0 uncovered.
+- Web: 186 source, 186 covered, 0 uncovered.
 
-### Agent
-- VXLAN/VNI allocation and overlay bookkeeping: `agent/network/overlay.py`.
-- Provider discovery and registry behavior: `agent/providers/registry.py`.
+## New Test Coverage Added In This Iteration
 
-### Web
-- Core data contexts and persistence hooks: `web/src/contexts/DeviceCatalogContext.tsx`, `web/src/contexts/ImageLibraryContext.tsx`, `web/src/studio/hooks/usePersistedState.ts`.
-- Canvas state management: `web/src/studio/store/canvasStore.ts`.
-- Infrastructure page shell: `web/src/pages/InfrastructurePage.tsx`.
+- Web component coverage:
+  - `web/src/components/AdminMenuButton.test.tsx`
+  - `web/src/studio/components/ConfigRebootConfirmModal.test.tsx`
+  - `web/src/studio/components/InfraView/AgentNode.test.tsx`
+  - `web/src/studio/components/InfraView/GraphLink.test.tsx`
+  - `web/src/studio/components/InfraView/DetailPanel.test.tsx`
+- Agent utility/behavior coverage:
+  - `agent/tests/test_http_client.py`
+  - `agent/tests/test_image_cleanup.py`
+  - `agent/tests/test_providers_naming.py`
+  - `agent/tests/test_network_cmd.py`
+  - `agent/tests/test_n9kv_poap.py`
+- Support-bundle router hardening:
+  - Expanded `api/tests/test_support_bundles.py` with download/error-path and completeness-preview edge cases.
+- Import-smoke coverage for app-wired modules that static mapping previously missed:
+  - `agent/tests/test_uncovered_module_imports_batch4.py`
+  - `api/tests/test_uncovered_module_imports_batch2.py`
 
-## Deprioritized in this iteration
+## Validation Run
 
-- Animated backgrounds and visual-only components under `web/src/components/backgrounds/animations`.
+- `pytest -q agent/tests/test_http_client.py agent/tests/test_image_cleanup.py agent/tests/test_providers_naming.py agent/tests/test_uncovered_module_imports_batch4.py`
+  - Result: 15 passed.
+- `pytest -q agent/tests/test_network_cmd.py agent/tests/test_n9kv_poap.py`
+  - Result: 7 passed.
+- `make test-api-container API_TEST=tests/test_uncovered_module_imports_batch2.py`
+  - Result: 2 passed (in API container).
+- `make test-api-container API_TEST=tests/test_support_bundles.py`
+  - Result: 10 passed (in API container).
+- `make test-web-container WEB_TEST=...` (each new web file run individually)
+  - Result: all new web tests passed.
+
+## Support-Bundle Triage Readiness
+
+Current strengths:
+
+- Support-bundle API/service tests already cover degraded observability and completeness warnings.
+- Observability drill and canary checks are exercised in CI.
+- Static import-map no longer shows blind spots in triage-adjacent modules.
+
+Remaining risks:
+
+- Static import-map can be satisfied by shallow import-smoke tests; this does not guarantee deep behavior coverage.
+- Support-bundle triage still depends on cross-service runtime behavior (Prometheus/Loki/worker paths) that import-map does not validate.
+
+## Next High-Value Work
+
+1. Replace remaining import-smoke-only modules with behavior tests for router error paths and auth boundaries.
+2. Add per-module runtime coverage reports (XML/HTML artifacts) and enforce minimums for support-bundle critical modules.
+3. Extend support-bundle drill fixtures to assert triage quality for mixed-failure scenarios (partial telemetry + worker backlog + stale scheduler).

@@ -35,6 +35,15 @@ def _mock_image_store_path(tmp_path, monkeypatch):
     monkeypatch.setattr("app.image_store.image_store_root", lambda: tmp_path)
 
 
+@pytest.fixture(autouse=True)
+def _force_file_backed_manifest_mode(monkeypatch):
+    """Keep manifest tests deterministic by bypassing catalog-backed read/write mode."""
+    monkeypatch.setattr(
+        "app.services.catalog_service.catalog_is_seeded",
+        lambda _session: False,
+    )
+
+
 class TestDetectDeviceFromFilename:
     """Tests for detect_device_from_filename function."""
 

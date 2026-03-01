@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import ast
 import json
 import os
 import re
@@ -13,9 +14,13 @@ TARGETS = [
     ("web", "web/src", "web/src", {".ts", ".tsx"}),
 ]
 
-IMPORT_RE = re.compile(r"^(?:from|import)\s+([a-zA-Z0-9_\.]+)")
 REQ_RE = re.compile(r"require\(['\"]([^'\"]+)['\"]\)")
-ESM_RE = re.compile(r"from\s+['\"]([^'\"]+)['\"]")
+IMPORT_FROM_RE = re.compile(
+    r"import\s+(?:type\s+)?[\w*\s{},]+\s+from\s+['\"]([^'\"]+)['\"]",
+    re.MULTILINE,
+)
+IMPORT_SIDE_EFFECT_RE = re.compile(r"import\s+['\"]([^'\"]+)['\"]", re.MULTILINE)
+EXPORT_FROM_RE = re.compile(r"export\s+[\w*\s{},]+\s+from\s+['\"]([^'\"]+)['\"]", re.MULTILINE)
 
 
 def list_files(base, exts):
@@ -46,20 +51,44 @@ def rel(path):
 
 
 def is_test_file(path):
-    name = os.path.basename(path)
-    return "test" in name or "spec" in name
+    name = os.path.basename(path).lower()
+    norm = path.replace("\\", "/").lower()
+    in_tests_dir = "/tests/" in norm
+    if name == "conftest.py":
+        return True
+    if in_tests_dir and name.startswith("test_") and name.endswith(".py"):
+        return True
+    if name.endswith("_test.py"):
+        return True
+    if ".test." in name or ".spec." in name:
+        return True
+    return False
 
 
 def scan_imports_py(path):
     imports = set()
     try:
         with open(path, "r", encoding="utf-8", errors="ignore") as handle:
-            for line in handle:
-                match = IMPORT_RE.match(line.strip())
-                if match:
-                    imports.add(match.group(1))
-    except OSError:
-        pass
+            source = handle.read()
+        tree = ast.parse(source, filename=path)
+    except (OSError, SyntaxError):
+        return imports
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                imports.add(alias.name)
+        elif isinstance(node, ast.ImportFrom):
+            if not node.module:
+                continue
+            imports.add(node.module)
+            for alias in node.names:
+                if alias.name == "*":
+                    continue
+                # Add potential submodule for patterns like:
+                # `from app.routers import support`.
+                imports.add(f"{node.module}.{alias.name}")
+
     return imports
 
 
@@ -70,7 +99,11 @@ def scan_imports_ts(path):
             text = handle.read()
         for match in REQ_RE.finditer(text):
             imports.add(match.group(1))
-        for match in ESM_RE.finditer(text):
+        for match in IMPORT_FROM_RE.finditer(text):
+            imports.add(match.group(1))
+        for match in IMPORT_SIDE_EFFECT_RE.finditer(text):
+            imports.add(match.group(1))
+        for match in EXPORT_FROM_RE.finditer(text):
             imports.add(match.group(1))
     except OSError:
         pass
@@ -174,7 +207,7 @@ def build_report():
                 covered.update(targets)
 
         src_rel = set(rel(path) for path in src_files)
-        covered_rel = set(rel(path) for path in covered)
+        covered_rel = src_rel & set(rel(path) for path in covered)
         uncovered = sorted(src_rel - covered_rel)
 
         report[name] = {
