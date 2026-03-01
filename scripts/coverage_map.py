@@ -15,7 +15,12 @@ TARGETS = [
 ]
 
 REQ_RE = re.compile(r"require\(['\"]([^'\"]+)['\"]\)")
-ESM_RE = re.compile(r"from\s+['\"]([^'\"]+)['\"]")
+IMPORT_FROM_RE = re.compile(
+    r"import\s+(?:type\s+)?[\w*\s{},]+\s+from\s+['\"]([^'\"]+)['\"]",
+    re.MULTILINE,
+)
+IMPORT_SIDE_EFFECT_RE = re.compile(r"import\s+['\"]([^'\"]+)['\"]", re.MULTILINE)
+EXPORT_FROM_RE = re.compile(r"export\s+[\w*\s{},]+\s+from\s+['\"]([^'\"]+)['\"]", re.MULTILINE)
 
 
 def list_files(base, exts):
@@ -46,8 +51,18 @@ def rel(path):
 
 
 def is_test_file(path):
-    name = os.path.basename(path)
-    return "test" in name or "spec" in name
+    name = os.path.basename(path).lower()
+    norm = path.replace("\\", "/").lower()
+    in_tests_dir = "/tests/" in norm
+    if name == "conftest.py":
+        return True
+    if in_tests_dir and name.startswith("test_") and name.endswith(".py"):
+        return True
+    if name.endswith("_test.py"):
+        return True
+    if ".test." in name or ".spec." in name:
+        return True
+    return False
 
 
 def scan_imports_py(path):
@@ -84,7 +99,11 @@ def scan_imports_ts(path):
             text = handle.read()
         for match in REQ_RE.finditer(text):
             imports.add(match.group(1))
-        for match in ESM_RE.finditer(text):
+        for match in IMPORT_FROM_RE.finditer(text):
+            imports.add(match.group(1))
+        for match in IMPORT_SIDE_EFFECT_RE.finditer(text):
+            imports.add(match.group(1))
+        for match in EXPORT_FROM_RE.finditer(text):
             imports.add(match.group(1))
     except OSError:
         pass
@@ -188,7 +207,7 @@ def build_report():
                 covered.update(targets)
 
         src_rel = set(rel(path) for path in src_files)
-        covered_rel = set(rel(path) for path in covered)
+        covered_rel = src_rel & set(rel(path) for path in covered)
         uncovered = sorted(src_rel - covered_rel)
 
         report[name] = {

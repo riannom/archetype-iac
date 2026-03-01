@@ -40,6 +40,7 @@
       "api/app/routers/infrastructure.py",
       "api/app/routers/iso.py",
       "api/app/routers/jobs.py",
+      "api/app/routers/lab_tests.py",
       "api/app/routers/labs.py",
       "api/app/routers/labs_configs.py",
       "api/app/routers/labs_node_states.py",
@@ -101,6 +102,7 @@
       "api/app/tasks/reconciliation.py",
       "api/app/tasks/scenario_executor.py",
       "api/app/tasks/state_enforcement.py",
+      "api/app/tasks/test_runner.py",
       "api/app/tasks/vrnetlab_build.py",
       "api/app/timing.py",
       "api/app/topology.py",
@@ -276,6 +278,7 @@
       "api/tests/test_topology.py",
       "api/tests/test_topology_service.py",
       "api/tests/test_transitional_states.py",
+      "api/tests/test_uncovered_module_imports_batch2.py",
       "api/tests/test_utils_cache_extra.py",
       "api/tests/test_utils_http_extra.py",
       "api/tests/test_utils_image_integrity.py",
@@ -730,6 +733,14 @@
         "api/app/models.py",
         "api/app/tasks/reconciliation.py"
       ],
+      "api/tests/test_uncovered_module_imports_batch2.py": [
+        "api/app/agent_auth.py",
+        "api/app/routers/dashboard.py",
+        "api/app/routers/lab_tests.py",
+        "api/app/routers/labs_configs.py",
+        "api/app/routers/labs_node_states.py",
+        "api/app/utils/time.py"
+      ],
       "api/tests/test_storage.py": [
         "api/app/schemas.py",
         "api/app/storage.py"
@@ -1008,6 +1019,7 @@
     },
     "covered_sources": [
       "api/app/__init__.py",
+      "api/app/agent_auth.py",
       "api/app/agent_client.py",
       "api/app/auth.py",
       "api/app/config.py",
@@ -1039,12 +1051,16 @@
       "api/app/routers/auth.py",
       "api/app/routers/callbacks.py",
       "api/app/routers/console.py",
+      "api/app/routers/dashboard.py",
       "api/app/routers/events.py",
       "api/app/routers/images.py",
       "api/app/routers/infrastructure.py",
       "api/app/routers/iso.py",
       "api/app/routers/jobs.py",
+      "api/app/routers/lab_tests.py",
       "api/app/routers/labs.py",
+      "api/app/routers/labs_configs.py",
+      "api/app/routers/labs_node_states.py",
       "api/app/routers/permissions.py",
       "api/app/routers/scenarios.py",
       "api/app/routers/state_ws.py",
@@ -1122,22 +1138,17 @@
       "api/app/utils/nodes.py",
       "api/app/utils/pagination.py",
       "api/app/utils/supervisor.py",
+      "api/app/utils/time.py",
       "api/app/utils/time_range.py",
       "api/app/utils/timeouts.py",
       "api/app/webhooks.py",
       "api/app/worker.py"
     ],
-    "uncovered_sources": [
-      "api/app/agent_auth.py",
-      "api/app/routers/dashboard.py",
-      "api/app/routers/labs_configs.py",
-      "api/app/routers/labs_node_states.py",
-      "api/app/utils/time.py"
-    ],
+    "uncovered_sources": [],
     "counts": {
-      "source": 123,
-      "covered": 119,
-      "uncovered": 5
+      "source": 125,
+      "covered": 125,
+      "uncovered": 0
     }
   },
   "agent": {
@@ -1262,6 +1273,8 @@
       "agent/tests/test_docker_snapshotter_drift.py",
       "agent/tests/test_events_console_logging_version_batch2.py",
       "agent/tests/test_hardware_spec_override.py",
+      "agent/tests/test_http_client.py",
+      "agent/tests/test_image_cleanup.py",
       "agent/tests/test_input_validation.py",
       "agent/tests/test_interface_config_unit.py",
       "agent/tests/test_iso_inject.py",
@@ -1273,11 +1286,13 @@
       "agent/tests/test_libvirt_security.py",
       "agent/tests/test_libvirt_vlan_collision_avoidance.py",
       "agent/tests/test_locks.py",
+      "agent/tests/test_n9kv_poap.py",
       "agent/tests/test_n9kv_poap_endpoints.py",
       "agent/tests/test_n9kv_vendor_config.py",
       "agent/tests/test_network_backend.py",
       "agent/tests/test_network_backend_registry.py",
       "agent/tests/test_network_cleanup_unit.py",
+      "agent/tests/test_network_cmd.py",
       "agent/tests/test_network_interface_config_detection.py",
       "agent/tests/test_network_interface_config_host_helpers.py",
       "agent/tests/test_network_interface_config_write_helpers.py",
@@ -1304,6 +1319,7 @@
       "agent/tests/test_port_state.py",
       "agent/tests/test_provider_registry.py",
       "agent/tests/test_provider_registry_unit.py",
+      "agent/tests/test_providers_naming.py",
       "agent/tests/test_readiness.py",
       "agent/tests/test_reconcile_overlay_ports.py",
       "agent/tests/test_registration.py",
@@ -1321,6 +1337,7 @@
       "agent/tests/test_routers_nodes_full.py",
       "agent/tests/test_routers_overlay_full.py",
       "agent/tests/test_timing.py",
+      "agent/tests/test_uncovered_module_imports_batch4.py",
       "agent/tests/test_updater.py",
       "agent/tests/test_vendors_comprehensive.py",
       "agent/tests/test_virsh_console_lock.py",
@@ -1376,6 +1393,9 @@
       "agent/tests/test_libvirt_carrier.py": [
         "agent/providers/libvirt.py"
       ],
+      "agent/tests/test_image_cleanup.py": [
+        "agent/image_cleanup.py"
+      ],
       "agent/tests/test_bootflash_inject.py": [
         "agent/providers/__init__.py",
         "agent/providers/bootflash_inject.py"
@@ -1408,6 +1428,10 @@
       ],
       "agent/tests/test_config_disk_inject.py": [
         "agent/providers/config_disk_inject.py"
+      ],
+      "agent/tests/test_providers_naming.py": [
+        "agent/providers/__init__.py",
+        "agent/providers/naming.py"
       ],
       "agent/tests/test_docker_network_conflict_integration.py": [
         "agent/providers/docker.py"
@@ -1481,6 +1505,10 @@
         "agent/events/docker_events.py",
         "agent/network/docker_plugin.py"
       ],
+      "agent/tests/test_network_cmd.py": [
+        "agent/network/__init__.py",
+        "agent/network/cmd.py"
+      ],
       "agent/tests/test_input_validation.py": [
         "agent/config.py",
         "agent/main.py"
@@ -1512,6 +1540,9 @@
         "agent/config.py",
         "agent/main.py",
         "agent/updater.py"
+      ],
+      "agent/tests/test_http_client.py": [
+        "agent/http_client.py"
       ],
       "agent/tests/test_container_endpoints.py": [
         "agent/main.py",
@@ -1611,6 +1642,9 @@
       ],
       "agent/tests/test_console_routes.py": [
         "agent/main.py"
+      ],
+      "agent/tests/test_n9kv_poap.py": [
+        "agent/n9kv_poap.py"
       ],
       "agent/tests/test_docker_plugin_batch5.py": [
         "agent/network/docker_plugin.py"
@@ -1718,6 +1752,30 @@
       "agent/tests/test_provider_registry_unit.py": [
         "agent/providers/registry.py"
       ],
+      "agent/tests/test_uncovered_module_imports_batch4.py": [
+        "agent/n9kv_poap.py",
+        "agent/network/cmd.py",
+        "agent/routers/__init__.py",
+        "agent/routers/admin.py",
+        "agent/routers/console.py",
+        "agent/routers/health.py",
+        "agent/routers/interfaces.py",
+        "agent/routers/nodes.py",
+        "agent/routers/overlay.py",
+        "agent/routers/ovs_plugin.py",
+        "agent/schemas/admin.py",
+        "agent/schemas/base.py",
+        "agent/schemas/console.py",
+        "agent/schemas/deploy.py",
+        "agent/schemas/enums.py",
+        "agent/schemas/images.py",
+        "agent/schemas/labs.py",
+        "agent/schemas/network.py",
+        "agent/schemas/node_lifecycle.py",
+        "agent/schemas/overlay.py",
+        "agent/schemas/plugin.py",
+        "agent/schemas/provisioning.py"
+      ],
       "agent/tests/test_routers_nodes.py": [
         "agent/main.py",
         "agent/providers/base.py"
@@ -1748,10 +1806,13 @@
       "agent/events/base.py",
       "agent/events/docker_events.py",
       "agent/helpers.py",
+      "agent/http_client.py",
+      "agent/image_cleanup.py",
       "agent/locks.py",
       "agent/logging_config.py",
       "agent/main.py",
       "agent/metrics.py",
+      "agent/n9kv_poap.py",
       "agent/network/__init__.py",
       "agent/network/backends/__init__.py",
       "agent/network/backends/base.py",
@@ -1759,6 +1820,7 @@
       "agent/network/backends/registry.py",
       "agent/network/carrier_monitor.py",
       "agent/network/cleanup.py",
+      "agent/network/cmd.py",
       "agent/network/docker_plugin.py",
       "agent/network/interface_config.py",
       "agent/network/local.py",
@@ -1775,39 +1837,27 @@
       "agent/providers/docker_networks.py",
       "agent/providers/iso_inject.py",
       "agent/providers/libvirt.py",
+      "agent/providers/naming.py",
       "agent/providers/registry.py",
       "agent/readiness.py",
       "agent/registration.py",
       "agent/registry.py",
-      "agent/routers/images.py",
-      "agent/routers/jobs.py",
-      "agent/routers/labs.py",
-      "agent/routers/links.py",
-      "agent/schemas/__init__.py",
-      "agent/schemas/common.py",
-      "agent/tests/__init__.py",
-      "agent/timing.py",
-      "agent/updater.py",
-      "agent/vendors.py",
-      "agent/version.py",
-      "agent/virsh_console_lock.py"
-    ],
-    "uncovered_sources": [
-      "agent/http_client.py",
-      "agent/image_cleanup.py",
-      "agent/n9kv_poap.py",
-      "agent/network/cmd.py",
-      "agent/providers/naming.py",
       "agent/routers/__init__.py",
       "agent/routers/admin.py",
       "agent/routers/console.py",
       "agent/routers/health.py",
+      "agent/routers/images.py",
       "agent/routers/interfaces.py",
+      "agent/routers/jobs.py",
+      "agent/routers/labs.py",
+      "agent/routers/links.py",
       "agent/routers/nodes.py",
       "agent/routers/overlay.py",
       "agent/routers/ovs_plugin.py",
+      "agent/schemas/__init__.py",
       "agent/schemas/admin.py",
       "agent/schemas/base.py",
+      "agent/schemas/common.py",
       "agent/schemas/console.py",
       "agent/schemas/deploy.py",
       "agent/schemas/enums.py",
@@ -1817,12 +1867,19 @@
       "agent/schemas/node_lifecycle.py",
       "agent/schemas/overlay.py",
       "agent/schemas/plugin.py",
-      "agent/schemas/provisioning.py"
+      "agent/schemas/provisioning.py",
+      "agent/tests/__init__.py",
+      "agent/timing.py",
+      "agent/updater.py",
+      "agent/vendors.py",
+      "agent/version.py",
+      "agent/virsh_console_lock.py"
     ],
+    "uncovered_sources": [],
     "counts": {
       "source": 82,
-      "covered": 57,
-      "uncovered": 25
+      "covered": 82,
+      "uncovered": 0
     }
   },
   "web": {
@@ -2017,6 +2074,7 @@
     "test_files": [
       "web/src/api.extended.test.ts",
       "web/src/api.test.ts",
+      "web/src/components/AdminMenuButton.test.tsx",
       "web/src/components/ISOImportModal.test.tsx",
       "web/src/components/ImageSyncProgress.ondemand.test.tsx",
       "web/src/components/ImageSyncProgress.test.tsx",
@@ -2066,6 +2124,7 @@
       "web/src/studio/components/Auth.test.tsx",
       "web/src/studio/components/Canvas.test.tsx",
       "web/src/studio/components/ConfigDiffViewer.test.tsx",
+      "web/src/studio/components/ConfigRebootConfirmModal.test.tsx",
       "web/src/studio/components/ConfigSnapshotSelector.test.tsx",
       "web/src/studio/components/ConfigViewerModal.test.tsx",
       "web/src/studio/components/ConfigsView.test.tsx",
@@ -2090,6 +2149,9 @@
       "web/src/studio/components/ImageCard.test.tsx",
       "web/src/studio/components/ImageFilterBar.test.tsx",
       "web/src/studio/components/InfraView/AgentGraph.test.tsx",
+      "web/src/studio/components/InfraView/AgentNode.test.tsx",
+      "web/src/studio/components/InfraView/DetailPanel.test.tsx",
+      "web/src/studio/components/InfraView/GraphLink.test.tsx",
       "web/src/studio/components/InfraView/InfraHeader.test.tsx",
       "web/src/studio/components/InfraView/InfraView.smoke.test.tsx",
       "web/src/studio/components/InfraView/LinkTable.test.tsx",
@@ -2290,6 +2352,9 @@
         "web/src/studio/components/DeviceConfigCard.tsx",
         "web/src/studio/types.ts"
       ],
+      "web/src/studio/components/ConfigRebootConfirmModal.test.tsx": [
+        "web/src/studio/components/ConfigRebootConfirmModal.tsx"
+      ],
       "web/src/studio/components/VerificationPanel.test.tsx": [
         "web/src/api.ts",
         "web/src/studio/components/VerificationPanel.tsx",
@@ -2449,10 +2514,18 @@
       "web/src/studio/components/DetailPopup.test.tsx": [
         "web/src/studio/components/DetailPopup.tsx"
       ],
+      "web/src/studio/components/InfraView/GraphLink.test.tsx": [
+        "web/src/studio/components/InfraView/GraphLink.tsx",
+        "web/src/studio/hooks/useLabStateWS.ts"
+      ],
       "web/src/studio/components/InfraView/AgentGraph.test.tsx": [
         "web/src/studio/components/InfraView/AgentGraph.tsx",
         "web/src/studio/components/InfraView/types.ts",
         "web/src/studio/hooks/useLabStateWS.ts"
+      ],
+      "web/src/studio/components/InfraView/AgentNode.test.tsx": [
+        "web/src/studio/components/InfraView/AgentNode.tsx",
+        "web/src/studio/components/InfraView/types.ts"
       ],
       "web/src/studio/components/InfraView/VniLinkDetailPanel.test.tsx": [
         "web/src/api.ts",
@@ -2468,6 +2541,10 @@
         "web/src/studio/components/InfraView/LinkTable.tsx",
         "web/src/studio/components/InfraView/types.ts",
         "web/src/studio/hooks/useLabStateWS.ts"
+      ],
+      "web/src/studio/components/InfraView/DetailPanel.test.tsx": [
+        "web/src/studio/components/InfraView/DetailPanel.tsx",
+        "web/src/studio/components/InfraView/types.ts"
       ],
       "web/src/studio/components/InfraView/index.test.tsx": [
         "web/src/api.ts",
@@ -2573,6 +2650,9 @@
       ],
       "web/src/components/NotificationCenter.test.tsx": [
         "web/src/components/NotificationCenter.tsx"
+      ],
+      "web/src/components/AdminMenuButton.test.tsx": [
+        "web/src/components/AdminMenuButton.tsx"
       ],
       "web/src/components/ISOImportModal.test.tsx": [
         "web/src/components/ISOImportModal.tsx"
@@ -2701,6 +2781,7 @@
     },
     "covered_sources": [
       "web/src/api.ts",
+      "web/src/components/AdminMenuButton.tsx",
       "web/src/components/ISOImportModal.tsx",
       "web/src/components/ImageSyncProgress.tsx",
       "web/src/components/NotificationCenter.tsx",
@@ -2799,6 +2880,7 @@
       "web/src/studio/components/Auth.tsx",
       "web/src/studio/components/Canvas.tsx",
       "web/src/studio/components/ConfigDiffViewer.tsx",
+      "web/src/studio/components/ConfigRebootConfirmModal.tsx",
       "web/src/studio/components/ConfigSnapshotSelector.tsx",
       "web/src/studio/components/ConfigViewerModal.tsx",
       "web/src/studio/components/ConfigsView/ConfigActions.tsx",
@@ -2823,6 +2905,9 @@
       "web/src/studio/components/ImageFilterBar.tsx",
       "web/src/studio/components/InfraView/AgentDetailView.tsx",
       "web/src/studio/components/InfraView/AgentGraph.tsx",
+      "web/src/studio/components/InfraView/AgentNode.tsx",
+      "web/src/studio/components/InfraView/DetailPanel.tsx",
+      "web/src/studio/components/InfraView/GraphLink.tsx",
       "web/src/studio/components/InfraView/InfraHeader.tsx",
       "web/src/studio/components/InfraView/LinkTable.tsx",
       "web/src/studio/components/InfraView/NotificationsPanel.tsx",
@@ -2882,17 +2967,11 @@
       "web/src/utils/status.ts",
       "web/src/vite-env.d.ts"
     ],
-    "uncovered_sources": [
-      "web/src/components/AdminMenuButton.tsx",
-      "web/src/studio/components/ConfigRebootConfirmModal.tsx",
-      "web/src/studio/components/InfraView/AgentNode.tsx",
-      "web/src/studio/components/InfraView/DetailPanel.tsx",
-      "web/src/studio/components/InfraView/GraphLink.tsx"
-    ],
+    "uncovered_sources": [],
     "counts": {
       "source": 186,
-      "covered": 181,
-      "uncovered": 5
+      "covered": 186,
+      "uncovered": 0
     }
   }
 }
