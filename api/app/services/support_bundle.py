@@ -347,15 +347,9 @@ def _build_completeness_warnings(
         "scheduler": "targets_up_scheduler",
         "agent": "targets_up_agent",
     }
-    label_values_set = {value.strip() for value in loki_service_label_values if value}
     for service, target_key in target_by_service.items():
         target_up = _prometheus_scalar_sum(prom_results.get(target_key)) or 0.0
         if target_up < 1:
-            continue
-        if service not in label_values_set:
-            warnings.append(
-                f"Coverage gap: Loki 'service' label missing expected value '{service}' while target is up"
-            )
             continue
         log_count = _loki_entry_count(loki_service_logs.get(service))
         if log_count == 0:
@@ -456,20 +450,55 @@ async def _query_loki_service_logs(
         end_dt = _now_utc()
     start_ns = int(start_dt.astimezone(timezone.utc).timestamp()) * 1_000_000_000
     end_ns = int(end_dt.astimezone(timezone.utc).timestamp()) * 1_000_000_000
-    query = f'{{service="{service}"}}'
+    escaped_service = re.escape(service)
+    query_candidates: list[tuple[str, str]] = [
+        ("service", f'{{service="{service}"}}'),
+        ("compose_service", f'{{compose_service="{service}"}}'),
+        ("container", f'{{container=~".*{escaped_service}.*"}}'),
+    ]
+    attempts: list[dict[str, Any]] = []
+    first_success: dict[str, Any] | None = None
+
     async with httpx.AsyncClient(timeout=25.0) as client:
-        resp = await client.get(
-            f"{settings.loki_url}/loki/api/v1/query_range",
-            params={
-                "query": query,
-                "start": start_ns,
-                "end": end_ns,
-                "limit": limit,
-                "direction": "backward",
-            },
-        )
-        resp.raise_for_status()
-        return resp.json()
+        for selector, query in query_candidates:
+            try:
+                resp = await client.get(
+                    f"{settings.loki_url}/loki/api/v1/query_range",
+                    params={
+                        "query": query,
+                        "start": start_ns,
+                        "end": end_ns,
+                        "limit": limit,
+                        "direction": "backward",
+                    },
+                )
+                resp.raise_for_status()
+                payload = resp.json()
+                if not isinstance(payload, dict):
+                    payload = {"status": "success", "data": {"result": []}}
+            except Exception as exc:
+                attempts.append({"selector": selector, "query": query, "error": str(exc)})
+                continue
+
+            log_count = _loki_entry_count(payload)
+            attempts.append({"selector": selector, "query": query, "log_count": log_count})
+            payload["selector"] = selector
+            payload["query"] = query
+
+            if first_success is None:
+                first_success = payload
+            if isinstance(log_count, int) and log_count > 0:
+                payload["attempts"] = attempts
+                return payload
+
+    if first_success is not None:
+        first_success["attempts"] = attempts
+        return first_success
+
+    return {
+        "error": f"failed to query Loki entries for service '{service}'",
+        "attempts": attempts,
+    }
 
 
 async def _query_loki_api_logs(since_hours: int, limit: int = 500) -> dict[str, Any]:

@@ -112,7 +112,7 @@ jobs:
         run: |
           set -euo pipefail
           docker compose -f docker-compose.gui.yml up -d --build \
-            postgres redis api scheduler worker agent loki prometheus
+            postgres redis api scheduler worker agent loki promtail prometheus
 
       - name: Wait for required readiness checks
         if: steps.mode.outputs.run_any == 'true'
@@ -139,12 +139,13 @@ jobs:
           if [ "${{ steps.mode.outputs.run_canary }}" = "true" ]; then
             for _ in $(seq 1 120); do
               if curl -fsS http://localhost:8000/healthz >/dev/null \
-                && curl -fsS http://localhost:9090/-/ready >/dev/null; then
+                && curl -fsS http://localhost:9090/-/ready >/dev/null \
+                && curl -fsS http://localhost:9080/ready >/dev/null; then
                 exit 0
               fi
               sleep 2
             done
-            echo "API/Prometheus readiness timeout" >&2
+            echo "API/Prometheus/Promtail readiness timeout" >&2
             exit 1
           fi
 
@@ -195,7 +196,7 @@ jobs:
           set -euo pipefail
           docker compose -f docker-compose.gui.yml ps > /tmp/observability-maintenance/compose-ps.txt || true
           docker compose -f docker-compose.gui.yml logs --no-color --timestamps > /tmp/observability-maintenance/compose.log || true
-          for svc in api scheduler worker agent prometheus loki postgres redis; do
+          for svc in api scheduler worker agent prometheus promtail loki postgres redis; do
             docker compose -f docker-compose.gui.yml logs --no-color --timestamps "$svc" > "/tmp/observability-maintenance/${svc}.log" || true
           done
 
