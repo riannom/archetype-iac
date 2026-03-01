@@ -14,13 +14,8 @@ from functools import partial
 import hashlib
 import logging
 import os
-import re
-import socket
 import subprocess
-import uuid
 import xml.etree.ElementTree as ET
-from xml.sax.saxutils import escape as xml_escape
-from urllib.parse import quote
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -29,7 +24,6 @@ if TYPE_CHECKING:
 
 
 from agent.config import settings
-from agent.n9kv_poap import render_poap_script
 from agent.providers.naming import libvirt_domain_name as _libvirt_name, sanitize_id
 from agent.providers.base import (
     DeployResult,
@@ -41,9 +35,8 @@ from agent.providers.base import (
     StatusResult,
     VlanPersistenceMixin,
 )
-from agent.readiness import ReadinessResult, get_libvirt_probe, get_readiness_timeout
+from agent.readiness import ReadinessResult, get_readiness_timeout
 from agent.vendors import (
-    get_config_extraction_settings,
     get_kind_for_device,
     get_console_credentials,
     get_console_method,
@@ -51,6 +44,54 @@ from agent.vendors import (
     get_vendor_config,
 )
 from agent.network.ovs_vlan_tags import used_vlan_tags_on_bridge_from_ovs_outputs
+
+# Companion modules — extracted from this file to reduce size.
+from agent.providers.libvirt_xml import (
+    generate_mac_address as _generate_mac_address,
+    find_ovmf_code_path as _find_ovmf_code_path,
+    find_ovmf_vars_template as _find_ovmf_vars_template,
+    resolve_domain_driver as _resolve_domain_driver,
+    translate_container_path_to_host as _translate_container_path_to_host,
+    create_overlay_disk_sync as _create_overlay_disk_sync,
+    create_data_volume_sync as _create_data_volume_sync,
+    patch_vjunos_svm_compat as _patch_vjunos_svm_compat,
+    allocate_tcp_serial_port as _allocate_tcp_serial_port,
+    get_tcp_serial_port as _get_tcp_serial_port,
+    generate_domain_xml as _generate_domain_xml,
+)
+from agent.providers.libvirt_n9kv import (
+    _N9KV_CONFIG_PREAMBLE,
+    n9kv_poap_network_name as _n9kv_poap_network_name,
+    n9kv_poap_bridge_name as _n9kv_poap_bridge_name,
+    n9kv_poap_subnet as _n9kv_poap_subnet,
+    n9kv_poap_config_url as _n9kv_poap_config_url,
+    n9kv_poap_tftp_root as _n9kv_poap_tftp_root,
+    n9kv_poap_bootfile_name as _n9kv_poap_bootfile_name,
+    stage_n9kv_poap_tftp_script as _stage_n9kv_poap_tftp_script,
+    ensure_n9kv_poap_network as _ensure_n9kv_poap_network,
+    teardown_n9kv_poap_network as _teardown_n9kv_poap_network,
+    ensure_libvirt_network as _ensure_libvirt_network,
+    node_uses_dedicated_mgmt_interface as _node_uses_dedicated_mgmt_interface,
+    resolve_management_network as _resolve_management_network,
+)
+from agent.providers.libvirt_readiness import (
+    extract_probe_markers as _extract_probe_markers,
+    classify_console_result as _classify_console_result,
+    check_tcp_port as _check_tcp_port,
+    run_post_boot_commands as _run_post_boot_commands,
+    run_n9kv_loader_recovery as _run_n9kv_loader_recovery,
+    run_n9kv_panic_recovery as _run_n9kv_panic_recovery,
+    run_n9kv_poap_skip as _run_n9kv_poap_skip,
+    run_n9kv_admin_password_setup as _run_n9kv_admin_password_setup,
+    check_readiness as _check_readiness,
+)
+from agent.providers.libvirt_config import (
+    get_vm_management_ip as _get_vm_management_ip,
+    extract_config as _extract_config,
+    extract_config_via_ssh as _extract_config_via_ssh,
+    prepare_startup_config_for_injection as _prepare_startup_config_for_injection,
+    format_injection_diagnostics as _format_injection_diagnostics,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -164,33 +205,9 @@ finally:
 '''
 
 
-# CML reference: preamble prepended to N9Kv ISO config (nxos_config.txt).
-# Echo commands create set_boot.py on bootflash at boot time — no qemu-nbd needed.
-# EEM applet fires on first login, auto-sets boot variable, self-deletes.
-# Uses `python` (not python3) per CML reference.
-_N9KV_CONFIG_PREAMBLE = """\
-hostname {hostname}
-echo 'from cli import cli' > set_boot.py
-echo 'import json' >> set_boot.py
-echo 'import os' >> set_boot.py
-echo 'import time' >> set_boot.py
-echo 'bootimage = json.loads(cli("show version | json"))["nxos_file_name"]' >> set_boot.py
-echo 'set_boot = cli("conf t ; boot nxos {{}} ; no event manager applet BOOTCONFIG".format(bootimage))' >> set_boot.py
-echo 'i = 0' >> set_boot.py
-echo 'while i < 10:' >> set_boot.py
-echo '    try:' >> set_boot.py
-echo '        save_config = cli("copy running-config startup-config")' >> set_boot.py
-echo '        break' >> set_boot.py
-echo '    except Exception:' >> set_boot.py
-echo '        i += 1' >> set_boot.py
-echo '        time.sleep(1)' >> set_boot.py
-echo 'os.remove("/bootflash/set_boot.py")' >> set_boot.py
-event manager applet BOOTCONFIG
- event syslog pattern "Configured from vty"
- action 1.0 cli python bootflash:set_boot.py
-no password strength-check
-username admin role network-admin
-username admin password cisco"""
+# _N9KV_CONFIG_PREAMBLE is imported from libvirt_n9kv and re-exported
+# so that external callers (e.g., tests) can still do:
+#   from agent.providers.libvirt import _N9KV_CONFIG_PREAMBLE
 
 
 def _coalesce(node_val, default):
@@ -741,294 +758,38 @@ class LibvirtProvider(Provider, VlanPersistenceMixin):
             f"got {actual[:16]}... (file is corrupted)"
         )
 
+    # -- Disk & image helpers (delegated to libvirt_xml) --
+
     def _translate_container_path_to_host(self, path: str) -> str:
-        """Translate container path to host-accessible path for libvirt.
+        return _translate_container_path_to_host(path)
 
-        When running in Docker, container mounts like /var/lib/archetype
-        may not exist on the host. Libvirt runs on the host and needs
-        the actual host path (typically the Docker volume mountpoint).
+    def _create_overlay_disk_sync(self, base_image: str, overlay_path: Path) -> bool:
+        return _create_overlay_disk_sync(base_image, overlay_path)
 
-        Args:
-            path: Path as seen from the container
+    async def _create_overlay_disk(self, base_image: str, overlay_path: Path) -> bool:
+        return await asyncio.to_thread(_create_overlay_disk_sync, base_image, overlay_path)
 
-        Returns:
-            Path as accessible from the host
-        """
-        # Check if ARCHETYPE_HOST_IMAGE_PATH is set (explicit host path)
-        host_image_path = os.environ.get("ARCHETYPE_HOST_IMAGE_PATH")
-        if host_image_path:
-            # Replace /var/lib/archetype/images with the host path
-            if path.startswith("/var/lib/archetype/images/"):
-                return path.replace("/var/lib/archetype/images", host_image_path)
-            return path
+    def _create_data_volume_sync(self, path: Path, size_gb: int) -> bool:
+        return _create_data_volume_sync(path, size_gb)
 
-        # Try to detect Docker volume mount point
-        # Docker volumes are typically at /var/lib/docker/volumes/<name>/_data
-        if path.startswith("/var/lib/archetype/"):
-            # Try common Docker volume patterns
-            volume_bases = [
-                "/var/lib/docker/volumes/archetype-iac_archetype_workspaces/_data",
-                "/var/lib/docker/volumes/archetype_workspaces/_data",
-            ]
-            for volume_base in volume_bases:
-                test_path = path.replace("/var/lib/archetype", volume_base)
-                if os.path.exists(test_path):
-                    logger.debug(f"Translated path {path} -> {test_path}")
-                    return test_path
-
-        # Fallback: return original path
-        return path
-
-    def _create_overlay_disk_sync(
-        self,
-        base_image: str,
-        overlay_path: Path,
-    ) -> bool:
-        """Create a qcow2 overlay disk backed by a base image (sync version).
-
-        Args:
-            base_image: Path to the base qcow2 image
-            overlay_path: Path for the overlay disk
-
-        Returns:
-            True if successful
-        """
-        if overlay_path.exists():
-            logger.info(f"Overlay disk already exists: {overlay_path}")
-            return True
-
-        # Translate the base image path to host-accessible path
-        host_base_image = self._translate_container_path_to_host(base_image)
-        if host_base_image != base_image:
-            logger.info(f"Translated base image path: {base_image} -> {host_base_image}")
-
-        cmd = [
-            "qemu-img", "create",
-            "-F", "qcow2",
-            "-f", "qcow2",
-            "-b", host_base_image,
-            str(overlay_path),
-        ]
-
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        if result.returncode != 0:
-            logger.error(f"Failed to create overlay disk: {result.stderr}")
-            return False
-
-        logger.info(f"Created overlay disk: {overlay_path}")
-        return True
-
-    async def _create_overlay_disk(
-        self,
-        base_image: str,
-        overlay_path: Path,
-    ) -> bool:
-        """Create a qcow2 overlay disk backed by a base image (async version).
-
-        Wraps the sync version in asyncio.to_thread to avoid blocking.
-        """
-        return await asyncio.to_thread(
-            self._create_overlay_disk_sync, base_image, overlay_path
-        )
-
-    def _create_data_volume_sync(
-        self,
-        path: Path,
-        size_gb: int,
-    ) -> bool:
-        """Create an empty qcow2 data volume (sync version).
-
-        Args:
-            path: Path for the data volume
-            size_gb: Size in gigabytes
-
-        Returns:
-            True if successful
-        """
-        if path.exists():
-            logger.info(f"Data volume already exists: {path}")
-            return True
-
-        cmd = [
-            "qemu-img", "create",
-            "-f", "qcow2",
-            str(path),
-            f"{size_gb}G",
-        ]
-
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        if result.returncode != 0:
-            logger.error(f"Failed to create data volume: {result.stderr}")
-            return False
-
-        logger.info(f"Created data volume: {path} ({size_gb}GB)")
-        return True
-
-    async def _create_data_volume(
-        self,
-        path: Path,
-        size_gb: int,
-    ) -> bool:
-        """Create an empty qcow2 data volume (async version).
-
-        Wraps the sync version in asyncio.to_thread to avoid blocking.
-        """
-        return await asyncio.to_thread(self._create_data_volume_sync, path, size_gb)
+    async def _create_data_volume(self, path: Path, size_gb: int) -> bool:
+        return await asyncio.to_thread(_create_data_volume_sync, path, size_gb)
 
     def _generate_mac_address(self, domain_name: str, interface_index: int) -> str:
-        """Generate a deterministic MAC address for a VM interface.
-
-        Uses domain name and interface index to generate consistent MACs.
-        Format: 52:54:00:XX:XX:XX (QEMU/KVM OUI prefix)
-        """
-        # Create deterministic hash from domain name and interface index
-        hash_input = f"{domain_name}:{interface_index}".encode()
-        hash_bytes = hashlib.md5(hash_input).digest()
-        # Use QEMU/KVM OUI prefix (52:54:00) + 3 bytes from hash
-        mac = f"52:54:00:{hash_bytes[0]:02x}:{hash_bytes[1]:02x}:{hash_bytes[2]:02x}"
-        return mac
+        return _generate_mac_address(domain_name, interface_index)
 
     def _find_ovmf_code_path(self) -> str | None:
-        """Find a host OVMF firmware code file for EFI boot."""
-        candidates = [
-            "/usr/share/OVMF/OVMF_CODE.fd",
-            "/usr/share/OVMF/OVMF_CODE_4M.fd",
-            "/usr/share/edk2/ovmf/OVMF_CODE.fd",
-            "/usr/share/edk2-ovmf/x64/OVMF_CODE.fd",
-        ]
-        for path in candidates:
-            if os.path.exists(path):
-                return path
-        return None
+        return _find_ovmf_code_path()
 
     def _find_ovmf_vars_template(self) -> str | None:
-        """Find a host OVMF vars template file for stateful EFI boot."""
-        candidates = [
-            "/usr/share/OVMF/OVMF_VARS.fd",
-            "/usr/share/OVMF/OVMF_VARS_4M.fd",
-            "/usr/share/edk2/ovmf/OVMF_VARS.fd",
-            "/usr/share/edk2-ovmf/x64/OVMF_VARS.fd",
-        ]
-        for path in candidates:
-            if os.path.exists(path):
-                return path
-        return None
+        return _find_ovmf_vars_template()
 
     def _resolve_domain_driver(self, requested: str | None, node_name: str) -> str:
-        """Resolve and validate libvirt domain driver.
-
-        Policy:
-        - enforce when value is valid (kvm|qemu)
-        - warn and fall back to kvm when invalid/unsupported
-        """
-        candidate = (requested or "kvm").strip().lower()
-        if candidate in self.ALLOWED_DOMAIN_DRIVERS:
-            return candidate
-        logger.warning(
-            "Invalid libvirt_driver '%s' for %s; falling back to 'kvm'",
-            requested,
-            node_name,
-        )
-        return "kvm"
+        return _resolve_domain_driver(requested, node_name, self.ALLOWED_DOMAIN_DRIVERS)
 
     @staticmethod
     def _patch_vjunos_svm_compat(overlay_path: Path) -> bool:
-        """Patch vJunos overlay disk to support AMD SVM for nested virtualization.
-
-        vJunos images check /proc/cpuinfo for 'vmx' (Intel) only. On AMD hosts,
-        the CPU flag is 'svm'. This patches start-junos.sh to accept both flags.
-        Uses qemu-nbd to mount the overlay, patch in-place, and unmount.
-
-        Returns True if patched (or already patched), False on error.
-        """
-        import tempfile
-
-        nbd_dev = None
-        mount_dir = None
-        try:
-            # Find a free nbd device
-            subprocess.run(
-                ["modprobe", "nbd", "max_part=8"],
-                capture_output=True, timeout=10,
-            )
-            for i in range(16):
-                dev = f"/dev/nbd{i}"
-                # Check if this nbd device has a connected disk (size > 0)
-                size_path = Path(f"/sys/block/nbd{i}/size")
-                if size_path.exists():
-                    try:
-                        size = int(size_path.read_text().strip())
-                        if size == 0:
-                            nbd_dev = dev
-                            break
-                    except (ValueError, OSError):
-                        continue
-            if not nbd_dev:
-                logger.warning("No free nbd device found for vJunos SVM patch")
-                return False
-
-            # Connect the overlay disk
-            result = subprocess.run(
-                ["qemu-nbd", "--connect", nbd_dev, str(overlay_path)],
-                capture_output=True, timeout=30,
-            )
-            if result.returncode != 0:
-                logger.warning("qemu-nbd connect failed: %s", result.stderr.decode())
-                nbd_dev = None
-                return False
-
-            # Wait for partitions to appear
-            subprocess.run(["partprobe", nbd_dev], capture_output=True, timeout=10)
-            time.sleep(1)
-
-            # Mount partition 2 (Linux root)
-            part2 = f"{nbd_dev}p2"
-            mount_dir = tempfile.mkdtemp(prefix="vjunos-patch-")
-            result = subprocess.run(
-                ["mount", part2, mount_dir],
-                capture_output=True, timeout=30,
-            )
-            if result.returncode != 0:
-                logger.warning("Failed to mount %s: %s", part2, result.stderr.decode())
-                return False
-
-            # Find and patch start-junos.sh
-            script_path = Path(mount_dir) / "home" / "pfe" / "junos" / "start-junos.sh"
-            if not script_path.exists():
-                logger.info("start-junos.sh not found at %s; skipping SVM patch", script_path)
-                return True  # Not a vJunos image, nothing to patch
-
-            content = script_path.read_text()
-            old_check = "grep -ci vmx"
-            new_check = 'grep -ciE "vmx|svm"'
-            if "svm" in content:
-                logger.info("start-junos.sh already patched for SVM support")
-                return True
-            if old_check not in content:
-                logger.warning("start-junos.sh has unexpected vmx check; skipping patch")
-                return True
-
-            content = content.replace(old_check, new_check)
-            script_path.write_text(content)
-            logger.info("Patched start-junos.sh for AMD SVM compatibility")
-            return True
-
-        except Exception as e:
-            logger.warning("vJunos SVM patch failed: %s", e)
-            return False
-        finally:
-            # Clean up: unmount and disconnect
-            if mount_dir:
-                subprocess.run(["umount", mount_dir], capture_output=True, timeout=10)
-                try:
-                    Path(mount_dir).rmdir()
-                except OSError:
-                    pass
-            if nbd_dev:
-                subprocess.run(
-                    ["qemu-nbd", "--disconnect", nbd_dev],
-                    capture_output=True, timeout=10,
-                )
+        return _patch_vjunos_svm_compat(overlay_path)
 
     def _generate_domain_xml(
         self,
@@ -1045,420 +806,35 @@ class LibvirtProvider(Provider, VlanPersistenceMixin):
         config_disk_path: Path | None = None,
         serial_log_path: Path | None = None,
     ) -> str:
-        """Generate libvirt domain XML for a VM.
-
-        Args:
-            name: Domain name
-            node_config: Node configuration from topology
-            overlay_path: Path to the overlay disk
-            data_volume_path: Optional path to data volume
-            interface_count: Number of network interfaces to create
-            vlan_tags: VLAN tags for each interface (for OVS isolation)
-            kind: Device kind for config extraction lookup
-
-        Returns:
-            Domain XML string
-        """
-        # Get resource requirements from node config
-        memory_mb = node_config.get("memory", 2048)
-        cpus = node_config.get("cpu", 1)
-        cpu_limit = node_config.get("cpu_limit")
-
-        # Get driver and machine settings (whitelist-validated)
-        machine_type = node_config.get("machine_type", "pc-q35-6.2")
-        if machine_type not in self.VALID_MACHINE_TYPES:
-            raise ValueError(f"Invalid machine type: {machine_type}")
-        disk_driver = node_config.get("disk_driver", "virtio")
-        if disk_driver not in self.VALID_DISK_DRIVERS:
-            raise ValueError(f"Invalid disk driver: {disk_driver}")
-        nic_driver = node_config.get("nic_driver", "virtio")
-        if nic_driver in self.NIC_DRIVER_SUBSTITUTIONS:
-            replacement = self.NIC_DRIVER_SUBSTITUTIONS[nic_driver]
-            logger.warning(
-                f"NIC driver '{nic_driver}' unsupported by QEMU, "
-                f"substituting '{replacement}' for node {name}"
-            )
-            nic_driver = replacement
-        if nic_driver not in self.VALID_NIC_DRIVERS:
-            raise ValueError(f"Invalid NIC driver: {nic_driver}")
-        libvirt_driver = self._resolve_domain_driver(
-            node_config.get("libvirt_driver"),
+        """Generate libvirt domain XML for a VM — delegates to libvirt_xml."""
+        return _generate_domain_xml(
             name,
+            node_config,
+            overlay_path,
+            data_volume_path=data_volume_path,
+            interface_count=interface_count,
+            vlan_tags=vlan_tags,
+            kind=kind,
+            include_management_interface=include_management_interface,
+            management_network=management_network,
+            config_iso_path=config_iso_path,
+            config_disk_path=config_disk_path,
+            serial_log_path=serial_log_path,
+            valid_machine_types=self.VALID_MACHINE_TYPES,
+            valid_disk_drivers=self.VALID_DISK_DRIVERS,
+            valid_nic_drivers=self.VALID_NIC_DRIVERS,
+            nic_driver_substitutions=self.NIC_DRIVER_SUBSTITUTIONS,
+            allowed_domain_drivers=self.ALLOWED_DOMAIN_DRIVERS,
+            mac_generator=_generate_mac_address,
         )
-        efi_boot = bool(node_config.get("efi_boot", False))
-        efi_vars = str(node_config.get("efi_vars") or "").strip().lower()
-
-        # Map bus type to device name prefix
-        dev_prefix = {"ide": "hd", "sata": "sd", "scsi": "sd"}.get(disk_driver, "vd")
-
-        # Generate UUID for the domain
-        domain_uuid = str(uuid.uuid4())
-
-        # Build disk elements
-        # cache='none' (O_DIRECT) bypasses page cache — prevents QEMU COW ops
-        # from corrupting the host page cache of read-only backing images.
-        # io='native' is required for optimal O_DIRECT performance.
-        # discard='unmap' passes guest TRIM to reclaim overlay disk space.
-        disks_xml = f'''
-    <disk type='file' device='disk'>
-      <driver name='qemu' type='qcow2' cache='none' io='native' discard='unmap'/>
-      <source file='{xml_escape(str(overlay_path))}'/>
-      <target dev='{dev_prefix}a' bus='{disk_driver}'/>
-    </disk>'''
-
-        if data_volume_path:
-            disks_xml += f'''
-    <disk type='file' device='disk'>
-      <driver name='qemu' type='qcow2' cache='none' io='native' discard='unmap'/>
-      <source file='{xml_escape(str(data_volume_path))}'/>
-      <target dev='{dev_prefix}b' bus='{disk_driver}'/>
-    </disk>'''
-
-        if config_iso_path:
-            disks_xml += f'''
-    <disk type='file' device='cdrom'>
-      <driver name='qemu' type='raw'/>
-      <source file='{xml_escape(str(config_iso_path))}'/>
-      <target dev='hdc' bus='ide'/>
-      <readonly/>
-    </disk>'''
-
-        if config_disk_path:
-            disks_xml += f'''
-    <controller type='usb' model='qemu-xhci'/>
-    <disk type='file' device='disk'>
-      <driver name='qemu' type='raw'/>
-      <source file='{xml_escape(str(config_disk_path))}'/>
-      <target dev='sda' bus='usb'/>
-    </disk>'''
-
-        # Build network interface elements
-        # VMs connect to the OVS bridge (arch-ovs) for networking
-        # Each interface gets a unique VLAN tag for isolation (like Docker containers)
-        ovs_bridge = getattr(settings, 'ovs_bridge_name', 'arch-ovs')
-        interfaces_xml = ""
-
-        # Ensure we have at least 1 interface
-        interface_count = max(1, interface_count)
-        reserved_nics = node_config.get("reserved_nics", 0)
-        data_interface_mac_offset = 0
-
-        # For SSH-console libvirt VMs (e.g., NX-OSv/Cat9k), add a dedicated
-        # management NIC on libvirt's default network before data interfaces.
-        if include_management_interface:
-            mgmt_mac = self._generate_mac_address(name, 0)
-            interfaces_xml += f'''
-    <interface type='network'>
-      <mac address='{mgmt_mac}'/>
-      <source network='{xml_escape(management_network)}'/>
-      <model type='{nic_driver}'/>
-    </interface>'''
-            data_interface_mac_offset = 1
-
-        # Reserved (dummy) NICs — placeholder interfaces required by some
-        # platforms (e.g., XRv9000 needs ctrl-dummy + dev-dummy between
-        # management and data interfaces for Spirit bootstrap).
-        # These get their own VLAN tags from the beginning of vlan_tags.
-        for r in range(reserved_nics):
-            mac_address = self._generate_mac_address(name, r + data_interface_mac_offset)
-            interface_id = str(uuid.uuid4())
-            vlan_xml = ""
-            if vlan_tags and r < len(vlan_tags):
-                vlan_xml = f'''
-      <vlan>
-        <tag id='{vlan_tags[r]}'/>
-      </vlan>'''
-            interfaces_xml += f'''
-    <interface type='bridge'>
-      <mac address='{mac_address}'/>
-      <source bridge='{ovs_bridge}'/>
-      <virtualport type='openvswitch'>
-        <parameters interfaceid='{interface_id}'/>
-      </virtualport>{vlan_xml}
-      <model type='{nic_driver}'/>
-    </interface>'''
-        data_interface_mac_offset += reserved_nics
-
-        for i in range(interface_count):
-            mac_address = self._generate_mac_address(name, i + data_interface_mac_offset)
-            interface_id = str(uuid.uuid4())
-
-            # Add VLAN tag if provided (for OVS isolation)
-            # Data interfaces use vlan_tags after the reserved_nics offset
-            vlan_xml = ""
-            vlan_idx = i + reserved_nics
-            if vlan_tags and vlan_idx < len(vlan_tags):
-                vlan_xml = f'''
-      <vlan>
-        <tag id='{vlan_tags[vlan_idx]}'/>
-      </vlan>'''
-
-            interfaces_xml += f'''
-    <interface type='bridge'>
-      <mac address='{mac_address}'/>
-      <source bridge='{ovs_bridge}'/>
-      <virtualport type='openvswitch'>
-        <parameters interfaceid='{interface_id}'/>
-      </virtualport>{vlan_xml}
-      <model type='{nic_driver}'/>
-    </interface>'''
-
-        # Build metadata section with device kind for config extraction
-        metadata_xml = ""
-        if kind:
-            readiness_probe = node_config.get("readiness_probe")
-            readiness_pattern = node_config.get("readiness_pattern")
-            readiness_timeout = node_config.get("readiness_timeout")
-
-            # Only store readiness overrides in domain XML that differ from
-            # vendor defaults.  This prevents stale vendor defaults from being
-            # locked into domain XML across vendor config updates.
-            vendor_cfg = get_vendor_config(kind)
-            if vendor_cfg:
-                if readiness_probe == vendor_cfg.readiness_probe:
-                    readiness_probe = None
-                if readiness_pattern == vendor_cfg.readiness_pattern:
-                    readiness_pattern = None
-                if readiness_timeout is not None:
-                    try:
-                        if int(readiness_timeout) == vendor_cfg.readiness_timeout:
-                            readiness_timeout = None
-                    except (TypeError, ValueError):
-                        pass
-
-            readiness_xml = ""
-            if readiness_probe:
-                readiness_xml += f"\n      <archetype:readiness_probe>{xml_escape(str(readiness_probe))}</archetype:readiness_probe>"
-            if readiness_pattern:
-                readiness_xml += f"\n      <archetype:readiness_pattern>{xml_escape(str(readiness_pattern))}</archetype:readiness_pattern>"
-            if readiness_timeout:
-                try:
-                    readiness_xml += f"\n      <archetype:readiness_timeout>{int(readiness_timeout)}</archetype:readiness_timeout>"
-                except (TypeError, ValueError):
-                    logger.debug(f"Skipping invalid readiness_timeout value in metadata: {readiness_timeout}")
-            serial_type = node_config.get("serial_type", "pty")
-            if serial_type and serial_type != "pty":
-                readiness_xml += f"\n      <archetype:serial_type>{xml_escape(str(serial_type))}</archetype:serial_type>"
-            metadata_xml = f'''
-  <metadata>
-    <archetype:node xmlns:archetype="http://archetype.io/libvirt/1">
-      <archetype:kind>{xml_escape(kind)}</archetype:kind>{readiness_xml}
-    </archetype:node>
-  </metadata>'''
-
-        # Build OS section, optionally enabling EFI firmware.
-        os_type_line = f"<type arch='x86_64' machine='{xml_escape(machine_type)}'>hvm</type>"
-        os_open = "<os>"
-        os_extras = "\n    <boot dev='hd'/>"
-        qemu_commandline_xml = ""
-        if efi_boot:
-            ovmf_code = self._find_ovmf_code_path()
-            ovmf_vars = self._find_ovmf_vars_template()
-            if efi_vars == "stateless":
-                # Stateless EFI: use QEMU commandline passthrough to inject the
-                # OVMF CODE as a single read-only pflash drive.  This bypasses
-                # libvirt's firmware auto-selection which unconditionally adds a
-                # second pflash device (NVRAM) — matching vrnetlab's approach.
-                if ovmf_code:
-                    qemu_commandline_xml = (
-                        "\n  <qemu:commandline>"
-                        f"\n    <qemu:arg value='-drive'/>"
-                        f"\n    <qemu:arg value='if=pflash,format=raw,readonly=on,file={xml_escape(ovmf_code)}'/>"
-                        "\n  </qemu:commandline>"
-                    )
-                else:
-                    logger.warning(
-                        "Stateless EFI boot requested for %s but no OVMF firmware found",
-                        name,
-                    )
-            else:
-                # Stateful EFI: let libvirt manage firmware via firmware='efi'
-                os_open = "<os firmware='efi'>"
-                if ovmf_code:
-                    os_extras += f"\n    <loader readonly='yes' type='pflash'>{xml_escape(ovmf_code)}</loader>"
-                    if ovmf_vars:
-                        os_extras += (
-                            f"\n    <nvram template='{xml_escape(ovmf_vars)}'>"
-                            f"/var/lib/libvirt/qemu/nvram/{xml_escape(name)}_VARS.fd</nvram>"
-                        )
-                else:
-                    logger.warning(
-                        "EFI boot requested for %s but no OVMF firmware file was found; "
-                        "relying on libvirt firmware auto-selection",
-                        name,
-                    )
-
-        # Build the full domain XML
-        cputune_xml = ""
-        if cpu_limit is not None:
-            try:
-                limit_pct = max(1, min(100, int(cpu_limit)))
-                period = 100000
-                quota = int(period * max(1, int(cpus)) * (limit_pct / 100.0))
-                if quota > 0:
-                    cputune_xml = (
-                        "\n  <cputune>"
-                        f"\n    <period>{period}</period>"
-                        f"\n    <quota>{quota}</quota>"
-                        "\n  </cputune>"
-                    )
-            except (TypeError, ValueError):
-                logger.debug("Skipping invalid cpu_limit value in domain XML: %s", cpu_limit)
-
-        # Build serial/console XML — PTY (default) or TCP telnet
-        serial_type = node_config.get("serial_type", "pty")
-        serial_port_count = node_config.get("serial_port_count", 1)
-        # Libvirt <log> element tees serial output to a file for lock-free observation
-        log_xml = ""
-        if serial_log_path:
-            log_xml = f"\n      <log file='{xml_escape(str(serial_log_path))}' append='off'/>"
-        if serial_type == "tcp":
-            tcp_port = self._allocate_tcp_serial_port()
-            serial_xml = f"""    <serial type='tcp'>
-      <source mode='bind' host='127.0.0.1' service='{tcp_port}'/>
-      <protocol type='telnet'/>{log_xml}
-      <target port='0'/>
-    </serial>
-    <console type='tcp'>
-      <source mode='bind' host='127.0.0.1' service='{tcp_port}'/>
-      <protocol type='telnet'/>
-      <target type='serial' port='0'/>
-    </console>"""
-            # Additional serial ports as PTY (XRv9000 needs 4 total for inner VM)
-            for port_idx in range(1, serial_port_count):
-                serial_xml += f"""
-    <serial type='pty'>
-      <target port='{port_idx}'/>
-    </serial>"""
-        else:
-            serial_xml = f"""    <serial type='pty'>{log_xml}
-      <target port='0'/>
-    </serial>
-    <console type='pty'>
-      <target type='serial' port='0'/>
-    </console>"""
-            # Additional serial ports (e.g., IOS-XRv 9000 needs 4 total)
-            for port_idx in range(1, serial_port_count):
-                serial_xml += f"""
-    <serial type='pty'>
-      <target port='{port_idx}'/>
-    </serial>"""
-
-        # VNC graphics + VGA video by default.
-        # nographic=True omits display devices so OVMF outputs to serial.
-        nographic = node_config.get("nographic", False)
-        if nographic or serial_type == "tcp":
-            graphics_xml = ""
-        else:
-            graphics_xml = """    <graphics type='vnc' port='-1' autoport='yes' listen='127.0.0.1'>
-      <listen type='address' address='127.0.0.1'/>
-    </graphics>
-    <video>
-      <model type='cirrus'/>
-    </video>
-"""
-
-        # SMBIOS product identification (required by some vendors, e.g., IOS-XRv 9000)
-        smbios_product = node_config.get("smbios_product", "")
-        sysinfo_xml = ""
-        smbios_os_xml = ""
-        if smbios_product:
-            sysinfo_xml = f"""
-  <sysinfo type='smbios'>
-    <system>
-      <entry name='manufacturer'>cisco</entry>
-      <entry name='product'>{xml_escape(smbios_product)}</entry>
-    </system>
-  </sysinfo>"""
-            smbios_os_xml = "\n    <smbios mode='sysinfo'/>"
-
-        # CPU SMP topology — some platforms (e.g., XRv9000) require cores-per-socket
-        # instead of sockets-per-core for Spirit bootstrap to detect CPUs correctly.
-        # migratable='off' exposes VMX/SVM for nested KVM (required by XRv9000 XR VM).
-        cpu_sockets = node_config.get("cpu_sockets", 0)
-        cpu_features_disable = node_config.get("cpu_features_disable", [])
-        cpu_children: list[str] = []
-        if cpu_sockets > 0:
-            cores = max(1, cpus // cpu_sockets)
-            cpu_children.append(
-                f"    <topology sockets='{cpu_sockets}' cores='{cores}' threads='1'/>"
-            )
-        for feat in cpu_features_disable:
-            cpu_children.append(f"    <feature policy='disable' name='{feat}'/>")
-        if cpu_children:
-            cpu_xml = (
-                "<cpu mode='host-passthrough' migratable='off'>\n"
-                + "\n".join(cpu_children) + "\n"
-                "  </cpu>"
-            )
-        else:
-            cpu_xml = "<cpu mode='host-passthrough' migratable='off'/>"
-
-        smm_xml = "\n    <smm state='off'/>" if efi_boot else ""
-
-        qemu_ns = " xmlns:qemu='http://libvirt.org/schemas/domain/qemu/1.0'" if qemu_commandline_xml else ""
-
-        xml = f'''<domain type='{libvirt_driver}'{qemu_ns}>{sysinfo_xml}
-  <name>{xml_escape(name)}</name>
-  <uuid>{domain_uuid}</uuid>{metadata_xml}
-  <memory unit='MiB'>{memory_mb}</memory>
-  <vcpu>{cpus}</vcpu>{cputune_xml}
-  {os_open}
-    {os_type_line}{os_extras}{smbios_os_xml}
-  </os>
-  <features>
-    <acpi/>
-    <apic/>{smm_xml}
-  </features>
-  {cpu_xml}
-  <clock offset='utc'>
-    <timer name='rtc' tickpolicy='catchup'/>
-    <timer name='pit' tickpolicy='delay'/>
-    <timer name='hpet' present='no'/>
-  </clock>
-  <devices>
-    <emulator>/usr/bin/qemu-system-x86_64</emulator>
-{disks_xml}
-{interfaces_xml}
-{serial_xml}
-{graphics_xml}    <memballoon model='none'/>
-    <rng model='virtio'>
-      <backend model='random'>/dev/urandom</backend>
-    </rng>
-  </devices>{qemu_commandline_xml}
-</domain>'''
-
-        return xml
 
     @staticmethod
     def _allocate_tcp_serial_port() -> int:
-        """Allocate a free TCP port for serial console.
-
-        Uses the OS to find an available port by binding to port 0.
-        """
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            s.bind(("127.0.0.1", 0))
-            return s.getsockname()[1]
+        return _allocate_tcp_serial_port()
 
     @staticmethod
     def _get_tcp_serial_port(domain) -> int | None:
-        """Extract TCP serial port from a running domain's XML.
-
-        Parses the domain XML for <serial type='tcp'> and returns
-        the service port number. Returns None if not a TCP serial domain.
-        """
-        try:
-            xml_str = domain.XMLDesc(0)
-            root = ET.fromstring(xml_str)
-            for serial in root.findall(".//devices/serial[@type='tcp']"):
-                source = serial.find("source")
-                if source is not None:
-                    port_str = source.get("service")
-                    if port_str:
-                        return int(port_str)
-        except Exception:
-            pass
-        return None
+        return _get_tcp_serial_port(domain)
 
     def _get_domain_status(self, domain) -> NodeStatus:
         """Map libvirt domain state to NodeStatus."""
@@ -2501,6 +1877,8 @@ class LibvirtProvider(Provider, VlanPersistenceMixin):
                 error=str(e),
             )
 
+    # -- Config extraction & injection helpers (delegated to libvirt_config) --
+
     def _prepare_startup_config_for_injection(
         self,
         kind: str,
@@ -2508,139 +1886,16 @@ class LibvirtProvider(Provider, VlanPersistenceMixin):
         *,
         node_name: str = "",
     ) -> str:
-        """Normalize startup-config content before disk/ISO injection.
-
-        N9Kv extraction may include serial-console prompt/echo artifacts
-        (for example, 'switch# show running-config') that break bootstrap
-        parsing when staged directly into bootflash.
-        """
-        text = startup_config or ""
-        if not text:
-            return ""
-
-        ansi_escape = re.compile(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
-        text = ansi_escape.sub("", text).replace("\r", "")
-
-        vendor = get_vendor_config(kind)
-        canonical_kind = vendor.kind if vendor else get_kind_for_device(kind)
-
-        # IOS-XR: strip SSH extraction artifacts before ISO injection
-        if canonical_kind == "cisco_iosxr":
-            iosxr_lines: list[str] = []
-            for line in text.split("\n"):
-                stripped = line.strip()
-                if stripped.startswith("Building configuration"):
-                    continue
-                if stripped.startswith("!! IOS XR Configuration"):
-                    continue
-                if stripped.startswith("!! Last configuration change"):
-                    continue
-                if re.match(r"^RP/\d+/RP\d+/CPU\d+:[\w\-]+#", stripped):
-                    continue
-                iosxr_lines.append(line)
-            # Strip leading/trailing blank lines
-            while iosxr_lines and not iosxr_lines[0].strip():
-                iosxr_lines.pop(0)
-            while iosxr_lines and not iosxr_lines[-1].strip():
-                iosxr_lines.pop()
-            text = "\n".join(iosxr_lines)
-            if text and not text.endswith("\n"):
-                text += "\n"
-            return text
-
-        # N9Kv-specific normalization for bootflash staging
-        if canonical_kind != "cisco_n9kv":
-            return text
-
-        cmd_echo_pat = re.compile(
-            r"^\s*(?:[^\s]+(?:\([^)\r\n]+\))?[>#]\s*)?"
-            r"(?:show\s+running-config|show\s+startup-config|terminal\s+length\s+0)\s*$",
-            re.IGNORECASE,
+        """Normalize startup-config content before disk/ISO injection."""
+        return _prepare_startup_config_for_injection(
+            kind, startup_config,
+            node_name=node_name,
+            n9kv_config_preamble=_N9KV_CONFIG_PREAMBLE,
         )
-        prompt_only_pat = re.compile(
-            r"^\s*[A-Za-z0-9_.-]+(?:\([^)\r\n]+\))?[>#]\s*$"
-        )
-
-        cleaned: list[str] = []
-        for line in text.split("\n"):
-            stripped = line.strip()
-            if not stripped:
-                cleaned.append(line)
-                continue
-            if stripped.startswith("!Command:"):
-                continue
-            if stripped.startswith("!Running configuration"):
-                continue
-            if stripped.startswith("!Time:"):
-                continue
-            if cmd_echo_pat.match(line):
-                continue
-            if stripped.startswith("Building configuration"):
-                continue
-            if stripped.startswith("Connected to domain"):
-                continue
-            if stripped.startswith("Escape character is"):
-                continue
-            if stripped == "--More--":
-                continue
-            if prompt_only_pat.match(line):
-                continue
-            cleaned.append(line)
-
-        while cleaned and not cleaned[0].strip():
-            cleaned = cleaned[1:]
-        while cleaned and not cleaned[-1].strip():
-            cleaned = cleaned[:-1]
-
-        normalized = "\n".join(cleaned)
-        if normalized and not normalized.endswith("\n"):
-            normalized += "\n"
-
-        # Prepend CML-style preamble: echo-based set_boot.py + EEM applet + credentials.
-        # .format() substitutes {hostname} and converts {{}} to {} for the Python script.
-        preamble = _N9KV_CONFIG_PREAMBLE.format(hostname=node_name or "switch")
-        normalized = preamble + "\n" + normalized
-        return normalized
 
     def _format_injection_diagnostics(self, inject_ok: bool, diag: dict[str, Any]) -> str:
         """Render compact bootflash injection diagnostics for callback logs."""
-        if not diag:
-            return ""
-
-        parts: list[str] = [f"ok={inject_ok}"]
-        bytes_written = diag.get("bytes")
-        if bytes_written is not None:
-            parts.append(f"bytes={bytes_written}")
-
-        partition = diag.get("resolved_partition")
-        if partition:
-            parts.append(f"partition={partition}")
-
-        fs_type = diag.get("fs_type")
-        if fs_type:
-            parts.append(f"fs={fs_type}")
-
-        requested = diag.get("requested_config_path")
-        if requested:
-            parts.append(f"requested={requested}")
-
-        written_paths = diag.get("written_paths")
-        if isinstance(written_paths, list) and written_paths:
-            parts.append(f"written={','.join(str(p) for p in written_paths)}")
-        else:
-            targets = diag.get("write_targets")
-            if isinstance(targets, list) and targets:
-                parts.append(f"targets={','.join(str(p) for p in targets)}")
-
-        error = diag.get("error")
-        if error:
-            parts.append(f"error={error}")
-
-        exception = diag.get("exception")
-        if exception:
-            parts.append(f"exception={exception}")
-
-        return " ".join(parts)
+        return _format_injection_diagnostics(inject_ok, diag)
 
     async def destroy_node(
         self,
@@ -2809,277 +2064,44 @@ class LibvirtProvider(Provider, VlanPersistenceMixin):
             return None
 
     async def _get_vm_management_ip(self, domain_name: str) -> str | None:
-        """Get the management IP address for a VM.
+        """Get the management IP address for a VM."""
+        return await _get_vm_management_ip(domain_name, self._uri)
 
-        Uses virsh domifaddr to query the guest agent or DHCP leases
-        for the VM's IP address.
-
-        Args:
-            domain_name: Libvirt domain name
-
-        Returns:
-            IP address string or None if not found
-        """
-        try:
-            # Try guest agent first (most accurate)
-            result = await asyncio.to_thread(
-                subprocess.run,
-                ["virsh", "-c", self._uri, "domifaddr", domain_name, "--source", "agent"],
-                capture_output=True,
-                text=True,
-            )
-
-            if result.returncode == 0 and result.stdout.strip():
-                # Parse output: "Name       MAC address          Protocol     Address"
-                for line in result.stdout.strip().split("\n")[2:]:  # Skip header
-                    parts = line.split()
-                    if len(parts) >= 4:
-                        # Address is like "192.168.1.100/24"
-                        ip = parts[3].split("/")[0]
-                        if ip and not ip.startswith("127."):
-                            return ip
-
-            # Fall back to DHCP leases
-            result = await asyncio.to_thread(
-                subprocess.run,
-                ["virsh", "-c", self._uri, "domifaddr", domain_name, "--source", "lease"],
-                capture_output=True,
-                text=True,
-            )
-
-            if result.returncode == 0 and result.stdout.strip():
-                for line in result.stdout.strip().split("\n")[2:]:
-                    parts = line.split()
-                    if len(parts) >= 4:
-                        ip = parts[3].split("/")[0]
-                        if ip and not ip.startswith("127."):
-                            return ip
-
-            # Fall back to ARP (least reliable)
-            result = await asyncio.to_thread(
-                subprocess.run,
-                ["virsh", "-c", self._uri, "domifaddr", domain_name, "--source", "arp"],
-                capture_output=True,
-                text=True,
-            )
-
-            if result.returncode == 0 and result.stdout.strip():
-                for line in result.stdout.strip().split("\n")[2:]:
-                    parts = line.split()
-                    if len(parts) >= 4:
-                        ip = parts[3].split("/")[0]
-                        if ip and not ip.startswith("127."):
-                            return ip
-
-            return None
-
-        except Exception as e:
-            logger.debug(f"Error getting VM IP for {domain_name}: {e}")
-            return None
+    # -- N9Kv POAP & management network helpers (delegated to libvirt_n9kv) --
 
     def _node_uses_dedicated_mgmt_interface(self, kind: str | None) -> bool:
-        """Return True when VM has a dedicated management interface.
-
-        Only devices with an explicit management_interface in their vendor config
-        get a virbr0 management NIC. Devices without one use all NICs for data.
-        """
-        if not kind:
-            return False
-        try:
-            config = get_vendor_config(kind)
-            return config is not None and config.management_interface is not None
-        except Exception:
-            return False
+        return _node_uses_dedicated_mgmt_interface(kind)
 
     @staticmethod
     def _n9kv_poap_network_name(lab_id: str, node_name: str) -> str:
-        """Build a deterministic libvirt network name for N9Kv POAP bootstrapping."""
-        digest = hashlib.sha1(f"{lab_id}:{node_name}".encode("utf-8")).hexdigest()
-        return f"ap-poap-{digest[:10]}"
+        return _n9kv_poap_network_name(lab_id, node_name)
 
     @staticmethod
     def _n9kv_poap_bridge_name(lab_id: str, node_name: str) -> str:
-        """Build a deterministic Linux bridge name (<=15 chars)."""
-        digest = hashlib.sha1(f"{lab_id}:{node_name}".encode("utf-8")).hexdigest()
-        return f"vpoap{digest[:8]}"
+        return _n9kv_poap_bridge_name(lab_id, node_name)
 
     @staticmethod
     def _n9kv_poap_subnet(lab_id: str, node_name: str) -> tuple[str, str, str]:
-        """Derive a deterministic /24 subnet (gateway, dhcp_start, dhcp_end)."""
-        digest = hashlib.sha1(f"{lab_id}:{node_name}".encode("utf-8")).digest()
-        octet_2 = 64 + (digest[0] % 64)  # 10.64.0.0/10 private slice
-        octet_3 = digest[1]
-        base = f"10.{octet_2}.{octet_3}"
-        return f"{base}.1", f"{base}.10", f"{base}.250"
+        return _n9kv_poap_subnet(lab_id, node_name)
 
     def _n9kv_poap_config_url(self, lab_id: str, node_name: str, gateway_ip: str) -> str:
-        """Build startup-config URL consumed by the staged POAP script."""
-        lab_q = quote(lab_id, safe="")
-        node_q = quote(node_name, safe="")
-        return f"http://{gateway_ip}:{settings.agent_port}/poap/{lab_q}/{node_q}/startup-config"
+        return _n9kv_poap_config_url(lab_id, node_name, gateway_ip)
 
     def _n9kv_poap_tftp_root(self, lab_id: str, node_name: str) -> Path:
-        """Build deterministic per-node TFTP root for POAP script staging."""
-        return Path(settings.workspace_path) / ".poap-tftp" / self._n9kv_poap_network_name(lab_id, node_name)
+        return _n9kv_poap_tftp_root(lab_id, node_name)
 
     @staticmethod
     def _n9kv_poap_bootfile_name() -> str:
-        """Return the staged POAP script filename served via TFTP."""
-        return "script.py"
+        return _n9kv_poap_bootfile_name()
 
     def _stage_n9kv_poap_tftp_script(self, lab_id: str, node_name: str, gateway_ip: str) -> tuple[Path, str] | None:
-        """Write per-node POAP script to the deterministic TFTP root."""
-        tftp_root = self._n9kv_poap_tftp_root(lab_id, node_name)
-        script_name = self._n9kv_poap_bootfile_name()
-        script_path = tftp_root / script_name
-        config_url = self._n9kv_poap_config_url(lab_id, node_name, gateway_ip)
-        script_content = render_poap_script(config_url)
-
-        try:
-            tftp_root.mkdir(parents=True, exist_ok=True)
-            script_path.write_text(script_content, encoding="utf-8")
-            return tftp_root, script_name
-        except Exception as e:
-            logger.warning(
-                "Failed to stage N9Kv POAP script for %s/%s under %s: %s",
-                lab_id,
-                node_name,
-                script_path,
-                e,
-            )
-            return None
+        return _stage_n9kv_poap_tftp_script(lab_id, node_name, gateway_ip)
 
     def _ensure_n9kv_poap_network(self, lab_id: str, node_name: str) -> str | None:
-        """Ensure per-node libvirt network with DHCP bootp options for N9Kv POAP."""
-        network_name = self._n9kv_poap_network_name(lab_id, node_name)
-        bridge_name = self._n9kv_poap_bridge_name(lab_id, node_name)
-        gateway_ip, dhcp_start, dhcp_end = self._n9kv_poap_subnet(lab_id, node_name)
-        staged = self._stage_n9kv_poap_tftp_script(lab_id, node_name, gateway_ip)
-        if staged is None:
-            return None
-        tftp_root, script_name = staged
-        script_server_opt = f"dhcp-option-force=66,{gateway_ip}"
-        script_name_opt = f"dhcp-option-force=67,{script_name}"
-
-        try:
-            network = self.conn.networkLookupByName(network_name)
-            if network is not None:
-                needs_recreate = False
-                try:
-                    existing_xml = network.XMLDesc(0)
-                    if (
-                        script_server_opt not in existing_xml
-                        or script_name_opt not in existing_xml
-                        or "<tftp root=" not in existing_xml
-                        or f"<bootp file='{script_name}'" not in existing_xml
-                    ):
-                        needs_recreate = True
-                except Exception:
-                    needs_recreate = True
-
-                if needs_recreate:
-                    logger.info(
-                        "Recreating N9Kv POAP network %s for %s/%s to apply DHCP script options",
-                        network_name,
-                        lab_id,
-                        node_name,
-                    )
-                    try:
-                        if network.isActive() == 1:
-                            network.destroy()
-                    except Exception:
-                        pass
-                    try:
-                        network.undefine()
-                    except Exception as e:
-                        logger.warning(
-                            "Failed to recreate N9Kv POAP network %s for %s/%s: %s",
-                            network_name,
-                            lab_id,
-                            node_name,
-                            e,
-                        )
-                        if network.isActive() != 1:
-                            network.create()
-                        try:
-                            network.setAutostart(True)
-                        except Exception:
-                            pass
-                        return network_name
-                else:
-                    if network.isActive() != 1:
-                        network.create()
-                    try:
-                        network.setAutostart(True)
-                    except Exception:
-                        pass
-                    return network_name
-        except Exception:
-            # Define the network if it does not already exist.
-            pass
-
-        network_xml = f"""
-<network xmlns:dnsmasq='http://libvirt.org/schemas/network/dnsmasq/1.0'>
-  <name>{xml_escape(network_name)}</name>
-  <bridge name='{xml_escape(bridge_name)}' stp='on' delay='0'/>
-  <forward mode='nat'/>
-  <ip address='{gateway_ip}' netmask='255.255.255.0'>
-    <tftp root='{xml_escape(str(tftp_root))}'/>
-    <dhcp>
-      <range start='{dhcp_start}' end='{dhcp_end}'/>
-      <bootp file='{xml_escape(script_name)}' server='{gateway_ip}'/>
-    </dhcp>
-  </ip>
-  <dnsmasq:options>
-    <dnsmasq:option value='{xml_escape(script_server_opt)}'/>
-    <dnsmasq:option value='{xml_escape(script_name_opt)}'/>
-  </dnsmasq:options>
-</network>""".strip()
-
-        try:
-            network = self.conn.networkDefineXML(network_xml)
-            if network is None:
-                return None
-            if network.isActive() != 1:
-                network.create()
-            try:
-                network.setAutostart(True)
-            except Exception:
-                pass
-            logger.info(
-                "Created N9Kv POAP network %s for %s/%s (bootfile=%s)",
-                network_name,
-                lab_id,
-                node_name,
-                script_name,
-            )
-            return network_name
-        except Exception as e:
-            logger.warning(
-                "Failed to create N9Kv POAP network %s for %s/%s: %s",
-                network_name,
-                lab_id,
-                node_name,
-                e,
-            )
-            return None
+        return _ensure_n9kv_poap_network(self.conn, lab_id, node_name)
 
     def _teardown_n9kv_poap_network(self, lab_id: str, node_name: str) -> None:
-        """Remove per-node N9Kv POAP network if it exists."""
-        network_name = self._n9kv_poap_network_name(lab_id, node_name)
-        try:
-            network = self.conn.networkLookupByName(network_name)
-        except Exception:
-            return
-        try:
-            if network.isActive() == 1:
-                network.destroy()
-        except Exception:
-            pass
-        try:
-            network.undefine()
-        except Exception:
-            pass
+        _teardown_n9kv_poap_network(self.conn, lab_id, node_name)
 
     def _resolve_management_network(
         self,
@@ -3087,50 +2109,13 @@ class LibvirtProvider(Provider, VlanPersistenceMixin):
         node_name: str,
         kind: str | None,
     ) -> tuple[bool, str]:
-        """Resolve management network behavior for a VM node."""
-        if not self._node_uses_dedicated_mgmt_interface(kind):
-            return False, "default"
-
-        normalized_kind = self._canonical_kind(kind)
-        if (
-            normalized_kind == "cisco_n9kv"
-            and settings.n9kv_boot_modifications_enabled
-            and settings.n9kv_poap_preboot_enabled
-        ):
-            poap_network = self._ensure_n9kv_poap_network(lab_id, node_name)
-            if poap_network:
-                return True, poap_network
-            logger.warning(
-                "Falling back to libvirt default management network for %s/%s after POAP network failure",
-                lab_id,
-                node_name,
-            )
-
-        include_management_interface = self._ensure_libvirt_network("default")
-        if not include_management_interface:
-            logger.warning(
-                "Unable to enable libvirt 'default' network for %s; management NIC omitted, SSH console may be unavailable",
-                node_name,
-            )
-            return False, "default"
-        return True, "default"
+        return _resolve_management_network(
+            self.conn, lab_id, node_name, kind,
+            canonical_kind_fn=self._canonical_kind,
+        )
 
     def _ensure_libvirt_network(self, network_name: str) -> bool:
-        """Ensure a libvirt network exists, is active, and autostarted."""
-        try:
-            network = self.conn.networkLookupByName(network_name)
-            if network is None:
-                return False
-            if network.isActive() != 1:
-                network.create()
-            try:
-                network.setAutostart(True)
-            except Exception:
-                # Autostart failure is non-fatal if the network is active now.
-                pass
-            return True
-        except Exception:
-            return False
+        return _ensure_libvirt_network(self.conn, network_name)
 
     def _domain_has_dedicated_mgmt_interface(self, domain) -> bool:
         """Detect whether a domain includes a libvirt-managed network NIC."""
@@ -3417,353 +2402,58 @@ class LibvirtProvider(Provider, VlanPersistenceMixin):
             logger.error(f"Error during hot_connect: {e}")
             return False
 
-    async def _run_post_boot_commands(
-        self,
-        domain_name: str,
-        kind: str,
-    ) -> bool:
-        """Run vendor-specific post-boot commands on a VM.
+    # -- Readiness & boot intervention (delegated to libvirt_readiness) --
 
-        This handles workarounds like disabling paging or DNS lookups
-        that need to be executed after the VM is ready.
-
-        Args:
-            domain_name: Libvirt domain name
-            kind: Device kind for looking up vendor config
-
-        Returns:
-            True if commands were run (or already completed), False on error
-        """
-        canonical_kind = self._canonical_kind(kind)
-        if canonical_kind == "cisco_n9kv" and not settings.n9kv_boot_modifications_enabled:
-            logger.info(
-                "Skipping N9Kv post-boot console automation for %s (boot mutations disabled)",
-                domain_name,
-            )
-            self._clear_vm_console_control_state(domain_name)
-            return True
-
-        if canonical_kind == "cisco_n9kv" and settings.n9kv_poap_preboot_enabled:
-            logger.info(
-                "Running N9Kv post-boot console automation for %s (pre-boot POAP enabled)",
-                domain_name,
-            )
-
-        from agent.console_extractor import run_vm_post_boot_commands, PEXPECT_AVAILABLE
-
-        if not PEXPECT_AVAILABLE:
-            logger.debug("pexpect not available, skipping post-boot commands")
-            return True  # Not an error, just skip
-
-        try:
-            result = await asyncio.to_thread(
-                run_vm_post_boot_commands,
-                domain_name,
-                kind,
-                self._uri,
-            )
-            return result.success
-        except Exception as e:
-            logger.warning(f"Post-boot commands failed for {domain_name}: {e}")
-            return False
+    async def _run_post_boot_commands(self, domain_name: str, kind: str) -> bool:
+        return await _run_post_boot_commands(
+            domain_name, kind, self._uri,
+            canonical_kind_fn=self._canonical_kind,
+            clear_console_state_fn=self._clear_vm_console_control_state,
+        )
 
     @staticmethod
     def _extract_probe_markers(details: str | None) -> set[str]:
-        """Parse `markers=` payload from readiness details."""
-        if not details:
-            return set()
-        match = re.search(r"(?:^|;\s*)markers=([^;]+)", details)
-        if not match:
-            return set()
-        raw = match.group(1).strip()
-        if not raw or raw == "none":
-            return set()
-        return {item.strip() for item in raw.split(",") if item.strip()}
+        return _extract_probe_markers(details)
 
     @staticmethod
     def _classify_console_result(result) -> str:
-        """Classify console command result into a status string.
+        return _classify_console_result(result)
 
-        Used by N9Kv boot intervention handlers (loader recovery, POAP skip,
-        admin password setup) to normalize success/failure/timeout outcomes.
-        """
-        if result.success:
-            return "sent"
-        first_error = ""
-        if result.outputs:
-            first_error = (result.outputs[0].error or "").strip()
-        overall_error = (result.error or "").strip()
-        if "Timeout waiting for command output" in first_error:
-            return "sent_handoff_timeout"
-        if "Console connection closed unexpectedly" in overall_error:
-            return "sent_console_closed"
-        return "failed"
-
-    async def _run_n9kv_loader_recovery(
-        self,
-        domain_name: str,
-        kind: str,
-    ) -> str:
-        """Attempt loader recovery by booting NX-OS image from bootflash.
-
-        Allows up to _N9KV_LOADER_RECOVERY_MAX_ATTEMPTS retries with a
-        cooldown period between attempts.  NX-OS can crash during early
-        boot (sysconf checksum on fresh NVRAM) and drop back to loader,
-        so a single attempt is insufficient.
-        """
-        attempts = self._n9kv_loader_recovery_attempts.get(domain_name, 0)
-        max_attempts = LibvirtProvider._N9KV_LOADER_RECOVERY_MAX_ATTEMPTS
-
-        if attempts >= max_attempts:
-            return "skipped_max_attempts"
-
-        last_at = self._n9kv_loader_recovery_last_at.get(domain_name, 0.0)
-        elapsed = time.monotonic() - last_at
-        if last_at > 0 and elapsed < LibvirtProvider._N9KV_LOADER_RECOVERY_COOLDOWN:
-            return "skipped_cooldown"
-
-        from agent.console_extractor import run_vm_cli_commands, PEXPECT_AVAILABLE
-
-        if not PEXPECT_AVAILABLE:
-            logger.warning(
-                "Skipping N9Kv loader recovery for %s: pexpect unavailable",
-                domain_name,
-            )
-            return "skipped_pexpect_unavailable"
-
-        try:
-            result = await asyncio.to_thread(
-                run_vm_cli_commands,
-                domain_name=domain_name,
-                kind=kind,
-                commands=["boot bootflash:nxos64-cs.10.5.3.F.bin"],
-                libvirt_uri=self._uri,
-                prompt_pattern=r"loader >\s*$",
-                paging_disable="",
-                attempt_enable=False,
-                timeout=45,
-                retries=0,
-            )
-        except Exception as e:
-            self._n9kv_loader_recovery_attempts[domain_name] = attempts + 1
-            self._n9kv_loader_recovery_last_at[domain_name] = time.monotonic()
-            logger.warning(
-                "N9Kv loader recovery command failed for %s (attempt %d/%d): %s",
-                domain_name,
-                attempts + 1,
-                max_attempts,
-                e,
-            )
-            return "error"
-
-        # Count this attempt regardless of outcome.
-        self._n9kv_loader_recovery_attempts[domain_name] = attempts + 1
-        self._n9kv_loader_recovery_last_at[domain_name] = time.monotonic()
-
-        status = self._classify_console_result(result)
-
-        logger.info(
-            "N9Kv loader recovery for %s: status=%s attempt=%d/%d commands_run=%s error=%s",
-            domain_name,
-            status,
-            attempts + 1,
-            max_attempts,
-            result.commands_run,
-            result.error,
-        )
-        return status
-
-    async def _run_n9kv_panic_recovery(
-        self,
-        domain_name: str,
-        kind: str,
-        serial_log_path: str,
-    ) -> str:
-        """Force-restart a VM stuck after a guest kernel panic.
-
-        Guest kernel panics (ksm_scan_thread GPF) leave the VM in QEMU
-        'running' state with no serial output.  QEMU does not detect guest
-        panics as crash events, so ``<on_crash>restart</on_crash>`` is
-        ineffective.  Instead we watch for the panic signature in the serial
-        log and, if the log stops growing, force-restart the domain.
-
-        Guards:
-          - Max attempts (3) to prevent infinite restart loops.
-          - Cooldown (60s) between restarts.
-          - Staleness check: first detection records log size; restart only
-            fires when log size is unchanged on a subsequent probe.
-        """
-        attempts = self._n9kv_panic_recovery_attempts.get(domain_name, 0)
-        max_attempts = LibvirtProvider._N9KV_PANIC_RECOVERY_MAX_ATTEMPTS
-
-        if attempts >= max_attempts:
-            return "skipped_max_attempts"
-
-        last_at = self._n9kv_panic_recovery_last_at.get(domain_name, 0.0)
-        elapsed = time.monotonic() - last_at
-        if last_at > 0 and elapsed < LibvirtProvider._N9KV_PANIC_RECOVERY_COOLDOWN:
-            return "skipped_cooldown"
-
-        # Staleness check: only restart when serial log stops growing.
-        try:
-            current_size = os.path.getsize(serial_log_path)
-        except OSError:
-            current_size = -1
-
-        prev_size = self._n9kv_panic_last_log_size.get(domain_name)
-        if prev_size is None:
-            # First time seeing panic — record size and give VM a grace period.
-            self._n9kv_panic_last_log_size[domain_name] = current_size
-            return "skipped_first_detection"
-
-        if current_size != prev_size:
-            # Log is still growing — VM may be recovering on its own.
-            self._n9kv_panic_last_log_size[domain_name] = current_size
-            return "skipped_log_growing"
-
-        # Log size unchanged since last check — VM is stuck.  Force restart.
-        try:
-            def _restart_domain(conn, dname):
-                dom = conn.lookupByName(dname)
-                dom.destroy()
-                time.sleep(2)
-                dom.create()
-
-            await self._run_libvirt(_restart_domain, self.conn, domain_name)
-        except Exception as e:
-            self._n9kv_panic_recovery_attempts[domain_name] = attempts + 1
-            self._n9kv_panic_recovery_last_at[domain_name] = time.monotonic()
-            logger.warning(
-                "N9Kv panic recovery failed for %s (attempt %d/%d): %s",
-                domain_name, attempts + 1, max_attempts, e,
-            )
-            return "error"
-
-        # Clear log size tracking (fresh boot produces new output).
-        self._n9kv_panic_last_log_size.pop(domain_name, None)
-
-        self._n9kv_panic_recovery_attempts[domain_name] = attempts + 1
-        self._n9kv_panic_recovery_last_at[domain_name] = time.monotonic()
-
-        logger.info(
-            "N9Kv panic recovery for %s: restarted (attempt %d/%d)",
-            domain_name, attempts + 1, max_attempts,
-        )
-        return "restarted"
-
-    async def _run_n9kv_poap_skip(
-        self,
-        domain_name: str,
-        kind: str,
-    ) -> str:
-        """Send 'yes' to POAP abort prompt to skip POAP and continue normal setup."""
-        if domain_name in self._n9kv_poap_skip_attempted:
-            return "skipped_already_attempted"
-
-        self._n9kv_poap_skip_attempted.add(domain_name)
-
-        from agent.console_extractor import run_vm_cli_commands, PEXPECT_AVAILABLE
-
-        if not PEXPECT_AVAILABLE:
-            logger.warning(
-                "Skipping N9Kv POAP skip for %s: pexpect unavailable",
-                domain_name,
-            )
-            return "skipped_pexpect_unavailable"
-
-        try:
-            result = await asyncio.to_thread(
-                run_vm_cli_commands,
-                domain_name=domain_name,
-                kind=kind,
-                commands=["yes"],
-                libvirt_uri=self._uri,
-                prompt_pattern=r"\(yes/no\)\[n(?:o)?\]:\s*$",
-                paging_disable="",
-                attempt_enable=False,
-                timeout=30,
-                retries=0,
-            )
-        except Exception as e:
-            logger.warning(
-                "N9Kv POAP skip failed for %s: %s",
-                domain_name,
-                e,
-            )
-            return "error"
-
-        status = self._classify_console_result(result)
-
-        logger.info(
-            "N9Kv POAP skip for %s: status=%s commands_run=%s error=%s",
-            domain_name,
-            status,
-            result.commands_run,
-            result.error,
-        )
-        return status
-
-    async def _run_n9kv_admin_password_setup(
-        self,
-        domain_name: str,
-        kind: str,
-    ) -> str:
-        """Navigate the first-boot admin password wizard via console interaction.
-
-        Uses run_vm_cli_commands which triggers _handle_login() in the console
-        extractor — that method already handles the password prompts, sending
-        a bootstrap password that meets NX-OS complexity requirements.
-        """
-        if domain_name in self._n9kv_admin_password_completed:
-            return "skipped_already_completed"
-
-        from agent.console_extractor import run_vm_cli_commands, PEXPECT_AVAILABLE
-
-        if not PEXPECT_AVAILABLE:
-            logger.warning(
-                "Skipping N9Kv admin password setup for %s: pexpect unavailable",
-                domain_name,
-            )
-            return "skipped_pexpect_unavailable"
-
-        try:
-            result = await asyncio.to_thread(
-                run_vm_cli_commands,
-                domain_name=domain_name,
-                kind=kind,
-                commands=["show clock"],
-                libvirt_uri=self._uri,
-                timeout=60,
-                retries=1,
-            )
-        except Exception as e:
-            logger.warning(
-                "N9Kv admin password setup failed for %s: %s",
-                domain_name,
-                e,
-            )
-            return "error"
-
-        status = self._classify_console_result(result)
-
-        logger.info(
-            "N9Kv admin password setup for %s: status=%s commands_run=%s error=%s",
-            domain_name,
-            status,
-            result.commands_run,
-            result.error,
+    async def _run_n9kv_loader_recovery(self, domain_name: str, kind: str) -> str:
+        return await _run_n9kv_loader_recovery(
+            domain_name, kind, self._uri,
+            recovery_attempts=self._n9kv_loader_recovery_attempts,
+            recovery_last_at=self._n9kv_loader_recovery_last_at,
+            max_attempts=self._N9KV_LOADER_RECOVERY_MAX_ATTEMPTS,
+            cooldown=self._N9KV_LOADER_RECOVERY_COOLDOWN,
         )
 
-        if status.startswith("sent"):
-            self._n9kv_admin_password_completed.add(domain_name)
+    async def _run_n9kv_panic_recovery(self, domain_name: str, kind: str, serial_log_path: str) -> str:
+        return await _run_n9kv_panic_recovery(
+            domain_name, kind, serial_log_path,
+            run_libvirt_fn=self._run_libvirt,
+            conn=self.conn,
+            panic_attempts=self._n9kv_panic_recovery_attempts,
+            panic_last_at=self._n9kv_panic_recovery_last_at,
+            panic_last_log_size=self._n9kv_panic_last_log_size,
+            max_attempts=self._N9KV_PANIC_RECOVERY_MAX_ATTEMPTS,
+            cooldown=self._N9KV_PANIC_RECOVERY_COOLDOWN,
+        )
 
-        return status
+    async def _run_n9kv_poap_skip(self, domain_name: str, kind: str) -> str:
+        return await _run_n9kv_poap_skip(
+            domain_name, kind, self._uri,
+            poap_skip_attempted=self._n9kv_poap_skip_attempted,
+        )
+
+    async def _run_n9kv_admin_password_setup(self, domain_name: str, kind: str) -> str:
+        return await _run_n9kv_admin_password_setup(
+            domain_name, kind, self._uri,
+            admin_password_completed=self._n9kv_admin_password_completed,
+        )
 
     def _check_readiness_domain_sync(self, domain_name: str) -> tuple[int, dict] | None:
-        """Lookup domain state and readiness overrides — runs on libvirt thread.
-
-        Returns (state, overrides) or None if domain not found.
-        """
+        """Lookup domain state and readiness overrides — runs on libvirt thread."""
         try:
             domain = self.conn.lookupByName(domain_name)
             state, _ = domain.state()
@@ -3778,182 +2468,34 @@ class LibvirtProvider(Provider, VlanPersistenceMixin):
         node_name: str,
         kind: str,
     ) -> ReadinessResult:
-        """Check if a VM has finished booting and is ready.
-
-        This uses the serial console output to detect boot completion
-        patterns defined in the vendor config. When the VM becomes ready,
-        post-boot commands are automatically executed (once).
-
-        Args:
-            lab_id: Lab identifier
-            node_name: Node name within the lab
-            kind: Device kind for vendor config lookup
-
-        Returns:
-            ReadinessResult with ready status and progress
-        """
+        """Check if a VM has finished booting and is ready."""
         domain_name = self._domain_name(lab_id, node_name)
-
-        result = await self._run_libvirt(self._check_readiness_domain_sync, domain_name)
-        if result is None:
-            return ReadinessResult(
-                is_ready=False,
-                message="VM domain not found",
-                progress_percent=0,
-            )
-        state, overrides = result
-
-        if state != libvirt.VIR_DOMAIN_RUNNING:
-            return ReadinessResult(
-                is_ready=False,
-                message=f"VM not running (state={state})",
-                progress_percent=0,
-            )
-        effective_probe = overrides.get("readiness_probe") or get_libvirt_config(kind).readiness_probe
-
-        # Only use management-IP/SSH gating when readiness probe explicitly asks
-        # for SSH readiness. Console method alone is not sufficient.
-        if get_console_method(kind) == "ssh" and effective_probe in {"ssh", "tcp_ssh", "management_ssh"}:
-            ip = await self._get_vm_management_ip(domain_name)
-            if not ip:
-                return ReadinessResult(
-                    is_ready=False,
-                    message="Waiting for management IP",
-                    progress_percent=30,
-                )
-
-            ssh_ready = await asyncio.to_thread(self._check_tcp_port, ip, 22, 2.0)
-            if not ssh_ready:
-                return ReadinessResult(
-                    is_ready=False,
-                    message=f"Management IP {ip} reachable, waiting for SSH",
-                    progress_percent=70,
-                )
-
-            return ReadinessResult(
-                is_ready=True,
-                message=f"Management SSH ready on {ip}",
-                progress_percent=100,
-            )
-
-        # Compute serial log path for lock-free observation
-        serial_log_path = (
-            Path(settings.workspace_path) / lab_id / "serial-logs" / f"{domain_name}.log"
+        return await _check_readiness(
+            lab_id, node_name, kind,
+            domain_name=domain_name,
+            uri=self._uri,
+            run_libvirt_fn=self._run_libvirt,
+            check_readiness_domain_sync_fn=self._check_readiness_domain_sync,
+            get_vm_management_ip_fn=self._get_vm_management_ip,
+            canonical_kind_fn=self._canonical_kind,
+            clear_console_state_fn=self._clear_vm_console_control_state,
+            loader_recovery_attempts=self._n9kv_loader_recovery_attempts,
+            loader_recovery_last_at=self._n9kv_loader_recovery_last_at,
+            loader_max_attempts=self._N9KV_LOADER_RECOVERY_MAX_ATTEMPTS,
+            loader_cooldown=self._N9KV_LOADER_RECOVERY_COOLDOWN,
+            panic_recovery_attempts=self._n9kv_panic_recovery_attempts,
+            panic_recovery_last_at=self._n9kv_panic_recovery_last_at,
+            panic_last_log_size=self._n9kv_panic_last_log_size,
+            panic_max_attempts=self._N9KV_PANIC_RECOVERY_MAX_ATTEMPTS,
+            panic_cooldown=self._N9KV_PANIC_RECOVERY_COOLDOWN,
+            poap_skip_attempted=self._n9kv_poap_skip_attempted,
+            admin_password_completed=self._n9kv_admin_password_completed,
+            conn=self.conn,
         )
-
-        probe = get_libvirt_probe(
-            kind,
-            domain_name,
-            self._uri,
-            readiness_probe=overrides.get("readiness_probe"),
-            readiness_pattern=overrides.get("readiness_pattern"),
-            serial_log_path=str(serial_log_path),
-        )
-
-        # Run the probe
-        result = await probe.check(node_name)
-
-        canonical_kind = self._canonical_kind(kind)
-        if canonical_kind == "cisco_n9kv" and not result.is_ready:
-            markers = self._extract_probe_markers(result.details)
-            # Loader recovery is invasive (boots a specific image) — gate behind flag
-            if "loader_prompt" in markers and settings.n9kv_boot_modifications_enabled:
-                recovery_status = await self._run_n9kv_loader_recovery(
-                    domain_name,
-                    kind,
-                )
-                recovery_note = f"loader_recovery={recovery_status}"
-                result.details = (
-                    f"{result.details}; {recovery_note}"
-                    if result.details
-                    else recovery_note
-                )
-                attempts = self._n9kv_loader_recovery_attempts.get(domain_name, 0)
-                max_attempts = LibvirtProvider._N9KV_LOADER_RECOVERY_MAX_ATTEMPTS
-                if recovery_status.startswith("sent"):
-                    result.message = f"Boot recovery in progress (attempt {attempts}/{max_attempts})"
-                elif recovery_status == "skipped_max_attempts":
-                    result.message = f"Boot recovery exhausted ({max_attempts} attempts)"
-                elif recovery_status == "skipped_cooldown":
-                    result.message = f"Boot recovery cooling down (attempt {attempts}/{max_attempts})"
-            # POAP skip is safe — just answers "yes" at the standard abort prompt.
-            # When POAP preboot is enabled we WANT POAP to run (download script
-            # from TFTP, apply startup config), so only skip on explicit failure.
-            elif "poap_abort_prompt" in markers or "poap_failure" in markers:
-                if settings.n9kv_poap_preboot_enabled and "poap_failure" not in markers:
-                    # Let POAP proceed — the DHCP/TFTP/HTTP pipeline will deliver
-                    # the startup config via the staged script.py.
-                    result.message = "POAP provisioning in progress"
-                else:
-                    skip_status = await self._run_n9kv_poap_skip(
-                        domain_name,
-                        kind,
-                    )
-                    skip_note = f"poap_skip={skip_status}"
-                    result.details = (
-                        f"{result.details}; {skip_note}"
-                        if result.details
-                        else skip_note
-                    )
-                    if skip_status.startswith("sent"):
-                        result.message = "POAP skip in progress (skipping to normal setup)"
-            # Admin password wizard blocks before login prompt on first boot.
-            # The console extractor's _handle_login() already handles the
-            # password prompts — we just need to open a console session.
-            elif "admin_password_prompt" in markers and settings.n9kv_boot_modifications_enabled:
-                pw_status = await self._run_n9kv_admin_password_setup(
-                    domain_name,
-                    kind,
-                )
-                pw_note = f"admin_password_setup={pw_status}"
-                result.details = (
-                    f"{result.details}; {pw_note}"
-                    if result.details
-                    else pw_note
-                )
-                if pw_status.startswith("sent"):
-                    result.is_ready = True
-                    result.progress_percent = 100
-                    result.message = "Boot complete (admin password configured)"
-            # Guest kernel panic (ksm_scan_thread GPF) leaves QEMU running
-            # but guest OS dead — no serial output.  Force-restart if stuck.
-            elif "kernel_panic" in markers and settings.n9kv_boot_modifications_enabled:
-                panic_status = await self._run_n9kv_panic_recovery(
-                    domain_name, kind, str(serial_log_path),
-                )
-                panic_note = f"panic_recovery={panic_status}"
-                result.details = (
-                    f"{result.details}; {panic_note}"
-                    if result.details
-                    else panic_note
-                )
-                attempts = self._n9kv_panic_recovery_attempts.get(domain_name, 0)
-                max_attempts = LibvirtProvider._N9KV_PANIC_RECOVERY_MAX_ATTEMPTS
-                if panic_status == "restarted":
-                    result.message = f"Kernel panic detected — restarting VM (attempt {attempts}/{max_attempts})"
-                elif panic_status == "skipped_first_detection":
-                    result.message = "Kernel panic detected — monitoring for recovery"
-                elif panic_status == "skipped_log_growing":
-                    result.message = "Kernel panic detected — VM recovering (output still growing)"
-                elif panic_status == "skipped_max_attempts":
-                    result.message = f"Kernel panic recovery exhausted ({max_attempts} attempts)"
-                elif panic_status == "skipped_cooldown":
-                    result.message = f"Kernel panic recovery cooling down (attempt {attempts}/{max_attempts})"
-
-        # If ready, run post-boot commands (idempotent - only runs once)
-        if result.is_ready:
-            await self._run_post_boot_commands(domain_name, kind)
-
-        return result
 
     @staticmethod
     def _check_tcp_port(host: str, port: int, timeout: float) -> bool:
-        """Return True when TCP port is connectable."""
-        try:
-            with socket.create_connection((host, port), timeout=timeout):
-                return True
-        except Exception:
-            return False
+        return _check_tcp_port(host, port, timeout)
 
     def _get_readiness_timeout_sync(
         self,
@@ -4219,92 +2761,16 @@ class LibvirtProvider(Provider, VlanPersistenceMixin):
         node_name: str,
         kind: str,
     ) -> tuple[str, str] | None:
-        """Extract running config from a single VM.
-
-        Supports:
-        - config_extract_method="serial": Use virsh console + pexpect
-        - config_extract_method="ssh": Use SSH to VM's management IP
-
-        Args:
-            lab_id: Lab identifier
-            node_name: Node name within the lab
-            kind: Device kind for vendor config lookup
-
-        Returns:
-            Tuple of (node_name, config_content) or None if extraction failed
-        """
+        """Extract running config from a single VM."""
         domain_name = self._domain_name(lab_id, node_name)
-
-        running = await self._run_libvirt(self._check_domain_running_sync, domain_name)
-        if running is None:
-            logger.warning(f"Cannot extract config from {node_name}: domain not found")
-            return None
-        if not running:
-            logger.warning(f"Cannot extract config from {node_name}: VM not running")
-            return None
-
-        # Check extraction method
-        extraction_settings = get_config_extraction_settings(kind)
-
-        if extraction_settings.method == "ssh":
-            # Extract via SSH
-            config = await self._extract_config_via_ssh(domain_name, kind, node_name)
-            if config:
-                # Guard against obvious non-config noise while allowing
-                # legitimately small configs on freshly booted devices.
-                compact = config.strip()
-                if len(compact) < 64 and not re.search(
-                    r"(version|hostname|interface|current configuration|^!$)",
-                    compact,
-                    re.IGNORECASE | re.MULTILINE,
-                ):
-                    logger.warning(
-                        f"Discarding suspiciously short extracted config for {node_name} via SSH "
-                        f"({len(compact)} bytes)"
-                    )
-                    return None
-                logger.info(f"Extracted config from {node_name} via SSH ({len(config)} bytes)")
-                return (node_name, config)
-            return None
-
-        elif extraction_settings.method == "serial":
-            # Extract via serial console (pexpect)
-            from agent.console_extractor import extract_vm_config, PEXPECT_AVAILABLE
-
-            if not PEXPECT_AVAILABLE:
-                logger.warning("pexpect not available, skipping VM config extraction")
-                return None
-
-            # Run extraction in thread pool to avoid blocking
-            result = await asyncio.to_thread(
-                extract_vm_config,
-                domain_name,
-                kind,
-                self._uri,
-            )
-
-            if result.success:
-                # Extra safety net even if extractor reported success.
-                compact = result.config.strip()
-                if len(compact) < 64 and not re.search(
-                    r"(version|hostname|interface|current configuration|^!$)",
-                    compact,
-                    re.IGNORECASE | re.MULTILINE,
-                ):
-                    logger.warning(
-                        f"Discarding suspiciously short extracted config for {node_name} "
-                        f"({len(compact)} bytes)"
-                    )
-                    return None
-                logger.info(f"Extracted config from {node_name} ({len(result.config)} bytes)")
-                return (node_name, result.config)
-            else:
-                logger.warning(f"Failed to extract config from {node_name}: {result.error}")
-                return None
-
-        else:
-            logger.debug(f"No extraction method for {node_name} (method={extraction_settings.method})")
-            return None
+        return await _extract_config(
+            lab_id, node_name, kind,
+            domain_name=domain_name,
+            uri=self._uri,
+            run_libvirt_fn=self._run_libvirt,
+            check_domain_running_sync_fn=self._check_domain_running_sync,
+            run_ssh_command_fn=self._run_ssh_command,
+        )
 
     async def _extract_config_via_ssh(
         self,
@@ -4313,21 +2779,11 @@ class LibvirtProvider(Provider, VlanPersistenceMixin):
         node_name: str,
     ) -> str | None:
         """Extract config from VM via SSH."""
-        ip = await self._get_vm_management_ip(domain_name)
-        if not ip:
-            logger.warning(f"No IP address found for SSH extraction from {node_name}")
-            return None
-
-        extraction_settings = get_config_extraction_settings(kind)
-        user = extraction_settings.user or "admin"
-        password = extraction_settings.password or "admin"
-        cmd = extraction_settings.command
-
-        if not cmd:
-            logger.warning(f"No extraction command for {kind}, skipping {node_name}")
-            return None
-
-        return await self._run_ssh_command(ip, user, password, cmd, node_name)
+        return await _extract_config_via_ssh(
+            domain_name, kind, node_name,
+            uri=self._uri,
+            run_ssh_command_fn=self._run_ssh_command,
+        )
 
     def _list_lab_vm_kinds_sync(self, lab_id: str) -> list[tuple[str, str]]:
         """List running VMs for a lab with their kinds — libvirt thread.
