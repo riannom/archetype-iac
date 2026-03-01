@@ -251,12 +251,19 @@ def _run_canary_traffic(cfg: Config, token: str) -> None:
 
     if cfg.sync_node_id:
         print(f"[canary] sync node desired-state running: {cfg.sync_node_id}")
-        _request_json(
-            "PUT",
-            f"{cfg.api_url}/labs/{cfg.lab_id}/nodes/{cfg.sync_node_id}/desired-state",
-            token=token,
-            payload={"state": "running"},
-        )
+        try:
+            _request_json(
+                "PUT",
+                f"{cfg.api_url}/labs/{cfg.lab_id}/nodes/{cfg.sync_node_id}/desired-state",
+                token=token,
+                payload={"state": "running"},
+            )
+        except urllib.error.HTTPError as exc:
+            # In CI and constrained labs, node sync can fail (for example when OVS is unavailable).
+            # Keep canary traffic flowing and rely on coverage checks to enforce observability signal.
+            print(f"[warn] sync desired-state request failed ({exc.code}: {exc.reason}); continuing")
+        except Exception as exc:
+            print(f"[warn] sync desired-state request failed ({exc}); continuing")
 
     if cfg.run_up_down:
         print("[canary] running lab up/down")
@@ -323,8 +330,14 @@ def _print_coverage(cfg: Config) -> int:
 
     if cfg.apply:
         if values["api_get_lab_status_samples"] <= 0:
-            print("[fail] controlled status probes generated no api_get_lab_status samples")
-            failures += 1
+            if cfg.sync_node_id:
+                print("[fail] controlled status probes generated no api_get_lab_status samples")
+                failures += 1
+            else:
+                print(
+                    "[warn] controlled status probes generated no api_get_lab_status samples "
+                    "(no sync node selected for apply traffic)"
+                )
         if cfg.run_up_down and values["jobs_started"] <= 0:
             print("[fail] --run-up-down requested but no jobs_started samples observed")
             failures += 1

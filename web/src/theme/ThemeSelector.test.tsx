@@ -77,7 +77,9 @@ describe("ThemeSelector", () => {
 
       await user.click(screen.getByText("Dark"));
       const darkFilterButton = screen.getByRole("button", { name: "Dark mode" });
-      expect(darkFilterButton.className).toContain("bg-sage-600");
+      await waitFor(() => {
+        expect(darkFilterButton.className).toContain("bg-sage-600");
+      });
     });
   });
 

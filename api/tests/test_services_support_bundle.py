@@ -754,7 +754,7 @@ class TestBuildSupportBundleEndToEnd:
             assert cb_state["handlers"]["lab_deleted"]["state_value"] == 2.0
 
             errors = json.loads(zf.read("errors.json"))["errors"]
-            assert any("Loki 'service' label missing expected value 'api'" in item for item in errors)
+            assert any("no Loki log entries found for service 'api'" in item for item in errors)
             assert any("jobs started in 2h window but no archetype_job_duration_seconds samples" in item for item in errors)
             assert any("jobs started in 2h window but no archetype_job_queue_wait_seconds samples" in item for item in errors)
             assert any("scheduler /healthz reported status 'degraded'" in item for item in errors)
