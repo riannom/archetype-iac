@@ -2,14 +2,9 @@
 from __future__ import annotations
 
 import io
-import json
-import os
-import subprocess
 from pathlib import Path
-from unittest.mock import MagicMock, patch
-from uuid import uuid4
+from unittest.mock import MagicMock
 
-import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
@@ -185,7 +180,6 @@ class TestLoadImageSync:
         monkeypatch,
     ):
         """An .xz file that fails decompression should return 400."""
-        from app.routers import images as img
 
         self._patch_disk_pressure(monkeypatch)
 

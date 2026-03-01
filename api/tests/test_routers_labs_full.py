@@ -1,15 +1,12 @@
 """Tests for lab CRUD, deploy/destroy, topology import/export endpoints."""
 from __future__ import annotations
 
-import json
-from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
-import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
-from app import models, schemas
+from app import models
 
 
 class TestCreateLab:

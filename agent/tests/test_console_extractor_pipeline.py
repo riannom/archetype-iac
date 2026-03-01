@@ -6,16 +6,14 @@ _extract_config_inner, and _get_tcp_serial_port_sync.
 
 from __future__ import annotations
 
+import importlib.util
 import sys
 import types
 
-import pytest
 
 # Ensure pexpect stub is available so SerialConsoleExtractor can be
 # constructed even in environments without the real package.
-try:
-    import pexpect as _real_pexpect
-except ImportError:
+if importlib.util.find_spec("pexpect") is None:
     _pexpect_stub = types.ModuleType("pexpect")
 
     class TIMEOUT(Exception):

@@ -687,7 +687,7 @@ class TestTriggerAgentUpdate:
 
             with patch("app.routers.agents.get_commit", return_value="abc1234"):
                 with patch("app.routers.agents._get_agent_auth_headers", return_value={}):
-                    resp = test_client.post(
+                    test_client.post(
                         f"/agents/{host.id}/update",
                         json={"target_version": "0.5.0"},
                         headers=admin_auth_headers,

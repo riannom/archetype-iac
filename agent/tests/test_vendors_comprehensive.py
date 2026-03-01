@@ -20,7 +20,6 @@ from agent.vendors import (
     ReadinessConfig,
     UIConfig,
     ContainerRuntimeConfig,
-    LibvirtRuntimeConfig,
     ConfigExtractionSettings,
     build_device_id_aliases,
     build_device_vendor_map,

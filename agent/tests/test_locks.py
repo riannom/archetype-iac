@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -39,7 +39,7 @@ def _mock_redis() -> AsyncMock:
 
     async def _scan_iter(match=None):
         return
-        yield  # noqa: makes this an async generator
+        yield  # noqa
 
     r.scan_iter = _scan_iter
     return r
@@ -216,8 +216,8 @@ class TestLockStatus:
     async def test_get_all_scans_prefix(self, manager, mock_redis):
         """get_all_locks should scan for keys matching the agent prefix."""
         keys_found = [
-            f"deploy_lock:agent-01:lab-1",
-            f"deploy_lock:agent-01:lab-2",
+            "deploy_lock:agent-01:lab-1",
+            "deploy_lock:agent-01:lab-2",
         ]
 
         async def fake_scan_iter(match=None):

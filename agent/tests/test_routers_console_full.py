@@ -299,7 +299,7 @@ class TestConsoleWebSocketRouting:
                            return_value=("docker_exec", "/bin/sh", "admin", "admin")):
                     with patch("agent.routers.console._console_websocket_docker",
                                new_callable=AsyncMock) as mock_ws_docker:
-                        with client.websocket_connect("/console/lab1/r1") as ws:
+                        with client.websocket_connect("/console/lab1/r1"):
                             pass  # Connection established, mock handler called
 
                         mock_ws_docker.assert_awaited_once()

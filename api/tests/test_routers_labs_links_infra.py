@@ -5,14 +5,12 @@ reconciliation endpoints in api/app/routers/labs.py.
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
-from app import models, schemas
+from app import models
 
 
 # ---------------------------------------------------------------------------
@@ -582,7 +580,7 @@ class TestSetAllLinksDesiredState:
                     )
         assert resp.status_code == 200
         data = resp.json()
-        assert all(l["desired_state"] == "up" for l in data["links"])
+        assert all(link["desired_state"] == "up" for link in data["links"])
 
     def test_set_all_links_down(
         self,
@@ -608,7 +606,7 @@ class TestSetAllLinksDesiredState:
                     )
         assert resp.status_code == 200
         data = resp.json()
-        assert all(l["desired_state"] == "down" for l in data["links"])
+        assert all(link["desired_state"] == "down" for link in data["links"])
 
 
 # ===========================================================================

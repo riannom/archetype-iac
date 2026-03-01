@@ -13,11 +13,10 @@ This module tests:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
-import pytest
 
-from app.services.device_resolver import DeviceResolver, ResolvedDevice, get_resolver
+from app.services.device_resolver import DeviceResolver
 
 
 # ---------------------------------------------------------------------------

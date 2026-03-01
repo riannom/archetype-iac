@@ -318,7 +318,7 @@ class TestAgentManagedInterfaceCreate:
 # ---------------------------------------------------------------------------
 
 class TestNodeStateOutModelValidator:
-    def _make(self, actual_state: str, desired_state: str) -> "NodeStateOut":
+    def _make(self, actual_state: str, desired_state: str):
         from app.schemas import NodeStateOut
         now = datetime.now(timezone.utc)
         return NodeStateOut(

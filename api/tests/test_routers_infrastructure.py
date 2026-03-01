@@ -10,7 +10,6 @@ import uuid
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
@@ -194,8 +193,8 @@ class TestAgentMesh:
         self, test_client: TestClient, test_db: Session, auth_headers: dict,
     ):
         """Mesh includes agents and creates links between pairs."""
-        h1 = _make_online_host(test_db, "h1", "Host 1")
-        h2 = _make_online_host(test_db, "h2", "Host 2")
+        _make_online_host(test_db, "h1", "Host 1")
+        _make_online_host(test_db, "h2", "Host 2")
 
         resp = test_client.get("/infrastructure/mesh", headers=auth_headers)
         assert resp.status_code == 200
@@ -236,8 +235,8 @@ class TestMtuTest:
         self, test_client: TestClient, test_db: Session, auth_headers: dict,
     ):
         """Successful MTU test returns success result."""
-        h1 = _make_online_host(test_db, "h1", "Host 1")
-        h2 = _make_online_host(test_db, "h2", "Host 2")
+        _make_online_host(test_db, "h1", "Host 1")
+        _make_online_host(test_db, "h2", "Host 2")
 
         with (
             patch("app.routers.infrastructure.agent_client") as mock_ac,
@@ -271,7 +270,7 @@ class TestMtuTest:
             id="h1", name="Host 1", address="h1.local:8080",
             status="offline", version="1.0.0",
         )
-        h2 = _make_online_host(test_db, "h2", "Host 2")
+        _make_online_host(test_db, "h2", "Host 2")
         test_db.add(h1)
         test_db.commit()
 
@@ -293,7 +292,7 @@ class TestMtuTest:
         self, test_client: TestClient, test_db: Session, auth_headers: dict,
     ):
         """Target agent offline returns error."""
-        h1 = _make_online_host(test_db, "h1", "Host 1")
+        _make_online_host(test_db, "h1", "Host 1")
         h2 = models.Host(
             id="h2", name="Host 2", address="h2.local:8080",
             status="offline", version="1.0.0",
@@ -319,8 +318,8 @@ class TestMtuTest:
         self, test_client: TestClient, test_db: Session, auth_headers: dict,
     ):
         """Test on data_plane path uses data plane addresses."""
-        h1 = _make_online_host(test_db, "h1", "Host 1", data_plane_address="10.0.0.1")
-        h2 = _make_online_host(test_db, "h2", "Host 2", data_plane_address="10.0.0.2")
+        _make_online_host(test_db, "h1", "Host 1", data_plane_address="10.0.0.1")
+        _make_online_host(test_db, "h2", "Host 2", data_plane_address="10.0.0.2")
 
         with patch("app.routers.infrastructure.agent_client") as mock_ac:
             mock_ac.is_agent_online = MagicMock(return_value=True)
@@ -376,8 +375,8 @@ class TestMtuTestAll:
         self, test_client: TestClient, test_db: Session, auth_headers: dict,
     ):
         """All pairs are tested when multiple agents are online."""
-        h1 = _make_online_host(test_db, "h1", "Host 1")
-        h2 = _make_online_host(test_db, "h2", "Host 2")
+        _make_online_host(test_db, "h1", "Host 1")
+        _make_online_host(test_db, "h2", "Host 2")
 
         with patch("app.routers.infrastructure.agent_client") as mock_ac:
             mock_ac.is_agent_online = MagicMock(return_value=True)
@@ -403,9 +402,9 @@ class TestMtuTestAll:
         self, test_client: TestClient, test_db: Session, auth_headers: dict,
     ):
         """Offline agents are excluded from test-all."""
-        h1 = _make_online_host(test_db, "h1", "Host 1")
+        _make_online_host(test_db, "h1", "Host 1")
         # h2 has status=online in DB but agent is offline by heartbeat check
-        h2 = _make_online_host(test_db, "h2", "Host 2")
+        _make_online_host(test_db, "h2", "Host 2")
 
         with patch("app.routers.infrastructure.agent_client") as mock_ac:
             mock_ac.is_agent_online = MagicMock(side_effect=lambda a: a.id == "h1")
@@ -433,7 +432,7 @@ class TestNetworkConfig:
         self, test_client: TestClient, test_db: Session, auth_headers: dict,
     ):
         """GET creates a default network config when none exists."""
-        h1 = _make_online_host(test_db, "h1", "Host 1")
+        _make_online_host(test_db, "h1", "Host 1")
 
         resp = test_client.get(
             "/infrastructure/agents/h1/network-config",
@@ -449,7 +448,7 @@ class TestNetworkConfig:
         self, test_client: TestClient, test_db: Session, auth_headers: dict,
     ):
         """GET returns existing network config."""
-        h1 = _make_online_host(test_db, "h1", "Host 1")
+        _make_online_host(test_db, "h1", "Host 1")
         _make_network_config(test_db, "h1", desired_mtu=1500, data_plane_interface="eth0")
 
         resp = test_client.get(
@@ -465,7 +464,7 @@ class TestNetworkConfig:
         self, test_client: TestClient, test_db: Session, auth_headers: dict,
     ):
         """PATCH requires admin access."""
-        h1 = _make_online_host(test_db, "h1", "Host 1")
+        _make_online_host(test_db, "h1", "Host 1")
 
         resp = test_client.patch(
             "/infrastructure/agents/h1/network-config",
@@ -478,7 +477,7 @@ class TestNetworkConfig:
         self, test_client: TestClient, test_db: Session, admin_auth_headers: dict,
     ):
         """PATCH updates network config fields."""
-        h1 = _make_online_host(test_db, "h1", "Host 1")
+        _make_online_host(test_db, "h1", "Host 1")
 
         with patch("app.routers.infrastructure.agent_client") as mock_ac:
             mock_ac.is_agent_online = MagicMock(return_value=False)
@@ -502,8 +501,8 @@ class TestNetworkConfig:
         self, test_client: TestClient, test_db: Session, auth_headers: dict,
     ):
         """GET /network-configs lists all agents' configs."""
-        h1 = _make_online_host(test_db, "h1", "Host 1")
-        h2 = _make_online_host(test_db, "h2", "Host 2")
+        _make_online_host(test_db, "h1", "Host 1")
+        _make_online_host(test_db, "h2", "Host 2")
         _make_network_config(test_db, "h1", desired_mtu=9000)
 
         resp = test_client.get(
@@ -541,7 +540,7 @@ class TestManagedInterfaces:
         self, test_client: TestClient, test_db: Session, auth_headers: dict,
     ):
         """List returns managed interfaces."""
-        h1 = _make_online_host(test_db, "h1", "Host 1")
+        _make_online_host(test_db, "h1", "Host 1")
         _make_managed_interface(test_db, "h1", name="eth1.100")
 
         resp = test_client.get(
@@ -557,7 +556,7 @@ class TestManagedInterfaces:
         self, test_client: TestClient, test_db: Session, auth_headers: dict,
     ):
         """Create managed interface requires admin."""
-        h1 = _make_online_host(test_db, "h1", "Host 1")
+        _make_online_host(test_db, "h1", "Host 1")
 
         resp = test_client.post(
             "/infrastructure/agents/h1/managed-interfaces",
@@ -574,7 +573,7 @@ class TestManagedInterfaces:
         self, test_client: TestClient, test_db: Session, admin_auth_headers: dict,
     ):
         """Create managed interface succeeds with admin."""
-        h1 = _make_online_host(test_db, "h1", "Host 1")
+        _make_online_host(test_db, "h1", "Host 1")
 
         with patch("app.routers.infrastructure.agent_client") as mock_ac:
             mock_ac.is_agent_online = MagicMock(return_value=True)
@@ -604,7 +603,7 @@ class TestManagedInterfaces:
         self, test_client: TestClient, test_db: Session, admin_auth_headers: dict,
     ):
         """PATCH updates managed interface."""
-        h1 = _make_online_host(test_db, "h1", "Host 1")
+        _make_online_host(test_db, "h1", "Host 1")
         iface = _make_managed_interface(test_db, "h1", name="eth1")
 
         with patch("app.routers.infrastructure.agent_client") as mock_ac:
@@ -628,7 +627,7 @@ class TestManagedInterfaces:
         self, test_client: TestClient, test_db: Session, admin_auth_headers: dict,
     ):
         """DELETE removes managed interface."""
-        h1 = _make_online_host(test_db, "h1", "Host 1")
+        _make_online_host(test_db, "h1", "Host 1")
         iface = _make_managed_interface(test_db, "h1", name="eth1")
 
         with patch("app.routers.infrastructure.agent_client") as mock_ac:
@@ -651,7 +650,7 @@ class TestManagedInterfaces:
         self, test_client: TestClient, test_db: Session, auth_headers: dict,
     ):
         """GET agent interfaces returns details from the agent."""
-        h1 = _make_online_host(test_db, "h1", "Host 1")
+        _make_online_host(test_db, "h1", "Host 1")
 
         with patch("app.routers.infrastructure.agent_client") as mock_ac:
             mock_ac.is_agent_online = MagicMock(return_value=True)
@@ -699,7 +698,7 @@ class TestNicGroups:
         self, test_client: TestClient, test_db: Session, admin_auth_headers: dict,
     ):
         """Create NIC group succeeds with admin."""
-        h1 = _make_online_host(test_db, "h1", "Host 1")
+        _make_online_host(test_db, "h1", "Host 1")
 
         resp = test_client.post(
             "/infrastructure/hosts/h1/nic-groups",
@@ -716,7 +715,7 @@ class TestNicGroups:
         self, test_client: TestClient, test_db: Session, admin_auth_headers: dict,
     ):
         """Creating a NIC group with duplicate name returns 409."""
-        h1 = _make_online_host(test_db, "h1", "Host 1")
+        _make_online_host(test_db, "h1", "Host 1")
         _make_nic_group(test_db, "h1", name="transport-group")
 
         resp = test_client.post(
@@ -730,7 +729,7 @@ class TestNicGroups:
         self, test_client: TestClient, test_db: Session, admin_auth_headers: dict,
     ):
         """Delete NIC group removes it."""
-        h1 = _make_online_host(test_db, "h1", "Host 1")
+        _make_online_host(test_db, "h1", "Host 1")
         group = _make_nic_group(test_db, "h1", name="transport-group")
 
         resp = test_client.delete(
@@ -744,7 +743,7 @@ class TestNicGroups:
         self, test_client: TestClient, test_db: Session, admin_auth_headers: dict,
     ):
         """Add a managed interface to a NIC group."""
-        h1 = _make_online_host(test_db, "h1", "Host 1")
+        _make_online_host(test_db, "h1", "Host 1")
         group = _make_nic_group(test_db, "h1", name="transport-group")
         iface = _make_managed_interface(test_db, "h1", name="eth1.100")
 
@@ -762,7 +761,7 @@ class TestNicGroups:
         self, test_client: TestClient, test_db: Session, admin_auth_headers: dict,
     ):
         """Remove a member from a NIC group."""
-        h1 = _make_online_host(test_db, "h1", "Host 1")
+        _make_online_host(test_db, "h1", "Host 1")
         group = _make_nic_group(test_db, "h1", name="transport-group")
         iface = _make_managed_interface(test_db, "h1", name="eth1.100")
 
@@ -787,7 +786,7 @@ class TestNicGroups:
         self, test_client: TestClient, test_db: Session, auth_headers: dict,
     ):
         """Create NIC group requires admin."""
-        h1 = _make_online_host(test_db, "h1", "Host 1")
+        _make_online_host(test_db, "h1", "Host 1")
 
         resp = test_client.post(
             "/infrastructure/hosts/h1/nic-groups",
@@ -800,8 +799,8 @@ class TestNicGroups:
         self, test_client: TestClient, test_db: Session, admin_auth_headers: dict,
     ):
         """Adding an interface from a different host returns 400."""
-        h1 = _make_online_host(test_db, "h1", "Host 1")
-        h2 = _make_online_host(test_db, "h2", "Host 2")
+        _make_online_host(test_db, "h1", "Host 1")
+        _make_online_host(test_db, "h2", "Host 2")
         group = _make_nic_group(test_db, "h1", name="transport-group")
         iface = _make_managed_interface(test_db, "h2", name="eth1.100")  # Different host
 

@@ -951,7 +951,7 @@ class TestMultihostDeployAdvanced:
         job = _make_job(test_db, lab, test_user, action="up")
         _make_node(test_db, lab, gui_id="n1", name="r1", host_id=host1.id)
 
-        analysis = _FakeAnalysis(
+        _FakeAnalysis(
             placements={host1.id: [MagicMock(node_name="r1")]},
             cross_host_links=[],
         )
@@ -986,7 +986,7 @@ class TestMultihostDeployAdvanced:
         job = _make_job(test_db, lab, test_user, action="up")
         _make_node(test_db, lab, gui_id="n1", name="r1", host_id=host1.id)
 
-        analysis = _FakeAnalysis(
+        _FakeAnalysis(
             placements={host1.id: [MagicMock(node_name="r1")]},
             cross_host_links=[],
         )
@@ -1024,7 +1024,7 @@ class TestMultihostDeployAdvanced:
         _make_node(test_db, lab, gui_id="n1", name="r1", host_id=host1.id)
         _make_node(test_db, lab, gui_id="n2", name="r2", host_id=host2.id)
 
-        analysis = _FakeAnalysis(
+        _FakeAnalysis(
             placements={
                 host1.id: [MagicMock(node_name="r1")],
                 host2.id: [MagicMock(node_name="r2")],
@@ -1234,7 +1234,7 @@ class TestMultihostDestroyAdvanced:
         multiple_hosts: list[models.Host],
     ):
         """Offline agents produce warnings in the job log."""
-        host1, host2, host3 = multiple_hosts[0], multiple_hosts[1], multiple_hosts[2]
+        host1, _host2, host3 = multiple_hosts[0], multiple_hosts[1], multiple_hosts[2]
         lab = _make_lab(test_db, test_user, state="running")
         job = _make_job(test_db, lab, test_user, action="down")
         _make_node(test_db, lab, gui_id="n1", name="r1", host_id=host1.id)
@@ -1307,7 +1307,7 @@ class TestMultihostDestroyAdvanced:
         multiple_hosts: list[models.Host],
     ):
         """On partial failure, LinkState rows are updated (not deleted)."""
-        host1, host2, host3 = multiple_hosts[0], multiple_hosts[1], multiple_hosts[2]
+        host1, _host2, host3 = multiple_hosts[0], multiple_hosts[1], multiple_hosts[2]
         lab = _make_lab(test_db, test_user, state="running")
         job = _make_job(test_db, lab, test_user, action="down")
         _make_node(test_db, lab, gui_id="n1", name="r1", host_id=host1.id)
@@ -1378,7 +1378,7 @@ class TestMultihostDestroyAdvanced:
         multiple_hosts: list[models.Host],
     ):
         """On partial failure, job.failed webhook is dispatched."""
-        host1, host2, host3 = multiple_hosts[0], multiple_hosts[1], multiple_hosts[2]
+        host1, _host2, host3 = multiple_hosts[0], multiple_hosts[1], multiple_hosts[2]
         lab = _make_lab(test_db, test_user, state="running")
         job = _make_job(test_db, lab, test_user, action="down")
         _make_node(test_db, lab, gui_id="n1", name="r1", host_id=host1.id)

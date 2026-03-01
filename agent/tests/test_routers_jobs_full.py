@@ -9,7 +9,6 @@ Covers:
 
 from __future__ import annotations
 
-import asyncio
 from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -22,12 +21,7 @@ from agent.locks import LockAcquisitionTimeout
 from agent.main import app
 from agent.providers.base import DeployResult, DestroyResult
 from agent.schemas import (
-    DeployRequest,
     DeployTopology,
-    DestroyRequest,
-    JobResult,
-    JobStatus,
-    Provider,
 )
 
 

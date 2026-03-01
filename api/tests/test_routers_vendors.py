@@ -3,11 +3,9 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
-import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
-from app import models
 
 
 class TestListVendors:
@@ -43,10 +41,8 @@ class TestListVendors:
         self, test_client: TestClient, auth_headers: dict, monkeypatch
     ):
         """Hidden devices are excluded from the vendor list."""
-        import app.routers.vendors as vendors_mod
 
         # Mock load_hidden_devices to return a device ID
-        original_list = vendors_mod.list_vendors
 
         with patch(
             "app.routers.vendors.load_hidden_devices",

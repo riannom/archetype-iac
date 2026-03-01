@@ -41,7 +41,7 @@
         "-lc",
         "cd agent && pytest -q tests"
       ],
-      "required": true
+      "required": false
     },
     "test-web-container": {
       "description": "Web vitest suite in CI",

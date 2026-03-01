@@ -1,10 +1,9 @@
 """Tests for app/tasks/node_lifecycle_agents.py — Agent resolution mixin."""
 from __future__ import annotations
 
-import asyncio
 import json
 from datetime import datetime, timedelta, timezone
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 
 import pytest
@@ -12,7 +11,7 @@ from sqlalchemy.orm import Session
 
 from app import models
 from app.agent_client import AgentUnavailableError
-from app.state import JobStatus, NodeActualState
+from app.state import JobStatus
 
 
 # ---------------------------------------------------------------------------

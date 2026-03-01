@@ -15,19 +15,13 @@ from __future__ import annotations
 
 import io
 import json
-import os
-import shutil
 import tarfile
-import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
-import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy.orm import Session
 
-from app import models
 
 
 # ---------------------------------------------------------------------------

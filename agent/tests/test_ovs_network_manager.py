@@ -8,11 +8,11 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from agent.network.ovs import OVSNetworkManager, OVSPort, VlanAllocator
+from agent.network.ovs import OVSNetworkManager, VlanAllocator
 
 
 # ---------------------------------------------------------------------------
@@ -175,7 +175,6 @@ class TestProvisionInterface:
         mgr = _make_manager(tmp_path)
 
         call_count = 0
-        original_ovs = mgr._ovs_vsctl
 
         async def _selective_fail(*args):
             nonlocal call_count
