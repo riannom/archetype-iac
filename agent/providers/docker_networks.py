@@ -5,6 +5,7 @@ backed by the archetype-ovs plugin. It handles:
 - Creating per-interface networks for a lab
 - Attaching containers to multiple networks
 - Cleaning up networks on lab destroy
+- Lab-level network lifecycle (create, delete, prune, recover)
 
 The key benefit is that interfaces are provisioned BEFORE container init runs,
 solving the cEOS interface enumeration timing issue.
@@ -14,6 +15,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
+from typing import Any
 
 import docker
 from docker.errors import APIError, NotFound
@@ -236,3 +239,316 @@ def get_docker_network_manager(docker_client: docker.DockerClient) -> DockerNetw
     if _network_manager is None:
         _network_manager = DockerNetworkManager(docker_client)
     return _network_manager
+
+
+# ---------------------------------------------------------------------------
+# Standalone network-lifecycle functions extracted from DockerProvider
+# ---------------------------------------------------------------------------
+# These functions accept the provider instance to access its Docker client,
+# retry helper, and naming utilities.
+
+LABEL_LAB_ID = "archetype.lab_id"
+LABEL_NODE_KIND = "archetype.node_kind"
+LABEL_NODE_INTERFACE_COUNT = "archetype.node_interface_count"
+LABEL_PROVIDER = "archetype.provider"
+
+
+async def create_lab_networks(provider: Any, lab_id: str, max_interfaces: int = 8) -> dict[str, str]:
+    """Create Docker networks for lab interfaces via OVS plugin.
+
+    Creates one network per interface (eth0, eth1, ..., ethN).
+    All networks share the same OVS bridge (arch-ovs).
+
+    Args:
+        provider: DockerProvider instance
+        lab_id: Lab identifier
+        max_interfaces: Maximum number of data interfaces to create
+
+    Returns:
+        Dict mapping interface name (e.g., "eth0") to network name
+    """
+    async with provider._get_lab_network_lock(lab_id):
+        await prune_legacy_lab_networks(provider, lab_id)
+
+        networks: dict[str, str] = {}
+        errors: list[str] = []
+        lab_prefix = provider._lab_network_prefix(lab_id)
+
+        for i in range(0, max_interfaces + 1):
+            interface_name = f"eth{i}"
+            network_name = f"{lab_prefix}-{interface_name}"
+
+            try:
+                try:
+                    existing = await provider._retry_docker_call(
+                        f"inspect network {network_name}",
+                        provider.docker.networks.get,
+                        network_name,
+                    )
+                    if provider._network_matches_lab_spec(existing, lab_id, interface_name):
+                        logger.debug(f"Network {network_name} already exists with expected config")
+                        networks[interface_name] = network_name
+                        continue
+
+                    await provider._resolve_conflicting_lab_network(
+                        network_name,
+                        lab_id,
+                        interface_name,
+                    )
+                    networks[interface_name] = network_name
+                    continue
+                except NotFound:
+                    pass
+
+                try:
+                    await provider._retry_docker_call(
+                        f"create network {network_name}",
+                        provider.docker.networks.create,
+                        **provider._lab_network_create_kwargs(network_name, lab_id, interface_name),
+                    )
+                except APIError as create_err:
+                    if create_err.status_code == 409:
+                        action = await provider._resolve_conflicting_lab_network(
+                            network_name,
+                            lab_id,
+                            interface_name,
+                        )
+                        logger.warning(
+                            f"Resolved network conflict for {network_name} via {action}"
+                        )
+                    else:
+                        raise
+
+                networks[interface_name] = network_name
+                logger.debug(f"Ensured network {network_name}")
+
+            except Exception as e:
+                msg = f"Failed to ensure network {network_name}: {e}"
+                errors.append(msg)
+                logger.error(msg)
+
+        expected = max_interfaces + 1
+        if expected > 0 and len(networks) < expected:
+            missing = expected - len(networks)
+            err_detail = "; ".join(errors) if errors else "unknown error"
+            raise RuntimeError(
+                f"Failed to create {missing}/{expected} Docker networks for lab {lab_id}: {err_detail}"
+            )
+
+        logger.info(f"Created {len(networks)} Docker networks for lab {lab_id}")
+        return networks
+
+
+async def delete_lab_networks(provider: Any, lab_id: str) -> int:
+    """Delete all Docker networks for a lab.
+
+    Args:
+        provider: DockerProvider instance
+        lab_id: Lab identifier
+
+    Returns:
+        Number of networks deleted
+    """
+    deleted = 0
+
+    try:
+        await prune_legacy_lab_networks(provider, lab_id)
+        lab_networks = await provider._retry_docker_call(
+            f"list networks for {lab_id} by label",
+            provider.docker.networks.list,
+            filters={"label": f"{LABEL_LAB_ID}={lab_id}"},
+        )
+
+        if not lab_networks:
+            all_networks = await provider._retry_docker_call(
+                f"list all networks for {lab_id} fallback",
+                provider.docker.networks.list,
+            )
+            safe_prefix = provider._lab_network_prefix(lab_id)
+            lab_prefixes = (f"{safe_prefix}-", f"{lab_id}-")
+            lab_networks = [
+                n for n in all_networks
+                if any(n.name.startswith(p) for p in lab_prefixes)
+            ]
+
+        for network in lab_networks:
+            try:
+                await provider._retry_docker_call(
+                    f"remove network {network.name}",
+                    network.remove,
+                )
+                deleted += 1
+                logger.debug(f"Deleted network {network.name}")
+            except APIError as e:
+                logger.warning(f"Failed to delete network {network.name}: {e}")
+            except Exception as e:
+                logger.warning(f"Failed to delete network {network.name}: {e}")
+
+    except (APIError, Exception) as e:
+        logger.warning(f"Failed to list networks for lab {lab_id}: {e}")
+
+    if deleted > 0:
+        logger.info(f"Deleted {deleted} Docker networks for lab {lab_id}")
+    return deleted
+
+
+async def recover_stale_networks(
+    provider: Any,
+    container: Any,
+    lab_id: str,
+) -> bool:
+    """Recover from stale network references by reconnecting to current lab networks.
+
+    Returns True if recovery was attempted, False if no recovery was needed.
+    """
+    from agent.vendors import get_config_by_device
+
+    container_name = container.name
+
+    await asyncio.to_thread(container.reload)
+    networks = container.attrs.get("NetworkSettings", {}).get("Networks", {})
+
+    if not networks:
+        return False
+
+    safe_prefix = provider._lab_network_prefix(lab_id)
+    lab_prefix = f"{safe_prefix}-"
+    current_lab_networks: dict[str, Any] = {}
+    try:
+        labeled = await asyncio.to_thread(
+            provider.docker.networks.list,
+            filters={"label": f"{LABEL_LAB_ID}={lab_id}"},
+        )
+        for net in labeled:
+            current_lab_networks[net.name] = net
+
+        if not current_lab_networks:
+            all_networks = await asyncio.to_thread(provider.docker.networks.list)
+            legacy_prefixes = (lab_prefix, f"{lab_id}-")
+            for net in all_networks:
+                if any(net.name.startswith(p) for p in legacy_prefixes):
+                    current_lab_networks[net.name] = net
+    except Exception as e:
+        logger.warning(f"Failed to list networks: {e}")
+        return False
+
+    networks_disconnected: list[str] = []
+    for net_name in list(networks.keys()):
+        if net_name in ("bridge", "host", "none"):
+            continue
+        if net_name.startswith(lab_prefix) or net_name.startswith(lab_id):
+            try:
+                await asyncio.to_thread(provider.docker.networks.get, net_name)
+            except NotFound:
+                try:
+                    logger.debug(f"Network {net_name} not found, will be cleaned up on start")
+                except Exception:
+                    pass
+                networks_disconnected.append(net_name)
+
+    for net_name in list(networks.keys()):
+        if net_name in ("bridge", "host", "none"):
+            continue
+        if net_name.startswith(lab_prefix) or net_name.startswith(lab_id):
+            try:
+                net = await asyncio.to_thread(provider.docker.networks.get, net_name)
+                await asyncio.to_thread(net.disconnect, container_name, force=True)
+                logger.debug(f"Disconnected {container_name} from {net_name}")
+                if net_name not in networks_disconnected:
+                    networks_disconnected.append(net_name)
+            except NotFound:
+                pass
+            except Exception as e:
+                logger.debug(f"Could not disconnect from {net_name}: {e}")
+
+    if not networks_disconnected:
+        return False
+
+    logger.info(
+        f"Disconnected {container_name} from {len(networks_disconnected)} stale networks"
+    )
+
+    desired_count: int | None = None
+    try:
+        labels = container.labels or {}
+        raw = labels.get(LABEL_NODE_INTERFACE_COUNT)
+        if raw:
+            desired_count = int(raw)
+    except Exception:
+        desired_count = None
+
+    kind = (container.labels or {}).get(LABEL_NODE_KIND)
+    if kind and desired_count is not None:
+        vc = get_config_by_device(kind)
+        if vc and vc.management_interface:
+            desired_count = 1 + vc.reserved_nics + desired_count
+
+    def _iface_index(name: str) -> int:
+        match = re.search(r"(\d+)$", name)
+        return int(match.group(1)) if match else 0
+
+    sorted_networks = sorted(
+        current_lab_networks.items(),
+        key=lambda kv: _iface_index(kv[0]),
+    )
+    if desired_count is None:
+        desired_count = 1
+        logger.warning(
+            f"{container_name} missing interface_count label; "
+            "reconnecting only eth1 for safety"
+        )
+    sorted_networks = sorted_networks[:desired_count]
+
+    reconnected = 0
+    for net_name, net in sorted_networks:
+        try:
+            await asyncio.to_thread(net.connect, container_name)
+            reconnected += 1
+            logger.debug(f"Reconnected {container_name} to {net_name}")
+        except APIError as e:
+            if "already exists" in str(e).lower():
+                reconnected += 1
+            else:
+                logger.warning(f"Failed to reconnect to {net_name}: {e}")
+
+    logger.info(f"Reconnected {container_name} to {reconnected} lab networks")
+    return True
+
+
+async def prune_legacy_lab_networks(provider: Any, lab_id: str) -> int:
+    """Remove legacy lab networks that don't match current naming/labels.
+
+    Disconnects any attached containers before removing the network.
+    """
+    removed = 0
+    current_prefix, legacy_prefix = provider._legacy_lab_network_prefixes(lab_id)
+    current_prefix = f"{current_prefix}-"
+    legacy_prefix = f"{legacy_prefix}-"
+
+    try:
+        all_networks = await asyncio.to_thread(provider.docker.networks.list)
+        for net in all_networks:
+            name = net.name or ""
+            if name.startswith(current_prefix):
+                continue
+            if not name.startswith(legacy_prefix):
+                continue
+
+            containers = net.attrs.get("Containers") or {}
+            for cid in containers:
+                try:
+                    await asyncio.to_thread(net.disconnect, cid, force=True)
+                    logger.debug(f"Disconnected {cid[:12]} from legacy network {name}")
+                except Exception:
+                    pass
+
+            try:
+                await asyncio.to_thread(net.remove)
+                removed += 1
+                logger.info(f"Removed legacy lab network {name} for lab {lab_id}")
+            except Exception as e:
+                logger.warning(f"Failed to remove legacy network {name}: {e}")
+    except Exception as e:
+        logger.warning(f"Legacy network prune failed for lab {lab_id}: {e}")
+
+    return removed
