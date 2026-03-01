@@ -148,8 +148,29 @@ class NodeLifecycleManager(AgentResolutionMixin, DeploymentMixin):
     # environments where the agent package is not available.
     try:
         from agent.vendors import VENDOR_CONFIGS as _VC
-        _KNOWN_DEVICE_TYPES = frozenset(_VC.keys())
-        del _VC
+        _known_device_types: set[str] = set()
+        for _key, _config in _VC.items():
+            _normalized_key = (_key or "").strip().lower()
+            if _normalized_key:
+                _known_device_types.add(_normalized_key)
+
+            _kind = (getattr(_config, "kind", None) or "").strip().lower()
+            if _kind:
+                _known_device_types.add(_kind)
+
+            for _alias in (getattr(_config, "aliases", None) or []):
+                _normalized_alias = (_alias or "").strip().lower()
+                if _normalized_alias:
+                    _known_device_types.add(_normalized_alias)
+
+        # Keep legacy/common aliases recognized even when vendor keys shift to
+        # canonical IDs (for example "nokia_srlinux" instead of "srlinux").
+        _known_device_types.update({
+            "ceos", "srlinux", "iosv", "iosvl2", "csr1000v", "cat8000v",
+            "cat9000v", "xrv9k", "asav", "nxosv", "linux", "frr",
+        })
+        _KNOWN_DEVICE_TYPES = frozenset(_known_device_types)
+        del _VC, _known_device_types
     except ImportError:
         _KNOWN_DEVICE_TYPES = frozenset({
             "ceos", "srlinux", "iosv", "iosvl2", "csr1000v", "cat8000v",
