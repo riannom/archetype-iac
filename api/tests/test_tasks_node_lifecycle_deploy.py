@@ -1,4 +1,4 @@
-"""Tests for DeploymentMixin (node_lifecycle_deploy.py).
+"""Tests for DeploymentMixin (node_lifecycle_deploy.py) and StopMixin (node_lifecycle_stop.py).
 
 Covers deploy/start/stop dispatching, per-node lifecycle, topology deploy,
 same-host link connection, startup config resolution, and auto-extract.
@@ -559,8 +559,8 @@ class TestStopNodes:
         manager.placements_map = {"R1": test_db.query(models.NodePlacement).first()}
 
         with (
-            patch("app.tasks.node_lifecycle_deploy.agent_client") as mock_ac,
-            patch("app.tasks.node_lifecycle_deploy.settings") as mock_settings,
+            patch("app.tasks.node_lifecycle_stop.agent_client") as mock_ac,
+            patch("app.tasks.node_lifecycle_stop.settings") as mock_settings,
         ):
             mock_settings.feature_auto_extract_on_stop = False
             mock_ac.is_agent_online = MagicMock(return_value=True)
@@ -595,7 +595,7 @@ class TestStopNodes:
 
         manager._auto_extract_before_stop = mock_extract
 
-        with patch("app.tasks.node_lifecycle_deploy.agent_client") as mock_ac:
+        with patch("app.tasks.node_lifecycle_stop.agent_client") as mock_ac:
             mock_ac.is_agent_online = MagicMock(return_value=True)
             mock_ac.reconcile_nodes_on_agent = AsyncMock(return_value={
                 "results": [
@@ -620,8 +620,8 @@ class TestStopNodes:
         manager.placements_map = {"R1": test_db.query(models.NodePlacement).first()}
 
         with (
-            patch("app.tasks.node_lifecycle_deploy.agent_client") as mock_ac,
-            patch("app.tasks.node_lifecycle_deploy.settings") as mock_settings,
+            patch("app.tasks.node_lifecycle_stop.agent_client") as mock_ac,
+            patch("app.tasks.node_lifecycle_stop.settings") as mock_settings,
         ):
             mock_settings.feature_auto_extract_on_stop = False
             mock_ac.is_agent_online = MagicMock(return_value=True)
