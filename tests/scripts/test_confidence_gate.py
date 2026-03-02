@@ -97,7 +97,7 @@ def test_filter_selected_checks_required_only():
         check_scope="required-only",
     )
 
-    assert scoped == ["test-web-container"]
+    assert scoped == ["test-agent-smoke", "test-api-smoke", "test-web-container"]
 
 
 def test_filter_selected_checks_optional_only():
@@ -145,10 +145,16 @@ def test_scope_filtered_report_keeps_all_selected_checks():
     )
 
     assert report["check_scope"] == "required-only"
-    assert [item["check_id"] for item in report["selected_checks"]] == ["test-web-container"]
+    assert [item["check_id"] for item in report["selected_checks"]] == [
+        "test-agent-smoke",
+        "test-api-smoke",
+        "test-web-container",
+    ]
     assert [item["check_id"] for item in report["selected_checks_all"]] == [
         "test-agent",
+        "test-agent-smoke",
         "test-api",
+        "test-api-smoke",
         "test-web-container",
     ]
 
