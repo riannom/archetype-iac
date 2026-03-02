@@ -640,19 +640,17 @@ class TestLabStatus:
         sample_lab: models.Lab,
         auth_headers: dict,
     ):
-        """Lab status falls back to netlab when no agent."""
+        """Lab status returns 503 when no agent available."""
         with patch("app.routers.jobs.agent_client.get_healthy_agent", new_callable=AsyncMock) as mock_get:
             mock_get.return_value = None
-            with patch("app.routers.jobs.run_netlab_command") as mock_netlab:
-                mock_netlab.return_value = (0, "Status output", "")
-                response = test_client.get(
-                    f"/labs/{sample_lab.id}/status",
-                    headers=auth_headers
-                )
+            response = test_client.get(
+                f"/labs/{sample_lab.id}/status",
+                headers=auth_headers
+            )
 
-        assert response.status_code == 200
+        assert response.status_code == 503
         data = response.json()
-        assert "raw" in data
+        assert "No agents available" in data["detail"]
 
     def test_lab_status_multi_agent_gather(
         self,
