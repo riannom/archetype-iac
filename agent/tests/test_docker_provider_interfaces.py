@@ -243,7 +243,7 @@ def test_create_container_config_applies_cpu_limit(monkeypatch, tmp_path):
         entrypoint=None,
         cmd=["sleep", "infinity"],
     )
-    monkeypatch.setattr("agent.providers.docker.get_container_config", lambda **_kwargs: runtime)
+    monkeypatch.setattr("agent.providers.docker_setup.get_container_config", lambda **_kwargs: runtime)
 
     node = TopologyNode(name="n1", kind="linux", cpu=2, cpu_limit=50)
     cfg = provider._create_container_config(node, "lab1", tmp_path, interface_count=0)

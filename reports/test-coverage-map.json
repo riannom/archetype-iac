@@ -38,7 +38,16 @@
       "api/app/main.py",
       "api/app/metrics.py",
       "api/app/middleware.py",
-      "api/app/models.py",
+      "api/app/models/__init__.py",
+      "api/app/models/auth.py",
+      "api/app/models/base.py",
+      "api/app/models/catalog.py",
+      "api/app/models/infra.py",
+      "api/app/models/job.py",
+      "api/app/models/lab.py",
+      "api/app/models/state.py",
+      "api/app/models/topology.py",
+      "api/app/models/webhook.py",
       "api/app/netlab.py",
       "api/app/providers.py",
       "api/app/routers/__init__.py",
@@ -135,6 +144,7 @@
       "api/app/tasks/node_lifecycle.py",
       "api/app/tasks/node_lifecycle_agents.py",
       "api/app/tasks/node_lifecycle_deploy.py",
+      "api/app/tasks/node_lifecycle_stop.py",
       "api/app/tasks/reconciliation.py",
       "api/app/tasks/reconciliation_db.py",
       "api/app/tasks/reconciliation_refresh.py",
@@ -345,7 +355,7 @@
         "api/app/db.py"
       ],
       "api/tests/test_transitional_states.py": [
-        "api/app/models.py",
+        "api/app/models/__init__.py",
         "api/app/routers/__init__.py",
         "api/app/routers/jobs.py",
         "api/app/tasks/__init__.py",
@@ -354,12 +364,12 @@
       ],
       "api/tests/test_tasks_node_lifecycle_deploy.py": [
         "api/app/agent_client/__init__.py",
-        "api/app/models.py",
+        "api/app/models/__init__.py",
         "api/app/state.py",
         "api/app/tasks/node_lifecycle.py"
       ],
       "api/tests/test_webhooks.py": [
-        "api/app/models.py",
+        "api/app/models/__init__.py",
         "api/app/webhooks.py"
       ],
       "api/tests/test_netlab.py": [
@@ -367,28 +377,28 @@
       ],
       "api/tests/test_agent_provider_selection.py": [
         "api/app/agent_client/__init__.py",
-        "api/app/models.py"
+        "api/app/models/__init__.py"
       ],
       "api/tests/test_tasks_link_cleanup.py": [
         "api/app/config.py",
-        "api/app/models.py",
+        "api/app/models/__init__.py",
         "api/app/tasks/link_cleanup.py"
       ],
       "api/tests/test_api_module_imports.py": [
         "api/app/__init__.py",
         "api/app/errors.py",
         "api/app/iso/__init__.py",
-        "api/app/models.py",
+        "api/app/models/__init__.py",
         "api/app/routers/v1/__init__.py",
         "api/app/services/__init__.py",
         "api/app/utils/__init__.py"
       ],
       "api/tests/test_auto_sync.py": [
-        "api/app/models.py",
+        "api/app/models/__init__.py",
         "api/app/tasks/live_nodes.py"
       ],
       "api/tests/test_topology_service.py": [
-        "api/app/models.py",
+        "api/app/models/__init__.py",
         "api/app/schemas/__init__.py",
         "api/app/services/topology.py"
       ],
@@ -396,23 +406,23 @@
         "api/app/services/resource_monitor.py"
       ],
       "api/tests/test_port_convergence.py": [
-        "api/app/models.py",
+        "api/app/models/__init__.py",
         "api/app/tasks/link_reconciliation.py"
       ],
       "api/tests/test_routers_labs_node_states.py": [
-        "api/app/models.py",
+        "api/app/models/__init__.py",
         "api/app/state.py"
       ],
       "api/tests/test_routers_callbacks.py": [
-        "api/app/models.py"
+        "api/app/models/__init__.py"
       ],
       "api/tests/test_link_normalization.py": [
-        "api/app/models.py",
+        "api/app/models/__init__.py",
         "api/app/services/topology.py",
         "api/app/utils/link.py"
       ],
       "api/tests/test_routers_images.py": [
-        "api/app/models.py",
+        "api/app/models/__init__.py",
         "api/app/routers/__init__.py",
         "api/app/routers/images/__init__.py",
         "api/app/tasks/__init__.py",
@@ -424,54 +434,54 @@
       ],
       "api/tests/test_routers_labs_full.py": [
         "api/app/auth.py",
-        "api/app/models.py"
+        "api/app/models/__init__.py"
       ],
       "api/tests/test_utils_cache_extra.py": [
         "api/app/utils/cache.py"
       ],
       "api/tests/test_auth.py": [
         "api/app/config.py",
-        "api/app/models.py"
+        "api/app/models/__init__.py"
       ],
       "api/tests/test_link_validator.py": [
-        "api/app/models.py",
+        "api/app/models/__init__.py",
         "api/app/services/link_validator.py"
       ],
       "api/tests/test_routers_images_infra_extra.py": [
-        "api/app/models.py",
+        "api/app/models/__init__.py",
         "api/app/routers/images/__init__.py",
         "api/app/routers/infrastructure.py"
       ],
       "api/tests/test_tasks_jobs_deploy.py": [
-        "api/app/models.py",
+        "api/app/models/__init__.py",
         "api/app/tasks/jobs.py"
       ],
       "api/tests/test_overlay_convergence.py": [
         "api/app/agent_client/__init__.py",
-        "api/app/models.py",
+        "api/app/models/__init__.py",
         "api/app/tasks/link_reconciliation.py"
       ],
       "api/tests/test_device_specs.py": [
         "api/app/services/device_service.py"
       ],
       "api/tests/test_tasks_reconciliation.py": [
-        "api/app/models.py",
+        "api/app/models/__init__.py",
         "api/app/tasks/reconciliation.py",
         "api/app/utils/link.py"
       ],
       "api/tests/test_agent_auth.py": [
         "api/app/config.py",
-        "api/app/models.py"
+        "api/app/models/__init__.py"
       ],
       "api/tests/test_dashboard.py": [
-        "api/app/models.py"
+        "api/app/models/__init__.py"
       ],
       "api/tests/test_utils_lab.py": [
-        "api/app/models.py",
+        "api/app/models/__init__.py",
         "api/app/utils/lab.py"
       ],
       "api/tests/test_services_support_bundle.py": [
-        "api/app/models.py",
+        "api/app/models/__init__.py",
         "api/app/services/__init__.py",
         "api/app/services/support_bundle.py"
       ],
@@ -479,32 +489,32 @@
         "api/app/auth.py",
         "api/app/config.py",
         "api/app/db.py",
-        "api/app/models.py"
+        "api/app/models/__init__.py"
       ],
       "api/tests/test_state_ws.py": [
-        "api/app/models.py",
+        "api/app/models/__init__.py",
         "api/app/routers/state_ws.py"
       ],
       "api/tests/test_routers_labs_permissions_extra.py": [
         "api/app/config.py",
-        "api/app/models.py",
+        "api/app/models/__init__.py",
         "api/app/routers/labs/__init__.py",
         "api/app/routers/permissions.py"
       ],
       "api/tests/test_routers_agents_console_extra.py": [
-        "api/app/models.py",
+        "api/app/models/__init__.py",
         "api/app/routers/agents.py"
       ],
       "api/tests/test_image_reconciliation.py": [
-        "api/app/models.py",
+        "api/app/models/__init__.py",
         "api/app/tasks/image_reconciliation.py"
       ],
       "api/tests/test_agents_batch7.py": [
-        "api/app/models.py",
+        "api/app/models/__init__.py",
         "api/app/state.py"
       ],
       "api/tests/test_tasks_link_reconciliation_full.py": [
-        "api/app/models.py",
+        "api/app/models/__init__.py",
         "api/app/tasks/link_reconciliation.py",
         "api/app/tasks/live_links.py"
       ],
@@ -512,12 +522,12 @@
         "api/app/worker.py"
       ],
       "api/tests/test_tasks_scenario_executor.py": [
-        "api/app/models.py",
+        "api/app/models/__init__.py",
         "api/app/state.py",
         "api/app/tasks/scenario_executor.py"
       ],
       "api/tests/test_services_catalog_service.py": [
-        "api/app/models.py",
+        "api/app/models/__init__.py",
         "api/app/services/__init__.py",
         "api/app/services/catalog_service.py"
       ],
@@ -525,12 +535,12 @@
         "api/app/logging_config.py"
       ],
       "api/tests/test_job_broadcasting.py": [
-        "api/app/models.py",
+        "api/app/models/__init__.py",
         "api/app/tasks/jobs.py",
         "api/app/utils/job.py"
       ],
       "api/tests/test_link_state_canonicalization.py": [
-        "api/app/models.py",
+        "api/app/models/__init__.py",
         "api/app/routers/labs/__init__.py",
         "api/app/schemas/__init__.py"
       ],
@@ -539,12 +549,12 @@
       ],
       "api/tests/test_routers_labs_configs.py": [
         "api/app/config.py",
-        "api/app/models.py"
+        "api/app/models/__init__.py"
       ],
       "api/tests/test_jobs_metrics_utils_extra.py": [
         "api/app/jobs.py",
         "api/app/metrics.py",
-        "api/app/models.py",
+        "api/app/models/__init__.py",
         "api/app/tasks/jobs.py"
       ],
       "api/tests/test_iso_mapper.py": [
@@ -552,11 +562,11 @@
         "api/app/iso/models.py"
       ],
       "api/tests/test_routers_infrastructure.py": [
-        "api/app/models.py"
+        "api/app/models/__init__.py"
       ],
       "api/tests/test_tasks_node_lifecycle_agents.py": [
         "api/app/agent_client/__init__.py",
-        "api/app/models.py",
+        "api/app/models/__init__.py",
         "api/app/state.py",
         "api/app/tasks/node_lifecycle_agents.py"
       ],
@@ -566,7 +576,7 @@
         "api/app/middleware.py"
       ],
       "api/tests/test_vxlan_reconciliation.py": [
-        "api/app/models.py",
+        "api/app/models/__init__.py",
         "api/app/tasks/link_reconciliation.py"
       ],
       "api/tests/test_nlm_timing.py": [
@@ -583,13 +593,13 @@
       ],
       "api/tests/test_routers_images_upload_build.py": [
         "api/app/config.py",
-        "api/app/models.py",
+        "api/app/models/__init__.py",
         "api/app/routers/__init__.py",
         "api/app/routers/images/__init__.py",
         "api/app/services/resource_monitor.py"
       ],
       "api/tests/test_locks.py": [
-        "api/app/models.py",
+        "api/app/models/__init__.py",
         "api/app/utils/locks.py"
       ],
       "api/tests/test_utils_http_extra.py": [
@@ -603,23 +613,23 @@
       ],
       "api/tests/test_metrics.py": [
         "api/app/metrics.py",
-        "api/app/models.py"
+        "api/app/models/__init__.py"
       ],
       "api/tests/test_cleanup_handler.py": [
         "api/app/events/cleanup_events.py",
-        "api/app/models.py",
+        "api/app/models/__init__.py",
         "api/app/tasks/cleanup_base.py",
         "api/app/tasks/cleanup_handler.py"
       ],
       "api/tests/test_models.py": [
-        "api/app/models.py"
+        "api/app/models/__init__.py"
       ],
       "api/tests/test_utils_image_integrity.py": [
         "api/app/utils/image_integrity.py"
       ],
       "api/tests/test_routers_scenarios.py": [
         "api/app/config.py",
-        "api/app/models.py",
+        "api/app/models/__init__.py",
         "api/app/routers/__init__.py",
         "api/app/routers/scenarios.py",
         "api/app/tasks/__init__.py",
@@ -630,16 +640,16 @@
       ],
       "api/tests/test_tasks_job_health.py": [
         "api/app/config.py",
-        "api/app/models.py",
+        "api/app/models/__init__.py",
         "api/app/tasks/job_health.py"
       ],
       "api/tests/test_link_orchestration.py": [
         "api/app/agent_client/__init__.py",
-        "api/app/models.py",
+        "api/app/models/__init__.py",
         "api/app/tasks/link_orchestration.py"
       ],
       "api/tests/test_routers_console_extra.py": [
-        "api/app/models.py",
+        "api/app/models/__init__.py",
         "api/app/routers/console.py"
       ],
       "api/tests/test_routers_iso_webhooks_extra.py": [
@@ -649,7 +659,7 @@
         "api/app/routers/webhooks.py"
       ],
       "api/tests/test_on_demand_sync_broadcasting.py": [
-        "api/app/models.py",
+        "api/app/models/__init__.py",
         "api/app/services/broadcaster.py",
         "api/app/state.py"
       ],
@@ -658,7 +668,7 @@
       ],
       "api/tests/test_utils_misc.py": [
         "api/app/enums.py",
-        "api/app/models.py",
+        "api/app/models/__init__.py",
         "api/app/services/permissions.py",
         "api/app/utils/__init__.py",
         "api/app/utils/agents.py",
@@ -673,60 +683,60 @@
       ],
       "api/tests/test_agent_updates.py": [
         "api/app/config.py",
-        "api/app/models.py"
+        "api/app/models/__init__.py"
       ],
       "api/tests/test_node_lifecycle_batch6.py": [
-        "api/app/models.py",
+        "api/app/models/__init__.py",
         "api/app/tasks/__init__.py",
         "api/app/tasks/node_lifecycle.py"
       ],
       "api/tests/test_routers_labs_links_infra.py": [
-        "api/app/models.py"
+        "api/app/models/__init__.py"
       ],
       "api/tests/test_async_tasks.py": [
         "api/app/utils/async_tasks.py"
       ],
       "api/tests/test_resource_capacity.py": [
         "api/app/config.py",
-        "api/app/models.py",
+        "api/app/models/__init__.py",
         "api/app/services/resource_capacity.py"
       ],
       "api/tests/test_jobs_orphan_cleanup.py": [
-        "api/app/models.py",
+        "api/app/models/__init__.py",
         "api/app/tasks/jobs.py"
       ],
       "api/tests/test_utils_pagination_extra.py": [
         "api/app/utils/pagination.py"
       ],
       "api/tests/test_config_extraction.py": [
-        "api/app/models.py",
+        "api/app/models/__init__.py",
         "api/app/tasks/jobs.py"
       ],
       "api/tests/test_config.py": [
         "api/app/config.py"
       ],
       "api/tests/test_live_nodes.py": [
-        "api/app/models.py",
+        "api/app/models/__init__.py",
         "api/app/tasks/live_nodes.py"
       ],
       "api/tests/test_tasks_test_runner_full.py": [
-        "api/app/models.py",
+        "api/app/models/__init__.py",
         "api/app/state.py",
         "api/app/tasks/test_runner.py"
       ],
       "api/tests/test_tasks_jobs_advanced.py": [
-        "api/app/models.py",
+        "api/app/models/__init__.py",
         "api/app/tasks/jobs.py"
       ],
       "api/tests/test_schemas.py": [
         "api/app/schemas/__init__.py"
       ],
       "api/tests/test_link_utils.py": [
-        "api/app/models.py",
+        "api/app/models/__init__.py",
         "api/app/utils/link.py"
       ],
       "api/tests/test_labs_router.py": [
-        "api/app/models.py",
+        "api/app/models/__init__.py",
         "api/app/routers/__init__.py",
         "api/app/routers/labs/__init__.py",
         "api/app/storage.py"
@@ -739,18 +749,18 @@
         "api/app/services/resource_monitor.py"
       ],
       "api/tests/test_routers_system_jobs_extra.py": [
-        "api/app/models.py",
+        "api/app/models/__init__.py",
         "api/app/routers/jobs.py",
         "api/app/routers/system.py"
       ],
       "api/tests/test_on_demand_image_sync.py": [
         "api/app/config.py",
-        "api/app/models.py",
+        "api/app/models/__init__.py",
         "api/app/state.py",
         "api/app/tasks/image_sync.py"
       ],
       "api/tests/test_routers_admin.py": [
-        "api/app/models.py"
+        "api/app/models/__init__.py"
       ],
       "api/tests/test_agent_client.py": [
         "api/app/agent_client/__init__.py",
@@ -762,15 +772,15 @@
       "api/tests/test_agent_selection.py": [
         "api/app/agent_client/__init__.py",
         "api/app/config.py",
-        "api/app/models.py"
+        "api/app/models/__init__.py"
       ],
       "api/tests/test_routers_auth_extra.py": [
         "api/app/auth.py",
-        "api/app/models.py",
+        "api/app/models/__init__.py",
         "api/app/routers/auth.py"
       ],
       "api/tests/test_reconciliation_batch6.py": [
-        "api/app/models.py",
+        "api/app/models/__init__.py",
         "api/app/tasks/reconciliation.py"
       ],
       "api/tests/test_uncovered_module_imports_batch2.py": [
@@ -790,11 +800,11 @@
       ],
       "api/tests/test_tasks_jobs_full.py": [
         "api/app/jobs.py",
-        "api/app/models.py",
+        "api/app/models/__init__.py",
         "api/app/tasks/jobs.py"
       ],
       "api/tests/test_interface_mapping.py": [
-        "api/app/models.py",
+        "api/app/models/__init__.py",
         "api/app/services/interface_mapping.py"
       ],
       "api/tests/test_iso_parser.py": [
@@ -803,7 +813,7 @@
         "api/app/iso/parser.py"
       ],
       "api/tests/test_migration_cleanup.py": [
-        "api/app/models.py",
+        "api/app/models/__init__.py",
         "api/app/tasks/migration_cleanup.py"
       ],
       "api/tests/test_schemas_batch6.py": [
@@ -811,11 +821,11 @@
       ],
       "api/tests/test_config_service_units.py": [
         "api/app/config.py",
-        "api/app/models.py",
+        "api/app/models/__init__.py",
         "api/app/services/config_service.py"
       ],
       "api/tests/test_routers_vendors_extra.py": [
-        "api/app/models.py",
+        "api/app/models/__init__.py",
         "api/app/routers/vendors.py"
       ],
       "api/tests/test_routers_iso.py": [
@@ -825,26 +835,26 @@
         "api/app/services/broadcaster.py"
       ],
       "api/tests/test_state_ws_reconnection.py": [
-        "api/app/models.py",
+        "api/app/models/__init__.py",
         "api/app/routers/state_ws.py"
       ],
       "api/tests/test_link_operational_state_api.py": [
         "api/app/agent_client/__init__.py",
-        "api/app/models.py",
+        "api/app/models/__init__.py",
         "api/app/services/link_operational_state.py"
       ],
       "api/tests/test_debouncing.py": [
         "api/app/tasks/live_nodes.py"
       ],
       "api/tests/test_log_parser_metrics_service.py": [
-        "api/app/models.py",
+        "api/app/models/__init__.py",
         "api/app/schemas/__init__.py",
         "api/app/services/log_parser.py",
         "api/app/services/metrics_service.py"
       ],
       "api/tests/test_services_config_service.py": [
         "api/app/config.py",
-        "api/app/models.py",
+        "api/app/models/__init__.py",
         "api/app/services/config_service.py"
       ],
       "api/tests/test_state_machine.py": [
@@ -852,7 +862,7 @@
         "api/app/state.py"
       ],
       "api/tests/test_carrier_callback.py": [
-        "api/app/models.py",
+        "api/app/models/__init__.py",
         "api/app/routers/callbacks.py",
         "api/app/schemas/__init__.py"
       ],
@@ -868,7 +878,7 @@
       ],
       "api/tests/test_concurrency.py": [
         "api/app/jobs.py",
-        "api/app/models.py",
+        "api/app/models/__init__.py",
         "api/app/routers/labs/__init__.py",
         "api/app/services/link_reservations.py",
         "api/app/state.py",
@@ -880,29 +890,29 @@
       ],
       "api/tests/test_catalog_cutover.py": [
         "api/app/image_store/__init__.py",
-        "api/app/models.py"
+        "api/app/models/__init__.py"
       ],
       "api/tests/test_routers_admin_extra.py": [
-        "api/app/models.py",
+        "api/app/models/__init__.py",
         "api/app/routers/admin.py"
       ],
       "api/tests/test_jobs_execution.py": [
         "api/app/agent_client/__init__.py",
-        "api/app/models.py",
+        "api/app/models/__init__.py",
         "api/app/tasks/jobs.py"
       ],
       "api/tests/test_link_repair.py": [
         "api/app/tasks/link_repair.py"
       ],
       "api/tests/test_routers_events_callbacks_extra.py": [
-        "api/app/models.py",
+        "api/app/models/__init__.py",
         "api/app/routers/callbacks.py",
         "api/app/routers/events.py"
       ],
       "api/tests/test_routers_permissions.py": [
         "api/app/auth.py",
         "api/app/config.py",
-        "api/app/models.py"
+        "api/app/models/__init__.py"
       ],
       "api/tests/test_tasks_health.py": [
         "api/app/tasks/health.py"
@@ -913,7 +923,7 @@
       "api/tests/test_support_bundles.py": [
         "api/app/auth.py",
         "api/app/config.py",
-        "api/app/models.py",
+        "api/app/models/__init__.py",
         "api/app/routers/__init__.py",
         "api/app/routers/support.py"
       ],
@@ -926,7 +936,7 @@
       ],
       "api/tests/test_tasks_image_sync.py": [
         "api/app/config.py",
-        "api/app/models.py",
+        "api/app/models/__init__.py",
         "api/app/tasks/image_sync.py"
       ],
       "api/tests/test_auth_and_events.py": [
@@ -935,14 +945,14 @@
         "api/app/events/__init__.py",
         "api/app/events/cleanup_events.py",
         "api/app/events/publisher.py",
-        "api/app/models.py",
+        "api/app/models/__init__.py",
         "api/app/services/audit.py"
       ],
       "api/tests/test_providers.py": [
         "api/app/providers.py"
       ],
       "api/tests/test_state_enforcement.py": [
-        "api/app/models.py",
+        "api/app/models/__init__.py",
         "api/app/state.py",
         "api/app/tasks/state_enforcement.py"
       ],
@@ -950,7 +960,7 @@
         "api/app/image_store/__init__.py"
       ],
       "api/tests/test_jobs_placement_events.py": [
-        "api/app/models.py",
+        "api/app/models/__init__.py",
         "api/app/tasks/jobs.py"
       ],
       "api/tests/conftest.py": [
@@ -961,7 +971,7 @@
         "api/app/events/publisher.py",
         "api/app/main.py",
         "api/app/middleware.py",
-        "api/app/models.py",
+        "api/app/models/__init__.py",
         "api/app/routers/console.py",
         "api/app/routers/jobs.py",
         "api/app/services/__init__.py",
@@ -974,17 +984,17 @@
         "api/app/utils/time_range.py"
       ],
       "api/tests/test_link_reconciliation_cleanup.py": [
-        "api/app/models.py",
+        "api/app/models/__init__.py",
         "api/app/tasks/link_reconciliation.py"
       ],
       "api/tests/test_routers_labs_batch7.py": [
-        "api/app/models.py",
+        "api/app/models/__init__.py",
         "api/app/schemas/__init__.py",
         "api/app/state.py"
       ],
       "api/tests/test_node_lifecycle.py": [
         "api/app/agent_client/__init__.py",
-        "api/app/models.py",
+        "api/app/models/__init__.py",
         "api/app/state.py",
         "api/app/tasks/__init__.py",
         "api/app/tasks/node_lifecycle.py",
@@ -997,7 +1007,7 @@
         "api/app/iso/virl2_parser.py"
       ],
       "api/tests/test_bulk_operations.py": [
-        "api/app/models.py"
+        "api/app/models/__init__.py"
       ],
       "api/tests/test_scheduler.py": [
         "api/app/scheduler.py"
@@ -1005,7 +1015,7 @@
       "api/tests/test_routers_users.py": [
         "api/app/auth.py",
         "api/app/enums.py",
-        "api/app/models.py",
+        "api/app/models/__init__.py",
         "api/app/routers/__init__.py",
         "api/app/routers/users.py"
       ],
@@ -1015,31 +1025,31 @@
       ],
       "api/tests/test_link_manager.py": [
         "api/app/agent_client/__init__.py",
-        "api/app/models.py",
+        "api/app/models/__init__.py",
         "api/app/services/link_manager.py",
         "api/app/utils/link.py"
       ],
       "api/tests/test_link_reservations.py": [
-        "api/app/models.py",
+        "api/app/models/__init__.py",
         "api/app/services/link_reservations.py"
       ],
       "api/tests/test_routers_jobs.py": [
         "api/app/config.py",
-        "api/app/models.py"
+        "api/app/models/__init__.py"
       ],
       "api/tests/test_routers_console.py": [
-        "api/app/models.py"
+        "api/app/models/__init__.py"
       ],
       "api/tests/test_routers_events.py": [
-        "api/app/models.py"
+        "api/app/models/__init__.py"
       ],
       "api/tests/test_live_links.py": [
-        "api/app/models.py",
+        "api/app/models/__init__.py",
         "api/app/tasks/live_links.py"
       ],
       "api/tests/test_vxlan_port_reconciliation.py": [
         "api/app/agent_client/__init__.py",
-        "api/app/models.py",
+        "api/app/models/__init__.py",
         "api/app/tasks/reconciliation.py"
       ],
       "api/tests/test_image_store.py": [
@@ -1049,12 +1059,12 @@
         "api/app/iso/models.py"
       ],
       "api/tests/test_state_ws_integration.py": [
-        "api/app/models.py",
+        "api/app/models/__init__.py",
         "api/app/routers/state_ws.py",
         "api/app/services/broadcaster.py"
       ],
       "api/tests/test_routers_agents.py": [
-        "api/app/models.py"
+        "api/app/models/__init__.py"
       ]
     },
     "covered_sources": [
@@ -1082,7 +1092,7 @@
       "api/app/main.py",
       "api/app/metrics.py",
       "api/app/middleware.py",
-      "api/app/models.py",
+      "api/app/models/__init__.py",
       "api/app/netlab.py",
       "api/app/providers.py",
       "api/app/routers/__init__.py",
@@ -1198,6 +1208,15 @@
       "api/app/image_store/metadata.py",
       "api/app/image_store/overrides.py",
       "api/app/image_store/paths.py",
+      "api/app/models/auth.py",
+      "api/app/models/base.py",
+      "api/app/models/catalog.py",
+      "api/app/models/infra.py",
+      "api/app/models/job.py",
+      "api/app/models/lab.py",
+      "api/app/models/state.py",
+      "api/app/models/topology.py",
+      "api/app/models/webhook.py",
       "api/app/routers/images/_shared.py",
       "api/app/routers/images/library.py",
       "api/app/routers/images/sync.py",
@@ -1221,15 +1240,16 @@
       "api/app/services/topology_resolution.py",
       "api/app/tasks/jobs_multihost.py",
       "api/app/tasks/jobs_node_reconcile.py",
+      "api/app/tasks/node_lifecycle_stop.py",
       "api/app/tasks/reconciliation_db.py",
       "api/app/tasks/reconciliation_refresh.py",
       "api/app/tasks/stuck_agents.py",
       "api/app/tasks/stuck_nodes.py"
     ],
     "counts": {
-      "source": 165,
+      "source": 175,
       "covered": 125,
-      "uncovered": 40
+      "uncovered": 50
     }
   },
   "agent": {
@@ -1345,6 +1365,7 @@
       "agent/tests/test_config_disk_inject.py",
       "agent/tests/test_console.py",
       "agent/tests/test_console_e2e.py",
+      "agent/tests/test_console_extractor_gap_paths.py",
       "agent/tests/test_console_extractor_pipeline.py",
       "agent/tests/test_console_injector.py",
       "agent/tests/test_console_routes.py",
@@ -1358,26 +1379,40 @@
       "agent/tests/test_docker_plugin_batch5.py",
       "agent/tests/test_docker_plugin_carrier.py",
       "agent/tests/test_docker_plugin_discovery.py",
+      "agent/tests/test_docker_plugin_gap_paths_batch2.py",
       "agent/tests/test_docker_plugin_migrate.py",
       "agent/tests/test_docker_plugin_repair.py",
+      "agent/tests/test_docker_plugin_state_gap_paths.py",
       "agent/tests/test_docker_plugin_state_helpers_batch.py",
       "agent/tests/test_docker_plugin_vlan_collision_avoidance.py",
+      "agent/tests/test_docker_provider_gap_network_ops.py",
+      "agent/tests/test_docker_provider_gap_paths_batch3.py",
+      "agent/tests/test_docker_provider_gap_paths_batch4.py",
+      "agent/tests/test_docker_provider_gap_readiness.py",
+      "agent/tests/test_docker_provider_gap_status_console.py",
       "agent/tests/test_docker_provider_helpers_batch.py",
       "agent/tests/test_docker_provider_interfaces.py",
+      "agent/tests/test_docker_provider_lifecycle_gap_batch5.py",
       "agent/tests/test_docker_provider_ops_corner_cases.py",
       "agent/tests/test_docker_snapshotter_drift.py",
       "agent/tests/test_events_console_logging_version_batch2.py",
       "agent/tests/test_hardware_spec_override.py",
+      "agent/tests/test_helpers_gap_batch.py",
       "agent/tests/test_http_client.py",
       "agent/tests/test_image_cleanup.py",
       "agent/tests/test_input_validation.py",
+      "agent/tests/test_interface_config_gap_paths_batch2.py",
+      "agent/tests/test_interface_config_gap_paths_batch3.py",
       "agent/tests/test_interface_config_unit.py",
       "agent/tests/test_iso_inject.py",
       "agent/tests/test_labs_reconcile_cleanup.py",
       "agent/tests/test_libvirt_carrier.py",
       "agent/tests/test_libvirt_console_command_fallback.py",
       "agent/tests/test_libvirt_domain_xml.py",
+      "agent/tests/test_libvirt_gap_paths_batch2.py",
+      "agent/tests/test_libvirt_low_coverage_helpers.py",
       "agent/tests/test_libvirt_preflight_default_network.py",
+      "agent/tests/test_libvirt_readiness_gap_paths.py",
       "agent/tests/test_libvirt_security.py",
       "agent/tests/test_libvirt_vlan_collision_avoidance.py",
       "agent/tests/test_locks.py",
@@ -1402,6 +1437,7 @@
       "agent/tests/test_node_ready.py",
       "agent/tests/test_nvram_parser.py",
       "agent/tests/test_overlay_batch5.py",
+      "agent/tests/test_overlay_gap_paths_batch6.py",
       "agent/tests/test_overlay_recovery.py",
       "agent/tests/test_ovs_batch5.py",
       "agent/tests/test_ovs_dataplane_smoke.py",
@@ -1422,11 +1458,18 @@
       "agent/tests/test_registry_transport_console.py",
       "agent/tests/test_remaining_agent_gaps_batch3.py",
       "agent/tests/test_routers_console_full.py",
+      "agent/tests/test_routers_console_gap_handlers.py",
+      "agent/tests/test_routers_console_gap_handlers_batch2.py",
+      "agent/tests/test_routers_console_gap_handlers_batch3.py",
+      "agent/tests/test_routers_console_gap_handlers_batch4.py",
+      "agent/tests/test_routers_console_gap_handlers_batch5.py",
       "agent/tests/test_routers_health.py",
       "agent/tests/test_routers_images.py",
       "agent/tests/test_routers_images_full.py",
       "agent/tests/test_routers_interfaces_full.py",
+      "agent/tests/test_routers_interfaces_gap_paths.py",
       "agent/tests/test_routers_jobs_full.py",
+      "agent/tests/test_routers_labs_gap_paths.py",
       "agent/tests/test_routers_links.py",
       "agent/tests/test_routers_nodes.py",
       "agent/tests/test_routers_nodes_full.py",
@@ -1456,6 +1499,17 @@
         "agent/metrics.py",
         "agent/timing.py"
       ],
+      "agent/tests/test_overlay_gap_paths_batch6.py": [
+        "agent/network/overlay.py"
+      ],
+      "agent/tests/test_interface_config_gap_paths_batch3.py": [
+        "agent/network/interface_config.py"
+      ],
+      "agent/tests/test_docker_provider_gap_paths_batch4.py": [
+        "agent/config.py",
+        "agent/providers/__init__.py",
+        "agent/providers/docker.py"
+      ],
       "agent/tests/test_routers_jobs_full.py": [
         "agent/agent_state.py",
         "agent/config.py",
@@ -1465,9 +1519,21 @@
         "agent/routers/jobs.py",
         "agent/schemas/__init__.py"
       ],
+      "agent/tests/test_docker_provider_lifecycle_gap_batch5.py": [
+        "agent/config.py",
+        "agent/providers/base.py",
+        "agent/providers/docker.py"
+      ],
       "agent/tests/test_libvirt_domain_xml.py": [
         "agent/providers/libvirt.py",
         "agent/vendors.py"
+      ],
+      "agent/tests/test_docker_plugin_state_gap_paths.py": [
+        "agent/network/__init__.py",
+        "agent/network/docker_plugin.py"
+      ],
+      "agent/tests/test_interface_config_gap_paths_batch2.py": [
+        "agent/network/interface_config.py"
       ],
       "agent/tests/test_registration.py": [
         "agent/agent_state.py",
@@ -1487,6 +1553,14 @@
       ],
       "agent/tests/test_libvirt_carrier.py": [
         "agent/providers/libvirt.py"
+      ],
+      "agent/tests/test_libvirt_gap_paths_batch2.py": [
+        "agent/providers/libvirt.py"
+      ],
+      "agent/tests/test_docker_provider_gap_readiness.py": [
+        "agent/providers/__init__.py",
+        "agent/providers/docker.py",
+        "agent/readiness.py"
       ],
       "agent/tests/test_image_cleanup.py": [
         "agent/image_cleanup.py"
@@ -1508,6 +1582,10 @@
         "agent/routers/images.py",
         "agent/schemas/__init__.py"
       ],
+      "agent/tests/test_routers_console_gap_handlers_batch5.py": [
+        "agent/config.py",
+        "agent/routers/console.py"
+      ],
       "agent/tests/test_network_provisioning.py": [
         "agent/config.py",
         "agent/main.py",
@@ -1523,6 +1601,11 @@
       ],
       "agent/tests/test_config_disk_inject.py": [
         "agent/providers/config_disk_inject.py"
+      ],
+      "agent/tests/test_docker_provider_gap_status_console.py": [
+        "agent/providers/__init__.py",
+        "agent/providers/base.py",
+        "agent/providers/docker.py"
       ],
       "agent/tests/test_providers_naming.py": [
         "agent/providers/__init__.py",
@@ -1561,6 +1644,9 @@
         "agent/providers/base.py",
         "agent/providers/docker_networks.py",
         "agent/providers/libvirt.py"
+      ],
+      "agent/tests/test_console_extractor_gap_paths.py": [
+        "agent/console_extractor.py"
       ],
       "agent/tests/test_provider_registry.py": [
         "agent/providers/__init__.py",
@@ -1621,6 +1707,10 @@
         "agent/logging_config.py",
         "agent/version.py"
       ],
+      "agent/tests/test_helpers_gap_batch.py": [
+        "agent/helpers.py",
+        "agent/schemas/__init__.py"
+      ],
       "agent/tests/test_ovs_stale_detection.py": [
         "agent/network/ovs.py"
       ],
@@ -1636,6 +1726,10 @@
         "agent/main.py",
         "agent/updater.py"
       ],
+      "agent/tests/test_routers_labs_gap_paths.py": [
+        "agent/routers/labs.py",
+        "agent/schemas/__init__.py"
+      ],
       "agent/tests/test_http_client.py": [
         "agent/http_client.py"
       ],
@@ -1648,6 +1742,13 @@
       ],
       "agent/tests/test_libvirt_security.py": [
         "agent/providers/libvirt.py"
+      ],
+      "agent/tests/test_docker_provider_gap_paths_batch3.py": [
+        "agent/config.py",
+        "agent/providers/__init__.py",
+        "agent/providers/base.py",
+        "agent/providers/docker.py",
+        "agent/schemas/__init__.py"
       ],
       "agent/tests/test_network_overlay.py": [
         "agent/config.py",
@@ -1668,6 +1769,11 @@
       "agent/tests/test_vlan_manager.py": [
         "agent/network/vlan.py"
       ],
+      "agent/tests/test_libvirt_readiness_gap_paths.py": [
+        "agent/console_extractor.py",
+        "agent/providers/libvirt_readiness.py",
+        "agent/readiness.py"
+      ],
       "agent/tests/test_updater.py": [
         "agent/updater.py"
       ],
@@ -1675,8 +1781,14 @@
         "agent/config.py",
         "agent/providers/docker.py"
       ],
+      "agent/tests/test_routers_console_gap_handlers.py": [
+        "agent/routers/console.py"
+      ],
       "agent/tests/test_console_e2e.py": [
         "agent/main.py"
+      ],
+      "agent/tests/test_libvirt_low_coverage_helpers.py": [
+        "agent/providers/libvirt.py"
       ],
       "agent/tests/test_docker_provider_ops_corner_cases.py": [
         "agent/config.py",
@@ -1714,6 +1826,10 @@
         "agent/readiness.py",
         "agent/vendors.py"
       ],
+      "agent/tests/test_routers_console_gap_handlers_batch4.py": [
+        "agent/config.py",
+        "agent/routers/console.py"
+      ],
       "agent/tests/test_network_backend.py": [
         "agent/config.py",
         "agent/main.py",
@@ -1725,6 +1841,9 @@
       ],
       "agent/tests/test_vjunos_vendor.py": [
         "agent/vendors.py"
+      ],
+      "agent/tests/test_routers_console_gap_handlers_batch3.py": [
+        "agent/routers/console.py"
       ],
       "agent/tests/test_network_local_cleanup_interface.py": [
         "agent/network/backends/base.py",
@@ -1751,6 +1870,10 @@
       "agent/tests/test_docker_snapshotter_drift.py": [
         "agent/config.py",
         "agent/main.py"
+      ],
+      "agent/tests/test_routers_interfaces_gap_paths.py": [
+        "agent/routers/interfaces.py",
+        "agent/schemas/__init__.py"
       ],
       "agent/tests/test_network_cleanup_unit.py": [
         "agent/network/cleanup.py"
@@ -1819,6 +1942,9 @@
         "agent/config.py",
         "agent/docker_client.py"
       ],
+      "agent/tests/test_routers_console_gap_handlers_batch2.py": [
+        "agent/routers/console.py"
+      ],
       "agent/tests/test_virsh_console_lock.py": [
         "agent/virsh_console_lock.py"
       ],
@@ -1840,6 +1966,11 @@
       ],
       "agent/tests/test_network_interface_config_host_helpers.py": [
         "agent/network/interface_config.py"
+      ],
+      "agent/tests/test_docker_provider_gap_network_ops.py": [
+        "agent/config.py",
+        "agent/providers/docker.py",
+        "agent/schemas/__init__.py"
       ],
       "agent/tests/test_ovs_vlan_tags.py": [
         "agent/network/ovs_vlan_tags.py"
@@ -1884,6 +2015,10 @@
       ],
       "agent/tests/test_overlay_batch5.py": [
         "agent/network/overlay.py"
+      ],
+      "agent/tests/test_docker_plugin_gap_paths_batch2.py": [
+        "agent/network/__init__.py",
+        "agent/network/docker_plugin.py"
       ]
     },
     "covered_sources": [
@@ -1932,6 +2067,7 @@
       "agent/providers/docker_networks.py",
       "agent/providers/iso_inject.py",
       "agent/providers/libvirt.py",
+      "agent/providers/libvirt_readiness.py",
       "agent/providers/naming.py",
       "agent/providers/registry.py",
       "agent/readiness.py",
@@ -1981,15 +2117,14 @@
       "agent/providers/docker_setup.py",
       "agent/providers/libvirt_config.py",
       "agent/providers/libvirt_n9kv.py",
-      "agent/providers/libvirt_readiness.py",
       "agent/providers/libvirt_xml.py",
       "agent/vendor_registry.py",
       "agent/vendor_schema.py"
     ],
     "counts": {
       "source": 96,
-      "covered": 82,
-      "uncovered": 14
+      "covered": 83,
+      "uncovered": 13
     }
   },
   "web": {

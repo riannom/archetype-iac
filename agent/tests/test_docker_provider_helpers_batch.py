@@ -339,7 +339,7 @@ def test_create_container_config_sets_readiness_labels_and_entrypoint_list(monke
         entrypoint=["/sbin/custom-init"],
         cmd=None,
     )
-    monkeypatch.setattr(docker_mod, "get_container_config", lambda **_kwargs: runtime)
+    monkeypatch.setattr("agent.providers.docker_setup.get_container_config", lambda **_kwargs: runtime)
 
     node = TopologyNode(
         name="n1",
@@ -370,7 +370,7 @@ def test_create_container_config_defaults_command_when_no_entrypoint_or_cmd(monk
         entrypoint=None,
         cmd=None,
     )
-    monkeypatch.setattr(docker_mod, "get_container_config", lambda **_kwargs: runtime)
+    monkeypatch.setattr("agent.providers.docker_setup.get_container_config", lambda **_kwargs: runtime)
 
     node = TopologyNode(name="n1", kind="linux")
     cfg = provider._create_container_config(node, "lab1", tmp_path, interface_count=0)

@@ -4,7 +4,7 @@ This report maps tests to directly imported source files and lists uncovered fil
 
 ## api
 
-Source files: 165. Covered: 125. Uncovered: 40.
+Source files: 175. Covered: 125. Uncovered: 50.
 
 Uncovered files:
 - `api/app/agent_client/http.py`
@@ -20,6 +20,15 @@ Uncovered files:
 - `api/app/image_store/metadata.py`
 - `api/app/image_store/overrides.py`
 - `api/app/image_store/paths.py`
+- `api/app/models/auth.py`
+- `api/app/models/base.py`
+- `api/app/models/catalog.py`
+- `api/app/models/infra.py`
+- `api/app/models/job.py`
+- `api/app/models/lab.py`
+- `api/app/models/state.py`
+- `api/app/models/topology.py`
+- `api/app/models/webhook.py`
 - `api/app/routers/images/_shared.py`
 - `api/app/routers/images/library.py`
 - `api/app/routers/images/sync.py`
@@ -43,6 +52,7 @@ Uncovered files:
 - `api/app/services/topology_resolution.py`
 - `api/app/tasks/jobs_multihost.py`
 - `api/app/tasks/jobs_node_reconcile.py`
+- `api/app/tasks/node_lifecycle_stop.py`
 - `api/app/tasks/reconciliation_db.py`
 - `api/app/tasks/reconciliation_refresh.py`
 - `api/app/tasks/stuck_agents.py`
@@ -50,7 +60,7 @@ Uncovered files:
 
 ## agent
 
-Source files: 96. Covered: 82. Uncovered: 14.
+Source files: 96. Covered: 83. Uncovered: 13.
 
 Uncovered files:
 - `agent/network/overlay_state.py`
@@ -63,7 +73,6 @@ Uncovered files:
 - `agent/providers/docker_setup.py`
 - `agent/providers/libvirt_config.py`
 - `agent/providers/libvirt_n9kv.py`
-- `agent/providers/libvirt_readiness.py`
 - `agent/providers/libvirt_xml.py`
 - `agent/vendor_registry.py`
 - `agent/vendor_schema.py`
