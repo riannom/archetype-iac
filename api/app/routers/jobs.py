@@ -12,10 +12,8 @@ from sqlalchemy.orm import Session
 from app import agent_client, db, models, schemas
 from app.auth import get_current_user
 from app.db import get_session
-from app.netlab import run_netlab_command
 from app.services.topology import TopologyService
 from app.state import HostStatus, JobStatus, LabState, NodeActualState, NodeDesiredState
-from app.storage import lab_workspace
 from app.tasks.jobs import run_agent_job, run_multihost_deploy, run_multihost_destroy
 from app.topology import analyze_topology
 from app.config import settings
@@ -738,13 +736,10 @@ async def lab_status(
         agents = database.query(models.Host).filter(models.Host.id.in_(agent_ids)).all()
 
     if not agents:
-        # Fallback to old netlab command if no agents
-        code, stdout, stderr = await asyncio.to_thread(
-            run_netlab_command, ["netlab", "status"], lab_workspace(lab.id)
+        raise HTTPException(
+            status_code=503,
+            detail="No agents available to report lab status",
         )
-        if code != 0:
-            return {"raw": "", "error": stderr or "netlab status failed"}
-        return {"raw": stdout}
 
     # Aggregate status from all agents
     all_nodes = []

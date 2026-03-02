@@ -27,10 +27,6 @@ RUN install -m 0755 -d /etc/apt/keyrings \
 COPY api/requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
-# netlab install (real repo pin)
-ARG NETLAB_REF=release_26.01.01
-RUN pip install --no-cache-dir "networklab @ git+https://github.com/ipspace/netlab.git@${NETLAB_REF}"
-
 COPY api/ ./
 
 # Copy VERSION file for version endpoint
