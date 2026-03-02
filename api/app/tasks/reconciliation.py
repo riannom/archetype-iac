@@ -23,8 +23,12 @@ from uuid import uuid4
 
 import redis
 
-from app import agent_client, models  # noqa: F401 -- agent_client used in function body + patched by tests
+from app import agent_client, models  # noqa: F401 -- agent_client patched by tests
 from app.config import settings
+from app.services.broadcaster import (  # noqa: F401 -- patched by tests
+    broadcast_link_state_change,
+    broadcast_node_state_change,
+)
 from app.db import get_redis, get_session
 from app.tasks.migration_cleanup import process_pending_migration_cleanups
 from app.utils import locks as lock_utils
