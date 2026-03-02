@@ -82,9 +82,10 @@ def _get_container_name(lab_id: str, node_name: str) -> str:
 
 from app.tasks.node_lifecycle_agents import AgentResolutionMixin  # noqa: E402
 from app.tasks.node_lifecycle_deploy import DeploymentMixin  # noqa: E402
+from app.tasks.node_lifecycle_stop import StopMixin  # noqa: E402
 
 
-class NodeLifecycleManager(AgentResolutionMixin, DeploymentMixin):
+class NodeLifecycleManager(AgentResolutionMixin, DeploymentMixin, StopMixin):
     """Per-node lifecycle orchestrator.
 
     Handles the lifecycle of individual nodes: deploy, start, stop, destroy.
@@ -92,7 +93,8 @@ class NodeLifecycleManager(AgentResolutionMixin, DeploymentMixin):
     Docker SDK + OVS for container and networking operations.
 
     Agent resolution methods are in node_lifecycle_agents.py (AgentResolutionMixin).
-    Deploy/start/stop methods are in node_lifecycle_deploy.py (DeploymentMixin).
+    Deploy/start methods are in node_lifecycle_deploy.py (DeploymentMixin).
+    Stop methods are in node_lifecycle_stop.py (StopMixin).
 
     Phases (called in order by execute()):
         1. _load_and_validate     — Load state, batch-load maps, early exit if nothing to do
