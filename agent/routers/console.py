@@ -597,6 +597,7 @@ async def _console_websocket_libvirt(
     fcntl.fcntl(master_fd, fcntl.F_SETFL, flags | os.O_NONBLOCK)
 
     process = None
+    _active_session = None
     try:
         # Start virsh console process with a controlling TTY
         process = await asyncio.create_subprocess_exec(
@@ -615,7 +616,6 @@ async def _console_websocket_libvirt(
         await asyncio.sleep(0.5)
 
         # Register session for piggyback config extraction
-        _active_session = None
         if _virsh_domain:
             from agent.console_session_registry import (
                 ActiveConsoleSession, register_session, unregister_session,
