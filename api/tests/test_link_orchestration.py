@@ -124,6 +124,55 @@ class TestCreateDeploymentLinks:
             assert fail_count == 1
 
     @pytest.mark.asyncio
+    async def test_defers_link_when_endpoint_not_running(
+        self, test_db: Session, lab_with_links, sample_host: models.Host
+    ):
+        """Should mark link pending instead of failing when an endpoint is stopped."""
+        from app.tasks.link_orchestration import create_deployment_links
+
+        lab, nodes, links = lab_with_links
+        host_to_agent = {sample_host.id: sample_host}
+        log_parts: list[str] = []
+
+        test_db.add_all([
+            models.NodeState(
+                id=str(uuid4()),
+                lab_id=lab.id,
+                node_id=nodes[0].gui_id,
+                node_name=nodes[0].container_name,
+                desired_state="running",
+                actual_state="stopped",
+            ),
+            models.NodeState(
+                id=str(uuid4()),
+                lab_id=lab.id,
+                node_id=nodes[1].gui_id,
+                node_name=nodes[1].container_name,
+                desired_state="running",
+                actual_state="running",
+            ),
+        ])
+        test_db.commit()
+
+        with patch("app.tasks.link_orchestration.agent_client") as mock_client:
+            mock_client.create_link_on_agent = AsyncMock()
+
+            success_count, fail_count = await create_deployment_links(
+                test_db, lab.id, host_to_agent, log_parts=log_parts
+            )
+
+            mock_client.create_link_on_agent.assert_not_awaited()
+            assert success_count == 0
+            assert fail_count == 0
+
+        link_state = test_db.query(models.LinkState).filter(
+            models.LinkState.lab_id == lab.id
+        ).first()
+        assert link_state is not None
+        assert link_state.actual_state == "pending"
+        assert any("PENDING - waiting for nodes" in line for line in log_parts)
+
+    @pytest.mark.asyncio
     async def test_handles_missing_node_reference(
         self, test_db: Session, sample_lab: models.Lab, sample_host: models.Host
     ):
