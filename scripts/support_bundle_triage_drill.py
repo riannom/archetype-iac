@@ -53,6 +53,13 @@ def _request_bytes(method: str, url: str, *, token: str | None = None) -> bytes:
         return resp.read()
 
 
+def _request_delete(url: str, *, token: str) -> None:
+    headers: dict[str, str] = {"Accept": "application/json", "Authorization": f"Bearer {token}"}
+    req = urllib.request.Request(url, method="DELETE", headers=headers)
+    with urllib.request.urlopen(req, timeout=30):
+        return
+
+
 def _login(api_url: str, username: str, password: str) -> str:
     payload = _request_json(
         "POST",
@@ -289,12 +296,20 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Allow bundle manifest completeness warnings without failing the drill",
     )
+    p.add_argument(
+        "--keep-seeded-lab",
+        action="store_true",
+        help="Do not delete the seeded ci-triage lab after drill completion (debug only).",
+    )
     return p.parse_args()
 
 
 def main() -> int:
     args = parse_args()
     api_url = args.api_url.rstrip("/")
+    token: str | None = None
+    lab_id: str | None = None
+    preserve_seeded_lab = bool(args.keep_seeded_lab)
     try:
         token = _login(api_url, args.username, args.password)
         lab_id, job_id = _seed_failure(args.compose_file)
@@ -337,6 +352,16 @@ def main() -> int:
     except Exception as exc:
         print(f"[triage-drill] failed: {exc}", file=sys.stderr)
         return 1
+    finally:
+        if token and lab_id and not preserve_seeded_lab:
+            try:
+                _request_delete(f"{api_url}/labs/{lab_id}", token=token)
+                print(f"[triage-drill] deleted seeded lab: {lab_id}")
+            except Exception as exc:
+                print(
+                    f"[triage-drill] warning: failed to delete seeded lab {lab_id}: {exc}",
+                    file=sys.stderr,
+                )
 
 
 if __name__ == "__main__":

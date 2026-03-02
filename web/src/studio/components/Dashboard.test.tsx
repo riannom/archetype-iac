@@ -102,6 +102,7 @@ describe("Dashboard", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    window.history.pushState({}, "", "/");
     // Mock initial auth check
     mockFetch.mockResolvedValue({
       ok: false,
@@ -135,6 +136,21 @@ describe("Dashboard", () => {
     ).toBeInTheDocument();
   });
 
+  it("shows total lab count and list controls", () => {
+    render(
+      <TestWrapper>
+        <Dashboard {...defaultProps} />
+      </TestWrapper>
+    );
+
+    expect(screen.getByText("Total Labs: 2")).toBeInTheDocument();
+    expect(screen.getByLabelText("Search labs")).toBeInTheDocument();
+    expect(screen.getByLabelText("Filter labs")).toBeInTheDocument();
+    expect(screen.getByLabelText("Sort labs")).toBeInTheDocument();
+    expect(screen.getByTitle("Back")).toBeInTheDocument();
+    expect(screen.getByTitle("Forward")).toBeInTheDocument();
+  });
+
   it("renders lab cards for each lab", () => {
     render(
       <TestWrapper>
@@ -144,6 +160,99 @@ describe("Dashboard", () => {
 
     expect(screen.getByText("Test Lab 1")).toBeInTheDocument();
     expect(screen.getByText("Production Lab")).toBeInTheDocument();
+  });
+
+  it("filters labs with search input", () => {
+    render(
+      <TestWrapper>
+        <Dashboard {...defaultProps} />
+      </TestWrapper>
+    );
+
+    fireEvent.change(screen.getByLabelText("Search labs"), {
+      target: { value: "Production" },
+    });
+
+    expect(screen.getByText("Production Lab")).toBeInTheDocument();
+    expect(screen.queryByText("Test Lab 1")).not.toBeInTheDocument();
+  });
+
+  it("filters labs by running/stopped state", () => {
+    render(
+      <TestWrapper>
+        <Dashboard {...defaultProps} />
+      </TestWrapper>
+    );
+
+    fireEvent.change(screen.getByLabelText("Filter labs"), {
+      target: { value: "running" },
+    });
+
+    expect(screen.getByText("Test Lab 1")).toBeInTheDocument();
+    expect(screen.queryByText("Production Lab")).not.toBeInTheDocument();
+  });
+
+  it("navigates lab pages with back/forward controls", async () => {
+    const user = userEvent.setup();
+    const manyLabs = Array.from({ length: 10 }, (_, idx) => ({
+      id: `lab-${idx + 1}`,
+      name: `Lab ${idx + 1}`,
+      created_at: `2024-01-${String(idx + 1).padStart(2, "0")}T10:00:00Z`,
+      node_count: 1,
+      running_count: 0,
+    }));
+
+    render(
+      <TestWrapper>
+        <Dashboard {...defaultProps} labs={manyLabs} />
+      </TestWrapper>
+    );
+
+    expect(screen.getByText((content) => content.includes("(1/2)"))).toBeInTheDocument();
+    expect(screen.queryByText(/^Lab 1$/)).not.toBeInTheDocument();
+
+    await user.click(screen.getByTitle("Forward"));
+
+    expect(screen.getByText((content) => content.includes("(2/2)"))).toBeInTheDocument();
+    expect(screen.getByText(/^Lab 1$/)).toBeInTheDocument();
+  });
+
+  it("hydrates dashboard controls from URL query params", () => {
+    window.history.pushState(
+      {},
+      "",
+      "/?q=Production&status=running&sort=name_desc&page=2"
+    );
+
+    render(
+      <TestWrapper>
+        <Dashboard {...defaultProps} />
+      </TestWrapper>
+    );
+
+    expect(screen.getByLabelText("Search labs")).toHaveValue("Production");
+    expect(screen.getByLabelText("Filter labs")).toHaveValue("running");
+    expect(screen.getByLabelText("Sort labs")).toHaveValue("name_desc");
+  });
+
+  it("updates URL query params when changing pages", async () => {
+    const user = userEvent.setup();
+    const manyLabs = Array.from({ length: 10 }, (_, idx) => ({
+      id: `lab-${idx + 1}`,
+      name: `Lab ${idx + 1}`,
+      created_at: `2024-01-${String(idx + 1).padStart(2, "0")}T10:00:00Z`,
+      node_count: 1,
+      running_count: 0,
+    }));
+
+    render(
+      <TestWrapper>
+        <Dashboard {...defaultProps} labs={manyLabs} />
+      </TestWrapper>
+    );
+
+    await user.click(screen.getByTitle("Forward"));
+    expect(window.location.search).toContain("page=2");
   });
 
   it("shows Create New Lab button", () => {

@@ -1,5 +1,6 @@
 
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { useTheme, ThemeSelector } from '../../theme/index';
 import { useUser } from '../../contexts/UserContext';
 import { canViewInfrastructure } from '../../utils/permissions';
@@ -37,6 +38,47 @@ interface DashboardProps {
   onLogout: () => void;
 }
 
+type LabListFilter = 'all' | 'running' | 'stopped';
+type LabSortOption =
+  | 'created_desc'
+  | 'created_asc'
+  | 'name_asc'
+  | 'name_desc'
+  | 'nodes_desc'
+  | 'nodes_asc';
+
+const LABS_PER_PAGE = 9;
+const SORT_OPTIONS: LabSortOption[] = [
+  'created_desc',
+  'created_asc',
+  'name_asc',
+  'name_desc',
+  'nodes_desc',
+  'nodes_asc',
+];
+
+const parseLabListFilter = (value: string | null): LabListFilter => {
+  if (value === 'running' || value === 'stopped') {
+    return value;
+  }
+  return 'all';
+};
+
+const parseLabSortOption = (value: string | null): LabSortOption => {
+  if (value && SORT_OPTIONS.includes(value as LabSortOption)) {
+    return value as LabSortOption;
+  }
+  return 'created_desc';
+};
+
+const parsePage = (value: string | null): number => {
+  const parsed = Number(value);
+  if (Number.isFinite(parsed) && parsed >= 1) {
+    return Math.floor(parsed);
+  }
+  return 1;
+};
+
 const Dashboard: React.FC<DashboardProps> = ({
   labs,
   labStatuses,
@@ -50,6 +92,7 @@ const Dashboard: React.FC<DashboardProps> = ({
 }) => {
   const { effectiveMode, toggleMode } = useTheme();
   const { user } = useUser();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [showThemeSelector, setShowThemeSelector] = useState(false);
   const [showSystemLogs, setShowSystemLogs] = useState(false);
   const [editingLabId, setEditingLabId] = useState<string | null>(null);
@@ -57,6 +100,111 @@ const Dashboard: React.FC<DashboardProps> = ({
   const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
   const deleteTimeoutRef = useRef<number | null>(null);
   const showInfra = canViewInfrastructure(user ?? null);
+  const searchQuery = searchParams.get('q') ?? '';
+  const listFilter = parseLabListFilter(searchParams.get('status'));
+  const sortOption = parseLabSortOption(searchParams.get('sort'));
+  const page = parsePage(searchParams.get('page'));
+
+  const updateDashboardParams = useCallback((updates: {
+    q?: string;
+    status?: LabListFilter;
+    sort?: LabSortOption;
+    page?: number;
+  }) => {
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+
+      if (updates.q !== undefined) {
+        const trimmed = updates.q.trim();
+        if (trimmed) {
+          next.set('q', trimmed);
+        } else {
+          next.delete('q');
+        }
+      }
+
+      if (updates.status !== undefined) {
+        if (updates.status === 'all') {
+          next.delete('status');
+        } else {
+          next.set('status', updates.status);
+        }
+      }
+
+      if (updates.sort !== undefined) {
+        if (updates.sort === 'created_desc') {
+          next.delete('sort');
+        } else {
+          next.set('sort', updates.sort);
+        }
+      }
+
+      if (updates.page !== undefined) {
+        if (updates.page <= 1) {
+          next.delete('page');
+        } else {
+          next.set('page', String(updates.page));
+        }
+      }
+
+      return next;
+    }, { replace: true });
+  }, [setSearchParams]);
+
+  const filteredAndSortedLabs = useMemo(() => {
+    const normalizedQuery = searchQuery.trim().toLowerCase();
+    const filtered = labs.filter((lab) => {
+      const agentStatus = labStatuses?.[lab.id];
+      const running = agentStatus ? agentStatus.running : (lab.running_count ?? 0);
+      const matchesFilter =
+        listFilter === 'all'
+          ? true
+          : listFilter === 'running'
+            ? running > 0
+            : running === 0;
+      const matchesQuery =
+        normalizedQuery.length === 0 || lab.name.toLowerCase().includes(normalizedQuery);
+      return matchesFilter && matchesQuery;
+    });
+
+    const sortable = [...filtered];
+    sortable.sort((a, b) => {
+      const aCreated = a.created_at ? Date.parse(a.created_at) : 0;
+      const bCreated = b.created_at ? Date.parse(b.created_at) : 0;
+      const aNodes = a.node_count ?? 0;
+      const bNodes = b.node_count ?? 0;
+      const aName = a.name.toLowerCase();
+      const bName = b.name.toLowerCase();
+      switch (sortOption) {
+        case 'created_asc':
+          return aCreated - bCreated;
+        case 'name_asc':
+          return aName.localeCompare(bName);
+        case 'name_desc':
+          return bName.localeCompare(aName);
+        case 'nodes_desc':
+          return bNodes - aNodes;
+        case 'nodes_asc':
+          return aNodes - bNodes;
+        case 'created_desc':
+        default:
+          return bCreated - aCreated;
+      }
+    });
+    return sortable;
+  }, [labs, labStatuses, listFilter, searchQuery, sortOption]);
+
+  const totalPages = Math.max(1, Math.ceil(filteredAndSortedLabs.length / LABS_PER_PAGE));
+  const currentPage = Math.min(page, totalPages);
+
+  useEffect(() => {
+    if (page !== currentPage) {
+      updateDashboardParams({ page: currentPage });
+    }
+  }, [page, currentPage, updateDashboardParams]);
+
+  const startIndex = (currentPage - 1) * LABS_PER_PAGE;
+  const pagedLabs = filteredAndSortedLabs.slice(startIndex, startIndex + LABS_PER_PAGE);
 
   useEffect(() => {
     return () => {
@@ -193,8 +341,85 @@ const Dashboard: React.FC<DashboardProps> = ({
             </button>
           </div>
 
+          <div className="mb-6 grid grid-cols-1 lg:grid-cols-12 gap-3">
+            <div className="lg:col-span-5 relative">
+              <i className="fa-solid fa-search absolute left-3 top-1/2 -translate-y-1/2 text-stone-400 text-xs"></i>
+              <input
+                aria-label="Search labs"
+                type="text"
+                value={searchQuery}
+                onChange={(e) => updateDashboardParams({ q: e.target.value, page: 1 })}
+                placeholder="Search labs..."
+                className="w-full pl-9 pr-3 py-2.5 rounded-xl glass-control border text-sm text-stone-700 dark:text-stone-200 placeholder:text-stone-400"
+              />
+            </div>
+            <div className="lg:col-span-2">
+              <select
+                aria-label="Filter labs"
+                value={listFilter}
+                onChange={(e) => updateDashboardParams({ status: e.target.value as LabListFilter, page: 1 })}
+                className="w-full py-2.5 px-3 rounded-xl glass-control border text-sm text-stone-700 dark:text-stone-200 bg-transparent"
+              >
+                <option value="all">All Labs</option>
+                <option value="running">Running</option>
+                <option value="stopped">Stopped</option>
+              </select>
+            </div>
+            <div className="lg:col-span-3">
+              <select
+                aria-label="Sort labs"
+                value={sortOption}
+                onChange={(e) => updateDashboardParams({ sort: e.target.value as LabSortOption, page: 1 })}
+                className="w-full py-2.5 px-3 rounded-xl glass-control border text-sm text-stone-700 dark:text-stone-200 bg-transparent"
+              >
+                <option value="created_desc">Newest First</option>
+                <option value="created_asc">Oldest First</option>
+                <option value="name_asc">Name A-Z</option>
+                <option value="name_desc">Name Z-A</option>
+                <option value="nodes_desc">Most Nodes</option>
+                <option value="nodes_asc">Least Nodes</option>
+              </select>
+            </div>
+            <div className="lg:col-span-2 flex items-center justify-between gap-2">
+              <button
+                onClick={() => updateDashboardParams({ page: Math.max(1, currentPage - 1) })}
+                disabled={currentPage <= 1}
+                className="flex-1 py-2.5 rounded-xl glass-control border text-xs font-bold text-stone-700 dark:text-stone-200 disabled:opacity-40 disabled:cursor-not-allowed"
+                title="Back"
+              >
+                <i className="fa-solid fa-chevron-left mr-1"></i>
+                Back
+              </button>
+              <button
+                onClick={() => updateDashboardParams({ page: Math.min(totalPages, currentPage + 1) })}
+                disabled={currentPage >= totalPages}
+                className="flex-1 py-2.5 rounded-xl glass-control border text-xs font-bold text-stone-700 dark:text-stone-200 disabled:opacity-40 disabled:cursor-not-allowed"
+                title="Forward"
+              >
+                Forward
+                <i className="fa-solid fa-chevron-right ml-1"></i>
+              </button>
+            </div>
+          </div>
+
+          <div className="mb-5 flex flex-wrap items-center justify-between gap-2 text-xs text-stone-500 dark:text-stone-400">
+            <span className="font-semibold">Total Labs: {labs.length}</span>
+            <span>
+              Showing {filteredAndSortedLabs.length === 0 ? 0 : startIndex + 1}
+              -
+              {Math.min(startIndex + LABS_PER_PAGE, filteredAndSortedLabs.length)} of {filteredAndSortedLabs.length}
+              {' '}({currentPage}/{totalPages})
+            </span>
+          </div>
+
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {labs.length > 0 ? labs.map((lab) => {
+            {labs.length === 0 ? (
+              <div className="col-span-full py-20 bg-stone-100/50 dark:bg-stone-900/30 border-2 border-dashed border-stone-300 dark:border-stone-800 rounded-3xl flex flex-col items-center justify-center text-stone-500 dark:text-stone-500">
+                 <i className="fa-solid fa-folder-open text-5xl mb-4 opacity-10"></i>
+                 <h3 className="text-lg font-bold text-stone-500 dark:text-stone-400">Empty Workspace</h3>
+                 <p className="text-sm max-w-xs text-center mt-1">Start your first journey by clicking 'Create New Lab' above.</p>
+              </div>
+            ) : filteredAndSortedLabs.length > 0 ? pagedLabs.map((lab) => {
               const agentStatus = labStatuses?.[lab.id];
               // Use agent-polled running count when available, DB total always
               // (agents only report deployed nodes, not the full topology)
@@ -315,9 +540,9 @@ const Dashboard: React.FC<DashboardProps> = ({
               );
             }) : (
               <div className="col-span-full py-20 bg-stone-100/50 dark:bg-stone-900/30 border-2 border-dashed border-stone-300 dark:border-stone-800 rounded-3xl flex flex-col items-center justify-center text-stone-500 dark:text-stone-500">
-                 <i className="fa-solid fa-folder-open text-5xl mb-4 opacity-10"></i>
-                 <h3 className="text-lg font-bold text-stone-500 dark:text-stone-400">Empty Workspace</h3>
-                 <p className="text-sm max-w-xs text-center mt-1">Start your first journey by clicking 'Create New Lab' above.</p>
+                 <i className="fa-solid fa-magnifying-glass text-5xl mb-4 opacity-10"></i>
+                 <h3 className="text-lg font-bold text-stone-500 dark:text-stone-400">No Matching Labs</h3>
+                 <p className="text-sm max-w-xs text-center mt-1">Adjust your search, filter, or sort options.</p>
               </div>
             )}
           </div>
