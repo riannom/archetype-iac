@@ -3,6 +3,7 @@ from __future__ import annotations
 import builtins
 import json
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -16,7 +17,7 @@ class _Result:
         self.stderr = stderr
 
 
-def test_is_in_container_and_host_helpers_remaining_branches(monkeypatch):
+def test_is_in_container_and_host_helpers_remaining_branches(monkeypatch, tmp_path):
     class _PathDockerenv:
         def __init__(self, p: str):
             self.p = p
@@ -37,6 +38,29 @@ def test_is_in_container_and_host_helpers_remaining_branches(monkeypatch):
             raise RuntimeError("mkdir fail")
 
     monkeypatch.setattr(iface, "Path", _PathDockerenv)
+    assert iface._is_in_container() is True
+
+    class _PathCgroupDocker:
+        def __init__(self, p: str):
+            self.p = p
+
+        def exists(self):
+            return self.p == "/proc/1/cgroup"
+
+        def read_text(self):
+            return "0::/docker/abc"
+
+        def glob(self, _pattern):
+            return []
+
+        def write_text(self, _content):
+            raise RuntimeError("write fail")
+
+        def mkdir(self, parents=True, exist_ok=True):
+            raise RuntimeError("mkdir fail")
+
+    monkeypatch.setattr(iface, "Path", _PathCgroupDocker)
+    monkeypatch.delenv("container", raising=False)
     assert iface._is_in_container() is True
 
     class _PathCgroupError:
@@ -70,6 +94,12 @@ def test_is_in_container_and_host_helpers_remaining_branches(monkeypatch):
     ok, err = iface._host_mkdir("/tmp/nope")
     assert ok is False
     assert "mkdir fail" in (err or "")
+
+    monkeypatch.setattr(iface, "Path", Path)
+    monkeypatch.setattr(iface, "_is_in_container", lambda: False)
+    ok, err = iface._host_mkdir(str(tmp_path / "ok-dir"))
+    assert ok is True
+    assert err is None
 
 
 def test_host_glob_container_empty_stdout(monkeypatch):
@@ -129,7 +159,7 @@ async def test_set_mtu_persistent_netplan_remaining_branches(monkeypatch):
         if calls["n"] == 1:
             return None  # line 370
         if calls["n"] == 2:
-            return "not-ok"  # safe_load => {} line 374
+            return "bad"  # safe_load => {} line 374
         raise RuntimeError("parse fail")  # 384-386
 
     monkeypatch.setattr(iface, "_host_read_file", _read)
@@ -191,6 +221,56 @@ async def test_set_mtu_persistent_systemd_networkd_remaining_branches(monkeypatc
     ok, err = await iface.set_mtu_persistent_systemd_networkd("eth0", 9200)
     assert ok is False
     assert "write crash" in (err or "")
+
+
+@pytest.mark.asyncio
+async def test_set_mtu_persistent_systemd_networkd_replace_existing_mtubytes(monkeypatch):
+    monkeypatch.setattr(iface, "_host_mkdir", lambda *_a, **_k: (True, None))
+    monkeypatch.setattr(iface, "_host_glob", lambda *_a, **_k: ["/etc/systemd/network/eth0.network"])
+    monkeypatch.setattr(
+        iface,
+        "_host_read_file",
+        lambda *_a, **_k: "[Match]\nName=eth0\n[Link]\nMTUBytes=1500\n",
+    )
+    captured: dict[str, str] = {}
+
+    def _write(_path, content):
+        captured["content"] = content
+        return True, None
+
+    monkeypatch.setattr(iface, "_host_write_file", _write)
+    monkeypatch.setattr(iface, "_run_on_host", lambda *_a, **_k: _Result(returncode=0))
+
+    ok, err = await iface.set_mtu_persistent_systemd_networkd("eth0", 9300)
+    assert ok is True
+    assert err is None
+    assert "MTUBytes=9300" in captured["content"]
+    assert "MTUBytes=1500" not in captured["content"]
+
+
+@pytest.mark.asyncio
+async def test_set_mtu_persistent_systemd_networkd_add_link_section(monkeypatch):
+    monkeypatch.setattr(iface, "_host_mkdir", lambda *_a, **_k: (True, None))
+    monkeypatch.setattr(iface, "_host_glob", lambda *_a, **_k: ["/etc/systemd/network/eth0.network"])
+    monkeypatch.setattr(
+        iface,
+        "_host_read_file",
+        lambda *_a, **_k: "[Match]\nName=eth0\n",
+    )
+    captured: dict[str, str] = {}
+
+    def _write(_path, content):
+        captured["content"] = content
+        return True, None
+
+    monkeypatch.setattr(iface, "_host_write_file", _write)
+    monkeypatch.setattr(iface, "_run_on_host", lambda *_a, **_k: _Result(returncode=0))
+
+    ok, err = await iface.set_mtu_persistent_systemd_networkd("eth0", 9400)
+    assert ok is True
+    assert err is None
+    assert "[Link]" in captured["content"]
+    assert "MTUBytes=9400" in captured["content"]
 
 
 def test_get_interface_mtu_exception_and_virtual_path(monkeypatch):
