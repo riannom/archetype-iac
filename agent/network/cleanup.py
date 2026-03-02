@@ -40,6 +40,28 @@ def _get_ovs_plugin_active_veths() -> set[str]:
     return set()
 
 
+def _get_overlay_tracked_ports() -> set[str]:
+    """Get VXLAN port names tracked by the overlay manager.
+
+    Includes both current (_link_tunnels) and legacy (_tunnels) tracking.
+    Returns empty set if overlay manager is not initialized.
+    """
+    try:
+        from agent.agent_state import get_overlay_manager
+        overlay = get_overlay_manager()
+        if not overlay:
+            return set()
+        ports: set[str] = set()
+        if hasattr(overlay, '_link_tunnels'):
+            ports.update(lt.interface_name for lt in overlay._link_tunnels.values())
+        if hasattr(overlay, '_tunnels'):
+            ports.update(t.interface_name for t in overlay._tunnels.values())
+        return ports
+    except Exception:
+        pass
+    return set()
+
+
 # Interface naming patterns used by Archetype
 # veth pairs from local.py: arch{random_hex}
 # veth pairs from ovs.py: vh{suffix}
@@ -59,7 +81,8 @@ ARCHETYPE_BRIDGE_PATTERNS = [
 
 # VXLAN interface patterns
 ARCHETYPE_VXLAN_PATTERNS = [
-    re.compile(r"^vxlan\d+$"),  # VXLAN tunnels
+    re.compile(r"^vxlan\d+$"),            # Legacy: vxlan100000
+    re.compile(r"^vxlan-[0-9a-f]{8}$"),   # Current: vxlan-abc12345 (token_hex(4) = 8 chars)
 ]
 
 
@@ -421,7 +444,9 @@ class NetworkCleanupManager:
     async def cleanup_orphaned_vxlans(self, dry_run: bool = False) -> int:
         """Find and delete orphaned VXLAN interfaces.
 
-        VXLAN interfaces are orphaned if they're not attached to any bridge.
+        VXLAN interfaces are orphaned if they're not attached to any bridge
+        AND not tracked by the overlay manager (OVS-managed ports don't show
+        a Linux bridge master in ``ip link``).
 
         Returns number of VXLAN interfaces deleted.
         """
@@ -439,9 +464,19 @@ class NetworkCleanupManager:
             import json
             vxlans = json.loads(stdout) if stdout else []
 
+            # Get VXLAN ports tracked by the overlay manager — never delete these
+            tracked_ports = _get_overlay_tracked_ports()
+            if tracked_ports:
+                logger.debug(f"Overlay manager tracking {len(tracked_ports)} VXLAN ports")
+
             for vxlan in vxlans:
                 name = vxlan.get("ifname", "")
                 if not self._is_archetype_vxlan(name):
+                    continue
+
+                # Skip devices tracked by the overlay manager
+                if name in tracked_ports:
+                    logger.debug(f"Skipping VXLAN {name}: tracked by overlay manager")
                     continue
 
                 # Check if VXLAN is attached to a bridge

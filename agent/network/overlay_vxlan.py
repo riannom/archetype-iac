@@ -86,6 +86,11 @@ async def create_vxlan_device(
         await _shared_run_cmd(["ip", "link", "delete", name])
         raise RuntimeError(f"Failed to add VXLAN device {name} to OVS: {stderr}")
 
+    logger.info(
+        f"VXLAN device created: name={name} vni={vni} "
+        f"remote={remote_ip} vlan={vlan_tag} mtu={vxlan_mtu}"
+    )
+
 
 async def delete_vxlan_device(name: str, bridge: str) -> None:
     """Remove a VXLAN device from OVS and delete the Linux interface.
@@ -94,8 +99,16 @@ async def delete_vxlan_device(name: str, bridge: str) -> None:
         name: Interface name of the VXLAN device
         bridge: OVS bridge name to remove the port from
     """
-    await _shared_ovs_vsctl("--if-exists", "del-port", bridge, name)
-    await _shared_run_cmd(["ip", "link", "delete", name])
+    ovs_code, _, ovs_err = await _shared_ovs_vsctl("--if-exists", "del-port", bridge, name)
+    link_code, _, link_err = await _shared_run_cmd(["ip", "link", "delete", name])
+
+    if ovs_code == 0 and link_code == 0:
+        logger.info(f"VXLAN device deleted: name={name} bridge={bridge}")
+    else:
+        logger.warning(
+            f"VXLAN device delete incomplete: name={name} bridge={bridge} "
+            f"ovs_rc={ovs_code} link_rc={link_code}"
+        )
 
 
 async def discover_path_mtu(remote_ip: str, mtu_cache: dict[str, int]) -> int:
