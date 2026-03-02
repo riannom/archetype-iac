@@ -30,7 +30,7 @@
       "command": [
         "/bin/bash",
         "-lc",
-        "cd api && DATABASE_URL=sqlite:///test.db REDIS_URL=redis://localhost:6379/0 WORKSPACE=/tmp/archetype-test PYTHONPATH=\"${PYTHONPATH}:$(pwd)/..\" pytest -q tests"
+        "cd api && DATABASE_URL=sqlite:///test.db REDIS_URL=redis://localhost:6379/0 WORKSPACE=/tmp/archetype-test PYTHONPATH=\"${PYTHONPATH}:$(pwd)/..\" pytest -q -x tests"
       ],
       "required": false
     },
@@ -39,7 +39,7 @@
       "command": [
         "/bin/bash",
         "-lc",
-        "cd agent && pytest -q tests"
+        "cd agent && pytest -q -x tests"
       ],
       "required": false
     },

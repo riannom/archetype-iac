@@ -55,12 +55,13 @@ jobs:
       - name: Install confidence gate tooling
         run: pip install pytest
 
-      - name: Plan selected checks
+      - name: Plan required checks
         id: plan
         run: |
           set -euo pipefail
           python3 scripts/confidence_gate.py \
             --json \
+            --required-only \
             --base "${{ steps.base.outputs.base_ref }}" \
             --rules scripts/confidence_gate_rules_ci.json > /tmp/confidence-plan.json
           python3 - <<'PY'
@@ -107,13 +108,14 @@ jobs:
           make confidence-gate-run \
             BASE="${{ steps.base.outputs.base_ref }}" \
             CONFIDENCE_RULES="scripts/confidence_gate_rules_ci.json" \
+            CONFIDENCE_CHECK_SCOPE=required \
             CONFIDENCE_MIN_SCORE=90
 
       - name: Upload confidence report
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: confidence-gate-report
+          name: confidence-gate-report-required
           path: reports/confidence-gate/latest.json
           if-no-files-found: warn
 
@@ -138,6 +140,7 @@ jobs:
               const report = JSON.parse(fs.readFileSync(reportPath, "utf8"));
               const confidence = report.confidence || {};
               const selected = report.selected_checks || [];
+              const selectedAll = report.selected_checks_all || selected;
               const results = report.check_results || [];
               const reasons = confidence.reasons || [];
               const remediation = report.remediation || [];
@@ -156,6 +159,10 @@ jobs:
                     .join("\n")
                 : "- none";
 
+              const selectedAllLines = selectedAll.length
+                ? selectedAll.map((item) => `- \`${item.check_id}\` (${item.required ? "required" : "optional"})`).join("\n")
+                : "- none";
+
               const reasonLines = reasons.length
                 ? reasons.map((r) => `- ${r}`).join("\n")
                 : "- none";
@@ -169,10 +176,14 @@ jobs:
                 "## Confidence Gate",
                 `Score: **${confidence.score ?? "n/a"}** (${confidence.level ?? "n/a"})`,
                 `Mode: \`${report.mode ?? "unknown"}\``,
+                `Scope: \`${report.check_scope ?? "all"}\``,
                 `Base: \`${report.base_ref ?? "unknown"}\``,
                 "",
                 "### Selected Checks",
                 selectedLines,
+                "",
+                "### Planned Checks (All Scopes)",
+                selectedAllLines,
                 "",
                 "### Check Results",
                 resultLines,
@@ -217,6 +228,116 @@ jobs:
                 body,
               });
             }
+
+  confidence-gate-optional:
+    name: Confidence Gate (Optional)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    continue-on-error: true
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Determine diff base
+        id: base
+        env:
+          EVENT_BEFORE: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          if [ "${GITHUB_EVENT_NAME}" = "pull_request" ]; then
+            git fetch origin "${GITHUB_BASE_REF}" --depth=1
+            echo "base_ref=origin/${GITHUB_BASE_REF}" >> "$GITHUB_OUTPUT"
+          elif [ -n "${EVENT_BEFORE:-}" ] && [ "${EVENT_BEFORE}" != "0000000000000000000000000000000000000000" ]; then
+            echo "base_ref=${EVENT_BEFORE}" >> "$GITHUB_OUTPUT"
+          else
+            echo "base_ref=HEAD~1" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: |
+            api/requirements.txt
+            agent/requirements.txt
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install confidence gate tooling
+        run: pip install pytest
+
+      - name: Plan optional checks
+        id: plan
+        run: |
+          set -euo pipefail
+          python3 scripts/confidence_gate.py \
+            --json \
+            --optional-only \
+            --base "${{ steps.base.outputs.base_ref }}" \
+            --rules scripts/confidence_gate_rules_ci.json > /tmp/confidence-plan-optional.json
+          python3 - <<'PY'
+          import json
+          import os
+
+          with open("/tmp/confidence-plan-optional.json", "r", encoding="utf-8") as handle:
+              report = json.load(handle)
+
+          checks = [item["check_id"] for item in report.get("selected_checks", [])]
+          print("Selected checks:", ", ".join(checks) if checks else "none")
+
+          outputs = {
+              "has_api": "true" if any(check.startswith("test-api") for check in checks) else "false",
+              "has_agent": "true" if any(check.startswith("test-agent") for check in checks) else "false",
+              "has_web": "true" if any(check.startswith("test-web") for check in checks) else "false",
+          }
+
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as handle:
+              for key, value in outputs.items():
+                  handle.write(f"{key}={value}\n")
+          PY
+
+      - name: Install API dependencies
+        if: steps.plan.outputs.has_api == 'true'
+        run: |
+          cd api
+          pip install -r requirements.txt
+
+      - name: Install Agent dependencies
+        if: steps.plan.outputs.has_agent == 'true'
+        run: |
+          cd agent
+          pip install -r requirements.txt
+
+      - name: Install Web dependencies
+        if: steps.plan.outputs.has_web == 'true'
+        run: |
+          cd web
+          npm ci
+
+      - name: Execute optional confidence gate
+        run: |
+          make confidence-gate-run \
+            BASE="${{ steps.base.outputs.base_ref }}" \
+            CONFIDENCE_RULES="scripts/confidence_gate_rules_ci.json" \
+            CONFIDENCE_CHECK_SCOPE=optional \
+            CONFIDENCE_MIN_SCORE=90 \
+            CONFIDENCE_REPORT="reports/confidence-gate/optional.json"
+
+      - name: Upload optional confidence report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: confidence-gate-report-optional
+          path: reports/confidence-gate/optional.json
+          if-no-files-found: warn
 
   backend-tests:
     name: Backend Tests
