@@ -358,11 +358,11 @@ const Dashboard: React.FC<DashboardProps> = ({
                 aria-label="Filter labs"
                 value={listFilter}
                 onChange={(e) => updateDashboardParams({ status: e.target.value as LabListFilter, page: 1 })}
-                className="w-full py-2.5 px-3 rounded-xl glass-control border text-sm text-stone-700 dark:text-stone-200 bg-transparent"
+                className="w-full py-2.5 px-3 rounded-xl glass-control border text-sm text-stone-700 dark:text-stone-200 bg-white/80 dark:bg-stone-900/85 dark:border-stone-700 dark:[color-scheme:dark]"
               >
-                <option value="all">All Labs</option>
-                <option value="running">Running</option>
-                <option value="stopped">Stopped</option>
+                <option value="all" className="bg-white text-stone-700 dark:bg-stone-900 dark:text-stone-200">All Labs</option>
+                <option value="running" className="bg-white text-stone-700 dark:bg-stone-900 dark:text-stone-200">Running</option>
+                <option value="stopped" className="bg-white text-stone-700 dark:bg-stone-900 dark:text-stone-200">Stopped</option>
               </select>
             </div>
             <div className="lg:col-span-3">
@@ -370,14 +370,14 @@ const Dashboard: React.FC<DashboardProps> = ({
                 aria-label="Sort labs"
                 value={sortOption}
                 onChange={(e) => updateDashboardParams({ sort: e.target.value as LabSortOption, page: 1 })}
-                className="w-full py-2.5 px-3 rounded-xl glass-control border text-sm text-stone-700 dark:text-stone-200 bg-transparent"
+                className="w-full py-2.5 px-3 rounded-xl glass-control border text-sm text-stone-700 dark:text-stone-200 bg-white/80 dark:bg-stone-900/85 dark:border-stone-700 dark:[color-scheme:dark]"
               >
-                <option value="created_desc">Newest First</option>
-                <option value="created_asc">Oldest First</option>
-                <option value="name_asc">Name A-Z</option>
-                <option value="name_desc">Name Z-A</option>
-                <option value="nodes_desc">Most Nodes</option>
-                <option value="nodes_asc">Least Nodes</option>
+                <option value="created_desc" className="bg-white text-stone-700 dark:bg-stone-900 dark:text-stone-200">Newest First</option>
+                <option value="created_asc" className="bg-white text-stone-700 dark:bg-stone-900 dark:text-stone-200">Oldest First</option>
+                <option value="name_asc" className="bg-white text-stone-700 dark:bg-stone-900 dark:text-stone-200">Name A-Z</option>
+                <option value="name_desc" className="bg-white text-stone-700 dark:bg-stone-900 dark:text-stone-200">Name Z-A</option>
+                <option value="nodes_desc" className="bg-white text-stone-700 dark:bg-stone-900 dark:text-stone-200">Most Nodes</option>
+                <option value="nodes_asc" className="bg-white text-stone-700 dark:bg-stone-900 dark:text-stone-200">Least Nodes</option>
               </select>
             </div>
             <div className="lg:col-span-2 flex items-center justify-between gap-2">
