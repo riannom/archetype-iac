@@ -6,7 +6,6 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from io import BytesIO
 from pathlib import Path
-from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest

@@ -274,7 +274,7 @@ async def test_trigger_job_execution_branch_coverage(test_db, monkeypatch) -> No
 
 @pytest.mark.asyncio
 async def test_check_agent_active_transfers_branches(monkeypatch) -> None:
-    host = SimpleHost = MagicMock()
+    host = MagicMock()
     host.address = "127.0.0.1:8080"
     host.name = "agent-host"
 
