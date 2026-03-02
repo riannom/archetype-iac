@@ -13,10 +13,16 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock, patch, PropertyMock
 
 import pytest
-from docker.errors import NotFound, ImageNotFound
+from docker.errors import NotFound, ImageNotFound, APIError
 
 from agent.providers.base import NodeStatus
 from agent.providers.docker import DockerProvider
+
+
+def _api_error(status_code: int = 500, message: str = "api error") -> APIError:
+    response = MagicMock()
+    response.status_code = status_code
+    return APIError(message, response=response)
 
 
 # ---------------------------------------------------------------------------
@@ -114,7 +120,7 @@ async def test_create_node_basic(provider, workspace, mock_docker_client, mock_v
 
     with patch("agent.providers.docker.get_config_by_device", return_value=mock_vendor_config):
         with patch("agent.providers.docker.is_ceos_kind", return_value=False):
-            with patch("agent.providers.docker.get_container_config") as mock_gcc:
+            with patch("agent.providers.docker_setup.get_container_config") as mock_gcc:
                 mock_gcc.return_value = MagicMock(
                     environment={"FOO": "bar"},
                     binds=[],
@@ -123,7 +129,7 @@ async def test_create_node_basic(provider, workspace, mock_docker_client, mock_v
                     ports={},
                     image="linux:latest",
                     privileged=False,
-                    command=None,
+                    cmd=None,
                     entrypoint=None,
                 )
                 result = await provider.create_node(
@@ -157,7 +163,7 @@ async def test_create_node_ceos(provider, workspace, mock_docker_client):
 
     with patch("agent.providers.docker.get_config_by_device", return_value=ceos_config):
         with patch("agent.providers.docker.is_ceos_kind", return_value=True):
-            with patch("agent.providers.docker.get_container_config") as mock_gcc:
+            with patch("agent.providers.docker_setup.get_container_config") as mock_gcc:
                 mock_gcc.return_value = MagicMock(
                     environment={"INTFTYPE": "eth", "CEOS": "1"},
                     binds=[],
@@ -166,7 +172,7 @@ async def test_create_node_ceos(provider, workspace, mock_docker_client):
                     ports={},
                     image="ceos:4.30.0F",
                     privileged=False,
-                    command=None,
+                    cmd=None,
                     entrypoint=None,
                 )
                 result = await provider.create_node(
@@ -239,7 +245,7 @@ async def test_create_node_existing_stopped(
 
     with patch("agent.providers.docker.get_config_by_device", return_value=mock_vendor_config):
         with patch("agent.providers.docker.is_ceos_kind", return_value=False):
-            with patch("agent.providers.docker.get_container_config") as mock_gcc:
+            with patch("agent.providers.docker_setup.get_container_config") as mock_gcc:
                 mock_gcc.return_value = MagicMock(
                     environment={},
                     binds=[],
@@ -248,7 +254,7 @@ async def test_create_node_existing_stopped(
                     ports={},
                     image="linux:latest",
                     privileged=False,
-                    command=None,
+                    cmd=None,
                     entrypoint=None,
                 )
                 result = await provider.create_node(
@@ -293,6 +299,195 @@ async def test_create_node_missing_image(
 
     # Should NOT have attempted to create a container
     mock_docker_client.containers.create.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_create_node_cjunos_runs_directory_setup(
+    provider, workspace, mock_docker_client, mock_vendor_config
+):
+    """create_node uses cJunOS directory setup path when kind is cJunOS."""
+    created_container = MagicMock()
+    created_container.short_id = "cjunos01"
+
+    mock_docker_client.images.get.return_value = MagicMock()
+    mock_docker_client.containers.get.side_effect = NotFound("not found")
+    mock_docker_client.containers.create.return_value = created_container
+
+    with patch("agent.providers.docker.get_config_by_device", return_value=mock_vendor_config):
+        with patch("agent.providers.docker.is_ceos_kind", return_value=False):
+            with patch("agent.providers.docker.is_cjunos_kind", return_value=True):
+                with patch("agent.providers.docker_setup.get_container_config") as mock_gcc:
+                    mock_gcc.return_value = MagicMock(
+                        environment={},
+                        binds=[],
+                        capabilities=[],
+                        sysctls={},
+                        ports={},
+                        image="linux:latest",
+                        privileged=False,
+                        cmd=None,
+                        entrypoint=None,
+                    )
+                    with patch.object(provider, "_setup_cjunos_directories") as mock_setup:
+                        result = await provider.create_node(
+                            lab_id="lab1",
+                            node_name="node1",
+                            kind="juniper_cjunos",
+                            workspace=workspace,
+                        )
+
+    assert result.success is True
+    mock_setup.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_create_node_ovs_plugin_with_management_uses_eth0_and_reserved_count(
+    provider, workspace, mock_docker_client
+):
+    """OVS-plugin create_node uses eth0 first network and includes reserved NICs."""
+    created_container = MagicMock()
+    created_container.short_id = "ovs001"
+
+    vendor_config = MagicMock()
+    vendor_config.default_image = "linux:latest"
+    vendor_config.management_interface = "eth0"
+    vendor_config.reserved_nics = 2
+
+    mock_docker_client.images.get.return_value = MagicMock()
+    mock_docker_client.containers.get.side_effect = NotFound("not found")
+    mock_docker_client.containers.create.return_value = created_container
+
+    with patch("agent.providers.docker.get_config_by_device", return_value=vendor_config):
+        with patch("agent.providers.docker.is_ceos_kind", return_value=False):
+            with patch("agent.providers.docker.is_cjunos_kind", return_value=False):
+                with patch.object(
+                    type(provider), "use_ovs_plugin", new_callable=PropertyMock, return_value=True
+                ):
+                    with patch.object(provider, "_create_lab_networks", new_callable=AsyncMock) as mock_create_nets:
+                        with patch.object(provider, "_attach_container_to_networks", new_callable=AsyncMock) as mock_attach:
+                            with patch.object(
+                                provider,
+                                "_create_container_config",
+                                return_value={"image": "linux:latest", "name": "archetype-lab1-node1"},
+                            ):
+                                with patch("asyncio.sleep", new_callable=AsyncMock):
+                                    result = await provider.create_node(
+                                        lab_id="lab1",
+                                        node_name="node1",
+                                        kind="linux",
+                                        workspace=workspace,
+                                        interface_count=3,
+                                    )
+
+    assert result.success is True
+    mock_create_nets.assert_awaited_once_with("lab1", max_interfaces=5)
+    assert mock_docker_client.containers.create.call_args.kwargs["network"] == "lab1-eth0"
+    mock_attach.assert_awaited_once()
+    assert mock_attach.await_args.kwargs["interface_count"] == 5
+    assert mock_attach.await_args.kwargs["start_index"] == 1
+
+
+@pytest.mark.asyncio
+async def test_create_node_ovs_plugin_without_management_uses_eth1_first_network(
+    provider, workspace, mock_docker_client
+):
+    """OVS-plugin create_node without management interface starts at eth1."""
+    created_container = MagicMock()
+    created_container.short_id = "ovs002"
+
+    vendor_config = MagicMock()
+    vendor_config.default_image = "linux:latest"
+    vendor_config.management_interface = None
+    vendor_config.reserved_nics = 0
+
+    mock_docker_client.images.get.return_value = MagicMock()
+    mock_docker_client.containers.get.side_effect = NotFound("not found")
+    mock_docker_client.containers.create.return_value = created_container
+
+    with patch("agent.providers.docker.get_config_by_device", return_value=vendor_config):
+        with patch("agent.providers.docker.is_ceos_kind", return_value=False):
+            with patch("agent.providers.docker.is_cjunos_kind", return_value=False):
+                with patch.object(
+                    type(provider), "use_ovs_plugin", new_callable=PropertyMock, return_value=True
+                ):
+                    with patch.object(provider, "_create_lab_networks", new_callable=AsyncMock) as mock_create_nets:
+                        with patch.object(provider, "_attach_container_to_networks", new_callable=AsyncMock) as mock_attach:
+                            with patch.object(
+                                provider,
+                                "_create_container_config",
+                                return_value={"image": "linux:latest", "name": "archetype-lab1-node1"},
+                            ):
+                                with patch("asyncio.sleep", new_callable=AsyncMock):
+                                    result = await provider.create_node(
+                                        lab_id="lab1",
+                                        node_name="node1",
+                                        kind="linux",
+                                        workspace=workspace,
+                                        interface_count=3,
+                                    )
+
+    assert result.success is True
+    mock_create_nets.assert_awaited_once_with("lab1", max_interfaces=3)
+    assert mock_docker_client.containers.create.call_args.kwargs["network"] == "lab1-eth1"
+    mock_attach.assert_awaited_once()
+    assert mock_attach.await_args.kwargs["interface_count"] == 2
+    assert mock_attach.await_args.kwargs["start_index"] == 2
+
+
+@pytest.mark.asyncio
+async def test_create_node_returns_api_error_when_docker_create_fails(
+    provider, workspace, mock_docker_client, mock_vendor_config
+):
+    """create_node surfaces Docker API errors from container create."""
+    mock_docker_client.images.get.return_value = MagicMock()
+    mock_docker_client.containers.get.side_effect = NotFound("not found")
+    mock_docker_client.containers.create.side_effect = _api_error(500, "daemon unavailable")
+
+    with patch("agent.providers.docker.get_config_by_device", return_value=mock_vendor_config):
+        with patch("agent.providers.docker.is_ceos_kind", return_value=False):
+            with patch("agent.providers.docker.is_cjunos_kind", return_value=False):
+                with patch.object(
+                    provider,
+                    "_create_container_config",
+                    return_value={"image": "linux:latest", "name": "archetype-lab1-node1"},
+                ):
+                    result = await provider.create_node(
+                        lab_id="lab1",
+                        node_name="node1",
+                        kind="linux",
+                        workspace=workspace,
+                    )
+
+    assert result.success is False
+    assert "Docker API error" in (result.error or "")
+
+
+@pytest.mark.asyncio
+async def test_create_node_returns_generic_error_when_create_raises_runtime_error(
+    provider, workspace, mock_docker_client, mock_vendor_config
+):
+    """create_node returns generic failure when create raises non-Docker exception."""
+    mock_docker_client.images.get.return_value = MagicMock()
+    mock_docker_client.containers.get.side_effect = NotFound("not found")
+    mock_docker_client.containers.create.side_effect = RuntimeError("boom")
+
+    with patch("agent.providers.docker.get_config_by_device", return_value=mock_vendor_config):
+        with patch("agent.providers.docker.is_ceos_kind", return_value=False):
+            with patch("agent.providers.docker.is_cjunos_kind", return_value=False):
+                with patch.object(
+                    provider,
+                    "_create_container_config",
+                    return_value={"image": "linux:latest", "name": "archetype-lab1-node1"},
+                ):
+                    result = await provider.create_node(
+                        lab_id="lab1",
+                        node_name="node1",
+                        kind="linux",
+                        workspace=workspace,
+                    )
+
+    assert result.success is False
+    assert "Container creation failed" in (result.error or "")
 
 
 # ---------------------------------------------------------------------------
@@ -403,6 +598,101 @@ async def test_start_node_not_found(provider, workspace, mock_docker_client):
     assert result.success is False
     assert result.node_name == "missing_node"
     assert "not found" in result.error.lower()
+
+
+@pytest.mark.asyncio
+async def test_start_node_recovers_from_stale_network_error(
+    provider, workspace, mock_docker_client, mock_container
+):
+    """start_node retries after stale network recovery."""
+    mock_docker_client.containers.get.return_value = mock_container
+    mock_container.start.side_effect = [
+        APIError("network abc not found"),
+        None,
+    ]
+
+    with patch.object(provider, "_recover_stale_networks", new_callable=AsyncMock, return_value=True) as mock_recover:
+        with patch("asyncio.sleep", new_callable=AsyncMock):
+            with patch.object(
+                type(provider), "use_ovs_plugin", new_callable=PropertyMock, return_value=False
+            ):
+                result = await provider.start_node("lab1", "node1", workspace)
+
+    assert result.success is True
+    assert mock_container.start.call_count == 2
+    mock_recover.assert_awaited_once_with(mock_container, "lab1")
+
+
+@pytest.mark.asyncio
+async def test_start_node_returns_api_error_when_stale_recovery_fails(
+    provider, workspace, mock_docker_client, mock_container
+):
+    """start_node returns Docker API error when stale network recovery fails."""
+    mock_docker_client.containers.get.return_value = mock_container
+    mock_container.start.side_effect = APIError("network xyz not found")
+
+    with patch.object(provider, "_recover_stale_networks", new_callable=AsyncMock, return_value=False):
+        result = await provider.start_node("lab1", "node1", workspace)
+
+    assert result.success is False
+    assert "Docker API error" in (result.error or "")
+
+
+@pytest.mark.asyncio
+async def test_start_node_continues_when_repair_and_fix_raise(
+    provider, workspace, mock_docker_client, mock_container
+):
+    """Repair/fix failures are logged but do not fail start_node."""
+    mock_docker_client.containers.get.return_value = mock_container
+
+    plugin = AsyncMock()
+    plugin.repair_endpoints.side_effect = RuntimeError("repair failed")
+
+    with patch("agent.providers.docker.get_docker_ovs_plugin", return_value=plugin):
+        with patch.object(provider, "_fix_interface_names", new_callable=AsyncMock) as mock_fix:
+            mock_fix.side_effect = RuntimeError("fix failed")
+            with patch.object(
+                type(provider), "use_ovs_plugin", new_callable=PropertyMock, return_value=True
+            ):
+                with patch("asyncio.sleep", new_callable=AsyncMock):
+                    result = await provider.start_node("lab1", "node1", workspace)
+
+    assert result.success is True
+    assert "Started container archetype-lab1-node1" in result.stdout
+    plugin.repair_endpoints.assert_awaited_once()
+    mock_fix.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_start_node_returns_api_error_for_non_network_api_error(
+    provider, workspace, mock_docker_client, mock_container
+):
+    """Non-network APIError should return failure without recovery attempt."""
+    mock_docker_client.containers.get.return_value = mock_container
+    mock_container.start.side_effect = APIError("permission denied")
+
+    with patch.object(
+        type(provider), "use_ovs_plugin", new_callable=PropertyMock, return_value=False
+    ):
+        result = await provider.start_node("lab1", "node1", workspace)
+
+    assert result.success is False
+    assert "Docker API error" in (result.error or "")
+
+
+@pytest.mark.asyncio
+async def test_start_node_raises_on_unexpected_start_exception(
+    provider, workspace, mock_docker_client, mock_container
+):
+    """Unexpected non-API exceptions during start propagate to caller."""
+    mock_docker_client.containers.get.return_value = mock_container
+    mock_container.start.side_effect = RuntimeError("boom")
+
+    with patch.object(
+        type(provider), "use_ovs_plugin", new_callable=PropertyMock, return_value=False
+    ):
+        with pytest.raises(RuntimeError, match="boom"):
+            await provider.start_node("lab1", "node1", workspace)
 
 
 # ---------------------------------------------------------------------------
@@ -610,6 +900,43 @@ async def test_stop_node_not_found_is_success(
     assert result.node_name == "gone_node"
     assert result.new_status == NodeStatus.STOPPED
     assert "already removed" in result.stdout.lower()
+
+
+@pytest.mark.asyncio
+async def test_stop_node_returns_api_error_from_remove_container(provider, workspace):
+    """stop_node propagates API errors from _remove_container."""
+    with patch.object(provider, "_remove_container", new_callable=AsyncMock) as mock_remove:
+        mock_remove.side_effect = _api_error(500, "remove failed")
+        result = await provider.stop_node("lab1", "node1", workspace)
+
+    assert result.success is False
+    assert "Docker API error" in (result.error or "")
+
+
+@pytest.mark.asyncio
+async def test_remove_container_raises_when_stop_fails(
+    provider, workspace, mock_docker_client, mock_container
+):
+    """_remove_container raises when Docker stop call fails."""
+    mock_container.status = "running"
+    mock_container.stop.side_effect = RuntimeError("stop failed")
+    mock_docker_client.containers.get.return_value = mock_container
+
+    with pytest.raises(RuntimeError, match="stop failed"):
+        await provider._remove_container("lab1", "node1", workspace)
+
+
+@pytest.mark.asyncio
+async def test_remove_container_raises_when_remove_fails(
+    provider, workspace, mock_docker_client, mock_container
+):
+    """_remove_container raises when Docker remove call fails."""
+    mock_container.status = "exited"
+    mock_container.remove.side_effect = RuntimeError("remove failed")
+    mock_docker_client.containers.get.return_value = mock_container
+
+    with pytest.raises(RuntimeError, match="remove failed"):
+        await provider._remove_container("lab1", "node1", workspace)
 
 
 @pytest.mark.asyncio

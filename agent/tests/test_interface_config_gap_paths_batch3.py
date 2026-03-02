@@ -111,6 +111,37 @@ def test_host_glob_container_empty_stdout(monkeypatch):
     assert iface._host_glob("/etc/netplan", "*.yaml") == []
 
 
+def test_host_read_write_mkdir_success_branches(monkeypatch, tmp_path):
+    monkeypatch.setattr(iface, "_is_in_container", lambda: True)
+    monkeypatch.setattr(
+        iface,
+        "_run_on_host",
+        lambda cmd, **_kwargs: _Result(returncode=0, stdout="content\n")
+        if cmd[:1] == ["cat"]
+        else _Result(returncode=0),
+    )
+    monkeypatch.setattr(
+        iface.subprocess,
+        "run",
+        lambda *_a, **_k: _Result(returncode=0),
+    )
+
+    assert iface._host_read_file("/etc/hosts") == "content\n"
+    ok, err = iface._host_write_file("/etc/hosts", "x")
+    assert ok is True
+    assert err is None
+    ok, err = iface._host_mkdir("/etc/systemd/network")
+    assert ok is True
+    assert err is None
+
+    monkeypatch.setattr(iface, "_is_in_container", lambda: False)
+    path = tmp_path / "ok.txt"
+    ok, err = iface._host_write_file(str(path), "hello")
+    assert ok is True
+    assert err is None
+    assert path.read_text() == "hello"
+
+
 def test_detect_network_manager_remaining_branches(monkeypatch):
     # In-container log branch + netplan `which` exception branch.
     monkeypatch.setattr(iface, "_is_in_container", lambda: True)

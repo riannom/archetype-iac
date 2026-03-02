@@ -290,22 +290,23 @@ def test_resolve_conflicting_lab_network_rolls_back_when_recreate_fails(monkeypa
 async def test_create_lab_networks_serializes_concurrent_calls_per_lab(monkeypatch):
     provider = DockerProvider()
 
-    active_calls = 0
-    max_concurrent_calls = 0
-
-    async def _tracked_prune(_lab_id: str):
-        nonlocal active_calls, max_concurrent_calls
-        active_calls += 1
-        max_concurrent_calls = max(max_concurrent_calls, active_calls)
-        await asyncio.sleep(0.05)
-        active_calls -= 1
-
-    provider._prune_legacy_lab_networks = AsyncMock(side_effect=_tracked_prune)
+    active_calls = {"current": 0, "max": 0}
 
     docker_client = MagicMock()
     docker_client.networks.get.side_effect = NotFound("missing")
     docker_client.networks.create = MagicMock()
     provider._docker = docker_client
+
+    async def _tracked_retry(_op_name: str, func, *args, **kwargs):
+        active_calls["current"] += 1
+        active_calls["max"] = max(active_calls["max"], active_calls["current"])
+        await asyncio.sleep(0.02)
+        try:
+            return func(*args, **kwargs)
+        finally:
+            active_calls["current"] -= 1
+
+    provider._retry_docker_call = AsyncMock(side_effect=_tracked_retry)
 
     async def _sync_to_thread(func, *args, **kwargs):
         return func(*args, **kwargs)
@@ -318,7 +319,7 @@ async def test_create_lab_networks_serializes_concurrent_calls_per_lab(monkeypat
     )
 
     # The per-lab lock should keep this critical section non-overlapping.
-    assert max_concurrent_calls == 1
+    assert active_calls["max"] == 1
 
 
 def test_local_cleanup_runs_orphan_veth_cleanup(monkeypatch):
