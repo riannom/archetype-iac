@@ -24,6 +24,7 @@ from app.services.link_manager import LinkManager
 from app.services.link_validator import verify_link_connected, update_interface_mappings
 from app.services.topology import TopologyService
 from app.services.interface_naming import normalize_interface
+from app.state import NodeActualState
 from app.utils.link import generate_link_name
 
 logger = logging.getLogger(__name__)
@@ -232,6 +233,54 @@ async def create_deployment_links(
             )
             session.add(link_state)
             session.flush()  # Get ID
+
+        # If NodeState is present and either endpoint is not running, defer link
+        # creation instead of attempting OVS/VXLAN operations that must fail.
+        source_state = (
+            session.query(models.NodeState)
+            .filter(
+                models.NodeState.lab_id == lab_id,
+                models.NodeState.node_name == source_node.container_name,
+            )
+            .first()
+        )
+        target_state = (
+            session.query(models.NodeState)
+            .filter(
+                models.NodeState.lab_id == lab_id,
+                models.NodeState.node_name == target_node.container_name,
+            )
+            .first()
+        )
+        source_running = (
+            source_state is None
+            or source_state.actual_state == NodeActualState.RUNNING.value
+        )
+        target_running = (
+            target_state is None
+            or target_state.actual_state == NodeActualState.RUNNING.value
+        )
+        if not source_running or not target_running:
+            src_status = source_state.actual_state if source_state else "unknown"
+            tgt_status = target_state.actual_state if target_state else "unknown"
+            link_state.actual_state = "pending"
+            link_state.error_message = None
+            link_state.source_carrier_state = "off"
+            link_state.target_carrier_state = "off"
+            link_state.source_vxlan_attached = False
+            link_state.target_vxlan_attached = False
+            _sync_oper_state(session, link_state)
+            logger.info(
+                "Link %s queued - waiting for nodes (source=%s, target=%s)",
+                link_state.link_name,
+                src_status,
+                tgt_status,
+            )
+            log_parts.append(
+                f"  {link_state.link_name}: PENDING - waiting for nodes "
+                f"(source={src_status}, target={tgt_status})"
+            )
+            continue
 
         # Determine host placement for each endpoint
         source_host_id = source_node.host_id

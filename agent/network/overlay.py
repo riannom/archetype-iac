@@ -1265,8 +1265,10 @@ class OverlayManager:
                         return False
 
         if not tunnel:
-            logger.warning(f"No link tunnel found for {link_id}")
-            return False
+            # Idempotent teardown: if the tunnel is already gone, desired state
+            # is satisfied and cleanup callers should not keep retrying forever.
+            logger.info(f"Link tunnel already absent for {link_id}")
+            return True
 
         try:
             # Delete OVS port and Linux VXLAN device

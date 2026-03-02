@@ -402,7 +402,7 @@ async def test_delete_link_tunnel_untracked_and_notfound(monkeypatch, tmp_path):
 
     mgr = _make_overlay(monkeypatch, tmp_path)
     mgr._ovs_port_exists = AsyncMock(return_value=False)
-    assert await mgr.delete_link_tunnel("missing-link", lab_id="lab1") is False
+    assert await mgr.delete_link_tunnel("missing-link", lab_id="lab1") is True
 
     tunnel = LinkTunnel(
         link_id="tracked",

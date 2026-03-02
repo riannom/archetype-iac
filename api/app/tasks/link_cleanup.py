@@ -41,7 +41,19 @@ async def _detach_overlay_endpoint(
             link_id=link_id,
         )
         if isinstance(result, dict) and not result.get("success", False):
-            return False, result.get("error") or "detach failed"
+            error = result.get("error") or "detach failed"
+            # Backward-compatibility for older agents: missing per-link VXLAN
+            # tunnel is reported as a generic detach failure. For cleanup paths,
+            # "already absent" is a successful terminal state.
+            if error == "Failed to delete VXLAN tunnel":
+                logger.info(
+                    "Treating missing-tunnel detach response as success for "
+                    "%s on agent %s",
+                    link_id,
+                    agent.id,
+                )
+                return True, None
+            return False, error
         return True, None
     except Exception as e:
         return False, str(e)

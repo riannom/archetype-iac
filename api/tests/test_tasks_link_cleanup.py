@@ -421,6 +421,22 @@ class TestDetachOverlayEndpoint:
         assert "port not found" in err
 
     @pytest.mark.asyncio
+    async def test_missing_tunnel_detach_treated_as_success(self, sample_host: models.Host):
+        """Cleanup should treat missing-tunnel detach as idempotent success."""
+        from app.tasks.link_cleanup import _detach_overlay_endpoint
+
+        with patch(
+            "app.tasks.link_cleanup.agent_client.detach_overlay_interface_on_agent",
+            new_callable=AsyncMock,
+            return_value={"success": False, "error": "Failed to delete VXLAN tunnel"},
+        ):
+            ok, err = await _detach_overlay_endpoint(
+                sample_host, "lab-1", "R1", "eth1", "link-1"
+            )
+        assert ok is True
+        assert err is None
+
+    @pytest.mark.asyncio
     async def test_exception_during_detach(self, sample_host: models.Host):
         """Exception during detach returns (False, error_string)."""
         from app.tasks.link_cleanup import _detach_overlay_endpoint
