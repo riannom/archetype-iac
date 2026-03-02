@@ -14,7 +14,6 @@ from app.auth import get_current_user
 from app.db import get_session
 from app.services.topology import TopologyService
 from app.state import HostStatus, JobStatus, LabState, NodeActualState, NodeDesiredState
-from app.storage import lab_workspace
 from app.tasks.jobs import run_agent_job, run_multihost_deploy, run_multihost_destroy
 from app.topology import analyze_topology
 from app.config import settings
