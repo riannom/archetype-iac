@@ -30,18 +30,36 @@
       "command": [
         "/bin/bash",
         "-lc",
-        "cd api && DATABASE_URL=sqlite:///test.db REDIS_URL=redis://localhost:6379/0 WORKSPACE=/tmp/archetype-test PYTHONPATH=\"${PYTHONPATH}:$(pwd)/..\" pytest -q tests"
+        "cd api && DATABASE_URL=sqlite:///test.db REDIS_URL=redis://localhost:6379/0 WORKSPACE=/tmp/archetype-test PYTHONPATH=\"${PYTHONPATH}:$(pwd)/..\" pytest -q -x tests"
       ],
       "required": false
+    },
+    "test-api-smoke": {
+      "description": "API smoke checks for imports and basic app wiring",
+      "command": [
+        "/bin/bash",
+        "-lc",
+        "cd api && DATABASE_URL=sqlite:///test.db REDIS_URL=redis://localhost:6379/0 WORKSPACE=/tmp/archetype-test PYTHONPATH=\"${PYTHONPATH}:$(pwd)/..\" pytest -q tests/test_api_module_imports.py tests/test_api_init_modules.py::test_import_api_modules tests/test_api_init_modules.py::test_v1_version_endpoint"
+      ],
+      "required": true
     },
     "test-agent": {
       "description": "Agent pytest suite in CI",
       "command": [
         "/bin/bash",
         "-lc",
-        "cd agent && pytest -q tests"
+        "cd agent && pytest -q -x tests"
       ],
       "required": false
+    },
+    "test-agent-smoke": {
+      "description": "Agent smoke checks for provider/backend registry wiring",
+      "command": [
+        "/bin/bash",
+        "-lc",
+        "cd agent && pytest -q tests/test_registry_singleton.py tests/test_provider_registry_unit.py tests/test_network_backend_registry.py tests/test_asyncio_primitive_binding.py"
+      ],
+      "required": true
     },
     "test-web-container": {
       "description": "Web vitest suite in CI",
@@ -94,6 +112,7 @@
         "api/**"
       ],
       "checks": [
+        "test-api-smoke",
         "test-api"
       ]
     },
@@ -120,6 +139,7 @@
         "agent/**"
       ],
       "checks": [
+        "test-agent-smoke",
         "test-agent"
       ]
     },
@@ -178,6 +198,8 @@
         "Dockerfile*"
       ],
       "checks": [
+        "test-agent-smoke",
+        "test-api-smoke",
         "test-api",
         "test-web-container",
         "audit"

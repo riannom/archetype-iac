@@ -23,20 +23,31 @@ Implementation:
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
-import re
 import secrets
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any
 
 import docker
 from docker.errors import NotFound
 
 from agent.config import settings
-from agent.network.cmd import run_cmd as _shared_run_cmd, ovs_vsctl as _shared_ovs_vsctl, ip_link_exists as _shared_ip_link_exists
+from agent.network.cmd import run_cmd as _shared_run_cmd, ovs_vsctl as _shared_ovs_vsctl
 from agent.providers.naming import docker_container_name as _build_container_name, DOCKER_PREFIX as CONTAINER_PREFIX
+from agent.network.overlay_vxlan import (
+    create_vxlan_device as _create_vxlan_device_impl,
+    delete_vxlan_device as _delete_vxlan_device_impl,
+    discover_path_mtu as _discover_path_mtu_impl,
+    read_vxlan_link_info as _read_vxlan_link_info_impl,
+    ip_link_exists as _ip_link_exists_impl,
+)
+from agent.network.overlay_state import (
+    declare_state as _declare_state_impl,
+    load_declared_state_cache as _load_declared_state_cache_impl,
+    write_declared_state_cache as _write_declared_state_cache_impl,
+    batch_read_ovs_ports as _batch_read_ovs_ports_impl,
+    recover_link_tunnels as _recover_link_tunnels_impl,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -203,32 +214,8 @@ class OverlayManager:
     VXLAN_OVERHEAD = 50
 
     async def _read_vxlan_link_info(self, interface_name: str) -> tuple[int, str, str]:
-        """Read VNI/remote/local from a Linux VXLAN device.
-
-        Returns (vni, remote_ip, local_ip). Zero/empty values on failure.
-        """
-        code, link_out, _ = await self._run_cmd([
-            "ip", "-d", "link", "show", interface_name
-        ])
-        if code != 0:
-            return 0, "", ""
-
-        vni = 0
-        remote_ip = ""
-        local_ip = ""
-        parts = link_out.split()
-        for i, part in enumerate(parts):
-            if part == "id" and i + 1 < len(parts):
-                try:
-                    vni = int(parts[i + 1])
-                except ValueError:
-                    pass
-            elif part == "remote" and i + 1 < len(parts):
-                remote_ip = parts[i + 1]
-            elif part == "local" and i + 1 < len(parts):
-                local_ip = parts[i + 1]
-
-        return vni, remote_ip, local_ip
+        """Read VNI/remote/local from a Linux VXLAN device."""
+        return await _read_vxlan_link_info_impl(interface_name)
 
     def __init__(self):
         self._docker: docker.DockerClient | None = None
@@ -290,7 +277,7 @@ class OverlayManager:
 
     async def _ip_link_exists(self, name: str) -> bool:
         """Check if a network interface exists."""
-        return await _shared_ip_link_exists(name)
+        return await _ip_link_exists_impl(name)
 
     async def _ovs_port_exists(self, port_name: str) -> bool:
         """Check if an OVS port exists on the bridge."""
@@ -310,170 +297,19 @@ class OverlayManager:
         vlan_tag: int | None = None,
         tenant_mtu: int = 0,
     ) -> None:
-        """Create a Linux VXLAN device with nopmtudisc and add it to OVS.
-
-        Uses Linux VXLAN devices instead of OVS-managed VXLAN ports so that
-        nopmtudisc disables all PMTUD checking on the tunnel. This allows
-        inner packets to pass through at full MTU while the kernel handles
-        outer packet fragmentation transparently.
-
-        Args:
-            name: Interface name for the VXLAN device
-            vni: VXLAN Network Identifier
-            local_ip: Local IP for VXLAN endpoint
-            remote_ip: Remote IP for VXLAN endpoint
-            bridge: OVS bridge name to add the port to
-            vlan_tag: Optional VLAN tag (access mode) or None (trunk mode)
-            tenant_mtu: API-supplied overlay MTU (0 = use agent default)
-
-        Raises:
-            RuntimeError: If device creation fails
-        """
-        # Create Linux VXLAN device with df unset to allow outer fragmentation
-        code, _, stderr = await self._run_cmd([
-            "ip", "link", "add", name, "type", "vxlan",
-            "id", str(vni), "local", local_ip, "remote", remote_ip,
-            "dstport", str(VXLAN_PORT), "df", "unset",
-        ])
-        if code != 0 and "already exists" in (stderr or ""):
-            # Stale Linux device from a previous failed cleanup — delete and retry
-            logger.warning(f"VXLAN device {name} already exists, deleting stale device and retrying")
-            await self._run_cmd(["ip", "link", "delete", name])
-            code, _, stderr = await self._run_cmd([
-                "ip", "link", "add", name, "type", "vxlan",
-                "id", str(vni), "local", local_ip, "remote", remote_ip,
-                "dstport", str(VXLAN_PORT), "df", "unset",
-            ])
-        if code != 0:
-            raise RuntimeError(f"Failed to create VXLAN device {name}: {stderr}")
-
-        # Set MTU to desired overlay/tenant MTU (not local_mtu which is for veth pairs)
-        # Priority: API-supplied tenant_mtu > agent config overlay_mtu > 1500 fallback
-        # With df=unset, the kernel fragments oversized outer packets transparently,
-        # so the VXLAN device can advertise the full tenant MTU (e.g. 1500) even when
-        # the underlay path MTU is also 1500. This hides fragmentation from the overlay.
-        vxlan_mtu = tenant_mtu if tenant_mtu > 0 else (settings.overlay_mtu if settings.overlay_mtu > 0 else 1500)
-        await self._run_cmd(["ip", "link", "set", name, "mtu", str(vxlan_mtu)])
-
-        # Bring device up
-        await self._run_cmd(["ip", "link", "set", name, "up"])
-
-        # Add to OVS bridge as a system port
-        if vlan_tag is not None:
-            code, _, stderr = await self._ovs_vsctl(
-                "add-port", bridge, name, f"tag={vlan_tag}",
-            )
-        else:
-            code, _, stderr = await self._ovs_vsctl(
-                "add-port", bridge, name,
-            )
-        if code != 0:
-            # Clean up the device on failure
-            await self._run_cmd(["ip", "link", "delete", name])
-            raise RuntimeError(f"Failed to add VXLAN device {name} to OVS: {stderr}")
+        """Create a Linux VXLAN device with nopmtudisc and add it to OVS."""
+        await _create_vxlan_device_impl(
+            name=name, vni=vni, local_ip=local_ip, remote_ip=remote_ip,
+            bridge=bridge, vlan_tag=vlan_tag, tenant_mtu=tenant_mtu,
+        )
 
     async def _delete_vxlan_device(self, name: str, bridge: str) -> None:
-        """Remove a VXLAN device from OVS and delete the Linux interface.
-
-        Args:
-            name: Interface name of the VXLAN device
-            bridge: OVS bridge name to remove the port from
-        """
-        await self._ovs_vsctl("--if-exists", "del-port", bridge, name)
-        # Linux VXLAN devices added as system ports aren't auto-deleted
-        await self._run_cmd(["ip", "link", "delete", name])
+        """Remove a VXLAN device from OVS and delete the Linux interface."""
+        await _delete_vxlan_device_impl(name, bridge)
 
     async def _discover_path_mtu(self, remote_ip: str) -> int:
-        """Discover the path MTU to a remote IP address.
-
-        Uses ping with DF (Don't Fragment) bit set to find the maximum
-        MTU that works on the path. Starts with jumbo frame size and
-        does binary search down to find working MTU.
-
-        Args:
-            remote_ip: Target IP address to test
-
-        Returns:
-            Discovered path MTU, or 0 if discovery fails (use fallback)
-        """
-        # Check cache first
-        if remote_ip in self._mtu_cache:
-            cached = self._mtu_cache[remote_ip]
-            logger.debug(f"Using cached MTU {cached} for {remote_ip}")
-            return cached
-
-        # MTU candidates to test (common values)
-        # Start high and work down - most infrastructure supports at least 1500
-        test_mtus = [9000, 4000, 1500]
-
-        # Use data plane IP as source for MTU discovery pings when available
-        from agent.network.transport import get_data_plane_ip
-        dp_ip = get_data_plane_ip()
-
-        async def test_mtu(mtu: int) -> bool:
-            """Test if a specific MTU works."""
-            # Payload = MTU - 20 (IP header) - 8 (ICMP header)
-            payload_size = mtu - 28
-            if payload_size < 0:
-                return False
-
-            try:
-                ping_args = [
-                    "ping",
-                    "-M", "do",  # Don't fragment
-                    "-c", "1",  # Single ping
-                    "-W", "2",  # 2 second timeout
-                    "-s", str(payload_size),
-                ]
-                if dp_ip:
-                    ping_args.extend(["-I", dp_ip])
-                ping_args.append(remote_ip)
-
-                process = await asyncio.create_subprocess_exec(
-                    *ping_args,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
-                )
-                stdout, stderr = await asyncio.wait_for(
-                    process.communicate(),
-                    timeout=5.0,
-                )
-
-                if process.returncode == 0:
-                    return True
-
-                # Check for fragmentation error (MTU too large)
-                combined = stdout.decode() + stderr.decode()
-                if "message too long" in combined.lower() or "frag needed" in combined.lower():
-                    return False
-
-                # Other errors (host unreachable, etc.)
-                return False
-
-            except asyncio.TimeoutError:
-                return False
-            except Exception as e:
-                logger.debug(f"MTU test error for {remote_ip} at {mtu}: {e}")
-                return False
-
-        # Test each MTU candidate
-        discovered_mtu = 0
-        for mtu in test_mtus:
-            logger.debug(f"Testing MTU {mtu} to {remote_ip}")
-            if await test_mtu(mtu):
-                discovered_mtu = mtu
-                logger.info(f"Path MTU to {remote_ip}: {mtu} bytes")
-                break
-
-        if discovered_mtu == 0:
-            logger.warning(
-                f"MTU discovery failed for {remote_ip}, will use fallback overlay_mtu={settings.overlay_mtu}"
-            )
-        else:
-            # Cache the result
-            self._mtu_cache[remote_ip] = discovered_mtu
-
-        return discovered_mtu
+        """Discover the path MTU to a remote IP address."""
+        return await _discover_path_mtu_impl(remote_ip, self._mtu_cache)
 
     def _vni_to_vlan(self, vni: int) -> int:
         """Convert VNI to a VLAN tag for OVS isolation."""
@@ -1506,89 +1342,8 @@ class OverlayManager:
         return result
 
     async def recover_link_tunnels(self) -> int:
-        """Recover link tunnel tracking from local cache or OVS state on startup.
-
-        Tries local declared-state cache first (provides real link IDs).
-        Falls back to OVS port scan if no cache (placeholder link IDs).
-
-        Returns:
-            Number of link tunnels recovered
-        """
-        # Try cache-based recovery first (has real link_ids)
-        cached = await self.load_declared_state_cache()
-        if cached:
-            try:
-                result = await self.declare_state(cached)
-                cache_recovered = sum(
-                    1 for r in result["results"]
-                    if r["status"] in ("converged", "created", "updated")
-                )
-                if cache_recovered > 0:
-                    logger.info(
-                        f"Recovered {cache_recovered} link tunnel(s) from declared-state cache"
-                    )
-                    return cache_recovered
-            except Exception as e:
-                logger.warning(f"Cache-based recovery failed, falling back to OVS scan: {e}")
-
-        # Fallback: scan OVS ports (placeholder link_ids)
-        recovered = 0
-        try:
-            code, stdout, _ = await self._ovs_vsctl(
-                "list-ports", self._bridge_name
-            )
-            if code != 0:
-                return 0
-
-            port_names = [
-                p.strip() for p in stdout.strip().split("\n")
-                if p.strip().startswith("vxlan-")
-            ]
-
-            for port_name in port_names:
-                # Read VLAN tag from OVS
-                code, tag_out, _ = await self._ovs_vsctl(
-                    "get", "port", port_name, "tag"
-                )
-                local_vlan = 0
-                if code == 0:
-                    tag_str = tag_out.strip()
-                    if tag_str and tag_str != "[]":
-                        try:
-                            local_vlan = int(tag_str)
-                        except ValueError:
-                            pass
-
-                # Read VNI, remote IP, local IP from Linux VXLAN device
-                vni, remote_ip, local_ip = await self._read_vxlan_link_info(port_name)
-
-                if not vni or not remote_ip:
-                    continue
-
-                # We can't recover link_id or lab_id from the hash-based name,
-                # so use the port name as a placeholder link_id. The API will
-                # overwrite with the real link_id on the next attach-link call.
-                tunnel = LinkTunnel(
-                    link_id=port_name,
-                    vni=vni,
-                    local_ip=local_ip,
-                    remote_ip=remote_ip,
-                    local_vlan=local_vlan,
-                    interface_name=port_name,
-                    lab_id="recovered",
-                    tenant_mtu=settings.overlay_mtu,
-                )
-                self._link_tunnels[port_name] = tunnel
-                recovered += 1
-
-            if recovered > 0:
-                logger.info(
-                    f"Recovered {recovered} link tunnel(s) from OVS state"
-                )
-        except Exception as e:
-            logger.warning(f"Link tunnel recovery failed: {e}")
-
-        return recovered
+        """Recover link tunnel tracking from local cache or OVS state on startup."""
+        return await _recover_link_tunnels_impl(self)
 
     async def get_tunnels_for_lab(self, lab_id: str) -> list[VxlanTunnel]:
         """Get all tunnels for a lab."""
@@ -1625,179 +1380,7 @@ class OverlayManager:
         Returns:
             Dict with "results" list and "orphans_removed" list
         """
-        await self._ensure_ovs_bridge()
-
-        results = []
-        orphans_removed = []
-        declared_labs_set = set(declared_labs or [])
-        declared_port_names = set()
-
-        # Batch read all OVS port state
-        ovs_ports = await self._batch_read_ovs_ports()
-
-        for t in tunnels:
-            link_id = t["link_id"]
-            lab_id = t["lab_id"]
-            vni = t["vni"]
-            local_ip = t["local_ip"]
-            remote_ip = t["remote_ip"]
-            expected_vlan = t["expected_vlan"]
-            port_name = t["port_name"]
-            mtu = t.get("mtu", 0)
-
-            declared_labs_set.add(lab_id)
-            declared_port_names.add(port_name)
-
-            try:
-                port_info = ovs_ports.get(port_name)
-
-                if port_info:
-                    # Port exists — check if it needs updating
-                    current_tag = port_info.get("tag", 0)
-                    if current_tag == expected_vlan and expected_vlan > 0:
-                        # Already converged
-                        status = "converged"
-                    elif expected_vlan > 0:
-                        # Update VLAN tag
-                        await self._ovs_vsctl(
-                            "set", "port", port_name, f"tag={expected_vlan}"
-                        )
-                        status = "updated"
-                        logger.info(
-                            f"Declare-state: updated {port_name} tag "
-                            f"{current_tag} -> {expected_vlan}"
-                        )
-                    else:
-                        status = "converged"
-
-                    # Enforce MTU on existing port
-                    if mtu > 0:
-                        try:
-                            rc, stdout, _ = await self._run_cmd(
-                                ["ip", "link", "show", port_name],
-                            )
-                            if rc == 0:
-                                mtu_match = re.search(r"mtu (\d+)", stdout)
-                                current_mtu = int(mtu_match.group(1)) if mtu_match else 0
-                                if current_mtu != mtu:
-                                    await self._run_cmd(
-                                        ["ip", "link", "set", port_name, "mtu", str(mtu)]
-                                    )
-                                    if status == "converged":
-                                        status = "updated"
-                                    logger.info(
-                                        f"Declare-state: updated {port_name} MTU "
-                                        f"{current_mtu} -> {mtu}"
-                                    )
-                        except Exception as e:
-                            logger.warning(f"MTU enforcement failed for {port_name}: {e}")
-
-                    # Update in-memory tracking with real link_id
-                    self._link_tunnels[link_id] = LinkTunnel(
-                        link_id=link_id,
-                        vni=vni,
-                        local_ip=local_ip,
-                        remote_ip=remote_ip,
-                        local_vlan=expected_vlan,
-                        interface_name=port_name,
-                        lab_id=lab_id,
-                        tenant_mtu=mtu if mtu > 0 else settings.overlay_mtu,
-                    )
-
-                    results.append({
-                        "link_id": link_id,
-                        "lab_id": lab_id,
-                        "status": status,
-                        "actual_vlan": expected_vlan if status != "converged" else current_tag,
-                    })
-                else:
-                    # Port missing — create it
-                    tenant_mtu = mtu if mtu > 0 else (
-                        settings.overlay_mtu if settings.overlay_mtu > 0 else 1500
-                    )
-
-                    # Clean up any leftover Linux interface
-                    if await self._ip_link_exists(port_name):
-                        await self._run_cmd(["ip", "link", "delete", port_name])
-
-                    await self._create_vxlan_device(
-                        name=port_name,
-                        vni=vni,
-                        local_ip=local_ip,
-                        remote_ip=remote_ip,
-                        bridge=self._bridge_name,
-                        vlan_tag=expected_vlan if expected_vlan > 0 else None,
-                        tenant_mtu=tenant_mtu,
-                    )
-
-                    self._link_tunnels[link_id] = LinkTunnel(
-                        link_id=link_id,
-                        vni=vni,
-                        local_ip=local_ip,
-                        remote_ip=remote_ip,
-                        local_vlan=expected_vlan,
-                        interface_name=port_name,
-                        lab_id=lab_id,
-                        tenant_mtu=tenant_mtu,
-                    )
-
-                    results.append({
-                        "link_id": link_id,
-                        "lab_id": lab_id,
-                        "status": "created",
-                        "actual_vlan": expected_vlan,
-                    })
-                    logger.info(
-                        f"Declare-state: created {port_name} "
-                        f"(VNI {vni}, VLAN {expected_vlan}) to {remote_ip}"
-                    )
-
-            except Exception as e:
-                results.append({
-                    "link_id": link_id,
-                    "lab_id": lab_id,
-                    "status": "error",
-                    "error": str(e),
-                })
-                logger.error(f"Declare-state error for {port_name}: {e}")
-
-        # Orphan cleanup: for declared labs only, delete vxlan-* ports
-        # not in the declared set
-        if declared_labs_set:
-            for port_name, port_info in ovs_ports.items():
-                if port_name in declared_port_names:
-                    continue
-                if not port_name.startswith("vxlan-"):
-                    continue
-                # Skip untracked ports to keep cleanup conservative.
-                lt_for_port = next(
-                    (lt for lt in self._link_tunnels.values()
-                     if lt.interface_name == port_name),
-                    None,
-                )
-                if not lt_for_port:
-                    continue
-                if lt_for_port.lab_id not in declared_labs_set:
-                    continue  # Skip ports from non-declared labs
-
-                try:
-                    await self._delete_vxlan_device(port_name, self._bridge_name)
-                    orphans_removed.append(port_name)
-                    # Remove from tracking
-                    keys_to_remove = [
-                        k for k, v in self._link_tunnels.items()
-                        if v.interface_name == port_name
-                    ]
-                    for k in keys_to_remove:
-                        del self._link_tunnels[k]
-                    logger.info(f"Declare-state: removed orphan {port_name}")
-                except Exception as e:
-                    logger.warning(f"Failed to remove orphan {port_name}: {e}")
-
-        # Write local cache
-        await self._write_declared_state_cache(tunnels)
-
-        return {"results": results, "orphans_removed": orphans_removed}
+        return await _declare_state_impl(self, tunnels, declared_labs)
 
     async def _batch_read_ovs_ports(self) -> dict[str, dict[str, Any]]:
         """Read all OVS port state in a single call.
@@ -1805,61 +1388,11 @@ class OverlayManager:
         Returns:
             Dict mapping port_name -> {tag, type, options}
         """
-        result = {}
-        code, stdout, _ = await self._ovs_vsctl("list-ports", self._bridge_name)
-        if code != 0:
-            return result
-
-        port_names = [p.strip() for p in stdout.strip().split("\n") if p.strip()]
-
-        for port_name in port_names:
-            if not port_name.startswith("vxlan"):
-                continue
-
-            info: dict[str, Any] = {"name": port_name}
-
-            # Read tag
-            code, tag_out, _ = await self._ovs_vsctl("get", "port", port_name, "tag")
-            if code == 0:
-                tag_str = tag_out.strip()
-                if tag_str and tag_str != "[]":
-                    try:
-                        info["tag"] = int(tag_str)
-                    except ValueError:
-                        info["tag"] = 0
-                else:
-                    info["tag"] = 0
-            else:
-                info["tag"] = 0
-
-            # Read interface type
-            code, type_out, _ = await self._ovs_vsctl("get", "interface", port_name, "type")
-            if code == 0:
-                info["type"] = type_out.strip().strip('"')
-
-            result[port_name] = info
-
-        return result
+        return await _batch_read_ovs_ports_impl(self._bridge_name)
 
     async def _write_declared_state_cache(self, tunnels: list[dict[str, Any]]) -> None:
         """Write declared state to local cache for API-less recovery."""
-        try:
-            from datetime import datetime, timezone
-
-            cache_path = Path(settings.workspace_path) / "declared_overlay_state.json"
-            cache_path.parent.mkdir(parents=True, exist_ok=True)
-
-            cache_data = {
-                "declared_at": datetime.now(timezone.utc).isoformat(),
-                "tunnels": tunnels,
-            }
-
-            tmp_path = cache_path.with_suffix(".tmp")
-            with open(tmp_path, "w") as f:
-                json.dump(cache_data, f, indent=2)
-            tmp_path.rename(cache_path)
-        except Exception as e:
-            logger.warning(f"Failed to write declared state cache: {e}")
+        await _write_declared_state_cache_impl(tunnels)
 
     async def load_declared_state_cache(self) -> list[dict[str, Any]] | None:
         """Load declared state from local cache for recovery.
@@ -1867,27 +1400,7 @@ class OverlayManager:
         Returns:
             List of tunnel dicts if cache exists and is valid, None otherwise
         """
-        try:
-            cache_path = Path(settings.workspace_path) / "declared_overlay_state.json"
-            if not cache_path.exists():
-                return None
-
-            with open(cache_path, "r") as f:
-                cache_data = json.load(f)
-
-            tunnels = cache_data.get("tunnels")
-            if not tunnels:
-                return None
-
-            declared_at = cache_data.get("declared_at", "")
-            logger.info(
-                f"Loaded declared state cache with {len(tunnels)} tunnels "
-                f"(declared at {declared_at})"
-            )
-            return tunnels
-        except Exception as e:
-            logger.warning(f"Failed to load declared state cache: {e}")
-            return None
+        return await _load_declared_state_cache_impl()
 
     def get_tunnel_status(self) -> dict[str, Any]:
         """Get status of all tunnels for debugging/monitoring."""

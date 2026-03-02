@@ -29,7 +29,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -37,7 +36,7 @@ from pathlib import Path
 from typing import Any
 
 import docker
-from docker.errors import NotFound, APIError, DockerException, ImageNotFound
+from docker.errors import NotFound, APIError, ImageNotFound
 from docker.types import IPAMConfig
 
 from agent.config import settings
@@ -58,13 +57,31 @@ from agent.providers.base import (
 from agent.schemas import DeployTopology
 from agent.vendors import (
     get_config_by_device,
-    get_config_extraction_settings,
     get_console_credentials,
     get_console_method,
-    get_container_config,
     get_console_shell,
     is_ceos_kind,
     is_cjunos_kind,
+)
+from agent.providers.docker_setup import (
+    setup_ceos_directories,
+    setup_cjunos_directories,
+    validate_images,
+    create_container_config,
+    calculate_required_interfaces,
+    count_node_interfaces,
+)
+from agent.providers.docker_config_extract import (
+    extract_all_container_configs,
+    extract_config_via_docker,
+    extract_config_via_ssh,
+    extract_config_via_nvram,
+)
+from agent.providers.docker_networks import (
+    create_lab_networks as _create_lab_networks_impl,
+    delete_lab_networks as _delete_lab_networks_impl,
+    recover_stale_networks as _recover_stale_networks_impl,
+    prune_legacy_lab_networks as _prune_legacy_lab_networks_impl,
 )
 
 
@@ -251,66 +268,6 @@ class ParsedTopology:
         if node:
             return node.log_name()
         return node_name
-
-
-def _parse_iol_nvram(data: bytes) -> str | None:
-    """Parse an IOL NVRAM binary file and extract the startup config.
-
-    IOL NVRAM format:
-    - Binary header (variable length, typically 76+ bytes)
-    - The config is stored as plain text after a header section
-    - Config starts after the binary preamble and ends at a null byte or EOF
-    - Multiple config sections may exist; we want the startup-config
-
-    The header contains magic bytes and size fields. We search for the
-    config section which starts with known IOS config patterns.
-    """
-    if not data or len(data) < 64:
-        return None
-
-    # Strategy: find the first occurrence of a typical IOS config line
-    # IOL NVRAM stores configs as plain ASCII text after binary headers
-    config_markers = [
-        b"\nversion ",
-        b"\nhostname ",
-        b"\nno service ",
-        b"\nservice ",
-        b"\n!\n",
-    ]
-
-    earliest_pos = len(data)
-    for marker in config_markers:
-        pos = data.find(marker)
-        if pos != -1 and pos < earliest_pos:
-            earliest_pos = pos
-
-    if earliest_pos >= len(data):
-        return None
-
-    # Back up to include the marker's leading newline
-    config_start = earliest_pos + 1  # skip the leading \n
-
-    # Find config end: look for null bytes or the "end" marker
-    config_bytes = data[config_start:]
-
-    # Trim at first null byte (binary data after config)
-    null_pos = config_bytes.find(b"\x00")
-    if null_pos != -1:
-        config_bytes = config_bytes[:null_pos]
-
-    # Decode as ASCII, ignoring errors from any remaining binary
-    config_text = config_bytes.decode("ascii", errors="ignore")
-
-    # Trim to the last "end" statement if present
-    end_pos = config_text.rfind("\nend")
-    if end_pos != -1:
-        config_text = config_text[: end_pos + 4]  # include "end"
-
-    config_text = config_text.strip()
-    if len(config_text) < 10:
-        return None
-
-    return config_text
 
 
 class DockerProvider(Provider, VlanPersistenceMixin):
@@ -804,28 +761,7 @@ class DockerProvider(Provider, VlanPersistenceMixin):
 
         Returns list of (node_name, image) tuples for missing images.
         """
-        missing = []
-        for node_name, node in topology.nodes.items():
-            # Get effective image
-            config = get_config_by_device(node.kind)
-            image = node.image or (config.default_image if config else None)
-            if not image:
-                continue
-
-            # File-based images (qcow2/img) — check filesystem, not Docker
-            if image.startswith("/") or image.endswith((".qcow2", ".img", ".iol")):
-                if not os.path.exists(image):
-                    missing.append((node_name, image))
-                continue
-
-            try:
-                self.docker.images.get(image)
-            except ImageNotFound:
-                missing.append((node_name, image))
-            except APIError as e:
-                logger.warning(f"Error checking image {image}: {e}")
-
-        return missing
+        return validate_images(topology, self.docker)
 
     def _create_container_config(
         self,
@@ -836,138 +772,16 @@ class DockerProvider(Provider, VlanPersistenceMixin):
     ) -> dict[str, Any]:
         """Build Docker container configuration for a node.
 
-        Args:
-            node: The topology node configuration
-            lab_id: Lab identifier
-            workspace: Path to lab workspace
-            interface_count: Number of interfaces this node has (for cEOS CLAB_INTFS)
-
         Returns a dict suitable for docker.containers.create().
         """
-        # Get vendor config
-        runtime_config = get_container_config(
-            device=node.kind,
-            node_name=node.name,
-            image=node.image,
-            workspace=str(workspace),
+        return create_container_config(
+            node=node,
+            lab_id=lab_id,
+            workspace=workspace,
+            interface_count=interface_count,
+            provider_name=self.name,
+            container_name_func=self._container_name,
         )
-
-        # Merge environment variables (topology overrides vendor defaults)
-        env = dict(runtime_config.environment)
-        env.update(node.env)
-
-        # Build labels
-        labels = {
-            LABEL_LAB_ID: lab_id,
-            LABEL_NODE_NAME: node.name,
-            LABEL_NODE_KIND: node.kind,
-            LABEL_PROVIDER: self.name,
-        }
-        if interface_count and interface_count > 0:
-            labels[LABEL_NODE_INTERFACE_COUNT] = str(interface_count)
-        if node.display_name:
-            labels[LABEL_NODE_DISPLAY_NAME] = node.display_name
-        if node.readiness_probe:
-            labels[LABEL_NODE_READINESS_PROBE] = node.readiness_probe
-        if node.readiness_pattern:
-            labels[LABEL_NODE_READINESS_PATTERN] = node.readiness_pattern
-        if node.readiness_timeout and node.readiness_timeout > 0:
-            labels[LABEL_NODE_READINESS_TIMEOUT] = str(node.readiness_timeout)
-
-        # Process binds from runtime config and node-specific binds
-        binds = list(runtime_config.binds)
-        binds.extend(node.binds)
-
-        # Build container configuration
-        # Note: network_mode is NOT set here - it's handled dynamically in
-        # _create_containers based on whether OVS plugin is enabled.
-        config: dict[str, Any] = {
-            "image": runtime_config.image,
-            "name": self._container_name(lab_id, node.name),
-            "hostname": runtime_config.hostname,
-            "environment": env,
-            "labels": labels,
-            "detach": True,
-            "tty": True,
-            "stdin_open": True,
-            # Don't auto-restart — agent manages lifecycle via deploy/destroy.
-            # "unless-stopped" races the OVS plugin socket on host reboot.
-            "restart_policy": {"Name": "no"},
-        }
-
-        # Capabilities
-        if runtime_config.capabilities:
-            config["cap_add"] = runtime_config.capabilities
-
-        # Privileged mode
-        if runtime_config.privileged:
-            config["privileged"] = True
-
-        # Use host cgroup namespace to enable stats collection on cgroups v2
-        # Without this, Docker can't read cgroup stats for containers that run
-        # their own init system (like cEOS) due to cgroup namespace isolation
-        config["cgroupns"] = "host"
-
-        # Volume binds
-        if binds:
-            config["volumes"] = {}
-            for bind in binds:
-                if ":" in bind:
-                    host_path, container_path = bind.split(":", 1)
-                    # Handle read-only mounts
-                    ro = False
-                    if container_path.endswith(":ro"):
-                        container_path = container_path[:-3]
-                        ro = True
-                    config["volumes"][host_path] = {
-                        "bind": container_path,
-                        "mode": "ro" if ro else "rw",
-                    }
-
-        # Sysctls
-        if runtime_config.sysctls:
-            config["sysctls"] = runtime_config.sysctls
-
-        # Entry command - ensure entrypoint is a list for Docker SDK
-        # For cEOS, we wrap the init process with if-wait.sh to wait for interfaces
-        # before starting init - this prevents the platform detection race condition.
-        # interface_count comes from the controller's UI-configured port count,
-        # ensuring the device sees all ports at boot (not just linked ones).
-        if is_ceos_kind(node.kind) and interface_count > 0:
-            # Set CLAB_INTFS so the if-wait.sh script knows how many interfaces to wait for
-            config["environment"]["CLAB_INTFS"] = str(interface_count)
-
-            # Use bash wrapper to run if-wait.sh before /sbin/init
-            # The script is created in flash dir by _ensure_directories()
-            config["entrypoint"] = ["/bin/bash", "-c"]
-            config["command"] = ["/mnt/flash/if-wait.sh ; exec /sbin/init"]
-            logger.debug(f"cEOS {node.name}: using if-wait.sh wrapper with CLAB_INTFS={interface_count}")
-        elif runtime_config.entrypoint:
-            # Docker SDK expects entrypoint as a list
-            if isinstance(runtime_config.entrypoint, str):
-                config["entrypoint"] = [runtime_config.entrypoint]
-            else:
-                config["entrypoint"] = runtime_config.entrypoint
-
-        if runtime_config.cmd and "command" not in config:
-            config["command"] = runtime_config.cmd
-
-        # Ensure at least one of entrypoint or command is set
-        # Some images (like cEOS) have ENTRYPOINT [] which clears defaults
-        if "entrypoint" not in config and "command" not in config:
-            config["command"] = ["sleep", "infinity"]
-
-        # Apply CPU limit as a cgroup quota.
-        # Interpret cpu_limit as a percentage of the requested vCPU count
-        # (or 1 vCPU when no explicit CPU count is provided).
-        if node.cpu_limit is not None:
-            limit_pct = max(1, min(100, int(node.cpu_limit)))
-            vcpus = node.cpu if node.cpu and node.cpu > 0 else 1
-            nano_cpus = int((vcpus * limit_pct / 100.0) * 1_000_000_000)
-            if nano_cpus > 0:
-                config["nano_cpus"] = nano_cpus
-
-        return config
 
     def _setup_ceos_directories(
         self,
@@ -979,80 +793,7 @@ class DockerProvider(Provider, VlanPersistenceMixin):
 
         This is a blocking operation meant to run in asyncio.to_thread().
         """
-        import shutil
-
-        flash_dir = workspace / "configs" / node_name / "flash"
-        flash_dir.mkdir(parents=True, exist_ok=True)
-        logger.debug(f"Created flash directory: {flash_dir}")
-
-        # Create systemd environment config for cEOS
-        # This is needed because systemd services don't inherit
-        # Docker container environment variables
-        systemd_dir = workspace / "configs" / node_name / "systemd"
-        systemd_dir.mkdir(parents=True, exist_ok=True)
-        env_file = systemd_dir / "ceos-env.conf"
-        env_file.write_text(
-            "[Manager]\n"
-            "DefaultEnvironment=EOS_PLATFORM=ceoslab CEOS=1 "
-            "container=docker ETBA=1 SKIP_ZEROTOUCH_BARRIER_IN_SYSDBINIT=1 "
-            "INTFTYPE=eth MGMT_INTF=eth0 CEOS_NOZEROTOUCH=1\n"
-        )
-        logger.debug(f"Created cEOS systemd env config: {env_file}")
-
-        # Write startup-config to flash directory
-        # cEOS reads startup-config from /mnt/flash/startup-config
-        startup_config_path = flash_dir / "startup-config"
-
-        # Check for existing startup-config in configs/{node}/startup-config
-        # (this is where extracted configs are saved)
-        extracted_config = workspace / "configs" / node_name / "startup-config"
-
-        if node.startup_config:
-            # Use startup-config from topology YAML
-            startup_config_path.write_text(node.startup_config)
-            logger.debug(f"Wrote startup-config from topology for {node.log_name()}")
-        elif extracted_config.exists():
-            # Copy previously extracted config to flash
-            shutil.copy2(extracted_config, startup_config_path)
-            logger.debug(f"Copied extracted startup-config for {node.log_name()}")
-        elif not startup_config_path.exists():
-            # Create minimal startup-config with essential initialization
-            # Use display_name for hostname if available, otherwise node_name
-            hostname = node.display_name or node_name
-            minimal_config = f"""! Minimal cEOS startup config
-hostname {hostname}
-!
-no aaa root
-!
-username admin privilege 15 role network-admin nopassword
-!
-! Remove iptables DROP rules on data interfaces at boot.
-! EOS adds per-interface DROP rules in the EOS_FORWARD chain
-! which block forwarding until the forwarding agent is ready.
-! In a lab environment these rules are unnecessary and cause
-! connectivity issues.
-event-handler IPTABLES_CLEANUP
-   trigger on-boot
-   action bash for i in $(seq 1 64); do iptables -D EOS_FORWARD -i eth$i -j DROP 2>/dev/null; done
-!
-"""
-            startup_config_path.write_text(minimal_config)
-            logger.debug(f"Created minimal startup-config for {node.log_name()}")
-
-        # Create zerotouch-config to disable ZTP
-        # This file's presence tells cEOS to skip Zero Touch Provisioning
-        zerotouch_config = flash_dir / "zerotouch-config"
-        if not zerotouch_config.exists():
-            zerotouch_config.write_text("DISABLE=True\n")
-            logger.debug(f"Created zerotouch-config for {node.log_name()}")
-
-        # Create if-wait.sh script to wait for interfaces before boot
-        # This prevents the platform detection race where Ark.getPlatform()
-        # returns None because init runs before interfaces are ready
-        if_wait_script = flash_dir / "if-wait.sh"
-        if_wait_script.write_text(IF_WAIT_SCRIPT)
-        if_wait_script.chmod(0o755)
-        logger.debug(f"Created if-wait.sh for {node.log_name()}")
+        setup_ceos_directories(node_name, node, workspace)
 
     def _setup_cjunos_directories(
         self,
@@ -1062,30 +803,9 @@ event-handler IPTABLES_CLEANUP
     ) -> None:
         """Set up cJunOS directories and startup config.
 
-        cJunOS reads startup config from /config/startup-config.cfg when
-        the /config directory is bind-mounted into the container.
-
         This is a blocking operation meant to run in asyncio.to_thread().
         """
-        import shutil
-
-        config_dir = workspace / "configs" / node_name / "config"
-        config_dir.mkdir(parents=True, exist_ok=True)
-        logger.debug(f"Created cJunOS config directory: {config_dir}")
-
-        startup_config_path = config_dir / "startup-config.cfg"
-
-        # Check for existing extracted config
-        extracted_config = workspace / "configs" / node_name / "startup-config"
-
-        if node.startup_config:
-            startup_config_path.write_text(node.startup_config)
-            logger.debug(f"Wrote startup-config from topology for {node.log_name()}")
-        elif extracted_config.exists():
-            shutil.copy2(extracted_config, startup_config_path)
-            logger.debug(f"Copied extracted startup-config for {node.log_name()}")
-        else:
-            logger.debug(f"No startup-config for {node.log_name()}, booting with factory defaults")
+        setup_cjunos_directories(node_name, node, workspace)
 
     async def _ensure_directories(
         self,
@@ -1123,72 +843,18 @@ event-handler IPTABLES_CLEANUP
     def _calculate_required_interfaces(self, topology: ParsedTopology) -> int:
         """Calculate the maximum interface index needed for pre-provisioning.
 
-        Strategy:
-        - The controller sends per-node interface_count based on the UI's
-          configured maxPorts (vendor defaults or overrides). We use those
-          counts to pre-provision interfaces before boot for devices like cEOS.
-          If a link references a higher interface, we raise the count so the
-          device still boots with that interface present.
-        - We size the lab's OVS networks to the maximum interface_count across
-          all nodes, and also consider any explicitly referenced link interfaces.
-        - Add a small buffer for flexibility when creating new links.
-
-        Args:
-            topology: Parsed topology with nodes and links
-
         Returns:
             Number of interfaces to create (max index found + buffer)
         """
-        max_index = 0
-
-        # Respect explicit interface counts (e.g., cross-host links not in topology.links)
-        for node in topology.nodes.values():
-            if node.interface_count and node.interface_count > max_index:
-                max_index = node.interface_count
-
-        for link in topology.links:
-            for endpoint in link.endpoints:
-                # Endpoint format: "node:eth1" or "node:Ethernet1"
-                if ":" in endpoint:
-                    _, interface = endpoint.split(":", 1)
-                    # Extract number from interface name (eth1, Ethernet1, etc.)
-                    import re
-                    match = re.search(r"(\d+)$", interface)
-                    if match:
-                        index = int(match.group(1))
-                        max_index = max(max_index, index)
-
-        # Add buffer of 4 interfaces for flexibility (connecting new links)
-        # Minimum of 4 interfaces even if no links defined
-        return max(max_index + 4, 4)
+        return calculate_required_interfaces(topology)
 
     def _count_node_interfaces(self, node_name: str, topology: ParsedTopology) -> int:
         """Count the number of interfaces connected to a specific node.
 
-        Args:
-            node_name: Name of the node
-            topology: Parsed topology with links
-
         Returns:
             Max interface index required for this node
         """
-        node = topology.nodes.get(node_name)
-        if node and node.interface_count:
-            return node.interface_count
-
-        max_index = 0
-
-        for link in topology.links:
-            for endpoint in link.endpoints:
-                if ":" in endpoint:
-                    ep_node, interface = endpoint.split(":", 1)
-                    if ep_node == node_name:
-                        # Extract interface number
-                        match = re.search(r"(\d+)$", interface)
-                        if match:
-                            max_index = max(max_index, int(match.group(1)))
-
-        return max_index
+        return count_node_interfaces(node_name, topology)
 
     async def _create_lab_networks(
         self,
@@ -1197,147 +863,18 @@ event-handler IPTABLES_CLEANUP
     ) -> dict[str, str]:
         """Create Docker networks for lab interfaces via OVS plugin.
 
-        Creates one network per interface (eth0, eth1, eth2, ..., ethN).
-        All networks share the same OVS bridge (arch-ovs).
-        eth0 is the management interface (wireable via hot_connect like data ports).
-
-        Args:
-            lab_id: Lab identifier
-            max_interfaces: Maximum number of data interfaces to create
-
         Returns:
             Dict mapping interface name (e.g., "eth0") to network name
         """
-        async with self._get_lab_network_lock(lab_id):
-            # Clean up any legacy lab networks that don't follow current naming/labels
-            await self._prune_legacy_lab_networks(lab_id)
-
-            networks: dict[str, str] = {}
-            errors: list[str] = []
-            lab_prefix = self._lab_network_prefix(lab_id)
-
-            for i in range(0, max_interfaces + 1):
-                interface_name = f"eth{i}"
-                network_name = f"{lab_prefix}-{interface_name}"
-
-                try:
-                    # If the network exists and matches expected config, reuse it.
-                    try:
-                        existing = await self._retry_docker_call(
-                            f"inspect network {network_name}",
-                            self.docker.networks.get,
-                            network_name,
-                        )
-                        if self._network_matches_lab_spec(existing, lab_id, interface_name):
-                            logger.debug(f"Network {network_name} already exists with expected config")
-                            networks[interface_name] = network_name
-                            continue
-
-                        await self._resolve_conflicting_lab_network(
-                            network_name,
-                            lab_id,
-                            interface_name,
-                        )
-                        networks[interface_name] = network_name
-                        continue
-                    except NotFound:
-                        pass
-
-                    try:
-                        await self._retry_docker_call(
-                            f"create network {network_name}",
-                            self.docker.networks.create,
-                            **self._lab_network_create_kwargs(network_name, lab_id, interface_name),
-                        )
-                    except APIError as create_err:
-                        if create_err.status_code == 409:
-                            action = await self._resolve_conflicting_lab_network(
-                                network_name,
-                                lab_id,
-                                interface_name,
-                            )
-                            logger.warning(
-                                f"Resolved network conflict for {network_name} via {action}"
-                            )
-                        else:
-                            raise
-
-                    networks[interface_name] = network_name
-                    logger.debug(f"Ensured network {network_name}")
-
-                except Exception as e:
-                    msg = f"Failed to ensure network {network_name}: {e}"
-                    errors.append(msg)
-                    logger.error(msg)
-
-            expected = max_interfaces + 1  # eth0 through ethN
-            if expected > 0 and len(networks) < expected:
-                missing = expected - len(networks)
-                err_detail = "; ".join(errors) if errors else "unknown error"
-                raise RuntimeError(
-                    f"Failed to create {missing}/{expected} Docker networks for lab {lab_id}: {err_detail}"
-                )
-
-            logger.info(f"Created {len(networks)} Docker networks for lab {lab_id}")
-            return networks
+        return await _create_lab_networks_impl(self, lab_id, max_interfaces)
 
     async def _delete_lab_networks(self, lab_id: str) -> int:
         """Delete all Docker networks for a lab.
 
-        Uses efficient query-first approach: lists networks matching the lab's
-        name prefix, then deletes only those that exist. Much faster than the
-        previous brute-force approach that tried 325 network names.
-
-        Args:
-            lab_id: Lab identifier
-
         Returns:
             Number of networks deleted
         """
-        deleted = 0
-
-        try:
-            await self._prune_legacy_lab_networks(lab_id)
-            # Query networks by label when possible (more reliable than name)
-            lab_networks = await self._retry_docker_call(
-                f"list networks for {lab_id} by label",
-                self.docker.networks.list,
-                filters={"label": f"{LABEL_LAB_ID}={lab_id}"},
-            )
-
-            # Fallback to name-based lookup for legacy networks without labels
-            if not lab_networks:
-                all_networks = await self._retry_docker_call(
-                    f"list all networks for {lab_id} fallback",
-                    self.docker.networks.list,
-                )
-                safe_prefix = self._lab_network_prefix(lab_id)
-                lab_prefixes = (f"{safe_prefix}-", f"{lab_id}-")
-                lab_networks = [
-                    n for n in all_networks
-                    if any(n.name.startswith(p) for p in lab_prefixes)
-                ]
-
-            for network in lab_networks:
-                try:
-                    await self._retry_docker_call(
-                        f"remove network {network.name}",
-                        network.remove,
-                    )
-                    deleted += 1
-                    logger.debug(f"Deleted network {network.name}")
-                except APIError as e:
-                    # Network might be in use or already deleted
-                    logger.warning(f"Failed to delete network {network.name}: {e}")
-                except Exception as e:
-                    logger.warning(f"Failed to delete network {network.name}: {e}")
-
-        except (APIError, DockerException) as e:
-            logger.warning(f"Failed to list networks for lab {lab_id}: {e}")
-
-        if deleted > 0:
-            logger.info(f"Deleted {deleted} Docker networks for lab {lab_id}")
-        return deleted
+        return await _delete_lab_networks_impl(self, lab_id)
 
     async def _attach_container_to_networks(
         self,
@@ -2664,180 +2201,13 @@ event-handler IPTABLES_CLEANUP
     ) -> bool:
         """Recover from stale network references by reconnecting to current lab networks.
 
-        When a lab is redeployed while a node is stopped, the old container may reference
-        Docker networks that no longer exist. This method:
-        1. Disconnects from all stale/missing networks
-        2. Reconnects to the current lab networks
-
         Returns True if recovery was attempted, False if no recovery was needed.
         """
-        container_name = container.name
-
-        # Get container's current network attachments
-        await asyncio.to_thread(container.reload)
-        networks = container.attrs.get("NetworkSettings", {}).get("Networks", {})
-
-        if not networks:
-            return False
-
-        # Find current lab networks (format: {safe_lab_id}-eth{N})
-        safe_prefix = self._lab_network_prefix(lab_id)
-        lab_prefix = f"{safe_prefix}-"
-        current_lab_networks = {}
-        try:
-            # Prefer label-based discovery for networks created by us
-            labeled = await asyncio.to_thread(
-                self.docker.networks.list,
-                filters={"label": f"{LABEL_LAB_ID}={lab_id}"},
-            )
-            for net in labeled:
-                current_lab_networks[net.name] = net
-
-            if not current_lab_networks:
-                all_networks = await asyncio.to_thread(self.docker.networks.list)
-                legacy_prefixes = (lab_prefix, f"{lab_id}-")
-                for net in all_networks:
-                    if any(net.name.startswith(p) for p in legacy_prefixes):
-                        current_lab_networks[net.name] = net
-        except Exception as e:
-            logger.warning(f"Failed to list networks: {e}")
-            return False
-
-        # Disconnect from all networks that are stale or no longer exist
-        networks_disconnected = []
-        for net_name in list(networks.keys()):
-            # Skip built-in networks
-            if net_name in ("bridge", "host", "none"):
-                continue
-
-            # Check if this is a lab network that no longer exists or has wrong ID
-            if net_name.startswith(lab_prefix) or net_name.startswith(lab_id):
-                try:
-                    # Try to get the network - if it doesn't exist, disconnect
-                    await asyncio.to_thread(self.docker.networks.get, net_name)
-                except NotFound:
-                    # Network doesn't exist, need to disconnect
-                    try:
-                        # Can't disconnect from non-existent network normally,
-                        # but we'll try anyway and catch the error
-                        logger.debug(f"Network {net_name} not found, will be cleaned up on start")
-                    except Exception:
-                        pass
-                    networks_disconnected.append(net_name)
-
-        # Now disconnect from ALL lab-related networks so we can reconnect cleanly
-        for net_name in list(networks.keys()):
-            if net_name in ("bridge", "host", "none"):
-                continue
-            if net_name.startswith(lab_prefix) or net_name.startswith(lab_id):
-                try:
-                    net = await asyncio.to_thread(self.docker.networks.get, net_name)
-                    await asyncio.to_thread(net.disconnect, container_name, force=True)
-                    logger.debug(f"Disconnected {container_name} from {net_name}")
-                    if net_name not in networks_disconnected:
-                        networks_disconnected.append(net_name)
-                except NotFound:
-                    pass  # Network already gone
-                except Exception as e:
-                    logger.debug(f"Could not disconnect from {net_name}: {e}")
-
-        if not networks_disconnected:
-            return False
-
-        logger.info(
-            f"Disconnected {container_name} from {len(networks_disconnected)} stale networks"
-        )
-
-        # Reconnect to current lab networks
-        desired_count: int | None = None
-        try:
-            labels = container.labels or {}
-            raw = labels.get(LABEL_NODE_INTERFACE_COUNT)
-            if raw:
-                desired_count = int(raw)
-        except Exception:
-            desired_count = None
-
-        # LABEL_NODE_INTERFACE_COUNT stores data-port count only.
-        # With mgmt on OVS, total attached = eth0 (mgmt) + reserved + data ports.
-        kind = (container.labels or {}).get(LABEL_NODE_KIND)
-        if kind and desired_count is not None:
-            vc = get_config_by_device(kind)
-            if vc and vc.management_interface:
-                desired_count = 1 + vc.reserved_nics + desired_count
-
-        def _iface_index(name: str) -> int:
-            match = re.search(r"(\d+)$", name)
-            return int(match.group(1)) if match else 0
-
-        sorted_networks = sorted(
-            current_lab_networks.items(),
-            key=lambda kv: _iface_index(kv[0]),
-        )
-        if desired_count is None:
-            desired_count = 1
-            logger.warning(
-                f"{container_name} missing interface_count label; "
-                "reconnecting only eth1 for safety"
-            )
-        sorted_networks = sorted_networks[:desired_count]
-
-        reconnected = 0
-        for net_name, net in sorted_networks:
-            try:
-                await asyncio.to_thread(net.connect, container_name)
-                reconnected += 1
-                logger.debug(f"Reconnected {container_name} to {net_name}")
-            except APIError as e:
-                if "already exists" in str(e).lower():
-                    reconnected += 1
-                else:
-                    logger.warning(f"Failed to reconnect to {net_name}: {e}")
-
-        logger.info(f"Reconnected {container_name} to {reconnected} lab networks")
-        return True
+        return await _recover_stale_networks_impl(self, container, lab_id)
 
     async def _prune_legacy_lab_networks(self, lab_id: str) -> int:
-        """Remove legacy lab networks that don't match current naming/labels.
-
-        Disconnects any attached containers before removing the network.
-        This cleans up networks created with truncated lab_id prefixes.
-        """
-        removed = 0
-        current_prefix, legacy_prefix = self._legacy_lab_network_prefixes(lab_id)
-        current_prefix = f"{current_prefix}-"
-        legacy_prefix = f"{legacy_prefix}-"
-
-        try:
-            all_networks = await asyncio.to_thread(self.docker.networks.list)
-            for net in all_networks:
-                name = net.name or ""
-                if name.startswith(current_prefix):
-                    continue
-                if not name.startswith(legacy_prefix):
-                    continue
-
-                # Legacy-named networks should be removed even if labeled —
-                # the current-format network is the canonical one.
-                # Disconnect any attached containers before removing
-                containers = net.attrs.get("Containers") or {}
-                for cid in containers:
-                    try:
-                        await asyncio.to_thread(net.disconnect, cid, force=True)
-                        logger.debug(f"Disconnected {cid[:12]} from legacy network {name}")
-                    except Exception:
-                        pass
-
-                try:
-                    await asyncio.to_thread(net.remove)
-                    removed += 1
-                    logger.info(f"Removed legacy lab network {name} for lab {lab_id}")
-                except Exception as e:
-                    logger.warning(f"Failed to remove legacy network {name}: {e}")
-        except Exception as e:
-            logger.warning(f"Legacy network prune failed for lab {lab_id}: {e}")
-
-        return removed
+        """Remove legacy lab networks that don't match current naming/labels."""
+        return await _prune_legacy_lab_networks_impl(self, lab_id)
 
     async def start_node(
         self,
@@ -3408,86 +2778,18 @@ event-handler IPTABLES_CLEANUP
     ) -> list[tuple[str, str]]:
         """Extract running configs from all containers in a lab that support it.
 
-        Checks each container's vendor config for extraction method and command.
-        Supports:
-        - config_extract_method="docker": Use docker exec
-        - config_extract_method="ssh": Use SSH to container's management IP
-
         Returns list of (node_name, config_content) tuples.
         Also saves configs to workspace/configs/{node}/startup-config.
         """
-        extracted = []
-        prefix = self._lab_prefix(lab_id)
-
-        try:
-            containers = await asyncio.to_thread(
-                self.docker.containers.list,
-                filters={
-                    "name": prefix,
-                    "label": LABEL_PROVIDER + "=" + self.name,
-                },
-            )
-
-            for container in containers:
-                labels = container.labels or {}
-                node_name = labels.get(LABEL_NODE_NAME)
-                kind = labels.get(LABEL_NODE_KIND, "")
-
-                if not node_name or not kind:
-                    continue
-
-                # Look up vendor config extraction settings
-                extraction_settings = get_config_extraction_settings(kind)
-
-                # Skip containers that don't support extraction
-                if extraction_settings.method not in ("docker", "ssh"):
-                    continue
-
-                log_name = _log_name_from_labels(labels)
-
-                if container.status != "running":
-                    logger.warning(f"Skipping {log_name}: container not running")
-                    continue
-
-                try:
-                    cmd = extraction_settings.command
-                    if not cmd:
-                        logger.warning(f"No extraction command for {kind}, skipping {log_name}")
-                        continue
-
-                    config_content = None
-
-                    if extraction_settings.method == "ssh":
-                        # Extract via SSH
-                        config_content = await self._extract_config_via_ssh(
-                            container, kind, cmd, log_name
-                        )
-                    else:
-                        # Extract via docker exec (default)
-                        config_content = await self._extract_config_via_docker(
-                            container, cmd, log_name
-                        )
-
-                    if not config_content or not config_content.strip():
-                        logger.warning(f"Empty config from {log_name}")
-                        continue
-
-                    # Save to workspace/configs/{node}/startup-config
-                    config_dir = workspace / "configs" / node_name
-                    config_dir.mkdir(parents=True, exist_ok=True)
-                    config_path = config_dir / "startup-config"
-                    config_path.write_text(config_content)
-
-                    extracted.append((node_name, config_content))
-                    logger.info(f"Extracted config from {log_name} ({kind})")
-
-                except Exception as e:
-                    logger.error(f"Error extracting config from {log_name}: {e}")
-
-        except Exception as e:
-            logger.error(f"Error during config extraction for lab {lab_id}: {e}")
-
-        return extracted
+        return await extract_all_container_configs(
+            lab_id=lab_id,
+            workspace=workspace,
+            docker_client=self.docker,
+            lab_prefix=self._lab_prefix(lab_id),
+            provider_name=self.name,
+            get_container_ips_func=self._get_container_ips,
+            run_ssh_command_func=self._run_ssh_command,
+        )
 
     async def _extract_config_via_docker(
         self,
@@ -3495,40 +2797,8 @@ event-handler IPTABLES_CLEANUP
         cmd: str,
         log_name: str,
     ) -> str | None:
-        """Extract config from container via docker exec.
-
-        Args:
-            container: Docker container object
-            cmd: Command to run
-            log_name: Display name for logging
-
-        Returns:
-            Config content string or None on failure
-        """
-        try:
-            # Use shell execution for complex commands with quotes/pipes
-            exec_cmd = ["sh", "-c", cmd]
-
-            result = await asyncio.to_thread(
-                container.exec_run,
-                exec_cmd,
-                demux=True,
-            )
-            stdout, stderr = result.output
-
-            if result.exit_code != 0:
-                stderr_str = stderr.decode("utf-8") if stderr else ""
-                logger.warning(
-                    f"Failed to extract config from {log_name}: "
-                    f"exit={result.exit_code}, stderr={stderr_str}"
-                )
-                return None
-
-            return stdout.decode("utf-8") if stdout else None
-
-        except Exception as e:
-            logger.error(f"Docker exec failed for {log_name}: {e}")
-            return None
+        """Extract config from container via docker exec."""
+        return await extract_config_via_docker(container, cmd, log_name)
 
     async def _extract_config_via_ssh(
         self,
@@ -3538,58 +2808,18 @@ event-handler IPTABLES_CLEANUP
         log_name: str,
     ) -> str | None:
         """Extract config from container via SSH."""
-        ips = self._get_container_ips(container)
-        if not ips:
-            logger.warning(f"No IP address found for SSH extraction from {log_name}")
-            return None
-
-        user, password = get_console_credentials(kind)
-        return await self._run_ssh_command(ips[0], user, password, cmd, log_name)
+        return await extract_config_via_ssh(
+            container, kind, cmd, log_name,
+            self._get_container_ips, self._run_ssh_command,
+        )
 
     async def _extract_config_via_nvram(
         self,
         container_name: str,
         workspace: Path,
     ) -> str | None:
-        """Extract config from IOL container via NVRAM file.
-
-        IOL stores its running config in a binary NVRAM file at
-        {workspace}/configs/{node_name}/iol-data/nvram_00001.
-        The NVRAM has a binary header followed by plain-text config.
-
-        Args:
-            container_name: Container name (used to derive node name)
-            workspace: Lab workspace path
-
-        Returns:
-            Config content string or None on failure
-        """
-        try:
-            # Derive node name from container name (archetype-{lab_id}-{node})
-            parts = container_name.split("-", 2)
-            node_name = parts[2] if len(parts) >= 3 else container_name
-
-            nvram_path = workspace / "configs" / node_name / "iol-data" / "nvram_00001"
-            if not nvram_path.exists():
-                logger.debug(f"No NVRAM file found at {nvram_path}")
-                return None
-
-            data = nvram_path.read_bytes()
-            if len(data) < 64:
-                logger.warning(f"NVRAM file too small ({len(data)} bytes): {nvram_path}")
-                return None
-
-            config_text = _parse_iol_nvram(data)
-            if config_text:
-                logger.info(
-                    f"Extracted config from NVRAM for {node_name} "
-                    f"({len(config_text)} bytes)"
-                )
-            return config_text
-
-        except Exception as e:
-            logger.error(f"NVRAM extraction failed for {container_name}: {e}")
-            return None
+        """Extract config from IOL container via NVRAM file."""
+        return await extract_config_via_nvram(container_name, workspace)
 
     # Backwards compatibility alias
     async def _extract_all_ceos_configs(

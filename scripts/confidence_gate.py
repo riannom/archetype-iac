@@ -48,6 +48,33 @@ class CheckDefinition:
     required: bool = True
 
 
+def _check_scope(*, required_only: bool, optional_only: bool) -> str:
+    if required_only and optional_only:
+        raise ValueError("cannot combine required-only and optional-only scopes")
+    if required_only:
+        return "required-only"
+    if optional_only:
+        return "optional-only"
+    return "all"
+
+
+def _filter_selected_checks(
+    selected_checks: list[str],
+    check_defs: dict[str, CheckDefinition],
+    *,
+    check_scope: str,
+) -> list[str]:
+    if check_scope == "all":
+        return list(selected_checks)
+
+    wants_required = check_scope == "required-only"
+    return [
+        check_id
+        for check_id in selected_checks
+        if bool(check_defs[check_id].required) == wants_required
+    ]
+
+
 def _git_list_changed(base_ref: str) -> tuple[list[str], str]:
     primary = subprocess.run(
         ["git", "diff", "--name-only", f"{base_ref}...HEAD"],
@@ -352,13 +379,35 @@ def assemble_output(
     rules_path: Path,
     plan: dict[str, Any],
     check_defs: dict[str, CheckDefinition],
+    check_scope: str,
+    scoped_check_ids: list[str],
     results: list[dict[str, Any]],
     execute: bool,
 ) -> dict[str, Any]:
     confidence = score_confidence(plan, results, execute)
+    selected_checks_all = [
+        {
+            "check_id": check_id,
+            "description": check_defs[check_id].description,
+            "command": check_defs[check_id].command,
+            "required": check_defs[check_id].required,
+        }
+        for check_id in plan["selected_checks"]
+    ]
+    selected_checks_scoped = [
+        {
+            "check_id": check_id,
+            "description": check_defs[check_id].description,
+            "command": check_defs[check_id].command,
+            "required": check_defs[check_id].required,
+        }
+        for check_id in scoped_check_ids
+    ]
+
     payload = {
         "timestamp_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "mode": "run" if execute else "dry-run",
+        "check_scope": check_scope,
         "base_ref": base_ref,
         "change_source": change_source,
         "rules_path": str(rules_path.relative_to(REPO_ROOT)),
@@ -368,15 +417,8 @@ def assemble_output(
         "unknown_code_files": plan["unknown_code_files"],
         "impacted_areas": plan["impacted_areas"],
         "file_rule_matches": plan["file_rule_matches"],
-        "selected_checks": [
-            {
-                "check_id": check_id,
-                "description": check_defs[check_id].description,
-                "command": check_defs[check_id].command,
-                "required": check_defs[check_id].required,
-            }
-            for check_id in plan["selected_checks"]
-        ],
+        "selected_checks": selected_checks_scoped,
+        "selected_checks_all": selected_checks_all,
         "check_results": results,
         "confidence": confidence,
         "remediation": build_remediation(plan, results, execute),
@@ -385,9 +427,11 @@ def assemble_output(
 
 
 def render_text(report: dict[str, Any]) -> str:
+    check_scope = report.get("check_scope", "all")
     lines = [
         "Confidence Gate",
         f"Mode: {report['mode']}",
+        f"Check scope: {check_scope}",
         f"Change source: {report['change_source']}",
         f"Changed files: {len(report['changed_files'])} (code/config: {len(report['code_files'])})",
     ]
@@ -405,6 +449,17 @@ def render_text(report: dict[str, Any]) -> str:
         lines.append(
             f"- {item['check_id']} [{required}] -> {' '.join(item['command'])}"
         )
+
+    all_selected = report.get("selected_checks_all", [])
+    if all_selected != report["selected_checks"]:
+        lines.append("Selected checks before scope filter:")
+        if not all_selected:
+            lines.append("- none")
+        for item in all_selected:
+            required = "required" if item["required"] else "optional"
+            lines.append(
+                f"- {item['check_id']} [{required}] -> {' '.join(item['command'])}"
+            )
 
     if report["unknown_code_files"]:
         lines.append("Unmatched code/config files:")
@@ -464,6 +519,17 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         action="store_true",
         help="Execute selected checks instead of only planning them.",
     )
+    scope_group = parser.add_mutually_exclusive_group()
+    scope_group.add_argument(
+        "--required-only",
+        action="store_true",
+        help="Limit selected checks to required checks only.",
+    )
+    scope_group.add_argument(
+        "--optional-only",
+        action="store_true",
+        help="Limit selected checks to optional checks only.",
+    )
     parser.add_argument(
         "--rules",
         default=str(DEFAULT_RULES_PATH),
@@ -513,8 +579,17 @@ def main(argv: list[str] | None = None) -> int:
         changed_files, change_source = _git_list_changed(args.base)
 
     plan = build_plan(changed_files, rules_data)
-    results = run_checks(
+    check_scope = _check_scope(
+        required_only=bool(args.required_only),
+        optional_only=bool(args.optional_only),
+    )
+    scoped_check_ids = _filter_selected_checks(
         plan["selected_checks"],
+        check_defs,
+        check_scope=check_scope,
+    )
+    results = run_checks(
+        scoped_check_ids,
         check_defs,
         execute=args.run,
         max_output_lines=max(1, args.max_output_lines),
@@ -525,6 +600,8 @@ def main(argv: list[str] | None = None) -> int:
         rules_path=rules_path,
         plan=plan,
         check_defs=check_defs,
+        check_scope=check_scope,
+        scoped_check_ids=scoped_check_ids,
         results=results,
         execute=args.run,
     )

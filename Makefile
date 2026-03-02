@@ -9,6 +9,7 @@ CONFIDENCE_FILES ?=
 CONFIDENCE_REPORT ?= reports/confidence-gate/latest.json
 CONFIDENCE_RULES ?= scripts/confidence_gate_rules.json
 CONFIDENCE_MIN_SCORE ?= 0
+CONFIDENCE_CHECK_SCOPE ?= all
 CATALOG_MANIFEST ?= /var/lib/archetype/images/manifest.json
 CATALOG_APPLY ?= 0
 CATALOG_DATABASE_URL ?= postgresql+psycopg://archetype:archetype@localhost:15432/archetype
@@ -84,24 +85,51 @@ iso-metadata-parity:
 	fi
 
 confidence-gate:
-	@if [ -n "$(CONFIDENCE_FILES)" ]; then \
-		python3 scripts/confidence_gate.py --rules "$(CONFIDENCE_RULES)" --min-score "$(CONFIDENCE_MIN_SCORE)" --files $(CONFIDENCE_FILES) --report-path "$(CONFIDENCE_REPORT)"; \
+	@scope_args=""; \
+	if [ "$(CONFIDENCE_CHECK_SCOPE)" = "required" ]; then \
+		scope_args="--required-only"; \
+	elif [ "$(CONFIDENCE_CHECK_SCOPE)" = "optional" ]; then \
+		scope_args="--optional-only"; \
+	elif [ "$(CONFIDENCE_CHECK_SCOPE)" != "all" ]; then \
+		echo "CONFIDENCE_CHECK_SCOPE must be one of: all, required, optional"; \
+		exit 2; \
+	fi; \
+	if [ -n "$(CONFIDENCE_FILES)" ]; then \
+		python3 scripts/confidence_gate.py $$scope_args --rules "$(CONFIDENCE_RULES)" --min-score "$(CONFIDENCE_MIN_SCORE)" --files $(CONFIDENCE_FILES) --report-path "$(CONFIDENCE_REPORT)"; \
 	else \
-		python3 scripts/confidence_gate.py --rules "$(CONFIDENCE_RULES)" --min-score "$(CONFIDENCE_MIN_SCORE)" --base "$(BASE)" --report-path "$(CONFIDENCE_REPORT)"; \
+		python3 scripts/confidence_gate.py $$scope_args --rules "$(CONFIDENCE_RULES)" --min-score "$(CONFIDENCE_MIN_SCORE)" --base "$(BASE)" --report-path "$(CONFIDENCE_REPORT)"; \
 	fi
 
 confidence-gate-run:
-	@if [ -n "$(CONFIDENCE_FILES)" ]; then \
-		python3 scripts/confidence_gate.py --run --rules "$(CONFIDENCE_RULES)" --min-score "$(CONFIDENCE_MIN_SCORE)" --files $(CONFIDENCE_FILES) --report-path "$(CONFIDENCE_REPORT)"; \
+	@scope_args=""; \
+	if [ "$(CONFIDENCE_CHECK_SCOPE)" = "required" ]; then \
+		scope_args="--required-only"; \
+	elif [ "$(CONFIDENCE_CHECK_SCOPE)" = "optional" ]; then \
+		scope_args="--optional-only"; \
+	elif [ "$(CONFIDENCE_CHECK_SCOPE)" != "all" ]; then \
+		echo "CONFIDENCE_CHECK_SCOPE must be one of: all, required, optional"; \
+		exit 2; \
+	fi; \
+	if [ -n "$(CONFIDENCE_FILES)" ]; then \
+		python3 scripts/confidence_gate.py $$scope_args --run --rules "$(CONFIDENCE_RULES)" --min-score "$(CONFIDENCE_MIN_SCORE)" --files $(CONFIDENCE_FILES) --report-path "$(CONFIDENCE_REPORT)"; \
 	else \
-		python3 scripts/confidence_gate.py --run --rules "$(CONFIDENCE_RULES)" --min-score "$(CONFIDENCE_MIN_SCORE)" --base "$(BASE)" --report-path "$(CONFIDENCE_REPORT)"; \
+		python3 scripts/confidence_gate.py $$scope_args --run --rules "$(CONFIDENCE_RULES)" --min-score "$(CONFIDENCE_MIN_SCORE)" --base "$(BASE)" --report-path "$(CONFIDENCE_REPORT)"; \
 	fi
 
 confidence-gate-json:
-	@if [ -n "$(CONFIDENCE_FILES)" ]; then \
-		python3 scripts/confidence_gate.py --json --rules "$(CONFIDENCE_RULES)" --min-score "$(CONFIDENCE_MIN_SCORE)" --files $(CONFIDENCE_FILES); \
+	@scope_args=""; \
+	if [ "$(CONFIDENCE_CHECK_SCOPE)" = "required" ]; then \
+		scope_args="--required-only"; \
+	elif [ "$(CONFIDENCE_CHECK_SCOPE)" = "optional" ]; then \
+		scope_args="--optional-only"; \
+	elif [ "$(CONFIDENCE_CHECK_SCOPE)" != "all" ]; then \
+		echo "CONFIDENCE_CHECK_SCOPE must be one of: all, required, optional"; \
+		exit 2; \
+	fi; \
+	if [ -n "$(CONFIDENCE_FILES)" ]; then \
+		python3 scripts/confidence_gate.py $$scope_args --json --rules "$(CONFIDENCE_RULES)" --min-score "$(CONFIDENCE_MIN_SCORE)" --files $(CONFIDENCE_FILES); \
 	else \
-		python3 scripts/confidence_gate.py --json --rules "$(CONFIDENCE_RULES)" --min-score "$(CONFIDENCE_MIN_SCORE)" --base "$(BASE)"; \
+		python3 scripts/confidence_gate.py $$scope_args --json --rules "$(CONFIDENCE_RULES)" --min-score "$(CONFIDENCE_MIN_SCORE)" --base "$(BASE)"; \
 	fi
 
 backfill-device-image-catalog:

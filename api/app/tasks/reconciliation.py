@@ -23,8 +23,12 @@ from uuid import uuid4
 
 import redis
 
-from app import models
+from app import agent_client, models  # noqa: F401 -- agent_client patched by tests
 from app.config import settings
+from app.services.broadcaster import (  # noqa: F401 -- patched by tests
+    broadcast_link_state_change,
+    broadcast_node_state_change,
+)
 from app.db import get_redis, get_session
 from app.tasks.migration_cleanup import process_pending_migration_cleanups
 from app.utils import locks as lock_utils
@@ -249,8 +253,6 @@ async def reconcile_managed_interfaces():
     interface state and updates sync_status/current_mtu accordingly.
     Runs less frequently than state reconciliation (called externally).
     """
-    from app import agent_client  # noqa: F811 -- intentional local re-import
-
     with get_session() as session:
         interfaces = session.query(models.AgentManagedInterface).all()
         if not interfaces:
