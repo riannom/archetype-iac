@@ -10,7 +10,7 @@ export default defineConfig({
     include: ["src/**/*.{test,spec}.{ts,tsx}"],
     coverage: {
       provider: "v8",
-      reporter: ["text", "html"],
+      reporter: ["text", "html", "json-summary"],
       include: ["src/**/*.{ts,tsx}"],
       exclude: [
         "src/**/*.test.{ts,tsx}",
@@ -19,6 +19,12 @@ export default defineConfig({
         "src/main.tsx",
         "src/components/backgrounds/animations/**/*.ts",
       ],
+      thresholds: {
+        lines: 50,
+        branches: 40,
+        functions: 40,
+        statements: 50,
+      },
     },
   },
 });
