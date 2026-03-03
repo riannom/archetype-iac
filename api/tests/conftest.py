@@ -66,15 +66,6 @@ def _mock_redis_globally(monkeypatch):
     )
 
 
-def pytest_sessionstart(session):
-    """Fail fast on unsupported Python versions for API TestClient runs."""
-    if sys.version_info >= (3, 13):
-        pytest.exit(
-            "API pytest is not supported on Python 3.13+ in this repo yet. "
-            "Use Python 3.11 to run api/tests.",
-            returncode=2,
-        )
-
 
 @pytest.fixture(scope="function")
 def test_engine():
