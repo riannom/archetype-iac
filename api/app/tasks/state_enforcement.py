@@ -272,37 +272,32 @@ async def _get_agent_for_node(
 ) -> models.Host | None:
     """Get the agent that should handle actions for a node.
 
-    Uses FK-first lookup strategy for reliability, falls back to string matching.
+    Uses deterministic FK lookup strategy for reliability.
 
     Priority order:
-    1. Node definition's host_id (via FK, then string match)
-    2. NodePlacement record (via FK, then string match)
+    1. Node definition's host_id (via FK)
+    2. NodePlacement record (via FK)
     3. Lab's default agent
     """
-    node_def = None
-
-    # 1. Try FK lookup first (most reliable)
-    if node_state.node_definition_id:
-        node_def = session.get(models.Node, node_state.node_definition_id)
-
-    # 2. Fall back to string matching
-    if not node_def:
-        node_def = session.query(models.Node).filter(
-            models.Node.lab_id == lab.id,
-            models.Node.container_name == node_state.node_name,
-        ).first()
-
-        # Link for future lookups
-        if node_def and not node_state.node_definition_id:
-            node_state.node_definition_id = node_def.id
-            logger.info(f"Linked NodeState {node_state.node_id} to Node {node_def.id}")
+    node_def = (
+        session.get(models.Node, node_state.node_definition_id)
+        if node_state.node_definition_id
+        else None
+    )
+    if node_state.node_definition_id and node_def is None:
+        logger.warning(
+            "NodeState %s in lab %s references missing Node definition %s",
+            node_state.node_id,
+            lab.id,
+            node_state.node_definition_id,
+        )
 
     if node_def and node_def.host_id:
         agent = session.get(models.Host, node_def.host_id)
         if agent and agent_client.is_agent_online(agent):
             return agent
 
-    # 3. Check NodePlacement (FK-first, then string)
+    # 2. Check NodePlacement via deterministic node_definition_id
     placement = None
     if node_state.node_definition_id:
         placement = session.query(models.NodePlacement).filter(
@@ -310,24 +305,18 @@ async def _get_agent_for_node(
             models.NodePlacement.node_definition_id == node_state.node_definition_id,
         ).first()
 
-    if not placement:
-        placement = session.query(models.NodePlacement).filter(
-            models.NodePlacement.lab_id == lab.id,
-            models.NodePlacement.node_name == node_state.node_name,
-        ).first()
-
     if placement and placement.host_id:
         agent = session.get(models.Host, placement.host_id)
         if agent and agent_client.is_agent_online(agent):
             return agent
 
-    # 4. Fall back to lab's default agent
+    # 3. Fall back to lab's default agent
     if lab.agent_id:
         agent = session.get(models.Host, lab.agent_id)
         if agent and agent_client.is_agent_online(agent):
             return agent
 
-    # 5. Fall back to any healthy agent with required provider
+    # 4. Fall back to any healthy agent with required provider
     # Use node-specific provider for mixed labs (docker vs libvirt)
     from app.utils.lab import get_lab_provider, get_node_provider
     if node_def:
@@ -488,16 +477,30 @@ async def enforce_node_state(
             # Backfill node_definition_id if missing
             if node_def and not placement.node_definition_id:
                 placement.node_definition_id = node_def.id
+            elif not node_def and not placement.node_definition_id:
+                logger.warning(
+                    "Node definition missing for existing placement %s/%s; "
+                    "retaining placement without FK",
+                    lab_id,
+                    node_name,
+                )
         else:
-            placement = models.NodePlacement(
-                lab_id=lab_id,
-                node_name=node_name,
-                node_definition_id=node_def.id if node_def else None,
-                host_id=agent.id,
-                status="deployed",
-            )
-            session.add(placement)
-            logger.info(f"Created placement for {node_name} on agent {agent.id}")
+            if node_def:
+                placement = models.NodePlacement(
+                    lab_id=lab_id,
+                    node_name=node_name,
+                    node_definition_id=node_def.id,
+                    host_id=agent.id,
+                    status="deployed",
+                )
+                session.add(placement)
+                logger.info(f"Created placement for {node_name} on agent {agent.id}")
+            else:
+                logger.warning(
+                    "Skipping placement creation for %s/%s: node definition not found",
+                    lab_id,
+                    node_name,
+                )
 
     # Re-verify desired_state hasn't changed since we started checks
     # (e.g. user clicked Stop All between check and job creation)

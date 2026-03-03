@@ -57,6 +57,18 @@ def _ensure_link_states_for_lab(session, lab_id: str) -> int:
     node_device_map: dict[str, str | None] = {
         n.container_name: n.device for n in nodes
     }
+    placements_by_node_definition_id = {
+        placement.node_definition_id: placement
+        for placement in (
+            session.query(models.NodePlacement)
+            .filter(
+                models.NodePlacement.lab_id == lab_id,
+                models.NodePlacement.node_definition_id.is_not(None),
+            )
+            .all()
+        )
+        if placement.node_definition_id
+    }
 
     # Get existing link states
     existing = list(
@@ -122,28 +134,14 @@ def _ensure_link_states_for_lab(session, lab_id: str) -> int:
         source_host_id = source_node.host_id
         target_host_id = target_node.host_id
 
-        # Fall back to NodePlacement if node.host_id not set
+        # Resolve host placement by deterministic Node definition FK.
         if not source_host_id:
-            placement = (
-                session.query(models.NodePlacement)
-                .filter(
-                    models.NodePlacement.lab_id == lab_id,
-                    models.NodePlacement.node_name == source_node.container_name,
-                )
-                .first()
-            )
+            placement = placements_by_node_definition_id.get(source_node.id)
             if placement:
                 source_host_id = placement.host_id
 
         if not target_host_id:
-            placement = (
-                session.query(models.NodePlacement)
-                .filter(
-                    models.NodePlacement.lab_id == lab_id,
-                    models.NodePlacement.node_name == target_node.container_name,
-                )
-                .first()
-            )
+            placement = placements_by_node_definition_id.get(target_node.id)
             if placement:
                 target_host_id = placement.host_id
 
@@ -183,30 +181,28 @@ def _ensure_link_states_for_lab(session, lab_id: str) -> int:
 
 
 def _backfill_placement_node_ids(session, lab_id: str) -> int:
-    """Backfill node_definition_id for placements missing it.
+    """Legacy compatibility helper kept for import stability.
 
-    This handles existing placements that were created before the FK was added.
-    Called during reconciliation to gradually migrate old data.
-
-    Returns:
-        Number of placements updated
+    Deterministic identifier migrations now require `node_definition_id` to be
+    populated at write-time, so reconciliation no longer performs name-based
+    placement backfills.
     """
-    count = 0
-    placements = session.query(models.NodePlacement).filter(
-        models.NodePlacement.lab_id == lab_id,
-        models.NodePlacement.node_definition_id.is_(None),
-    ).all()
-
-    for p in placements:
-        node = session.query(models.Node).filter(
-            models.Node.lab_id == p.lab_id,
-            models.Node.container_name == p.node_name,
-        ).first()
-        if node:
-            p.node_definition_id = node.id
-            count += 1
-
-    return count
+    missing_count = (
+        session.query(models.NodePlacement.id)
+        .filter(
+            models.NodePlacement.lab_id == lab_id,
+            models.NodePlacement.node_definition_id.is_(None),
+        )
+        .count()
+    )
+    if missing_count:
+        logger.warning(
+            "Lab %s has %s placement row(s) missing node_definition_id; "
+            "manual cleanup/backfill is required",
+            lab_id,
+            missing_count,
+        )
+    return 0
 
 
 def cleanup_orphaned_node_states(session, lab_id: str) -> int:
@@ -443,16 +439,6 @@ async def _do_reconcile_lab(session, lab, lab_id: str) -> int:
         session.rollback()
         logger.debug(f"Failed to normalize link interfaces for lab {lab_id}: {e}")
 
-    # Backfill node_definition_id for placements (gradual migration)
-    try:
-        backfilled = _backfill_placement_node_ids(session, lab_id)
-        if backfilled > 0:
-            logger.info(f"Backfilled node_definition_id for {backfilled} placement(s) in lab {lab_id}")
-            session.commit()
-    except Exception as e:
-        session.rollback()
-        logger.debug(f"Failed to backfill placement node IDs for lab {lab_id}: {e}")
-
     # Clean up orphaned NodeState records (node_definition_id IS NULL)
     try:
         ns_deleted = cleanup_orphaned_node_states(session, lab_id)
@@ -466,28 +452,46 @@ async def _do_reconcile_lab(session, lab, lab_id: str) -> int:
     try:
         lab_provider = get_lab_provider(lab)
 
-        # Find unique agents from NodePlacement records
-        placements = (
-            session.query(models.NodePlacement)
-            .filter(models.NodePlacement.lab_id == lab_id)
-            .all()
-        )
-        agent_ids = {p.host_id for p in placements}
-        # Map node names to their expected agent for safer undeployed detection
-        node_expected_agent: dict[str, str] = {p.node_name: p.host_id for p in placements}
-
-        # Look up device kinds for all nodes (needed for VM readiness checks)
+        # Look up node definitions for this lab.
         db_nodes = (
             session.query(models.Node)
             .filter(models.Node.lab_id == lab_id)
             .all()
         )
-        node_devices: dict[str, str | None] = {n.container_name: n.device for n in db_nodes}
-        node_images: dict[str, str | None] = {n.container_name: n.image for n in db_nodes}
 
         # D.2: Build indexed dicts from bulk-loaded data to avoid per-container queries
+        nodes_by_id = {n.id: n for n in db_nodes}
         nodes_by_container_name = {n.container_name: n for n in db_nodes}
-        placements_by_node_name = {p.node_name: p for p in placements}
+        node_devices_by_id: dict[str, str | None] = {n.id: n.device for n in db_nodes}
+        node_images_by_id: dict[str, str | None] = {n.id: n.image for n in db_nodes}
+        node_runtime_name_by_id: dict[str, str] = {n.id: n.container_name for n in db_nodes}
+        valid_node_ids = {n.id for n in db_nodes}
+
+        # Find unique agents from placement records keyed by deterministic FK.
+        placements = (
+            session.query(models.NodePlacement)
+            .filter(
+                models.NodePlacement.lab_id == lab_id,
+                models.NodePlacement.node_definition_id.is_not(None),
+            )
+            .all()
+        )
+        agent_ids = {p.host_id for p in placements if p.host_id}
+        placements_by_node_definition_id = {
+            p.node_definition_id: p
+            for p in placements
+            if p.node_definition_id
+        }
+        node_expected_agent_by_node_definition_id: dict[str, str] = {
+            p.node_definition_id: p.host_id
+            for p in placements
+            if p.node_definition_id and p.host_id
+        }
+        node_expected_agent_by_name: dict[str, str] = {
+            node_runtime_name_by_id[node_id]: host_id
+            for node_id, host_id in node_expected_agent_by_node_definition_id.items()
+            if node_id in node_runtime_name_by_id
+        }
 
         # Also include the lab's default agent if set
         if lab.agent_id:
@@ -634,14 +638,18 @@ async def _do_reconcile_lab(session, lab, lab_id: str) -> int:
 
             # Cleanup orphan NodePlacement records in database
             # This runs even if containers are already gone (e.g. manually removed)
-            orphan_placements_to_delete = (
-                session.query(models.NodePlacement)
-                .filter(
-                    models.NodePlacement.lab_id == lab_id,
-                    ~models.NodePlacement.node_name.in_(valid_node_names),
+            orphan_placements_to_delete = [
+                placement
+                for placement in (
+                    session.query(models.NodePlacement)
+                    .filter(models.NodePlacement.lab_id == lab_id)
+                    .all()
                 )
-                .all()
-            )
+                if (
+                    not placement.node_definition_id
+                    or placement.node_definition_id not in valid_node_ids
+                )
+            ]
             for placement in orphan_placements_to_delete:
                 logger.info(f"Removing orphan placement for node {placement.node_name} in lab {lab_id}")
                 session.delete(placement)
@@ -678,6 +686,18 @@ async def _do_reconcile_lab(session, lab, lab_id: str) -> int:
                 session.refresh(ns)
 
         for ns in node_states:
+            runtime_node_name = node_runtime_name_by_id.get(
+                ns.node_definition_id,
+                ns.node_name,
+            )
+            if ns.node_definition_id and ns.node_definition_id not in nodes_by_id:
+                logger.warning(
+                    "NodeState %s in lab %s references missing Node definition %s",
+                    ns.id,
+                    lab_id,
+                    ns.node_definition_id,
+                )
+
             # Skip nodes where enforcement has permanently failed.
             # Enforcement owns their state — reconciliation must not overwrite
             # the error state, which would cause an infinite retry oscillation.
@@ -758,7 +778,7 @@ async def _do_reconcile_lab(session, lab, lab_id: str) -> int:
                     f"timestamp or active job, recovering via reconciliation"
                 )
 
-            container_status = container_status_map.get(ns.node_name)
+            container_status = container_status_map.get(runtime_node_name)
             old_state = ns.actual_state
             old_is_ready = ns.is_ready
 
@@ -779,8 +799,9 @@ async def _do_reconcile_lab(session, lab, lab_id: str) -> int:
                         # Poll agent for readiness status
                         try:
                             readiness_agent_id = (
-                                container_agent_map.get(ns.node_name)
-                                or node_expected_agent.get(ns.node_name)
+                                container_agent_map.get(runtime_node_name)
+                                or node_expected_agent_by_node_definition_id.get(ns.node_definition_id)
+                                or node_expected_agent_by_name.get(runtime_node_name)
                                 or lab.agent_id
                             )
                             readiness_agent = (
@@ -796,8 +817,8 @@ async def _do_reconcile_lab(session, lab, lab_id: str) -> int:
                                 continue
 
                             # Get device kind and determine provider type
-                            device_kind = node_devices.get(ns.node_name)
-                            node_image = node_images.get(ns.node_name)
+                            device_kind = node_devices_by_id.get(ns.node_definition_id)
+                            node_image = node_images_by_id.get(ns.node_definition_id)
                             provider_type = None
                             if node_image:
                                 # Determine provider from image extension
@@ -807,7 +828,9 @@ async def _do_reconcile_lab(session, lab, lab_id: str) -> int:
                                     provider_type = "docker"
 
                             readiness = await agent_client.check_node_readiness(
-                                readiness_agent, lab_id, ns.node_name,
+                                readiness_agent,
+                                lab_id,
+                                runtime_node_name,
                                 kind=device_kind,
                                 provider_type=provider_type,
                             )
@@ -849,7 +872,10 @@ async def _do_reconcile_lab(session, lab, lab_id: str) -> int:
                 # Container not found in status response
                 # Only mark as undeployed if we successfully queried the agent that should have it
                 # This prevents falsely marking nodes as undeployed when agent is temporarily unreachable
-                expected_agent = node_expected_agent.get(ns.node_name)
+                expected_agent = (
+                    node_expected_agent_by_node_definition_id.get(ns.node_definition_id)
+                    or node_expected_agent_by_name.get(runtime_node_name)
+                )
                 agent_was_queried = (
                     expected_agent in agents_successfully_queried
                     if expected_agent
@@ -899,7 +925,7 @@ async def _do_reconcile_lab(session, lab, lab_id: str) -> int:
                 )
                 # Broadcast state change to WebSocket clients
                 # Look up host info for this node
-                node_host_id = container_agent_map.get(ns.node_name)
+                node_host_id = container_agent_map.get(runtime_node_name)
                 node_host_name = host_to_agent.get(node_host_id).name if node_host_id and node_host_id in host_to_agent else None
                 asyncio.create_task(
                     broadcast_node_state_change(
@@ -933,7 +959,11 @@ async def _do_reconcile_lab(session, lab, lab_id: str) -> int:
                 # Don't update placement for misplaced containers - this would perpetuate the bug
                 continue
 
-            existing_placement = placements_by_node_name.get(node_name)
+            existing_placement = (
+                placements_by_node_definition_id.get(node_def.id)
+                if node_def
+                else None
+            )
             if existing_placement:
                 # Update if container moved to a different agent (and move is valid per node_def)
                 if existing_placement.host_id != agent_id:
@@ -943,23 +973,33 @@ async def _do_reconcile_lab(session, lab, lab_id: str) -> int:
                     )
                     existing_placement.host_id = agent_id
                     existing_placement.status = "deployed"
-                # Backfill node_definition_id if missing
-                if node_def and not existing_placement.node_definition_id:
-                    existing_placement.node_definition_id = node_def.id
+                existing_placement.node_name = node_def.container_name
+                node_expected_agent_by_node_definition_id[node_def.id] = agent_id
+                node_expected_agent_by_name[node_def.container_name] = agent_id
             else:
+                if not node_def:
+                    logger.warning(
+                        "Skipping placement creation for %s/%s during reconciliation: "
+                        "node definition not found",
+                        lab_id,
+                        node_name,
+                    )
+                    continue
                 # Create new placement record
                 logger.info(
                     f"Creating placement for {node_name} in lab {lab_id} on agent {agent_id}"
                 )
                 new_placement = models.NodePlacement(
                     lab_id=lab_id,
-                    node_name=node_name,
-                    node_definition_id=node_def.id if node_def else None,
+                    node_name=node_def.container_name,
+                    node_definition_id=node_def.id,
                     host_id=agent_id,
                     status="deployed",
                 )
                 session.add(new_placement)
-                placements_by_node_name[node_name] = new_placement
+                placements_by_node_definition_id[node_def.id] = new_placement
+                node_expected_agent_by_node_definition_id[node_def.id] = agent_id
+                node_expected_agent_by_name[node_def.container_name] = agent_id
 
         # Remove misplaced containers from wrong agents
         # Only do this when no active job to avoid interfering with deployments
@@ -996,7 +1036,11 @@ async def _do_reconcile_lab(session, lab, lab_id: str) -> int:
         # Build a map of node name -> actual state for quick lookup
         node_actual_states: dict[str, str] = {}
         for ns in node_states:
-            node_actual_states[ns.node_name] = ns.actual_state
+            runtime_node_name = node_runtime_name_by_id.get(
+                ns.node_definition_id,
+                ns.node_name,
+            )
+            node_actual_states[runtime_node_name] = ns.actual_state
 
         # Update link states
         link_states = (
@@ -1162,7 +1206,7 @@ async def _do_reconcile_lab(session, lab, lab_id: str) -> int:
                             repair_agents: dict[str, list[str]] = {}
                             for ls in error_links:
                                 for node_name in (ls.source_node, ls.target_node):
-                                    host_id = node_expected_agent.get(node_name)
+                                    host_id = node_expected_agent_by_name.get(node_name)
                                     if host_id and host_id in host_to_agent:
                                         repair_agents.setdefault(host_id, []).append(node_name)
                             for host_id, nodes in repair_agents.items():

@@ -80,20 +80,53 @@ async def create_deployment_links(
     logger.info(f"Creating {len(db_links)} links for lab {lab_id}")
     log_parts.append(f"\n=== Creating {len(db_links)} Links ===")
 
-    # Ensure LinkState records exist for all links
-    existing_states = {
-        ls.link_name: ls
-        for ls in session.query(models.LinkState)
+    # Ensure LinkState records exist for all links.
+    # Deterministic identity is keyed by link_definition_id.
+    existing_states = (
+        session.query(models.LinkState)
         .filter(models.LinkState.lab_id == lab_id)
         .all()
-    }
+    )
 
-    # Clean up orphaned LinkState records from previous deploys
-    # These may have different interface naming (Ethernet vs eth)
-    current_link_names = {link.link_name for link in db_links}
+    def _index_states_by_definition(
+        states: list[models.LinkState],
+    ) -> dict[str, list[models.LinkState]]:
+        by_definition: dict[str, list[models.LinkState]] = {}
+        for state in states:
+            if state.link_definition_id:
+                by_definition.setdefault(state.link_definition_id, []).append(state)
+        return by_definition
+
+    states_by_definition = _index_states_by_definition(existing_states)
+
+    def _select_state_for_link_definition(
+        link_definition_id: str,
+    ) -> models.LinkState | None:
+        candidates = states_by_definition.get(link_definition_id, [])
+        if not candidates:
+            return None
+        preferred = sorted(
+            candidates,
+            key=lambda s: (
+                s.desired_state != "deleted",
+                s.updated_at or s.created_at,
+            ),
+        )[-1]
+        duplicates = [state for state in candidates if state.id != preferred.id]
+        for duplicate in duplicates:
+            if duplicate in existing_states:
+                existing_states.remove(duplicate)
+            session.delete(duplicate)
+        if duplicates:
+            session.flush()
+        states_by_definition[link_definition_id] = [preferred]
+        return preferred
+
+    # Clean up orphaned LinkState records from previous deploys.
+    current_link_ids = {link.id for link in db_links}
     orphaned_states = [
-        ls for ls in existing_states.values()
-        if ls.link_name not in current_link_names
+        ls for ls in existing_states
+        if ls.link_definition_id not in current_link_ids
     ]
     for ls in orphaned_states:
         # Tear down VXLAN ports on agents before deleting the DB record
@@ -139,14 +172,17 @@ async def create_deployment_links(
                         )
 
         logger.info(f"Cleaning up orphaned LinkState: {ls.link_name}")
+        if ls in existing_states:
+            existing_states.remove(ls)
         session.delete(ls)
     if orphaned_states:
         session.flush()
-        # Refresh existing_states after cleanup
-        existing_states = {
-            name: ls for name, ls in existing_states.items()
-            if name in current_link_names
-        }
+        existing_states = (
+            session.query(models.LinkState)
+            .filter(models.LinkState.lab_id == lab_id)
+            .all()
+        )
+        states_by_definition = _index_states_by_definition(existing_states)
 
     LinkManager(session)
     success_count = 0
@@ -184,9 +220,8 @@ async def create_deployment_links(
 
             # Get or create LinkState (use _ext: prefix for external endpoint name)
             ext_name = f"_ext:{ext_node.managed_interface_id or ext_node.container_name}"
-            if link.link_name in existing_states:
-                link_state = existing_states[link.link_name]
-            else:
+            link_state = _select_state_for_link_definition(link.id)
+            if link_state is None:
                 link_state = models.LinkState(
                     lab_id=lab_id,
                     link_definition_id=link.id,
@@ -200,6 +235,17 @@ async def create_deployment_links(
                 )
                 session.add(link_state)
                 session.flush()
+                existing_states.append(link_state)
+                states_by_definition[link.id] = [link_state]
+            else:
+                link_state.link_definition_id = link.id
+                link_state.link_name = link.link_name
+                link_state.source_node = device_node.container_name
+                link_state.source_interface = device_interface
+                link_state.target_node = ext_name
+                link_state.target_interface = "_external"
+                if link_state.desired_state == "deleted":
+                    link_state.desired_state = "up"
 
             external_link_groups.setdefault(ext_node.id, []).append(
                 (link, link_state, device_node, ext_node, device_interface)
@@ -215,11 +261,8 @@ async def create_deployment_links(
             target_node.container_name, tgt_iface,
         )
 
-        if link.link_name in existing_states:
-            link_state = existing_states[link.link_name]
-        elif norm_link_name in existing_states:
-            link_state = existing_states[norm_link_name]
-        else:
+        link_state = _select_state_for_link_definition(link.id)
+        if link_state is None:
             link_state = models.LinkState(
                 lab_id=lab_id,
                 link_definition_id=link.id,
@@ -233,6 +276,17 @@ async def create_deployment_links(
             )
             session.add(link_state)
             session.flush()  # Get ID
+            existing_states.append(link_state)
+            states_by_definition[link.id] = [link_state]
+        else:
+            link_state.link_definition_id = link.id
+            link_state.link_name = norm_link_name
+            link_state.source_node = source_node.container_name
+            link_state.source_interface = src_iface
+            link_state.target_node = target_node.container_name
+            link_state.target_interface = tgt_iface
+            if link_state.desired_state == "deleted":
+                link_state.desired_state = "up"
 
         # If NodeState is present and either endpoint is not running, defer link
         # creation instead of attempting OVS/VXLAN operations that must fail.

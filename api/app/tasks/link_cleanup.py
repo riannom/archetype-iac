@@ -83,6 +83,7 @@ async def _cleanup_deleted_links(
     changed = False
     for link_state in deleted_links:
         link_info = {
+            "link_state_id": link_state.id,
             "link_name": link_state.link_name,
             "source_node": link_state.source_node,
             "source_interface": link_state.source_interface,

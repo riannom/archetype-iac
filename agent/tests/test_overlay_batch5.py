@@ -478,7 +478,7 @@ class TestRecoverLinkTunnels:
         mgr.declare_state.assert_called_once_with(cached_tunnels)
 
     @pytest.mark.asyncio
-    async def test_ovs_scan_fallback(self, monkeypatch, tmp_path):
+    async def test_ovs_scan_fallback_skips_unmapped_ports(self, monkeypatch, tmp_path):
         mgr = _make_overlay(monkeypatch, tmp_path)
 
         # No cache available
@@ -517,11 +517,54 @@ class TestRecoverLinkTunnels:
         )
 
         count = await mgr.recover_link_tunnels()
-        assert count == 2
-        assert "vxlan-aaa11111" in mgr._link_tunnels
-        assert "vxlan-bbb22222" in mgr._link_tunnels
-        # Placeholder lab_id for OVS-scan recovery
-        assert mgr._link_tunnels["vxlan-aaa11111"].lab_id == "recovered"
+        assert count == 0
+        assert mgr._link_tunnels == {}
+
+    @pytest.mark.asyncio
+    async def test_ovs_scan_fallback_refreshes_known_mapping(self, monkeypatch, tmp_path):
+        mgr = _make_overlay(monkeypatch, tmp_path)
+
+        monkeypatch.setattr(
+            "agent.network.overlay_state.load_declared_state_cache",
+            AsyncMock(return_value=None),
+        )
+
+        from agent.network.overlay import LinkTunnel
+        mgr._link_tunnels["link-1"] = LinkTunnel(
+            link_id="link-1",
+            vni=100001,
+            local_ip="10.0.0.1",
+            remote_ip="10.0.0.2",
+            local_vlan=2049,
+            interface_name="vxlan-aaa11111",
+            lab_id="lab1",
+        )
+
+        async def fake_ovs(*args):
+            if args == ("list-ports", "arch-ovs"):
+                return 0, "vxlan-aaa11111\nvxlan-bbb22222\n", ""
+            if args[0] == "get" and args[1] == "port":
+                if args[2] == "vxlan-aaa11111":
+                    return 0, "2050", ""
+                if args[2] == "vxlan-bbb22222":
+                    return 0, "2051", ""
+            return 0, "", ""
+
+        async def fake_read(name):
+            if name == "vxlan-aaa11111":
+                return 100001, "10.0.0.2", "10.0.0.1"
+            if name == "vxlan-bbb22222":
+                return 100002, "10.0.0.3", "10.0.0.1"
+            return 0, "", ""
+
+        monkeypatch.setattr("agent.network.overlay_state._shared_ovs_vsctl", fake_ovs)
+        monkeypatch.setattr("agent.network.overlay_vxlan.read_vxlan_link_info", fake_read)
+
+        count = await mgr.recover_link_tunnels()
+        assert count == 1
+        assert "link-1" in mgr._link_tunnels
+        assert mgr._link_tunnels["link-1"].link_id == "link-1"
+        assert mgr._link_tunnels["link-1"].local_vlan == 2050
 
     @pytest.mark.asyncio
     async def test_ovs_scan_skips_invalid(self, monkeypatch, tmp_path):

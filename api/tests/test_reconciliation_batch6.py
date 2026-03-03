@@ -71,7 +71,7 @@ class TestAgentErrorHelpers:
 # ---------------------------------------------------------------------------
 
 class TestBackfillPlacementNodeIds:
-    def test_backfills_missing_node_definition_id(self, test_db):
+    def test_reports_missing_node_definition_id_without_name_backfill(self, test_db):
         from app.tasks.reconciliation import _backfill_placement_node_ids
         from app import models
 
@@ -91,8 +91,8 @@ class TestBackfillPlacementNodeIds:
         test_db.flush()
 
         count = _backfill_placement_node_ids(test_db, "lab-1")
-        assert count == 1
-        assert placement.node_definition_id == "n1"
+        assert count == 0
+        assert placement.node_definition_id is None
 
     def test_skips_already_populated(self, test_db):
         from app.tasks.reconciliation import _backfill_placement_node_ids
@@ -261,21 +261,22 @@ class TestMaybeCleanupLablessContainers:
     @pytest.mark.asyncio
     async def test_counter_skips_before_interval(self, monkeypatch):
         import app.tasks.reconciliation as recon
+        import app.tasks.reconciliation_db as recon_db
 
         # Reset counter
-        recon._lab_orphan_check_counter = 0
+        recon_db._lab_orphan_check_counter = 0
 
         # Mock the session so we can track if cleanup runs
 
         # The function increments counter and returns early if below interval
         # We patch _LAB_ORPHAN_CHECK_INTERVAL to something > 1
-        monkeypatch.setattr(recon, "_LAB_ORPHAN_CHECK_INTERVAL", 5)
+        monkeypatch.setattr(recon_db, "_LAB_ORPHAN_CHECK_INTERVAL", 5)
 
         mock_session = MagicMock()
         await recon._maybe_cleanup_labless_containers(mock_session)
 
         # Counter should have incremented but cleanup should not have run
-        assert recon._lab_orphan_check_counter == 1
+        assert recon_db._lab_orphan_check_counter == 1
 
 
 # ---------------------------------------------------------------------------

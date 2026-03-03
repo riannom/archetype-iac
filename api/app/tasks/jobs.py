@@ -523,6 +523,27 @@ async def _capture_node_ips(session, lab_id: str, agent: models.Host) -> None:
             logger.debug(f"No nodes returned in status for lab {lab_id}")
             return
 
+        node_defs_by_name = {
+            node.container_name: node
+            for node in (
+                session.query(models.Node)
+                .filter(models.Node.lab_id == lab_id)
+                .all()
+            )
+        }
+        node_states_by_definition_id = {
+            node_state.node_definition_id: node_state
+            for node_state in (
+                session.query(models.NodeState)
+                .filter(
+                    models.NodeState.lab_id == lab_id,
+                    models.NodeState.node_definition_id.is_not(None),
+                )
+                .all()
+            )
+            if node_state.node_definition_id
+        }
+
         # Update NodeState records with IP addresses
         for node_info in nodes:
             node_name = node_info.get("name")
@@ -531,15 +552,15 @@ async def _capture_node_ips(session, lab_id: str, agent: models.Host) -> None:
             if not node_name:
                 continue
 
-            # Find the NodeState record
-            node_state = (
-                session.query(models.NodeState)
-                .filter(
-                    models.NodeState.lab_id == lab_id,
-                    models.NodeState.node_name == node_name,
+            node_def = node_defs_by_name.get(node_name)
+            if not node_def:
+                logger.debug(
+                    "Skipping IP capture for %s/%s: node definition not found",
+                    lab_id,
+                    node_name,
                 )
-                .first()
-            )
+                continue
+            node_state = node_states_by_definition_id.get(node_def.id)
 
             if node_state and ip_addresses:
                 # Set primary IP (first in list)
@@ -582,47 +603,61 @@ async def _update_node_placements(
     """
     try:
         placement_moves: list[tuple[str, str, str]] = []
-        for node_name in node_names:
-            # Look up node definition for FK
-            node_def = (
-                session.query(models.Node)
-                .filter(
-                    models.Node.lab_id == lab_id,
-                    models.Node.container_name == node_name,
-                )
-                .first()
+        node_defs = (
+            session.query(models.Node)
+            .filter(
+                models.Node.lab_id == lab_id,
+                models.Node.container_name.in_(node_names),
             )
+            .all()
+        )
+        node_defs_by_name = {node.container_name: node for node in node_defs}
+        placement_rows = (
+            session.query(models.NodePlacement)
+            .filter(
+                models.NodePlacement.lab_id == lab_id,
+                models.NodePlacement.node_definition_id.in_([n.id for n in node_defs]),
+            )
+            .all()
+            if node_defs
+            else []
+        )
+        placements_by_node_definition_id = {
+            placement.node_definition_id: placement
+            for placement in placement_rows
+            if placement.node_definition_id
+        }
 
-            # Check for existing placement
-            existing = (
-                session.query(models.NodePlacement)
-                .filter(
-                    models.NodePlacement.lab_id == lab_id,
-                    models.NodePlacement.node_name == node_name,
+        for node_name in node_names:
+            node_def = node_defs_by_name.get(node_name)
+            if not node_def:
+                logger.warning(
+                    "Skipping placement update for %s/%s: node definition not found",
+                    lab_id,
+                    node_name,
                 )
-                .first()
-            )
+                continue
+            existing = placements_by_node_definition_id.get(node_def.id)
 
             if existing:
                 # Update existing placement
                 old_host_id = existing.host_id
                 existing.host_id = agent_id
                 existing.status = status
-                # Backfill node_definition_id if missing
-                if node_def and not existing.node_definition_id:
-                    existing.node_definition_id = node_def.id
+                existing.node_name = node_def.container_name
                 if old_host_id and old_host_id != agent_id:
-                    placement_moves.append((node_name, old_host_id, agent_id))
+                    placement_moves.append((node_def.container_name, old_host_id, agent_id))
             else:
                 # Create new placement with FK
                 placement = models.NodePlacement(
                     lab_id=lab_id,
-                    node_name=node_name,
-                    node_definition_id=node_def.id if node_def else None,
+                    node_name=node_def.container_name,
+                    node_definition_id=node_def.id,
                     host_id=agent_id,
                     status=status,
                 )
                 session.add(placement)
+                placements_by_node_definition_id[node_def.id] = placement
 
         session.commit()
         logger.info(f"Updated placements for {len(node_names)} nodes in lab {lab_id} on agent {agent_id}")
@@ -681,24 +716,31 @@ async def _cleanup_orphan_containers(
             if not old_agent:
                 continue
 
+            node_defs = (
+                session.query(models.Node)
+                .filter(models.Node.lab_id == lab_id)
+                .all()
+            )
+            node_defs_by_id = {node.id: node for node in node_defs}
+
             # Keep any nodes still assigned to this old agent (partial migration).
             keep_node_names = [
-                row[0]
-                for row in (
-                    session.query(models.NodePlacement.node_name)
+                node_defs_by_id[p.node_definition_id].container_name
+                for p in (
+                    session.query(models.NodePlacement)
                     .filter(
                         models.NodePlacement.lab_id == lab_id,
                         models.NodePlacement.host_id == old_agent_id,
+                        models.NodePlacement.node_definition_id.is_not(None),
                     )
                     .all()
                 )
+                if p.node_definition_id in node_defs_by_id
             ]
             keep_node_name_set = set(keep_node_names)
             nodes_by_name = {
                 node.container_name: node
-                for node in session.query(models.Node)
-                .filter(models.Node.lab_id == lab_id)
-                .all()
+                for node in node_defs
                 if node.container_name
             }
             candidate_cleanup_names = [

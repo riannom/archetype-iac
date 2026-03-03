@@ -38,6 +38,7 @@ def _make_link_state(
     test_db: Session,
     lab_id: str,
     *,
+    link_definition_id: str | None = None,
     link_name: str = "R1:eth1-R2:eth1",
     source_node: str = "R1",
     source_interface: str = "eth1",
@@ -52,6 +53,7 @@ def _make_link_state(
 ) -> models.LinkState:
     ls = models.LinkState(
         lab_id=lab_id,
+        link_definition_id=link_definition_id,
         link_name=link_name,
         source_node=source_node,
         source_interface=source_interface,
@@ -778,6 +780,124 @@ class TestHotConnectLink:
             .count()
         )
         assert count_after >= 1
+
+        link_state = (
+            test_db.query(models.LinkState)
+            .filter(models.LinkState.lab_id == lab.id)
+            .first()
+        )
+        assert link_state is not None
+        assert link_state.link_definition_id is not None
+        assert (
+            test_db.get(models.Link, link_state.link_definition_id) is not None
+        )
+
+    def test_repeated_hot_connect_reuses_same_link_identity(
+        self,
+        test_client: TestClient,
+        auth_headers: dict,
+        test_db: Session,
+        test_user: models.User,
+        sample_host: models.Host,
+    ):
+        """Repeated requests converge to one Link and one LinkState."""
+        lab = _make_running_lab(test_db, test_user.id)
+        _make_node(test_db, lab.id, gui_id="n1", container_name="R1", host_id=sample_host.id)
+        _make_node(test_db, lab.id, gui_id="n2", display_name="R2", container_name="R2", host_id=sample_host.id)
+
+        with patch(
+            "app.routers.labs._build_host_to_agent_map",
+            new_callable=AsyncMock,
+            return_value={sample_host.id: sample_host},
+        ), patch(
+            "app.routers.labs.create_link_if_ready",
+            new_callable=AsyncMock,
+            return_value=True,
+        ), patch("app.routers.labs.recompute_link_oper_state"):
+            for _ in range(2):
+                resp = test_client.post(
+                    f"/labs/{lab.id}/hot-connect",
+                    json={
+                        "source_node": "R1",
+                        "source_interface": "eth1",
+                        "target_node": "R2",
+                        "target_interface": "eth1",
+                    },
+                    headers=auth_headers,
+                )
+                assert resp.status_code == 200
+
+        links = test_db.query(models.Link).filter(models.Link.lab_id == lab.id).all()
+        states = test_db.query(models.LinkState).filter(models.LinkState.lab_id == lab.id).all()
+        assert len(links) == 1
+        assert len(states) == 1
+        assert states[0].link_definition_id == links[0].id
+
+    def test_hot_connect_reuses_state_by_link_definition_id(
+        self,
+        test_client: TestClient,
+        auth_headers: dict,
+        test_db: Session,
+        test_user: models.User,
+        sample_host: models.Host,
+    ):
+        """Hot-connect matches existing state by FK, not stored link_name string."""
+        lab = _make_running_lab(test_db, test_user.id)
+        src = _make_node(test_db, lab.id, gui_id="n1", container_name="R1", host_id=sample_host.id)
+        tgt = _make_node(test_db, lab.id, gui_id="n2", display_name="R2", container_name="R2", host_id=sample_host.id)
+
+        link_def = models.Link(
+            lab_id=lab.id,
+            link_name="R1:eth1-R2:eth1",
+            source_node_id=src.id,
+            source_interface="eth1",
+            target_node_id=tgt.id,
+            target_interface="eth1",
+        )
+        test_db.add(link_def)
+        test_db.flush()
+
+        existing = _make_link_state(
+            test_db,
+            lab.id,
+            link_definition_id=link_def.id,
+            link_name="legacy-link-name",
+            source_node="R1",
+            source_interface="eth1",
+            target_node="R2",
+            target_interface="eth1",
+            desired_state="up",
+            actual_state="down",
+            source_host_id=sample_host.id,
+            target_host_id=sample_host.id,
+        )
+
+        with patch(
+            "app.routers.labs._build_host_to_agent_map",
+            new_callable=AsyncMock,
+            return_value={sample_host.id: sample_host},
+        ), patch(
+            "app.routers.labs.create_link_if_ready",
+            new_callable=AsyncMock,
+            return_value=True,
+        ), patch("app.routers.labs.recompute_link_oper_state"):
+            resp = test_client.post(
+                f"/labs/{lab.id}/hot-connect",
+                json={
+                    "source_node": "R1",
+                    "source_interface": "eth1",
+                    "target_node": "R2",
+                    "target_interface": "eth1",
+                },
+                headers=auth_headers,
+            )
+
+        assert resp.status_code == 200
+        states = test_db.query(models.LinkState).filter(models.LinkState.lab_id == lab.id).all()
+        assert len(states) == 1
+        assert states[0].id == existing.id
+        assert states[0].link_definition_id == link_def.id
+        assert states[0].link_name == "R1:eth1-R2:eth1"
 
 
 # ===========================================================================

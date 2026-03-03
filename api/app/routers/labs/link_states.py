@@ -12,6 +12,7 @@ import sys
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app import db, models, schemas
@@ -22,11 +23,6 @@ from app.state import (
     LabState,
     LinkActualState,
     LinkDesiredState,
-)
-from app.tasks.live_links import (
-    _build_host_to_agent_map,
-    create_link_if_ready,
-    teardown_link,
 )
 from app.utils.http import raise_not_found, raise_unavailable
 from app.utils.lab import get_lab_or_404, get_lab_provider, require_lab_editor
@@ -74,13 +70,26 @@ def _choose_preferred_link_state(
 
 def _find_matching_link_state(
     states: list[models.LinkState],
+    link_definition_id: str,
+    node_device_map: dict[str, str | None] | None = None,
+) -> tuple[models.LinkState | None, list[models.LinkState]]:
+    """Find matching LinkState rows by deterministic Link definition id."""
+    matches = [s for s in states if s.link_definition_id == link_definition_id]
+    if not matches:
+        return None, []
+    preferred = _choose_preferred_link_state(matches, node_device_map)
+    return preferred, [s for s in matches if s.id != preferred.id]
+
+
+def _find_matching_link_state_by_endpoints(
+    states: list[models.LinkState],
     src_n: str,
     src_i: str,
     tgt_n: str,
     tgt_i: str,
     node_device_map: dict[str, str | None] | None = None,
 ) -> tuple[models.LinkState | None, list[models.LinkState]]:
-    """Find matching LinkState rows by canonical endpoints."""
+    """Compatibility matcher for legacy rows missing link_definition_id."""
     key = (src_n, src_i, tgt_n, tgt_i)
     matches = [s for s in states if link_state_endpoint_key(s, node_device_map) == key]
     if not matches:
@@ -105,6 +114,81 @@ def _parse_link_id_endpoints(link_id: str) -> tuple[str, str, str, str] | None:
 
 def _sync_link_oper_state(database: Session, link_state: models.LinkState) -> None:
     _pkg().recompute_link_oper_state(database, link_state)
+
+
+def _get_or_create_link_definition(
+    database: Session,
+    lab_id: str,
+    link_name: str,
+    src_n: str,
+    src_i: str,
+    tgt_n: str,
+    tgt_i: str,
+    *,
+    node_by_name: dict[str, models.Node] | None = None,
+    strict: bool = False,
+) -> models.Link | None:
+    """Resolve Link definition by canonical name, creating it if missing."""
+    link_def = (
+        database.query(models.Link)
+        .filter(
+            models.Link.lab_id == lab_id,
+            models.Link.link_name == link_name,
+        )
+        .first()
+    )
+    if link_def:
+        return link_def
+
+    node_by_name = node_by_name or {}
+    src_node = node_by_name.get(src_n) or (
+        database.query(models.Node)
+        .filter(models.Node.lab_id == lab_id, models.Node.container_name == src_n)
+        .first()
+    )
+    tgt_node = node_by_name.get(tgt_n) or (
+        database.query(models.Node)
+        .filter(models.Node.lab_id == lab_id, models.Node.container_name == tgt_n)
+        .first()
+    )
+    if not src_node or not tgt_node:
+        detail = (
+            f"Cannot resolve link endpoints for '{link_name}' "
+            f"(source='{src_n}', target='{tgt_n}')"
+        )
+        if strict:
+            raise_not_found(detail)
+        logger.warning("Skipping Link definition creation in lab %s: %s", lab_id, detail)
+        return None
+
+    link_def = models.Link(
+        lab_id=lab_id,
+        link_name=link_name,
+        source_node_id=src_node.id,
+        source_interface=src_i,
+        target_node_id=tgt_node.id,
+        target_interface=tgt_i,
+    )
+    savepoint = database.begin_nested()
+    try:
+        database.add(link_def)
+        database.flush()
+        savepoint.commit()
+        return link_def
+    except IntegrityError:
+        savepoint.rollback()
+        # Concurrent request likely inserted the same logical link.
+        existing = (
+            database.query(models.Link)
+            .filter(
+                models.Link.lab_id == lab_id,
+                models.Link.link_name == link_name,
+            )
+            .first()
+        )
+        if existing:
+            return existing
+        raise
 
 
 def _link_endpoint_payload(state: models.LinkState) -> list[dict[str, str]]:
@@ -197,11 +281,20 @@ def _upsert_link_states(
         .filter(models.Node.lab_id == lab_id)
         .all()
     )
+    node_name_to_def: dict[str, models.Node] = {n.container_name: n for n in db_nodes}
     node_name_to_host: dict[str, str | None] = {
         n.container_name: n.host_id for n in db_nodes
     }
     node_name_to_device: dict[str, str | None] = {
         n.container_name: n.device for n in db_nodes
+    }
+    link_def_by_name: dict[str, models.Link] = {
+        lnk.link_name: lnk
+        for lnk in (
+            database.query(models.Link)
+            .filter(models.Link.lab_id == lab_id)
+            .all()
+        )
     }
 
     # Also check NodePlacement for nodes without host_id set
@@ -245,8 +338,39 @@ def _upsert_link_states(
         )
         link_name = generate_link_name(src_n, src_i, tgt_n, tgt_i)
         current_link_names.add(link_name)
+        link_def = link_def_by_name.get(link_name)
+        if not link_def:
+            link_def = _get_or_create_link_definition(
+                database,
+                lab_id,
+                link_name,
+                src_n,
+                src_i,
+                tgt_n,
+                tgt_i,
+                node_by_name=node_name_to_def,
+            )
+            if not link_def:
+                continue
+            link_def_by_name[link_name] = link_def
 
-        existing, duplicates = _find_matching_link_state(existing_states, src_n, src_i, tgt_n, tgt_i, node_name_to_device)
+        existing, duplicates = _find_matching_link_state(
+            existing_states,
+            link_def.id,
+            node_name_to_device,
+        )
+        if not existing:
+            legacy_existing, legacy_duplicates = _find_matching_link_state_by_endpoints(
+                [state for state in existing_states if state.link_definition_id is None],
+                src_n,
+                src_i,
+                tgt_n,
+                tgt_i,
+                node_name_to_device,
+            )
+            if legacy_existing:
+                existing = legacy_existing
+                duplicates = duplicates + legacy_duplicates
         # Old naming variants can collide to the same canonical endpoints.
         # Delete duplicates immediately so the preferred row's link_name
         # rename doesn't hit the unique constraint (uq_link_state_lab_link).
@@ -264,12 +388,14 @@ def _upsert_link_states(
                 or existing.source_interface != src_i
                 or existing.target_node != tgt_n
                 or existing.target_interface != tgt_i
+                or existing.link_definition_id != link_def.id
             )
             existing.link_name = link_name
             existing.source_node = src_n
             existing.source_interface = src_i
             existing.target_node = tgt_n
             existing.target_interface = tgt_i
+            existing.link_definition_id = link_def.id
             # If this was previously a stale duplicate row, re-activate.
             if existing.desired_state == "deleted":
                 existing.desired_state = LinkDesiredState.UP
@@ -290,6 +416,7 @@ def _upsert_link_states(
 
             new_state = models.LinkState(
                 lab_id=lab_id,
+                link_definition_id=link_def.id,
                 link_name=link_name,
                 source_node=src_n,
                 source_interface=src_i,
@@ -351,7 +478,7 @@ def _ensure_link_states_exist(
     if service.has_nodes(lab_id):
         graph = service.export_to_graph(lab_id)
         # Ignore the added/removed info - this is just for ensuring records exist
-        _upsert_link_states(database, lab_id, graph)
+        _pkg()._upsert_link_states(database, lab_id, graph)
         database.commit()
 
 
@@ -372,7 +499,7 @@ def list_link_states(
     service = _pkg().TopologyService(database)
     if service.has_nodes(lab.id):
         graph = service.export_to_graph(lab.id)
-        _upsert_link_states(database, lab.id, graph)
+        _pkg()._upsert_link_states(database, lab.id, graph)
         database.commit()
 
     states = (
@@ -626,7 +753,7 @@ def refresh_link_states(
         raise_not_found("Topology not found")
     graph = service.export_to_graph(lab.id)
 
-    created, updated, _, _ = _upsert_link_states(database, lab.id, graph)
+    created, updated, _, _ = _pkg()._upsert_link_states(database, lab.id, graph)
     database.commit()
 
     return schemas.LinkStateRefreshResponse(
@@ -688,9 +815,30 @@ async def hot_connect_link(
         target_device=_tgt_db_node.device if _tgt_db_node else None,
     )
     link_name = generate_link_name(src_n, src_i, tgt_n, tgt_i)
+    _hot_node_by_name: dict[str, models.Node] = {}
+    if _src_db_node:
+        _hot_node_by_name[_src_db_node.container_name] = _src_db_node
+    if _tgt_db_node:
+        _hot_node_by_name[_tgt_db_node.container_name] = _tgt_db_node
+    link_def = _get_or_create_link_definition(
+        database,
+        lab_id,
+        link_name,
+        src_n,
+        src_i,
+        tgt_n,
+        tgt_i,
+        node_by_name=_hot_node_by_name,
+        strict=True,
+    )
+    if link_def is None:
+        raise_not_found(f"Link definition '{link_name}' could not be resolved")
     existing_states = (
         database.query(models.LinkState)
-        .filter(models.LinkState.lab_id == lab_id)
+        .filter(
+            models.LinkState.lab_id == lab_id,
+            models.LinkState.link_definition_id == link_def.id,
+        )
         .all()
     )
     _device_map: dict[str, str | None] = {}
@@ -699,14 +847,31 @@ async def hot_connect_link(
     if _tgt_db_node:
         _device_map[_tgt_db_node.container_name] = _tgt_db_node.device
     link_state, duplicate_states = _find_matching_link_state(
-        existing_states, src_n, src_i, tgt_n, tgt_i, _device_map
+        existing_states,
+        link_def.id,
+        _device_map,
     )
     for duplicate in duplicate_states:
         duplicate.desired_state = "deleted"  # not in LinkDesiredState enum - soft-delete marker
-
     if not link_state:
-        # Backward compatibility fallback: exact name match
-        link_state = next((s for s in existing_states if s.link_name == link_name), None)
+        legacy_states = (
+            database.query(models.LinkState)
+            .filter(
+                models.LinkState.lab_id == lab_id,
+                models.LinkState.link_definition_id.is_(None),
+            )
+            .all()
+        )
+        link_state, legacy_duplicates = _find_matching_link_state_by_endpoints(
+            legacy_states,
+            src_n,
+            src_i,
+            tgt_n,
+            tgt_i,
+            _device_map,
+        )
+        for duplicate in legacy_duplicates:
+            duplicate.desired_state = "deleted"  # not in LinkDesiredState enum - soft-delete marker
 
     if not link_state:
 
@@ -750,6 +915,7 @@ async def hot_connect_link(
 
         link_state = models.LinkState(
             lab_id=lab_id,
+            link_definition_id=link_def.id,
             link_name=link_name,
             source_node=src_n,
             source_interface=src_i,
@@ -761,12 +927,29 @@ async def hot_connect_link(
             desired_state=LinkDesiredState.UP,
             actual_state=LinkActualState.UNKNOWN,
         )
-        database.add(link_state)
-        database.flush()
+        savepoint = database.begin_nested()
+        try:
+            database.add(link_state)
+            database.flush()
+            savepoint.commit()
+        except IntegrityError:
+            savepoint.rollback()
+            existing = (
+                database.query(models.LinkState)
+                .filter(
+                    models.LinkState.lab_id == lab_id,
+                    models.LinkState.link_name == link_name,
+                )
+                .first()
+            )
+            if not existing:
+                raise
+            link_state = existing
         _sync_link_oper_state(database, link_state)
     else:
         # Ensure canonical storage and reactivate stale records.
         link_state.link_name = link_name
+        link_state.link_definition_id = link_def.id
         link_state.source_node = src_n
         link_state.source_interface = src_i
         link_state.target_node = tgt_n
@@ -775,11 +958,11 @@ async def hot_connect_link(
             link_state.desired_state = LinkDesiredState.UP
         _sync_link_oper_state(database, link_state)
 
-    host_to_agent = await _build_host_to_agent_map(database, lab_id)
+    host_to_agent = await _pkg()._build_host_to_agent_map(database, lab_id)
     if not host_to_agent:
         raise_unavailable("No healthy agent available")
 
-    success = await create_link_if_ready(database, lab_id, link_state, host_to_agent)
+    success = await _pkg().create_link_if_ready(database, lab_id, link_state, host_to_agent)
     database.commit()
 
     if success:
@@ -830,27 +1013,53 @@ async def hot_disconnect_link(
         for n in database.query(models.Node).filter(models.Node.lab_id == lab_id).all()
     }
     parsed = _parse_link_id_endpoints(link_id)
+    canonical_link_name: str | None = None
     link_state = None
     if parsed:
         src_n, src_i, tgt_n, tgt_i = parsed
-        link_state, _ = _find_matching_link_state(link_states, src_n, src_i, tgt_n, tgt_i, _del_device_map)
+        canonical_link_name = generate_link_name(src_n, src_i, tgt_n, tgt_i)
+        link_def = (
+            database.query(models.Link)
+            .filter(
+                models.Link.lab_id == lab_id,
+                models.Link.link_name == canonical_link_name,
+            )
+            .first()
+        )
+        if link_def:
+            candidate_states = [
+                ls for ls in link_states if ls.link_definition_id == link_def.id
+            ]
+            link_state, _ = _find_matching_link_state(
+                candidate_states,
+                link_def.id,
+                _del_device_map,
+            )
 
     if link_state is None:
-        # Backward compatibility with exact legacy IDs.
-        for ls in link_states:
-            if link_id == f"{ls.source_node}:{ls.source_interface}-{ls.target_node}:{ls.target_interface}" or \
-               link_id == f"{ls.target_node}:{ls.target_interface}-{ls.source_node}:{ls.source_interface}":
-                link_state = ls
-                break
+        # Backward compatibility for historical ids in older clients/tests.
+        candidate_link_names = {link_id}
+        if canonical_link_name:
+            candidate_link_names.add(canonical_link_name)
+        link_state = (
+            database.query(models.LinkState)
+            .filter(
+                models.LinkState.lab_id == lab_id,
+                models.LinkState.link_name.in_(list(candidate_link_names)),
+            )
+            .order_by(models.LinkState.updated_at.desc())
+            .first()
+        )
 
     if not link_state:
         return schemas.HotConnectResponse(success=False, error=f"Link '{link_id}' not found")
 
-    host_to_agent = await _build_host_to_agent_map(database, lab_id)
+    host_to_agent = await _pkg()._build_host_to_agent_map(database, lab_id)
     if not host_to_agent:
         raise_unavailable("No healthy agent available")
 
     link_info = {
+        "link_state_id": link_state.id,
         "link_name": link_state.link_name,
         "source_node": link_state.source_node,
         "source_interface": link_state.source_interface,
@@ -862,7 +1071,7 @@ async def hot_disconnect_link(
         "target_host_id": link_state.target_host_id,
         "vni": link_state.vni,
     }
-    success = await teardown_link(database, lab_id, link_info, host_to_agent)
+    success = await _pkg().teardown_link(database, lab_id, link_info, host_to_agent)
     database.commit()
 
     if success:

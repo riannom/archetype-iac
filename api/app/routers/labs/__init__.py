@@ -56,7 +56,12 @@ from app.storage import (  # noqa: E402,F401
     lab_workspace,
     read_layout,
 )
-from app.tasks.live_links import process_link_changes  # noqa: E402,F401
+from app.tasks.live_links import (  # noqa: E402,F401
+    _build_host_to_agent_map,
+    create_link_if_ready,
+    teardown_link,
+    process_link_changes,
+)
 from app.tasks.live_nodes import process_node_changes  # noqa: E402,F401
 from app.utils.agents import get_online_agent_for_lab  # noqa: E402,F401
 from app.utils.async_tasks import safe_create_task  # noqa: E402,F401

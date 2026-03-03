@@ -92,3 +92,31 @@ async def test_update_node_placements_no_event_when_host_unchanged(
         )
 
     mock_emit.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_update_node_placements_skips_create_when_node_definition_missing(
+    test_db, sample_lab, sample_host,
+) -> None:
+    with patch(
+        "app.tasks.jobs.emit_node_placement_changed",
+        new_callable=AsyncMock,
+    ) as mock_emit:
+        await _update_node_placements(
+            test_db,
+            sample_lab.id,
+            sample_host.id,
+            ["missing-node"],
+            status="deployed",
+        )
+
+    placement = (
+        test_db.query(models.NodePlacement)
+        .filter(
+            models.NodePlacement.lab_id == sample_lab.id,
+            models.NodePlacement.node_name == "missing-node",
+        )
+        .first()
+    )
+    assert placement is None
+    mock_emit.assert_not_awaited()

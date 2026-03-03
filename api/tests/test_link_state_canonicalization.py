@@ -98,6 +98,15 @@ def test_upsert_link_states_deduplicates_vendor_interface_variants(
     assert states[0].link_name == "r1:eth1-r2:eth2"
     assert states[0].source_interface == "eth1"
     assert states[0].target_interface == "eth2"
+    assert states[0].link_definition_id is not None
+
+    link_defs = (
+        test_db.query(models.Link)
+        .filter(models.Link.lab_id == sample_lab.id)
+        .all()
+    )
+    assert len(link_defs) == 1
+    assert link_defs[0].id == states[0].link_definition_id
 
 
 def test_links_reconcile_endpoint_uses_db_session_dependency(

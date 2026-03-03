@@ -167,11 +167,13 @@ async def deploy_node_immediately(
     node_def = None
     if node_state.node_definition_id:
         node_def = session.get(models.Node, node_state.node_definition_id)
-    if not node_def:
-        node_def = session.query(models.Node).filter(
-            models.Node.lab_id == lab_id,
-            models.Node.container_name == node_state.node_name,
-        ).first()
+        if not node_def:
+            logger.warning(
+                "NodeState %s in lab %s references missing Node definition %s",
+                node_state.id,
+                lab_id,
+                node_state.node_definition_id,
+            )
 
     if node_def:
         provider = get_node_provider(node_def, session)
@@ -240,6 +242,7 @@ async def destroy_node_immediately(
     """
     node_name = node_info.get("node_name", "")
     node_info.get("node_id", "")
+    node_definition_id = node_info.get("node_definition_id")
     host_id = node_info.get("host_id")
     actual_state = node_info.get("actual_state", "unknown")
 
@@ -251,7 +254,12 @@ async def destroy_node_immediately(
     if actual_state in ("undeployed",):
         logger.debug(f"Node {node_name} was not deployed, skipping destroy")
         # Still need to clean up NodeState, NodePlacement records
-        _cleanup_node_records(session, lab_id, node_name)
+        _cleanup_node_records(
+            session,
+            lab_id,
+            node_name=node_name,
+            node_definition_id=node_definition_id,
+        )
         return True
 
     # Find agent for this node
@@ -278,7 +286,12 @@ async def destroy_node_immediately(
         if result.get("success"):
             logger.info(f"Node {node_name} destroyed on agent {agent.name}")
             # Clean up database records
-            _cleanup_node_records(session, lab_id, node_name)
+            _cleanup_node_records(
+                session,
+                lab_id,
+                node_name=node_name,
+                node_definition_id=node_definition_id,
+            )
             return True
         else:
             error = result.get("error", "Unknown error")
@@ -289,22 +302,36 @@ async def destroy_node_immediately(
         return False
 
 
-def _cleanup_node_records(session: Session, lab_id: str, node_name: str) -> None:
+def _cleanup_node_records(
+    session: Session,
+    lab_id: str,
+    node_name: str,
+    node_definition_id: str | None = None,
+) -> None:
     """Clean up database records for a removed node.
 
     Deletes NodeState, NodePlacement, and related records.
     """
-    # Delete NodeState
-    session.query(models.NodeState).filter(
-        models.NodeState.lab_id == lab_id,
-        models.NodeState.node_name == node_name,
-    ).delete()
-
-    # Delete NodePlacement
-    session.query(models.NodePlacement).filter(
-        models.NodePlacement.lab_id == lab_id,
-        models.NodePlacement.node_name == node_name,
-    ).delete()
+    if node_definition_id:
+        # Deterministic identity path.
+        session.query(models.NodeState).filter(
+            models.NodeState.lab_id == lab_id,
+            models.NodeState.node_definition_id == node_definition_id,
+        ).delete()
+        session.query(models.NodePlacement).filter(
+            models.NodePlacement.lab_id == lab_id,
+            models.NodePlacement.node_definition_id == node_definition_id,
+        ).delete()
+    else:
+        # Compatibility fallback for legacy rows missing FK identity.
+        session.query(models.NodeState).filter(
+            models.NodeState.lab_id == lab_id,
+            models.NodeState.node_name == node_name,
+        ).delete()
+        session.query(models.NodePlacement).filter(
+            models.NodePlacement.lab_id == lab_id,
+            models.NodePlacement.node_name == node_name,
+        ).delete()
 
     session.commit()
     logger.debug(f"Cleaned up records for node {node_name} in lab {lab_id}")

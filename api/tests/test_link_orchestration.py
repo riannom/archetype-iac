@@ -215,7 +215,8 @@ class TestCreateDeploymentLinks:
         existing_state = models.LinkState(
             id=str(uuid4()),
             lab_id=lab.id,
-            link_name="R1:eth1-R2:eth1",
+            link_definition_id=links[0].id,
+            link_name="legacy-r1:Ethernet1-r2:Ethernet1",
             source_node="archetype-test-r1",
             source_interface="eth1",
             target_node="archetype-test-r2",
@@ -241,6 +242,8 @@ class TestCreateDeploymentLinks:
             ).all()
             assert len(link_states) == 1
             assert link_states[0].id == existing_state.id
+            assert link_states[0].link_definition_id == links[0].id
+            assert link_states[0].link_name == "archetype-test-r1:eth1-archetype-test-r2:eth1"
 
 
 class TestCreateSameHostLink:

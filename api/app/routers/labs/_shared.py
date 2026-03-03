@@ -7,7 +7,6 @@ Functions here are imported by multiple sub-modules and/or by external modules
 from __future__ import annotations
 
 import json
-import logging
 
 from sqlalchemy.orm import Session
 
@@ -16,9 +15,7 @@ from app.config import settings
 from app.jobs import has_conflicting_job as _has_conflicting_job
 from app.state import NodeActualState, NodeDesiredState
 from app.utils.async_tasks import safe_create_task
-
-logger = logging.getLogger(__name__)
-
+from app.utils.http import raise_not_found
 
 def has_conflicting_job(*args, **kwargs):
     """Backward-compatible export for tests monkeypatching app.routers.labs."""
@@ -88,6 +85,18 @@ def _get_or_create_node_state(
         query = query.with_for_update()
     state = query.first()
     if state:
+        if not state.node_definition_id:
+            node_def = (
+                database.query(models.Node)
+                .filter(models.Node.lab_id == lab_id, models.Node.gui_id == node_id)
+                .first()
+            )
+            if node_def:
+                state.node_definition_id = node_def.id
+                if state.node_name != node_def.container_name:
+                    state.node_name = node_def.container_name
+                database.commit()
+                database.refresh(state)
         return state
 
     # Look up Node definition to get correct container_name
@@ -96,21 +105,14 @@ def _get_or_create_node_state(
         .filter(models.Node.lab_id == lab_id, models.Node.gui_id == node_id)
         .first()
     )
-
-    if node_def:
-        node_name = node_def.container_name
-        node_definition_id = node_def.id
-    else:
-        # Fallback: placeholder will be corrected by topology sync
-        logger.warning(f"Creating NodeState with placeholder for {node_id}")
-        node_name = node_id
-        node_definition_id = None
+    if not node_def:
+        raise_not_found(f"Node '{node_id}' not found in topology")
 
     state = models.NodeState(
         lab_id=lab_id,
         node_id=node_id,
-        node_name=node_name,
-        node_definition_id=node_definition_id,
+        node_name=node_def.container_name,
+        node_definition_id=node_def.id,
         desired_state=initial_desired_state,
         actual_state=NodeActualState.UNDEPLOYED,
     )

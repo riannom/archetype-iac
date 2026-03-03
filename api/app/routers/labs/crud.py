@@ -135,14 +135,25 @@ def _upsert_node_states(
             continue  # This state was reused with a new node_id
         if existing_node_id not in current_node_ids:
             # Get placement info for teardown
-            placement = (
-                database.query(models.NodePlacement)
-                .filter(
-                    models.NodePlacement.lab_id == lab_id,
-                    models.NodePlacement.node_name == existing_state.node_name,
+            placement = None
+            if existing_state.node_definition_id:
+                placement = (
+                    database.query(models.NodePlacement)
+                    .filter(
+                        models.NodePlacement.lab_id == lab_id,
+                        models.NodePlacement.node_definition_id == existing_state.node_definition_id,
+                    )
+                    .first()
                 )
-                .first()
-            )
+            if not placement:
+                placement = (
+                    database.query(models.NodePlacement)
+                    .filter(
+                        models.NodePlacement.lab_id == lab_id,
+                        models.NodePlacement.node_name == existing_state.node_name,
+                    )
+                    .first()
+                )
             # Determine provider before node definition is gone
             provider = "docker"
             node_def = database.query(models.Node).filter(
@@ -158,6 +169,7 @@ def _upsert_node_states(
             removed_node_info.append({
                 "node_id": existing_state.node_id,
                 "node_name": existing_state.node_name,
+                "node_definition_id": existing_state.node_definition_id,
                 "actual_state": existing_state.actual_state,
                 "host_id": placement.host_id if placement else None,
                 "provider": provider,

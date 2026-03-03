@@ -414,6 +414,41 @@ class TestIdempotency:
         )
         assert [placement.node_name for placement in remaining] == ["r1"]
 
+    @pytest.mark.asyncio
+    async def test_cleanup_lab_placements_does_not_use_display_name(
+        self, test_db, sample_lab, sample_host,
+    ):
+        """Display names are ignored for placement identity matching."""
+        from app.tasks.cleanup_handler import _cleanup_lab_placements
+
+        test_db.add(
+            models.Node(
+                lab_id=sample_lab.id,
+                gui_id="node-r1",
+                display_name="R1",
+                container_name="r1",
+            )
+        )
+        test_db.flush()
+        test_db.add(
+            models.NodePlacement(
+                lab_id=sample_lab.id,
+                node_name="R1",
+                host_id=sample_host.id,
+                status="deployed",
+            )
+        )
+        test_db.commit()
+
+        @contextmanager
+        def _test_session():
+            yield test_db
+
+        with patch("app.tasks.cleanup_handler.get_session", _test_session):
+            result = await _cleanup_lab_placements(sample_lab.id)
+
+        assert result.deleted == 1
+
 
 # ---------------------------------------------------------------------------
 # CleanupEvent Serialization Tests
