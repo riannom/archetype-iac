@@ -107,7 +107,8 @@ async def delete_vxlan_device(name: str, bridge: str) -> None:
     else:
         logger.warning(
             f"VXLAN device delete incomplete: name={name} bridge={bridge} "
-            f"ovs_rc={ovs_code} link_rc={link_code}"
+            f"ovs_rc={ovs_code} ovs_err={ovs_err!r} "
+            f"link_rc={link_code} link_err={link_err!r}"
         )
 
 

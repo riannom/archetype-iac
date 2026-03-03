@@ -24,7 +24,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-async def batch_read_ovs_ports(bridge_name: str) -> dict[str, dict[str, Any]]:
+async def batch_read_ovs_ports(bridge_name: str) -> dict[str, dict[str, Any]] | None:
     """Read all VXLAN port state from OVS using batch JSON queries.
 
     Scopes to *bridge_name* first (``list-ports``), then reads Port and
@@ -35,14 +35,17 @@ async def batch_read_ovs_ports(bridge_name: str) -> dict[str, dict[str, Any]]:
         bridge_name: OVS bridge name to query
 
     Returns:
-        Dict mapping port_name -> {name, tag, type, ofport}
+        Dict mapping port_name -> {name, tag, type, ofport}, or
+        ``None`` if OVS could not be queried (callers must not treat
+        this as "no ports exist").
     """
     result: dict[str, dict[str, Any]] = {}
 
     # Step 0: scope to ports on this bridge only
     code, stdout, _ = await _shared_ovs_vsctl("list-ports", bridge_name)
     if code != 0:
-        return result
+        logger.warning(f"OVS list-ports failed for {bridge_name} (rc={code}), skipping read")
+        return None
     bridge_ports = {
         p.strip() for p in stdout.strip().split("\n")
         if p.strip().startswith("vxlan")
@@ -186,6 +189,10 @@ async def declare_state(
     declared_port_names: set[str] = set()
 
     ovs_ports = await manager._batch_read_ovs_ports()
+
+    if ovs_ports is None:
+        logger.warning("Declare-state: OVS query failed, skipping convergence")
+        return {"results": [], "orphans_removed": [], "skipped": "ovs_read_error"}
 
     for t in tunnels:
         link_id = t["link_id"]

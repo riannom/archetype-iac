@@ -1384,11 +1384,12 @@ class OverlayManager:
         """
         return await _declare_state_impl(self, tunnels, declared_labs)
 
-    async def _batch_read_ovs_ports(self) -> dict[str, dict[str, Any]]:
+    async def _batch_read_ovs_ports(self) -> dict[str, dict[str, Any]] | None:
         """Read all OVS port state in a single call.
 
         Returns:
-            Dict mapping port_name -> {tag, type, options}
+            Dict mapping port_name -> {tag, type, options}, or
+            ``None`` if OVS could not be queried.
         """
         return await _batch_read_ovs_ports_impl(self._bridge_name)
 

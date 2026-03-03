@@ -244,6 +244,113 @@ async def test_repair_failure_does_not_crash(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_ovs_failure_skips_repair(tmp_path):
+    """Health monitor skips repair when OVS query returns None (failure)."""
+    overlay = _make_overlay(tmp_path)
+
+    from agent.network.overlay import LinkTunnel
+    overlay._link_tunnels["link-1"] = LinkTunnel(
+        link_id="link-1",
+        vni=50000,
+        local_ip="10.0.0.1",
+        remote_ip="10.0.0.2",
+        local_vlan=3001,
+        interface_name="vxlan-abc12345",
+        lab_id="lab-1",
+        tenant_mtu=1400,
+    )
+
+    monitor = OverlayHealthMonitor(interval=60)
+
+    with patch(
+        "agent.agent_state.get_overlay_manager",
+        return_value=overlay,
+    ), patch(
+        "agent.network.overlay_state.batch_read_ovs_ports",
+        new_callable=AsyncMock,
+        return_value=None,  # OVS query failed
+    ):
+        result = await monitor.check_and_repair()
+
+    # Must NOT attempt any repairs when OVS state is unknown
+    assert result["checked"] == 0
+    assert result["repaired"] == 0
+    assert result.get("skipped") == "ovs_read_error"
+    overlay._create_vxlan_device.assert_not_called()
+    overlay._ovs_vsctl.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_race_guard_skips_removed_tunnel(tmp_path):
+    """Monitor skips repair if tunnel was removed between snapshot and await."""
+    overlay = _make_overlay(tmp_path)
+
+    from agent.network.overlay import LinkTunnel
+    overlay._link_tunnels["link-1"] = LinkTunnel(
+        link_id="link-1",
+        vni=50000,
+        local_ip="10.0.0.1",
+        remote_ip="10.0.0.2",
+        local_vlan=3001,
+        interface_name="vxlan-abc12345",
+        lab_id="lab-1",
+        tenant_mtu=1400,
+    )
+
+    # Simulate race: after del-port call, tunnel is removed from tracking
+    original_ovs_vsctl = overlay._ovs_vsctl
+    async def _del_port_and_remove(*args):
+        if args[0] == "del-port":
+            # Concurrent deletion removes tunnel from tracking
+            overlay._link_tunnels.pop("link-1", None)
+        return await original_ovs_vsctl(*args)
+
+    overlay._ovs_vsctl = AsyncMock(side_effect=_del_port_and_remove)
+
+    monitor = OverlayHealthMonitor(interval=60)
+
+    with patch(
+        "agent.agent_state.get_overlay_manager",
+        return_value=overlay,
+    ), patch(
+        "agent.network.overlay_state.batch_read_ovs_ports",
+        new_callable=AsyncMock,
+        return_value={
+            "vxlan-abc12345": {
+                "name": "vxlan-abc12345",
+                "tag": 3001,
+                "type": "vxlan",
+                "ofport": -1,
+            },
+        },
+    ):
+        result = await monitor.check_and_repair()
+
+    # The tunnel was seen as broken, but the race guard prevents recreation
+    # because link-1 was removed from _link_tunnels before create was called
+    assert result["checked"] == 1
+    assert result["repaired"] == 0
+    overlay._create_vxlan_device.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_start_runs_initial_check():
+    """start() runs one immediate check_and_repair before entering loop."""
+    monitor = OverlayHealthMonitor(interval=300)
+
+    with patch.object(
+        monitor, "check_and_repair",
+        new_callable=AsyncMock,
+        return_value={"checked": 0, "repaired": 0},
+    ) as mock_check:
+        await monitor.start()
+        # Initial check should have been called
+        mock_check.assert_called_once()
+
+        await monitor.stop()
+
+
+@pytest.mark.asyncio
 async def test_start_stop():
     """Monitor can be started and stopped cleanly."""
     monitor = OverlayHealthMonitor(interval=300)
