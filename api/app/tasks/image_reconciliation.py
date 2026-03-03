@@ -157,6 +157,10 @@ async def discover_unmanifested_images() -> int:
             .filter(models.Host.status == "online")
             .all()
         )
+        # Eagerly load attributes before session closes
+        for h in online_hosts:
+            _ = h.id, h.name, h.address, h.status, h.last_heartbeat, h.capabilities
+        session.expunge_all()
 
     # Collect all unique Docker tags across agents
     all_agent_tags: set[str] = set()
