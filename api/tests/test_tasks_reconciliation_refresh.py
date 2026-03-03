@@ -1,10 +1,9 @@
 """Tests for app/tasks/reconciliation_refresh.py - Agent refresh and boot-readiness checks."""
 from __future__ import annotations
 
-import asyncio
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 
 import pytest

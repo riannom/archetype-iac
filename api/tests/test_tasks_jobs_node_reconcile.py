@@ -1,9 +1,7 @@
 """Tests for app/tasks/jobs_node_reconcile.py - Node reconciliation job and cross-host links."""
 from __future__ import annotations
 
-import asyncio
 from contextlib import contextmanager
-from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
@@ -11,7 +9,7 @@ import pytest
 from sqlalchemy.orm import Session
 
 from app import models
-from app.state import HostStatus, JobStatus, LinkActualState, NodeActualState
+from app.state import JobStatus
 
 
 def _fake_get_session(session):

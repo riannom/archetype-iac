@@ -4,9 +4,7 @@ Uses the TestClient + auth fixtures from conftest.py.
 """
 from __future__ import annotations
 
-from unittest.mock import AsyncMock
 
-import pytest
 
 from app import models
 
@@ -228,7 +226,6 @@ class TestAuthRequirements:
     ):
         """A webhook created by user A should not be visible to user B."""
         from app.auth import create_access_token, hash_password
-        from app.config import settings
 
         # Create webhook as user A
         create_resp = _create_webhook(test_client, auth_headers)

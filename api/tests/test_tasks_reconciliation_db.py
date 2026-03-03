@@ -10,10 +10,7 @@ Covers:
 """
 from __future__ import annotations
 
-import asyncio
-from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
-from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
@@ -23,9 +20,7 @@ from sqlalchemy.orm import Session
 from app import models
 from app.state import (
     LinkActualState,
-    LinkDesiredState,
     NodeActualState,
-    NodeDesiredState,
 )
 
 
@@ -407,7 +402,7 @@ class TestBackfillPlacementNodeIds:
         """Placements with NULL node_definition_id trigger a warning but no backfill."""
         from app.tasks.reconciliation_db import _backfill_placement_node_ids
 
-        n1 = _make_node(test_db, sample_lab.id, "R1")
+        _make_node(test_db, sample_lab.id, "R1")
         h1 = _make_host(test_db, "host-bf1", "Agent BF1")
 
         p = models.NodePlacement(
@@ -631,7 +626,7 @@ class TestReconcileSingleLab:
                 "app.tasks.reconciliation_db.agent_client.is_agent_online",
                 return_value=True,
             ):
-                result = await _reconcile_single_lab(test_db, sample_lab.id)
+                await _reconcile_single_lab(test_db, sample_lab.id)
                 # Should have proceeded (not skipped)
                 mock_status.assert_called()
 
@@ -986,11 +981,11 @@ class TestReconcileLabLinkStates:
 
         n1 = _make_node(test_db, sample_lab.id, "R1")
         n2 = _make_node(test_db, sample_lab.id, "R2")
-        ns1 = _make_node_state(
+        _make_node_state(
             test_db, sample_lab.id, n1,
             node_id="g1", node_name="R1", desired="running", actual="running",
         )
-        ns2 = _make_node_state(
+        _make_node_state(
             test_db, sample_lab.id, n2,
             node_id="g2", node_name="R2", desired="running", actual="running",
         )
@@ -1144,7 +1139,7 @@ class TestReconcileErrorHandling:
                 return_value=True,
             ):
                 # Should not raise
-                result = await _reconcile_single_lab(test_db, sample_lab.id)
+                await _reconcile_single_lab(test_db, sample_lab.id)
                 # Changes count doesn't matter — important that it didn't crash
 
     @pytest.mark.asyncio
