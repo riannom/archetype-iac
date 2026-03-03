@@ -25,47 +25,81 @@ logger = logging.getLogger(__name__)
 
 
 async def batch_read_ovs_ports(bridge_name: str) -> dict[str, dict[str, Any]]:
-    """Read all OVS port state in a single call.
+    """Read all VXLAN port state from OVS using batch JSON queries.
+
+    Scopes to *bridge_name* first (``list-ports``), then reads Port and
+    Interface details in two batch calls — 3 total subprocesses regardless
+    of port count.
 
     Args:
         bridge_name: OVS bridge name to query
 
     Returns:
-        Dict mapping port_name -> {tag, type, options}
+        Dict mapping port_name -> {name, tag, type, ofport}
     """
     result: dict[str, dict[str, Any]] = {}
+
+    # Step 0: scope to ports on this bridge only
     code, stdout, _ = await _shared_ovs_vsctl("list-ports", bridge_name)
     if code != 0:
         return result
+    bridge_ports = {
+        p.strip() for p in stdout.strip().split("\n")
+        if p.strip().startswith("vxlan")
+    }
+    if not bridge_ports:
+        return result
 
-    port_names = [p.strip() for p in stdout.strip().split("\n") if p.strip()]
+    # Batch 1: port names + VLAN tags (global table, filtered to bridge_ports)
+    port_tags: dict[str, int] = {}
+    code, json_out, _ = await _shared_ovs_vsctl(
+        "--format=json", "--", "--columns=name,tag", "list", "Port",
+    )
+    if code == 0 and json_out.strip():
+        try:
+            data = json.loads(json_out)
+            for row in data.get("data", []):
+                name = row[0]
+                if not isinstance(name, str) or name not in bridge_ports:
+                    continue
+                tag = row[1]
+                if isinstance(tag, int) and tag > 0:
+                    port_tags[name] = tag
+                else:
+                    port_tags[name] = 0
+        except (json.JSONDecodeError, IndexError, TypeError) as e:
+            logger.debug(f"Failed to parse batch port tags: {e}")
 
-    for port_name in port_names:
-        if not port_name.startswith("vxlan"):
-            continue
+    if not port_tags:
+        return result
 
-        info: dict[str, Any] = {"name": port_name}
+    # Batch 2: interface type + ofport (global table, filtered to bridge_ports)
+    iface_info: dict[str, tuple[str, int]] = {}  # name -> (type, ofport)
+    code, json_out, _ = await _shared_ovs_vsctl(
+        "--format=json", "--", "--columns=name,type,ofport", "list", "Interface",
+    )
+    if code == 0 and json_out.strip():
+        try:
+            data = json.loads(json_out)
+            for row in data.get("data", []):
+                name = row[0]
+                if not isinstance(name, str) or name not in bridge_ports:
+                    continue
+                itype = row[1] if isinstance(row[1], str) else ""
+                ofport = row[2] if isinstance(row[2], int) else -1
+                iface_info[name] = (itype, ofport)
+        except (json.JSONDecodeError, IndexError, TypeError) as e:
+            logger.debug(f"Failed to parse batch interface info: {e}")
 
-        # Read tag
-        code, tag_out, _ = await _shared_ovs_vsctl("get", "port", port_name, "tag")
-        if code == 0:
-            tag_str = tag_out.strip()
-            if tag_str and tag_str != "[]":
-                try:
-                    info["tag"] = int(tag_str)
-                except ValueError:
-                    info["tag"] = 0
-            else:
-                info["tag"] = 0
-        else:
-            info["tag"] = 0
-
-        # Read interface type
-        code, type_out, _ = await _shared_ovs_vsctl("get", "interface", port_name, "type")
-        if code == 0:
-            info["type"] = type_out.strip().strip('"')
-
-        result[port_name] = info
+    # Merge into result
+    for name, tag in port_tags.items():
+        itype, ofport = iface_info.get(name, ("", -1))
+        result[name] = {
+            "name": name,
+            "tag": tag,
+            "type": itype,
+            "ofport": ofport,
+        }
 
     return result
 
@@ -151,7 +185,7 @@ async def declare_state(
     declared_labs_set = set(declared_labs or [])
     declared_port_names: set[str] = set()
 
-    ovs_ports = await batch_read_ovs_ports(manager._bridge_name)
+    ovs_ports = await manager._batch_read_ovs_ports()
 
     for t in tunnels:
         link_id = t["link_id"]
@@ -168,6 +202,17 @@ async def declare_state(
 
         try:
             port_info = ovs_ports.get(port_name)
+
+            # Detect broken OVS ports: the OVS entry exists but the
+            # underlying Linux VXLAN netdev is gone (ofport == -1).
+            # Delete the stale OVS port so it falls through to creation.
+            if port_info and port_info.get("ofport") == -1:
+                logger.warning(
+                    f"Declare-state: {port_name} has ofport=-1 "
+                    f"(underlying device missing), deleting stale OVS port"
+                )
+                await manager._ovs_vsctl("del-port", manager._bridge_name, port_name)
+                port_info = None
 
             if port_info:
                 current_tag = port_info.get("tag", 0)
@@ -307,7 +352,7 @@ async def declare_state(
             except Exception as e:
                 logger.warning(f"Failed to remove orphan {port_name}: {e}")
 
-    await write_declared_state_cache(tunnels)
+    await manager._write_declared_state_cache(tunnels)
 
     return {"results": results, "orphans_removed": orphans_removed}
 

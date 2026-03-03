@@ -354,8 +354,8 @@ async def test_declare_writes_local_cache(tmp_path):
 
     overlay._batch_read_ovs_ports = AsyncMock(return_value={})
 
-    # Use real cache writer
-    with patch("agent.network.overlay.settings") as mock_settings:
+    # Use real cache writer — patch settings where overlay_state imports it
+    with patch("agent.network.overlay_state.settings") as mock_settings:
         mock_settings.workspace_path = str(tmp_path)
         mock_settings.overlay_mtu = 1400
 
@@ -384,7 +384,7 @@ async def test_cache_load_on_startup(tmp_path):
     cache_path = tmp_path / "declared_overlay_state.json"
     cache_path.write_text(json.dumps(cache_data))
 
-    with patch("agent.network.overlay.settings") as mock_settings:
+    with patch("agent.network.overlay_state.settings") as mock_settings:
         mock_settings.workspace_path = str(tmp_path)
 
         loaded = await overlay.load_declared_state_cache()
@@ -412,7 +412,7 @@ async def test_declare_overwrites_cache_recovery(tmp_path):
     # declare_state with new tunnels
     new_tunnels = [_tunnel_dict(link_id="new-link")]
 
-    with patch("agent.network.overlay.settings") as mock_settings:
+    with patch("agent.network.overlay_state.settings") as mock_settings:
         mock_settings.workspace_path = str(tmp_path)
         mock_settings.overlay_mtu = 1400
 
@@ -423,3 +423,74 @@ async def test_declare_overwrites_cache_recovery(tmp_path):
     assert len(updated_cache["tunnels"]) == 1
     assert updated_cache["tunnels"][0]["link_id"] == "new-link"
     assert updated_cache["declared_at"] != "2026-01-01T00:00:00Z"
+
+
+# ─── broken port (ofport=-1) recovery tests ──────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_declare_recreates_broken_port_with_negative_ofport(tmp_path):
+    """OVS port with ofport=-1 (missing Linux netdev) is deleted and recreated."""
+    overlay = _make_overlay(tmp_path)
+
+    # Port exists in OVS but underlying device is gone (ofport=-1)
+    overlay._batch_read_ovs_ports = AsyncMock(return_value={
+        "vxlan-abc12345": {
+            "name": "vxlan-abc12345",
+            "tag": 3001,
+            "type": "",
+            "ofport": -1,
+        },
+    })
+    overlay._write_declared_state_cache = AsyncMock()
+
+    result = await overlay.declare_state([
+        _tunnel_dict(port_name="vxlan-abc12345", expected_vlan=3001),
+    ])
+
+    assert len(result["results"]) == 1
+    assert result["results"][0]["status"] == "created"
+
+    # Stale OVS port should be deleted first
+    overlay._ovs_vsctl.assert_any_call(
+        "del-port", "arch-ovs", "vxlan-abc12345"
+    )
+
+    # Then VXLAN device should be recreated
+    overlay._create_vxlan_device.assert_called_once()
+    call_kwargs = overlay._create_vxlan_device.call_args
+    assert call_kwargs.kwargs["name"] == "vxlan-abc12345"
+    assert call_kwargs.kwargs["vni"] == 50000
+    assert call_kwargs.kwargs["vlan_tag"] == 3001
+
+
+@pytest.mark.asyncio
+async def test_declare_healthy_port_not_deleted(tmp_path):
+    """OVS port with valid ofport (>0) is not deleted and treated as converged."""
+    overlay = _make_overlay(tmp_path)
+
+    # Port exists and is healthy (ofport=10)
+    overlay._batch_read_ovs_ports = AsyncMock(return_value={
+        "vxlan-abc12345": {
+            "name": "vxlan-abc12345",
+            "tag": 3001,
+            "type": "",
+            "ofport": 10,
+        },
+    })
+    overlay._write_declared_state_cache = AsyncMock()
+
+    result = await overlay.declare_state([
+        _tunnel_dict(port_name="vxlan-abc12345", expected_vlan=3001),
+    ])
+
+    assert len(result["results"]) == 1
+    assert result["results"][0]["status"] == "converged"
+
+    # Should NOT delete or recreate
+    del_port_calls = [
+        c for c in overlay._ovs_vsctl.call_args_list
+        if len(c.args) >= 2 and c.args[0] == "del-port"
+    ]
+    assert len(del_port_calls) == 0
+    overlay._create_vxlan_device.assert_not_called()

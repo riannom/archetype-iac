@@ -131,3 +131,59 @@ def test_get_cleanup_manager_singleton():
     assert mgr1 is mgr2
 
 
+class TestVxlanPatterns:
+    """VXLAN regex matches both legacy and current naming conventions."""
+
+    def test_legacy_pattern_matches(self):
+        mgr = NetworkCleanupManager()
+        assert mgr._is_archetype_vxlan("vxlan100000")
+        assert mgr._is_archetype_vxlan("vxlan10")
+
+    def test_current_pattern_matches(self):
+        mgr = NetworkCleanupManager()
+        assert mgr._is_archetype_vxlan("vxlan-abc12345")  # 8 hex chars
+        assert mgr._is_archetype_vxlan("vxlan-ef0feba5")
+        assert mgr._is_archetype_vxlan("vxlan-0000dead")
+
+    def test_non_matching_patterns(self):
+        mgr = NetworkCleanupManager()
+        assert not mgr._is_archetype_vxlan("vxlan-GHIJ")       # uppercase
+        assert not mgr._is_archetype_vxlan("vtep-10-0-0-2")
+        assert not mgr._is_archetype_vxlan("eth0")
+        assert not mgr._is_archetype_vxlan("vxlan-")            # no hex suffix
+        assert not mgr._is_archetype_vxlan("vxlan")             # bare name
+        assert not mgr._is_archetype_vxlan("vxlan-abc1234")     # 7 chars (too short)
+        assert not mgr._is_archetype_vxlan("vxlan-abc123456")   # 9 chars (too long)
+
+
+@pytest.mark.asyncio
+async def test_cleanup_vxlans_skips_tracked_ports(monkeypatch):
+    """VXLAN cleanup skips devices tracked by overlay manager."""
+    mgr = NetworkCleanupManager()
+
+    async def fake_run_cmd(cmd):
+        if cmd[:3] == ["ip", "-j", "link"]:
+            import json
+            # Two VXLAN devices: one tracked, one orphaned (no bridge master)
+            return 0, json.dumps([
+                {"ifname": "vxlan-aaa11111"},
+                {"ifname": "vxlan-bbb22222"},
+            ]), ""
+        if cmd[:3] == ["ip", "link", "delete"]:
+            return 0, "", ""
+        return 0, "", ""
+
+    monkeypatch.setattr(mgr, "_run_cmd", fake_run_cmd)
+
+    # Mock overlay manager tracking vxlan-aaa11111
+    from unittest.mock import patch
+    with patch(
+        "agent.network.cleanup._get_overlay_tracked_ports",
+        return_value={"vxlan-aaa11111"},
+    ):
+        deleted = await mgr.cleanup_orphaned_vxlans(dry_run=False)
+
+    # Only the untracked one should be deleted
+    assert deleted == 1
+
+

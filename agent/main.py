@@ -255,6 +255,16 @@ async def lifespan(app: FastAPI):
     # Phase 2 bootstrap: fetch and apply transport config from controller
     await _bootstrap_transport_config()
 
+    # Start VXLAN overlay health monitor (self-heals broken tunnels)
+    from agent.network.overlay_health import OverlayHealthMonitor
+    _overlay_health_monitor: OverlayHealthMonitor | None = None
+    if settings.enable_vxlan:
+        try:
+            _overlay_health_monitor = OverlayHealthMonitor(interval=60)
+            await _overlay_health_monitor.start()
+        except Exception as e:
+            logger.warning(f"Failed to start overlay health monitor: {e}")
+
     # Start heartbeat background task
     _state.set_heartbeat_task(asyncio.create_task(heartbeat_loop()))
 
@@ -355,6 +365,10 @@ async def lifespan(app: FastAPI):
     # Stop carrier monitor
     if _carrier_monitor is not None:
         _carrier_monitor.stop()
+
+    # Stop overlay health monitor
+    if _overlay_health_monitor is not None:
+        await _overlay_health_monitor.stop()
 
     # Terminate any lingering virsh console sessions before backend shutdown.
     await _cleanup_lingering_virsh_sessions()
