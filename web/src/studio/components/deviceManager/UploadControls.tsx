@@ -108,7 +108,7 @@ const UploadControls: React.FC<UploadControlsProps> = ({
               ref={qcow2InputRef}
               className="hidden"
               type="file"
-              accept=".qcow2,.qcow"
+              accept=".qcow2,.qcow,.img,.qcow2.gz,.qcow.gz,.img.gz"
               onChange={uploadQcow2}
             />
           </div>

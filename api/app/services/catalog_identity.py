@@ -6,7 +6,7 @@ import json
 import logging
 from collections import defaultdict
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import Any
 from uuid import uuid4
 
 from sqlalchemy import text as sa_text
@@ -14,10 +14,8 @@ from sqlalchemy.orm import Session
 
 from app import models
 
-if TYPE_CHECKING:
-    from .catalog_service import AliasIndex
-
 from .catalog_service import (
+    AliasIndex,
     _ALIAS_TYPE_RANK,
     _CATALOG_IDENTITY_ADVISORY_LOCK_KEY,
     _IDENTITY_SYNC_LOCK,

@@ -1,6 +1,7 @@
 """qcow2 and IOL upload, detection, registration, build, and diagnostics endpoints."""
 from __future__ import annotations
 
+import gzip
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path
@@ -27,11 +28,51 @@ from app.utils.image_integrity import compute_sha256, validate_qcow2
 
 from ._shared import (
     ImageChunkUploadCompleteResponse,
+    _is_supported_qcow2_upload_filename,
+    _resolved_qcow2_upload_filename,
     _chunk_upload_lock,
     _chunk_upload_sessions,
 )
 
 router = APIRouter(tags=["images"])
+
+
+def _resolve_qcow2_upload_path(path: Path) -> Path:
+    """Resolve the final qcow2 path by removing an optional .gz suffix."""
+    resolved_name = _resolved_qcow2_upload_filename(path.name)
+    if not resolved_name:
+        raise HTTPException(
+            status_code=400,
+            detail="File must be a qcow2/qcow/img image (optionally .gz-compressed)",
+        )
+    if resolved_name == path.name:
+        return path
+    return path.with_name(resolved_name)
+
+
+def _prepare_qcow2_upload_path(path: Path) -> Path:
+    """Decompress a .gz qcow2 upload in place and return the resulting path."""
+    resolved_path = _resolve_qcow2_upload_path(path)
+    if resolved_path == path:
+        return path
+
+    if resolved_path.exists():
+        path.unlink(missing_ok=True)
+        raise HTTPException(
+            status_code=409,
+            detail=f"Image '{resolved_path.name}' already exists on disk",
+        )
+
+    try:
+        with gzip.open(path, "rb") as source, resolved_path.open("wb") as target:
+            shutil.copyfileobj(source, target)
+    except OSError as exc:
+        resolved_path.unlink(missing_ok=True)
+        path.unlink(missing_ok=True)
+        raise HTTPException(status_code=400, detail=f"Invalid gzip qcow2 image: {exc}") from exc
+
+    path.unlink(missing_ok=True)
+    return resolved_path
 
 
 class Qcow2DetectionResult(BaseModel):
@@ -104,6 +145,8 @@ def _detect_qcow2(destination: Path) -> dict[str, object]:
     Used in two-phase upload mode to present detection results for user
     confirmation before committing to the manifest.
     """
+
+    destination = _prepare_qcow2_upload_path(destination)
 
     manifest = load_manifest()
     potential_id = f"qcow2:{destination.name}"
@@ -239,6 +282,8 @@ def _finalize_qcow2_upload(destination: Path, *, auto_build: bool = True) -> dic
     Used by auto_confirm=True (default) and the legacy single-file upload.
     """
 
+    destination = _prepare_qcow2_upload_path(destination)
+
     manifest = load_manifest()
     potential_id = f"qcow2:{destination.name}"
     if find_image_by_id(manifest, potential_id):
@@ -299,6 +344,8 @@ def confirm_qcow2_upload(
                 _chunk_upload_sessions[upload_id]["error_message"] = "File no longer exists"
         raise HTTPException(status_code=410, detail="Uploaded file no longer exists")
 
+    final_path = _prepare_qcow2_upload_path(final_path)
+
     # Apply overrides: user values take precedence over detection.
     device_id = body.device_id or detection.get("detected_device_id")
     version = body.version or detection.get("detected_version")
@@ -357,8 +404,11 @@ def upload_qcow2(
     filename = None if file is None or isinstance(file, str) else getattr(file, "filename", None)
     if not filename:
         raise HTTPException(status_code=400, detail="Missing filename")
-    if not filename.lower().endswith((".qcow2", ".qcow")):
-        raise HTTPException(status_code=400, detail="File must be a qcow2 image")
+    if not _is_supported_qcow2_upload_filename(filename):
+        raise HTTPException(
+            status_code=400,
+            detail="File must be a qcow2/qcow/img image (optionally .gz-compressed)",
+        )
 
     destination = qcow2_path(Path(filename).name)
     try:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import gzip
 import subprocess
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
@@ -346,3 +347,37 @@ def test_register_and_finalize_qcow2_paths(monkeypatch, tmp_path):
         img._finalize_qcow2_upload(invalid)
     assert exc_info.value.status_code == 400
     assert not invalid.exists()
+
+
+def test_finalize_qcow2_upload_gzip_paths(monkeypatch, tmp_path):
+    gz_path = tmp_path / "sonic-vs.img.gz"
+    with gzip.open(gz_path, "wb") as handle:
+        handle.write(b"QFI\xfb" + (b"\x00" * 64))
+
+    monkeypatch.setattr(img, "load_manifest", lambda: {"images": []})
+    monkeypatch.setattr(img, "find_image_by_id", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(img, "validate_qcow2", lambda _dst: (True, None))
+    monkeypatch.setattr(img, "compute_sha256", lambda _dst: "sha-gz")
+    monkeypatch.setattr(img, "detect_device_from_filename", lambda _name: ("sonic-vs", None))
+
+    called: dict[str, object] = {}
+
+    def _fake_register(destination, **kwargs):
+        called["destination"] = destination
+        called["kwargs"] = kwargs
+        return {"path": str(destination), "filename": destination.name}
+
+    monkeypatch.setattr(img, "_register_qcow2", _fake_register)
+
+    finalized = img._finalize_qcow2_upload(gz_path, auto_build=False)
+    assert finalized["filename"] == "sonic-vs.img"
+    assert called["destination"].name == "sonic-vs.img"
+    assert called["kwargs"]["auto_build"] is False
+    assert not gz_path.exists()
+    assert (tmp_path / "sonic-vs.img").exists()
+
+    bad_gz = tmp_path / "broken.img.gz"
+    bad_gz.write_bytes(b"not-a-gzip-stream")
+    with pytest.raises(HTTPException) as exc_info:
+        img._finalize_qcow2_upload(bad_gz)
+    assert exc_info.value.status_code == 400

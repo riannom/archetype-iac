@@ -41,7 +41,9 @@ from ._shared import (
     _decompress_xz_file,
     _format_size,
     _get_progress,
+    _is_supported_qcow2_upload_filename,
     _is_docker_image_tar,
+    _resolved_qcow2_upload_filename,
     _sanitize_upload_filename,
     _send_sse_event,
     _update_progress,
@@ -196,8 +198,11 @@ def init_chunk_upload(
     if not safe_filename:
         raise HTTPException(status_code=400, detail="Invalid filename")
 
-    if kind == "qcow2" and not safe_filename.lower().endswith((".qcow2", ".qcow")):
-        raise HTTPException(status_code=400, detail="Filename must end with .qcow2 or .qcow")
+    if kind == "qcow2" and not _is_supported_qcow2_upload_filename(safe_filename):
+        raise HTTPException(
+            status_code=400,
+            detail="Filename must end with .qcow2/.qcow/.img (optionally .gz)",
+        )
 
     _cleanup_expired_chunk_upload_sessions()
 
@@ -208,16 +213,18 @@ def init_chunk_upload(
 
     if kind == "qcow2":
         manifest = load_manifest()
-        potential_id = f"qcow2:{safe_filename}"
+        resolved_filename = _resolved_qcow2_upload_filename(safe_filename) or safe_filename
+        potential_id = f"qcow2:{resolved_filename}"
         if find_image_by_id(manifest, potential_id):
             raise HTTPException(
                 status_code=409,
-                detail=f"Image '{safe_filename}' already exists in the library",
+                detail=f"Image '{resolved_filename}' already exists in the library",
             )
-        if final_path.exists():
+        resolved_path = final_path.parent / resolved_filename
+        if resolved_path.exists():
             raise HTTPException(
                 status_code=409,
-                detail=f"Image '{safe_filename}' already exists on disk",
+                detail=f"Image '{resolved_filename}' already exists on disk",
             )
 
     chunk_size = request.chunk_size or DEFAULT_CHUNK_SIZE
@@ -406,7 +413,8 @@ def complete_chunk_upload(
 
         if not auto_confirm:
             # Two-phase mode: detect only, store results, await confirmation.
-            from .upload_vm import _detect_qcow2
+            from .upload_vm import _detect_qcow2, _resolve_qcow2_upload_path
+            resolved_final_path = _resolve_qcow2_upload_path(final_path)
 
             try:
                 detection = _detect_qcow2(final_path)
@@ -420,7 +428,7 @@ def complete_chunk_upload(
             with _chunk_upload_lock:
                 if upload_id in _chunk_upload_sessions:
                     _chunk_upload_sessions[upload_id]["status"] = "awaiting_confirmation"
-                    _chunk_upload_sessions[upload_id]["final_path"] = str(final_path)
+                    _chunk_upload_sessions[upload_id]["final_path"] = str(resolved_final_path)
                     _chunk_upload_sessions[upload_id]["detection"] = detection
 
             return ImageChunkUploadCompleteResponse(
