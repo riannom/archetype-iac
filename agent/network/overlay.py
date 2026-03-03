@@ -334,7 +334,7 @@ class OverlayManager:
         # Sort IPs to ensure same hash regardless of which side calls
         sorted_ips = tuple(sorted([local_ip, remote_ip]))
         combined = f"{sorted_ips[0]}:{sorted_ips[1]}"
-        hash_val = int(hashlib.md5(combined.encode()).hexdigest()[:8], 16)
+        hash_val = int(hashlib.md5(combined.encode(), usedforsecurity=False).hexdigest()[:8], 16)
         # Map to VNI range (avoid first 1000 reserved)
         vni_range = settings.vxlan_vni_max - settings.vxlan_vni_base
         return settings.vxlan_vni_base + (hash_val % vni_range)
@@ -1048,7 +1048,7 @@ class OverlayManager:
         import hashlib
 
         combined = f"{lab_id}:{link_id}"
-        link_hash = hashlib.md5(combined.encode()).hexdigest()[:8]
+        link_hash = hashlib.md5(combined.encode(), usedforsecurity=False).hexdigest()[:8]
         return f"vxlan-{link_hash}"
 
     async def create_link_tunnel(

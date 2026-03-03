@@ -1245,7 +1245,7 @@ class NodeLifecycleManager(AgentResolutionMixin, DeploymentMixin, StopMixin):
             return
 
         self.log_parts.append(f"  Waiting for {len(unready_nodes)} node(s) to become ready...")
-        start_time = asyncio.get_event_loop().time()
+        start_time = asyncio.get_running_loop().time()
         timeout_by_node: dict[str, int] = {
             ns.node_name: self.READINESS_POLL_MAX_DURATION for ns in unready_nodes
         }
@@ -1298,7 +1298,7 @@ class NodeLifecycleManager(AgentResolutionMixin, DeploymentMixin, StopMixin):
 
         while unready_nodes:
             await asyncio.sleep(self.READINESS_POLL_INTERVAL)
-            elapsed = asyncio.get_event_loop().time() - start_time
+            elapsed = asyncio.get_running_loop().time() - start_time
 
             still_unready = []
             timed_out_by_timeout: dict[int, list[str]] = {}

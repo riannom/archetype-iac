@@ -35,7 +35,7 @@ def generate_mac_address(domain_name: str, interface_index: int) -> str:
     """
     # Create deterministic hash from domain name and interface index
     hash_input = f"{domain_name}:{interface_index}".encode()
-    hash_bytes = hashlib.md5(hash_input).digest()
+    hash_bytes = hashlib.md5(hash_input, usedforsecurity=False).digest()
     # Use QEMU/KVM OUI prefix (52:54:00) + 3 bytes from hash
     mac = f"52:54:00:{hash_bytes[0]:02x}:{hash_bytes[1]:02x}:{hash_bytes[2]:02x}"
     return mac

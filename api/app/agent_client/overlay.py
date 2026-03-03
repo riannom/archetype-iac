@@ -32,7 +32,7 @@ def compute_vxlan_port_name(lab_id: str, link_name: str) -> str:
     import hashlib
 
     combined = f"{lab_id}:{link_name}"
-    link_hash = hashlib.md5(combined.encode()).hexdigest()[:8]
+    link_hash = hashlib.md5(combined.encode(), usedforsecurity=False).hexdigest()[:8]
     return f"vxlan-{link_hash}"
 
 

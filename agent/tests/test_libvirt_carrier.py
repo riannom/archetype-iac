@@ -23,7 +23,7 @@ def _make_provider() -> libvirt_module.LibvirtProvider:
 
 def _mac(domain_name: str, index: int) -> str:
     """Reproduce _generate_mac_address for expected-value assertions."""
-    h = hashlib.md5(f"{domain_name}:{index}".encode()).digest()
+    h = hashlib.md5(f"{domain_name}:{index}".encode(), usedforsecurity=False).digest()
     return f"52:54:00:{h[0]:02x}:{h[1]:02x}:{h[2]:02x}"
 
 

@@ -361,7 +361,7 @@ async def _console_websocket_docker(
 
     async def read_container():
         """Read from container and send to WebSocket using event-driven I/O."""
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         data_available = asyncio.Event()
 
         def on_readable():
@@ -623,7 +623,7 @@ async def _console_websocket_libvirt(
             _active_session = ActiveConsoleSession(
                 domain_name=_virsh_domain,
                 master_fd=master_fd,
-                loop=asyncio.get_event_loop(),
+                loop=asyncio.get_running_loop(),
                 websocket=websocket,
             )
             register_session(_virsh_domain, _active_session)
@@ -679,7 +679,7 @@ async def _console_websocket_libvirt(
 
         async def read_pty():
             """Read from PTY and send to WebSocket."""
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             data_available = asyncio.Event()
 
             def on_readable():

@@ -233,10 +233,10 @@ def test_is_agent_online_handles_naive_heartbeat(monkeypatch):
     monkeypatch.setattr(settings, "agent_stale_timeout", 5)
     agent = MagicMock()
     agent.status = "online"
-    agent.last_heartbeat = datetime.utcnow() - timedelta(seconds=4)
+    agent.last_heartbeat = datetime.now(timezone.utc) - timedelta(seconds=4)
     assert is_agent_online(agent) is True
 
-    agent.last_heartbeat = datetime.utcnow() - timedelta(seconds=6)
+    agent.last_heartbeat = datetime.now(timezone.utc) - timedelta(seconds=6)
     assert is_agent_online(agent) is False
 
 

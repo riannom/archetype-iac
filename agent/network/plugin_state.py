@@ -924,7 +924,7 @@ class PluginStateMixin:
             return None
 
         # Run synchronous Docker calls in thread pool to avoid blocking event loop
-        return await asyncio.get_event_loop().run_in_executor(None, _sync_find)
+        return await asyncio.get_running_loop().run_in_executor(None, _sync_find)
 
     async def _recover_endpoints_for_bridge(
         self, lab_bridge: LabBridge, ports: list[str]
@@ -946,7 +946,7 @@ class PluginStateMixin:
                         )
                 return pids
 
-            container_pids = await asyncio.get_event_loop().run_in_executor(
+            container_pids = await asyncio.get_running_loop().run_in_executor(
                 None, _get_container_pids
             )
 
