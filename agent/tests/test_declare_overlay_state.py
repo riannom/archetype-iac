@@ -494,3 +494,53 @@ async def test_declare_healthy_port_not_deleted(tmp_path):
     ]
     assert len(del_port_calls) == 0
     overlay._create_vxlan_device.assert_not_called()
+
+
+# ─── OVS failure safety tests ─────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_declare_skips_on_ovs_failure(tmp_path):
+    """declare_state returns early without repair when OVS query fails."""
+    overlay = _make_overlay(tmp_path)
+
+    # batch_read returns None = OVS failure
+    overlay._batch_read_ovs_ports = AsyncMock(return_value=None)
+    overlay._write_declared_state_cache = AsyncMock()
+
+    result = await overlay.declare_state([
+        _tunnel_dict(port_name="vxlan-abc12345"),
+    ])
+
+    # Should not create or modify anything
+    assert result["results"] == []
+    assert result.get("skipped") == "ovs_read_error"
+    overlay._create_vxlan_device.assert_not_called()
+    overlay._ovs_vsctl.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_declare_skips_orphan_cleanup_on_ovs_failure(tmp_path):
+    """Orphan cleanup does NOT run when OVS state is unknown."""
+    overlay = _make_overlay(tmp_path)
+
+    from agent.network.overlay import LinkTunnel
+    overlay._link_tunnels["stale-link"] = LinkTunnel(
+        link_id="stale-link",
+        vni=60000,
+        local_ip="10.0.0.1",
+        remote_ip="10.0.0.3",
+        local_vlan=3002,
+        interface_name="vxlan-orphan99",
+        lab_id="lab-1",
+        tenant_mtu=1400,
+    )
+
+    overlay._batch_read_ovs_ports = AsyncMock(return_value=None)
+    overlay._write_declared_state_cache = AsyncMock()
+
+    result = await overlay.declare_state([], declared_labs=["lab-1"])
+
+    # Orphan should still be tracked — not deleted
+    assert "stale-link" in overlay._link_tunnels
+    overlay._delete_vxlan_device.assert_not_called()

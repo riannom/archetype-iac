@@ -140,13 +140,13 @@ def _safe_node_name(name: str, used: set[str]) -> str:
     if not clean or not re.match(r"^[A-Za-z_]", clean):
         clean = f"n_{clean}" if clean else "n"
     for attempt in range(100):
-        suffix = hashlib.md5(f"{name}-{attempt}".encode()).hexdigest()[:4]
+        suffix = hashlib.md5(f"{name}-{attempt}".encode(), usedforsecurity=False).hexdigest()[:4]
         base_max = 16 - len(suffix) - 1
         base = clean[: max(base_max, 1)]
         candidate = f"{base}_{suffix}"
         if candidate not in used:
             return candidate
-    return f"n_{hashlib.md5(name.encode()).hexdigest()[:13]}"
+    return f"n_{hashlib.md5(name.encode(), usedforsecurity=False).hexdigest()[:13]}"
 
 
 def _format_external_endpoint(endpoint: GraphEndpoint) -> str:
@@ -801,7 +801,7 @@ def graph_to_topology_yaml(
 
     # Generate a unique subnet based on lab_id to avoid conflicts
     # Use hash of lab_id to generate 2nd and 3rd octets (avoiding common ranges)
-    lab_hash = int(hashlib.md5(lab_id.encode()).hexdigest()[:4], 16)
+    lab_hash = int(hashlib.md5(lab_id.encode(), usedforsecurity=False).hexdigest()[:4], 16)
     # Use 10.x.y.0/24 range (private, less likely to conflict)
     octet2 = (lab_hash >> 8) % 256
     octet3 = lab_hash % 256

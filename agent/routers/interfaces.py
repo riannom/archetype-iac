@@ -665,7 +665,7 @@ async def provision_interface(
     import subprocess
 
     async def run_cmd(cmd: list[str], check: bool = False) -> tuple[int, str, str]:
-        proc = await asyncio.get_event_loop().run_in_executor(
+        proc = await asyncio.get_running_loop().run_in_executor(
             None, lambda: subprocess.run(cmd, capture_output=True, text=True)
         )
         return proc.returncode, proc.stdout, proc.stderr

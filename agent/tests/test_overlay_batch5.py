@@ -184,6 +184,8 @@ class TestLinkTunnelInterfaceName:
 # _read_vxlan_link_info
 # ===========================================================================
 class TestReadVxlanLinkInfo:
+    """Tests for _read_vxlan_link_info (extracted to overlay_vxlan.py)."""
+
     @pytest.mark.asyncio
     async def test_parses_output(self, monkeypatch, tmp_path):
         mgr = _make_overlay(monkeypatch, tmp_path)
@@ -193,7 +195,11 @@ class TestReadVxlanLinkInfo:
             "    link/ether fa:16:3e:xx:xx:xx brd ff:ff:ff:ff:ff:ff\n"
             "    vxlan id 100001 remote 10.0.0.2 local 10.0.0.1 dev eth0 srcport 0 0 dstport 4789\n"
         )
-        mgr._run_cmd = AsyncMock(return_value=(0, ip_output, ""))
+        # Patch the module-level run_cmd used by the extracted function
+        monkeypatch.setattr(
+            "agent.network.overlay_vxlan._shared_run_cmd",
+            AsyncMock(return_value=(0, ip_output, "")),
+        )
 
         vni, remote_ip, local_ip = await mgr._read_vxlan_link_info("vxlan-abc12345")
         assert vni == 100001
@@ -203,7 +209,10 @@ class TestReadVxlanLinkInfo:
     @pytest.mark.asyncio
     async def test_command_failure(self, monkeypatch, tmp_path):
         mgr = _make_overlay(monkeypatch, tmp_path)
-        mgr._run_cmd = AsyncMock(return_value=(1, "", "not found"))
+        monkeypatch.setattr(
+            "agent.network.overlay_vxlan._shared_run_cmd",
+            AsyncMock(return_value=(1, "", "not found")),
+        )
 
         vni, remote_ip, local_ip = await mgr._read_vxlan_link_info("bad-dev")
         assert vni == 0
@@ -214,7 +223,10 @@ class TestReadVxlanLinkInfo:
     async def test_invalid_vni(self, monkeypatch, tmp_path):
         mgr = _make_overlay(monkeypatch, tmp_path)
         ip_output = "    vxlan id notanumber remote 10.0.0.2 local 10.0.0.1\n"
-        mgr._run_cmd = AsyncMock(return_value=(0, ip_output, ""))
+        monkeypatch.setattr(
+            "agent.network.overlay_vxlan._shared_run_cmd",
+            AsyncMock(return_value=(0, ip_output, "")),
+        )
 
         vni, remote_ip, local_ip = await mgr._read_vxlan_link_info("dev1")
         assert vni == 0
@@ -224,7 +236,10 @@ class TestReadVxlanLinkInfo:
     async def test_partial_output(self, monkeypatch, tmp_path):
         mgr = _make_overlay(monkeypatch, tmp_path)
         ip_output = "    vxlan id 50000 remote 10.0.0.5\n"  # no local
-        mgr._run_cmd = AsyncMock(return_value=(0, ip_output, ""))
+        monkeypatch.setattr(
+            "agent.network.overlay_vxlan._shared_run_cmd",
+            AsyncMock(return_value=(0, ip_output, "")),
+        )
 
         vni, remote_ip, local_ip = await mgr._read_vxlan_link_info("dev1")
         assert vni == 50000
@@ -236,46 +251,136 @@ class TestReadVxlanLinkInfo:
 # _batch_read_ovs_ports (actual logic, not mocked)
 # ===========================================================================
 class TestBatchReadOvsPorts:
+    """Tests for _batch_read_ovs_ports (batch JSON queries)."""
+
     @pytest.mark.asyncio
     async def test_reads_vxlan_ports(self, monkeypatch, tmp_path):
         mgr = _make_overlay(monkeypatch, tmp_path)
         # Remove the mock to test actual implementation
         del mgr._batch_read_ovs_ports
 
-        call_count = 0
+        # Batch implementation uses 3 OVS calls:
+        # 1. list-ports -> port names
+        # 2. --format=json list Port -> names + tags
+        # 3. --format=json list Interface -> names + types + ofports
+        port_json = json.dumps({
+            "data": [
+                ["vxlan-abc12345", 2050],
+                ["vxlan-def67890", ["set", []]],
+                ["vh-r1-e1", 100],
+            ]
+        })
+        iface_json = json.dumps({
+            "data": [
+                ["vxlan-abc12345", "vxlan", 10],
+                ["vxlan-def67890", "vxlan", 11],
+                ["vh-r1-e1", "system", 12],
+            ]
+        })
 
         async def fake_ovs(*args):
-            nonlocal call_count
-            call_count += 1
             if args == ("list-ports", "arch-ovs"):
                 return 0, "vxlan-abc12345\nvh-r1-e1\nvxlan-def67890\n", ""
-            elif args == ("get", "port", "vxlan-abc12345", "tag"):
-                return 0, "2050", ""
-            elif args == ("get", "interface", "vxlan-abc12345", "type"):
-                return 0, '"vxlan"', ""
-            elif args == ("get", "port", "vxlan-def67890", "tag"):
-                return 0, "[]", ""
-            elif args == ("get", "interface", "vxlan-def67890", "type"):
-                return 0, '"vxlan"', ""
+            if args[0] == "--format=json" and "Port" in args:
+                return 0, port_json, ""
+            if args[0] == "--format=json" and "Interface" in args:
+                return 0, iface_json, ""
             return 0, "", ""
 
-        mgr._ovs_vsctl = fake_ovs
+        # Patch the module-level ovs_vsctl used by the extracted function
+        monkeypatch.setattr(
+            "agent.network.overlay_state._shared_ovs_vsctl", fake_ovs,
+        )
         result = await mgr._batch_read_ovs_ports()
 
+        assert result is not None
         assert "vxlan-abc12345" in result
         assert result["vxlan-abc12345"]["tag"] == 2050
+        assert result["vxlan-abc12345"]["ofport"] == 10
         assert "vxlan-def67890" in result
         assert result["vxlan-def67890"]["tag"] == 0
         # vh-r1-e1 should be skipped (not vxlan prefix)
         assert "vh-r1-e1" not in result
 
     @pytest.mark.asyncio
-    async def test_empty_bridge(self, monkeypatch, tmp_path):
+    async def test_ovs_failure_returns_none(self, monkeypatch, tmp_path):
         mgr = _make_overlay(monkeypatch, tmp_path)
         del mgr._batch_read_ovs_ports
-        mgr._ovs_vsctl = AsyncMock(return_value=(1, "", "no bridge"))
+        monkeypatch.setattr(
+            "agent.network.overlay_state._shared_ovs_vsctl",
+            AsyncMock(return_value=(1, "", "no bridge")),
+        )
 
         result = await mgr._batch_read_ovs_ports()
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_malformed_port_json(self, monkeypatch, tmp_path):
+        """Malformed JSON in Port table returns empty (not None)."""
+        mgr = _make_overlay(monkeypatch, tmp_path)
+        del mgr._batch_read_ovs_ports
+
+        async def fake_ovs(*args):
+            if args == ("list-ports", "arch-ovs"):
+                return 0, "vxlan-abc12345\n", ""
+            if args[0] == "--format=json" and "Port" in args:
+                return 0, "not valid json{{{", ""
+            if args[0] == "--format=json" and "Interface" in args:
+                return 0, "{}", ""
+            return 0, "", ""
+
+        monkeypatch.setattr(
+            "agent.network.overlay_state._shared_ovs_vsctl", fake_ovs,
+        )
+        result = await mgr._batch_read_ovs_ports()
+        # Malformed JSON = no port_tags parsed, returns empty dict (not None)
+        assert result is not None
+        assert result == {}
+
+    @pytest.mark.asyncio
+    async def test_partial_interface_data(self, monkeypatch, tmp_path):
+        """Missing Interface data defaults to ofport=-1."""
+        mgr = _make_overlay(monkeypatch, tmp_path)
+        del mgr._batch_read_ovs_ports
+
+        port_json = json.dumps({"data": [["vxlan-abc12345", 2050]]})
+
+        async def fake_ovs(*args):
+            if args == ("list-ports", "arch-ovs"):
+                return 0, "vxlan-abc12345\n", ""
+            if args[0] == "--format=json" and "Port" in args:
+                return 0, port_json, ""
+            if args[0] == "--format=json" and "Interface" in args:
+                # Interface query fails
+                return 1, "", "ovsdb error"
+            return 0, "", ""
+
+        monkeypatch.setattr(
+            "agent.network.overlay_state._shared_ovs_vsctl", fake_ovs,
+        )
+        result = await mgr._batch_read_ovs_ports()
+        assert result is not None
+        assert "vxlan-abc12345" in result
+        # Defaults when Interface data is missing
+        assert result["vxlan-abc12345"]["ofport"] == -1
+        assert result["vxlan-abc12345"]["type"] == ""
+
+    @pytest.mark.asyncio
+    async def test_empty_bridge_returns_empty(self, monkeypatch, tmp_path):
+        """Bridge with no VXLAN ports returns empty dict (not None)."""
+        mgr = _make_overlay(monkeypatch, tmp_path)
+        del mgr._batch_read_ovs_ports
+
+        async def fake_ovs(*args):
+            if args == ("list-ports", "arch-ovs"):
+                return 0, "vh-r1-e1\nvc12345678\n", ""  # no vxlan* ports
+            return 0, "", ""
+
+        monkeypatch.setattr(
+            "agent.network.overlay_state._shared_ovs_vsctl", fake_ovs,
+        )
+        result = await mgr._batch_read_ovs_ports()
+        assert result is not None
         assert result == {}
 
 
@@ -347,6 +452,8 @@ class TestCleanupLab:
 # recover_link_tunnels
 # ===========================================================================
 class TestRecoverLinkTunnels:
+    """Tests for recover_link_tunnels (extracted to overlay_state.py)."""
+
     @pytest.mark.asyncio
     async def test_cache_recovery(self, monkeypatch, tmp_path):
         mgr = _make_overlay(monkeypatch, tmp_path)
@@ -355,7 +462,13 @@ class TestRecoverLinkTunnels:
             {"link_id": "link-1", "vni": 100001, "local_ip": "10.0.0.1",
              "remote_ip": "10.0.0.2", "local_vlan": 2050, "lab_id": "lab1"},
         ]
-        mgr.load_declared_state_cache = AsyncMock(return_value=cached_tunnels)
+
+        # Patch the module-level functions used by _recover_link_tunnels_impl
+        monkeypatch.setattr(
+            "agent.network.overlay_state.load_declared_state_cache",
+            AsyncMock(return_value=cached_tunnels),
+        )
+        # declare_state is called on the manager instance — mock that
         mgr.declare_state = AsyncMock(return_value={
             "results": [{"link_id": "link-1", "status": "created"}],
         })
@@ -367,13 +480,15 @@ class TestRecoverLinkTunnels:
     @pytest.mark.asyncio
     async def test_ovs_scan_fallback(self, monkeypatch, tmp_path):
         mgr = _make_overlay(monkeypatch, tmp_path)
-        mgr.load_declared_state_cache = AsyncMock(return_value=None)
 
-        call_seq = 0
+        # No cache available
+        monkeypatch.setattr(
+            "agent.network.overlay_state.load_declared_state_cache",
+            AsyncMock(return_value=None),
+        )
 
+        # OVS fallback path uses module-level _shared_ovs_vsctl
         async def fake_ovs(*args):
-            nonlocal call_seq
-            call_seq += 1
             if args == ("list-ports", "arch-ovs"):
                 return 0, "vxlan-aaa11111\nvxlan-bbb22222\nvh-r1-e1\n", ""
             elif args[0] == "get" and args[1] == "port":
@@ -384,8 +499,12 @@ class TestRecoverLinkTunnels:
                     return 0, "2051", ""
             return 0, "", ""
 
-        mgr._ovs_vsctl = fake_ovs
+        monkeypatch.setattr(
+            "agent.network.overlay_state._shared_ovs_vsctl", fake_ovs,
+        )
 
+        # Patch read_vxlan_link_info at its source module (imported locally
+        # inside recover_link_tunnels)
         async def fake_read(name):
             if name == "vxlan-aaa11111":
                 return 100001, "10.0.0.2", "10.0.0.1"
@@ -393,7 +512,9 @@ class TestRecoverLinkTunnels:
                 return 100002, "10.0.0.3", "10.0.0.1"
             return 0, "", ""
 
-        mgr._read_vxlan_link_info = fake_read
+        monkeypatch.setattr(
+            "agent.network.overlay_vxlan.read_vxlan_link_info", fake_read,
+        )
 
         count = await mgr.recover_link_tunnels()
         assert count == 2
@@ -405,13 +526,23 @@ class TestRecoverLinkTunnels:
     @pytest.mark.asyncio
     async def test_ovs_scan_skips_invalid(self, monkeypatch, tmp_path):
         mgr = _make_overlay(monkeypatch, tmp_path)
-        mgr.load_declared_state_cache = AsyncMock(return_value=None)
 
-        mgr._ovs_vsctl = AsyncMock(side_effect=[
-            (0, "vxlan-xxx\n", ""),  # list-ports
-            (0, "2050", ""),          # get tag
-        ])
-        mgr._read_vxlan_link_info = AsyncMock(return_value=(0, "", ""))  # Invalid
+        monkeypatch.setattr(
+            "agent.network.overlay_state.load_declared_state_cache",
+            AsyncMock(return_value=None),
+        )
+
+        monkeypatch.setattr(
+            "agent.network.overlay_state._shared_ovs_vsctl",
+            AsyncMock(side_effect=[
+                (0, "vxlan-xxx\n", ""),  # list-ports
+                (0, "2050", ""),          # get tag
+            ]),
+        )
+        monkeypatch.setattr(
+            "agent.network.overlay_vxlan.read_vxlan_link_info",
+            AsyncMock(return_value=(0, "", "")),  # Invalid
+        )
 
         count = await mgr.recover_link_tunnels()
         assert count == 0
@@ -419,9 +550,16 @@ class TestRecoverLinkTunnels:
     @pytest.mark.asyncio
     async def test_cache_recovery_failure_falls_back(self, monkeypatch, tmp_path):
         mgr = _make_overlay(monkeypatch, tmp_path)
-        mgr.load_declared_state_cache = AsyncMock(return_value=[{"bad": "data"}])
+
+        monkeypatch.setattr(
+            "agent.network.overlay_state.load_declared_state_cache",
+            AsyncMock(return_value=[{"bad": "data"}]),
+        )
         mgr.declare_state = AsyncMock(side_effect=Exception("parse error"))
-        mgr._ovs_vsctl = AsyncMock(return_value=(1, "", ""))  # OVS scan also empty
+        monkeypatch.setattr(
+            "agent.network.overlay_state._shared_ovs_vsctl",
+            AsyncMock(return_value=(1, "", "")),  # OVS scan also fails
+        )
 
         count = await mgr.recover_link_tunnels()
         assert count == 0

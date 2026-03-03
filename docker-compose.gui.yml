@@ -25,7 +25,6 @@ services:
       context: .
       dockerfile: Dockerfile.api
       args:
-        NETLAB_REF: ${NETLAB_REF:-release_26.01.01}
         GIT_SHA: ${GIT_SHA:-unknown}
     ports:
       - "${API_PORT:-8000}:8000"
@@ -92,8 +91,6 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.api
-      args:
-        NETLAB_REF: ${NETLAB_REF:-release_26.01.01}
     command: ["python", "-m", "app.scheduler"]
     depends_on:
       api:
@@ -138,8 +135,6 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.api
-      args:
-        NETLAB_REF: ${NETLAB_REF:-release_26.01.01}
     command: ["python", "-m", "app.worker"]
     network_mode: host
     privileged: true

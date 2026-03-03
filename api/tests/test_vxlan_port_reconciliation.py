@@ -54,7 +54,7 @@ class TestComputeVxlanPortName:
         lab_id = "abc-123"
         link_id = "ceos_1:eth2-ceos_4:eth1"
         combined = f"{lab_id}:{link_id}"
-        expected = f"vxlan-{hashlib.md5(combined.encode()).hexdigest()[:8]}"
+        expected = f"vxlan-{hashlib.md5(combined.encode(), usedforsecurity=False).hexdigest()[:8]}"
         assert agent_client.compute_vxlan_port_name(lab_id, link_id) == expected
 
     def test_within_ovs_name_limit(self):

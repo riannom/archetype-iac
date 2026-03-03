@@ -233,10 +233,10 @@ async def poll_nodes_ready(
     lab_provider = get_lab_provider(lab)
     agent = await _pkg().get_online_agent_for_lab(database, lab, required_provider=lab_provider)
 
-    start_time = asyncio.get_event_loop().time()
+    start_time = asyncio.get_running_loop().time()
     end_time = start_time + timeout
 
-    while asyncio.get_event_loop().time() < end_time:
+    while asyncio.get_running_loop().time() < end_time:
         # Refresh session to get latest state
         database.expire_all()
 

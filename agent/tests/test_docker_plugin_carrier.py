@@ -272,7 +272,7 @@ class TestVNIAllocationLogic:
 
         def allocate_vni(lab_id: str, link_name: str) -> int:
             combined = f"{lab_id}:{link_name}"
-            hash_val = int(hashlib.md5(combined.encode()).hexdigest()[:8], 16)
+            hash_val = int(hashlib.md5(combined.encode(), usedforsecurity=False).hexdigest()[:8], 16)
             return (hash_val % 16000000) + 1000
 
         vni1 = allocate_vni("lab-123", "R1:eth1-R2:eth1")
@@ -286,7 +286,7 @@ class TestVNIAllocationLogic:
 
         def allocate_vni(lab_id: str, link_name: str) -> int:
             combined = f"{lab_id}:{link_name}"
-            hash_val = int(hashlib.md5(combined.encode()).hexdigest()[:8], 16)
+            hash_val = int(hashlib.md5(combined.encode(), usedforsecurity=False).hexdigest()[:8], 16)
             return (hash_val % 16000000) + 1000
 
         vni1 = allocate_vni("lab-123", "R1:eth1-R2:eth1")
@@ -300,7 +300,7 @@ class TestVNIAllocationLogic:
 
         def allocate_vni(lab_id: str, link_name: str) -> int:
             combined = f"{lab_id}:{link_name}"
-            hash_val = int(hashlib.md5(combined.encode()).hexdigest()[:8], 16)
+            hash_val = int(hashlib.md5(combined.encode(), usedforsecurity=False).hexdigest()[:8], 16)
             return (hash_val % 16000000) + 1000
 
         for i in range(100):

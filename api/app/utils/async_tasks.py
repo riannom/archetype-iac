@@ -94,7 +94,7 @@ def setup_asyncio_exception_handler(loop: asyncio.AbstractEventLoop | None = Non
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
 
     def handle_exception(loop: asyncio.AbstractEventLoop, context: dict) -> None:
         exception = context.get("exception")

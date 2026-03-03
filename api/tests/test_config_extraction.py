@@ -858,7 +858,7 @@ class TestConcurrentAgentCalls:
         call_times = []
 
         async def mock_extract(agent, lab_id):
-            call_times.append((agent.id, asyncio.get_event_loop().time()))
+            call_times.append((agent.id, asyncio.get_running_loop().time()))
             await asyncio.sleep(0.1)  # Simulate network delay
             return {
                 "success": True,
@@ -872,9 +872,9 @@ class TestConcurrentAgentCalls:
                 mock_agent_client.is_agent_online.return_value = True
                 mock_agent_client.extract_configs_on_agent = AsyncMock(side_effect=mock_extract)
 
-                start = asyncio.get_event_loop().time()
+                start = asyncio.get_running_loop().time()
                 await _auto_extract_configs_before_destroy(test_db, lab, sample_host)
-                elapsed = asyncio.get_event_loop().time() - start
+                elapsed = asyncio.get_running_loop().time() - start
 
         # Both agents should be called
         assert len(call_times) == 2

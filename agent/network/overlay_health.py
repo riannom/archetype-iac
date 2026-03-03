@@ -32,6 +32,14 @@ class OverlayHealthMonitor:
             logger.warning("Overlay health monitor already running")
             return
         self._running = True
+
+        # Run one immediate check before entering the periodic loop
+        # so broken tunnels are repaired without waiting a full interval.
+        try:
+            await self.check_and_repair()
+        except Exception:
+            logger.warning("Overlay health monitor: initial check failed", exc_info=True)
+
         self._task = asyncio.create_task(self._loop())
         logger.info(
             f"Overlay health monitor started (interval: {self._interval}s)"
@@ -75,6 +83,10 @@ class OverlayHealthMonitor:
 
         ovs_ports = await batch_read_ovs_ports(overlay._bridge_name)
 
+        if ovs_ports is None:
+            logger.warning("Health monitor: OVS query failed, skipping check")
+            return {"checked": 0, "repaired": 0, "skipped": "ovs_read_error"}
+
         checked = 0
         repaired = 0
 
@@ -107,6 +119,14 @@ class OverlayHealthMonitor:
                     await overlay._ovs_vsctl(
                         "del-port", overlay._bridge_name, port_name
                     )
+
+                # Re-check tracking right before creation: tunnel may have
+                # been intentionally removed by a concurrent declare_state
+                # between the iteration snapshot and this await point.
+                # del-port above is harmless; creation would produce an orphan.
+                if link_id not in overlay._link_tunnels:
+                    continue
+
                 await overlay._create_vxlan_device(
                     name=port_name,
                     vni=tunnel.vni,

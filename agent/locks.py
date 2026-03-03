@@ -129,7 +129,7 @@ class DeployLockManager:
 
         async with local_lock:
             # Try to acquire Redis lock with TTL
-            start_time = asyncio.get_event_loop().time()
+            start_time = asyncio.get_running_loop().time()
 
             while True:
                 # Use SET NX EX for atomic acquire with TTL
@@ -145,7 +145,7 @@ class DeployLockManager:
                     break
 
                 # Check timeout
-                elapsed = asyncio.get_event_loop().time() - start_time
+                elapsed = asyncio.get_running_loop().time() - start_time
                 if elapsed >= timeout:
                     # Get info about current lock holder
                     current = await r.get(lock_key)

@@ -1740,10 +1740,10 @@ class DockerProvider(Provider, VlanPersistenceMixin):
         Returns dict mapping node_name -> ready status.
         """
         ready_status = {name: False for name in containers.keys()}
-        start_time = asyncio.get_event_loop().time()
+        start_time = asyncio.get_running_loop().time()
 
         while True:
-            elapsed = asyncio.get_event_loop().time() - start_time
+            elapsed = asyncio.get_running_loop().time() - start_time
             if elapsed > timeout:
                 break
 
