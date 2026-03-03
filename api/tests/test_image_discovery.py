@@ -157,3 +157,28 @@ async def test_discovery_deduplicates_across_agents(test_db, sample_lab, monkeyp
 
     assert count == 1
     assert len(saved["manifest"]["images"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_discovery_skips_alpine_suffix_false_positives(test_db, sample_lab, monkeypatch):
+    """Images with '-alpine' base image suffix should not match the alpine device."""
+    _make_host(test_db)
+
+    manifest = {"images": []}
+
+    async def fake_get_images(agent):
+        return {"images": [{"tags": [
+            "redis:7-alpine",
+            "nginx:1.27-alpine",
+            "postgres:16-alpine",
+            "node:20-alpine",
+        ]}]}
+
+    monkeypatch.setattr(image_reconciliation, "load_manifest", lambda: manifest)
+    monkeypatch.setattr(image_reconciliation, "get_session", lambda: _session_ctx(test_db))
+    monkeypatch.setattr(image_reconciliation.agent_client, "is_agent_online", lambda h: True)
+    monkeypatch.setattr(image_reconciliation.agent_client, "get_agent_images", fake_get_images)
+
+    count = await image_reconciliation.discover_unmanifested_images()
+
+    assert count == 0

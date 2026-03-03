@@ -185,9 +185,15 @@ async def discover_unmanifested_images() -> int:
         if tag in known_references:
             continue
 
-        device_id, version = detect_device_from_filename(tag)
+        # Detect device from the image name only (before ':'), not the
+        # version/tag suffix.  This prevents "redis:7-alpine" from matching
+        # the "alpine" keyword — only "alpine:3.20" should match.
+        image_name = tag.split(":")[0] if ":" in tag else tag
+        device_id, version = detect_device_from_filename(image_name)
         if not device_id:
             continue
+        # Re-extract version from the full tag (more precise than name alone)
+        _, version = detect_device_from_filename(tag)
 
         image_id = f"docker:{tag}"
         entry = create_image_entry(
