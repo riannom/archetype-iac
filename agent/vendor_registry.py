@@ -169,6 +169,7 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         license_required=True,
         tags=["routing", "bgp", "mpls", "segment-routing", "container"],
         filename_patterns=[r"xrd[_-]?[\d\.]+.*\.qcow2"],
+        filename_keywords=["ios-xrd", "xrd"],
         vrnetlab_subdir="cisco/xrd",
         default_credentials="cisco / cisco",
     ),
@@ -417,6 +418,7 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         documentation_url="https://www.juniper.net/documentation/product/us/en/crpd/",
         license_required=True,
         tags=["routing", "bgp", "mpls", "container", "kubernetes"],
+        filename_keywords=["crpd"],
         default_credentials="root / (no password)",
     ),
     "juniper_vsrx3": VendorConfig(
@@ -559,6 +561,7 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         documentation_url="https://www.juniper.net/documentation/product/us/en/cjunos-evolved/",
         license_required=True,
         tags=["routing", "bgp", "mpls", "evpn", "evolved", "container"],
+        filename_keywords=["cjunosevolved", "cjunos"],
         readiness_probe="log_pattern",
         readiness_pattern=r"EVO FLAVORS|login:",
         readiness_timeout=600,

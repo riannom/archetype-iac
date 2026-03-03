@@ -18,7 +18,12 @@ from datetime import datetime, timezone
 from app import agent_client, models
 from app.config import settings
 from app.db import get_session
-from app.image_store import load_manifest
+from app.image_store import (
+    create_image_entry,
+    detect_device_from_filename,
+    load_manifest,
+    save_manifest,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +35,7 @@ class ImageReconciliationResult:
         self.orphaned_hosts_removed = 0
         self.missing_hosts_created = 0
         self.status_updates = 0
+        self.images_discovered = 0
         self.errors: list[str] = []
 
     def to_dict(self) -> dict:
@@ -37,6 +43,7 @@ class ImageReconciliationResult:
             "orphaned_hosts_removed": self.orphaned_hosts_removed,
             "missing_hosts_created": self.missing_hosts_created,
             "status_updates": self.status_updates,
+            "images_discovered": self.images_discovered,
             "errors": self.errors,
         }
 
@@ -124,6 +131,81 @@ async def reconcile_image_hosts() -> ImageReconciliationResult:
                 pass
 
     return result
+
+
+async def discover_unmanifested_images() -> int:
+    """Discover Docker images on agents that are not in the manifest.
+
+    Queries each online agent for Docker images, detects device types from
+    tags, and creates manifest entries for unregistered images. This ensures
+    resolve_node_image() can find actual Docker tags instead of falling
+    through to vendor defaults that may not match.
+
+    Returns:
+        Number of new manifest entries created.
+    """
+    manifest = load_manifest()
+    known_references: set[str] = set()
+    for img in manifest.get("images", []):
+        ref = img.get("reference")
+        if ref:
+            known_references.add(ref)
+
+    with get_session() as session:
+        online_hosts = (
+            session.query(models.Host)
+            .filter(models.Host.status == "online")
+            .all()
+        )
+
+    # Collect all unique Docker tags across agents
+    all_agent_tags: set[str] = set()
+    for host in online_hosts:
+        if not agent_client.is_agent_online(host):
+            continue
+        try:
+            images_response = await agent_client.get_agent_images(host)
+            for img_info in images_response.get("images", []):
+                for tag in img_info.get("tags", []):
+                    all_agent_tags.add(tag)
+        except Exception as e:
+            logger.debug(f"Failed to query images on agent {host.name}: {e}")
+
+    discovered = 0
+    for tag in sorted(all_agent_tags):
+        # Skip dangling images
+        if tag == "<none>:<none>" or ":<none>" in tag or "<none>:" in tag:
+            continue
+
+        # Skip already-manifested references
+        if tag in known_references:
+            continue
+
+        device_id, version = detect_device_from_filename(tag)
+        if not device_id:
+            continue
+
+        image_id = f"docker:{tag}"
+        entry = create_image_entry(
+            image_id=image_id,
+            kind="docker",
+            reference=tag,
+            filename=tag,
+            device_id=device_id,
+            version=version,
+            source="agent-discovery",
+        )
+        manifest.setdefault("images", []).append(entry)
+        known_references.add(tag)
+        discovered += 1
+        logger.info(
+            f"Discovered Docker image: {tag} -> device={device_id}, version={version}"
+        )
+
+    if discovered > 0:
+        save_manifest(manifest)
+
+    return discovered
 
 
 async def verify_image_status_on_agents(run_sha256_check: bool = False) -> ImageReconciliationResult:
@@ -329,12 +411,25 @@ async def verify_image_status_on_agents(run_sha256_check: bool = False) -> Image
 async def full_image_reconciliation() -> ImageReconciliationResult:
     """Run full image reconciliation: host records and status verification.
 
-    Combines reconcile_image_hosts() and verify_image_status_on_agents().
+    Combines discover_unmanifested_images(), reconcile_image_hosts(), and
+    verify_image_status_on_agents().
     """
-    # First reconcile the ImageHost table
-    result = await reconcile_image_hosts()
+    result = ImageReconciliationResult()
 
-    # Then verify actual status on agents (if no errors so far)
+    # Discover Docker images on agents not yet in manifest
+    try:
+        result.images_discovered = await discover_unmanifested_images()
+    except Exception as e:
+        logger.error(f"Error discovering unmanifested images: {e}")
+        result.errors.append(f"Discovery: {e}")
+
+    # Reconcile the ImageHost table
+    host_result = await reconcile_image_hosts()
+    result.orphaned_hosts_removed = host_result.orphaned_hosts_removed
+    result.missing_hosts_created = host_result.missing_hosts_created
+    result.errors.extend(host_result.errors)
+
+    # Verify actual status on agents (if no errors so far)
     if not result.errors:
         status_result = await verify_image_status_on_agents()
         result.status_updates = status_result.status_updates
@@ -364,6 +459,14 @@ async def image_reconciliation_monitor():
         try:
             await asyncio.sleep(interval)
             cycle += 1
+
+            # Discover unmanifested Docker images on agents
+            try:
+                discovered = await discover_unmanifested_images()
+                if discovered > 0:
+                    logger.info(f"Image discovery: {discovered} new image(s) registered")
+            except Exception as e:
+                logger.error(f"Error discovering unmanifested images: {e}")
 
             result = await reconcile_image_hosts()
             if result.orphaned_hosts_removed > 0 or result.missing_hosts_created > 0:
