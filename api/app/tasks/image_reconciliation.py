@@ -136,10 +136,9 @@ async def reconcile_image_hosts() -> ImageReconciliationResult:
 async def discover_unmanifested_images() -> int:
     """Discover Docker images on agents that are not in the manifest.
 
-    Queries each online agent for Docker images, detects device types from
-    tags, and creates manifest entries for unregistered images. This ensures
-    resolve_node_image() can find actual Docker tags instead of falling
-    through to vendor defaults that may not match.
+    Queries each online agent for Docker images. Prefers agent-reported
+    ``device_id`` (set during image sync) for deterministic identification.
+    Falls back to keyword detection only for truly unknown images.
 
     Returns:
         Number of new manifest entries created.
@@ -162,21 +161,27 @@ async def discover_unmanifested_images() -> int:
             _ = h.id, h.name, h.address, h.status, h.last_heartbeat, h.capabilities
         session.expunge_all()
 
-    # Collect all unique Docker tags across agents
-    all_agent_tags: set[str] = set()
+    # Collect images with agent-reported device_id
+    # Key: tag, Value: dict with device_ids per host and host list
+    agent_images: dict[str, dict] = {}
     for host in online_hosts:
         if not agent_client.is_agent_online(host):
             continue
         try:
             images_response = await agent_client.get_agent_images(host)
             for img_info in images_response.get("images", []):
+                reported_device_id = img_info.get("device_id")
                 for tag in img_info.get("tags", []):
-                    all_agent_tags.add(tag)
+                    if tag not in agent_images:
+                        agent_images[tag] = {"device_ids": {}, "hosts": []}
+                    agent_images[tag]["hosts"].append(host.name)
+                    if reported_device_id:
+                        agent_images[tag]["device_ids"][host.name] = reported_device_id
         except Exception as e:
             logger.debug(f"Failed to query images on agent {host.name}: {e}")
 
     discovered = 0
-    for tag in sorted(all_agent_tags):
+    for tag in sorted(agent_images):
         # Skip dangling images
         if tag == "<none>:<none>" or ":<none>" in tag or "<none>:" in tag:
             continue
@@ -185,9 +190,29 @@ async def discover_unmanifested_images() -> int:
         if tag in known_references:
             continue
 
-        device_id, version = detect_device_from_filename(tag)
-        if not device_id:
+        info = agent_images[tag]
+        device_ids = info["device_ids"]
+        unique_ids = set(device_ids.values())
+
+        if len(unique_ids) > 1:
+            # Conflict: different agents report different device_ids
+            logger.warning(
+                f"Conflicting device_id for {tag}: {device_ids} — skipping"
+            )
             continue
+        elif len(unique_ids) == 1:
+            device_id = unique_ids.pop()  # Deterministic: all agents agree
+            version = None
+            # Extract version from tag for manifest entry
+            _, version = detect_device_from_filename(tag)
+        else:
+            # No metadata — fallback to keyword detection
+            image_name = tag.split(":")[0] if ":" in tag else tag
+            device_id, version = detect_device_from_filename(image_name)
+            if not device_id:
+                continue
+            # Re-extract version from the full tag (more precise)
+            _, version = detect_device_from_filename(tag)
 
         image_id = f"docker:{tag}"
         entry = create_image_entry(
@@ -415,8 +440,8 @@ async def verify_image_status_on_agents(run_sha256_check: bool = False) -> Image
 async def full_image_reconciliation() -> ImageReconciliationResult:
     """Run full image reconciliation: host records and status verification.
 
-    Combines discover_unmanifested_images(), reconcile_image_hosts(), and
-    verify_image_status_on_agents().
+    Combines discover_unmanifested_images(), reconcile_image_hosts(),
+    verify_image_status_on_agents(), and metadata backfill.
     """
     result = ImageReconciliationResult()
 
@@ -439,7 +464,64 @@ async def full_image_reconciliation() -> ImageReconciliationResult:
         result.status_updates = status_result.status_updates
         result.errors.extend(status_result.errors)
 
+    # Backfill metadata for manifest images that agents have but lack metadata for
+    try:
+        await _backfill_agent_metadata()
+    except Exception as e:
+        logger.debug(f"Metadata backfill error (non-critical): {e}")
+
     return result
+
+
+async def _backfill_agent_metadata() -> None:
+    """Push known device_ids to agents for images missing metadata.
+
+    For each online agent, compares agent-reported images (those without
+    device_id) against the manifest. If the manifest knows the device_id
+    for a tag the agent has, sends a backfill request so subsequent
+    queries return deterministic device identification.
+    """
+    manifest = load_manifest()
+    # Build reference -> device_id lookup from manifest
+    manifest_device_map: dict[str, str] = {}
+    for img in manifest.get("images", []):
+        ref = img.get("reference")
+        did = img.get("device_id")
+        if ref and did:
+            manifest_device_map[ref] = did
+
+    if not manifest_device_map:
+        return
+
+    with get_session() as session:
+        online_hosts = (
+            session.query(models.Host)
+            .filter(models.Host.status == "online")
+            .all()
+        )
+        for h in online_hosts:
+            _ = h.id, h.name, h.address, h.status, h.last_heartbeat, h.capabilities
+        session.expunge_all()
+
+    for host in online_hosts:
+        if not agent_client.is_agent_online(host):
+            continue
+        try:
+            images_response = await agent_client.get_agent_images(host)
+            backfill: dict[str, str] = {}
+            for img_info in images_response.get("images", []):
+                if img_info.get("device_id"):
+                    continue  # Already has metadata
+                for tag in img_info.get("tags", []):
+                    if tag in manifest_device_map:
+                        backfill[tag] = manifest_device_map[tag]
+            if backfill:
+                await agent_client.backfill_image_metadata(host, backfill)
+                logger.debug(
+                    f"Backfilled {len(backfill)} image metadata entries on {host.name}"
+                )
+        except Exception as e:
+            logger.debug(f"Metadata backfill failed on {host.name}: {e}")
 
 
 async def image_reconciliation_monitor():

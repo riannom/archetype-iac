@@ -976,6 +976,7 @@ async def teardown_deployment_links(
 
     # Track which agents need overlay cleanup (deduplicate)
     agents_to_cleanup: set[str] = set()
+    succeeded_agents: set[str] = set()
     for tunnel in tunnels:
         agents_to_cleanup.add(tunnel.agent_a_id)
         agents_to_cleanup.add(tunnel.agent_b_id)
@@ -1000,14 +1001,26 @@ async def teardown_deployment_links(
                 f"{result.get('bridges_deleted', 0)} bridges)"
             )
             success_count += 1
+            succeeded_agents.add(agent_id)
         except Exception as e:
             logger.error(f"Failed to cleanup overlay on agent {agent_id}: {e}")
             log_parts.append(f"  Agent {agent_id}: FAILED - {e}")
             fail_count += 1
 
-    # Delete VxlanTunnel records
+    # Delete or preserve VxlanTunnel records based on cleanup result.
+    # Only delete tunnels where BOTH agents cleaned up successfully.
+    # Tunnels with a failed agent keep status="cleanup_failed" so the
+    # background cleanup_orphaned_tunnels() can retry later.
     for tunnel in tunnels:
-        session.delete(tunnel)
+        both_ok = (
+            tunnel.agent_a_id in succeeded_agents
+            and tunnel.agent_b_id in succeeded_agents
+        )
+        if both_ok:
+            session.delete(tunnel)
+        elif fail_count > 0:
+            tunnel.status = "cleanup_failed"
+            tunnel.error_message = "Agent cleanup incomplete; will retry"
 
     # Detach external interfaces (only when no other lab references them)
     external_nodes = (
@@ -1042,15 +1055,34 @@ async def teardown_deployment_links(
                 except Exception as e:
                     logger.warning(f"Failed to detach external {mi.name}: {e}")
 
-    # Delete ALL LinkState records for this lab (not just cross-host)
-    # Fresh records will be created on the next deploy
+    # Delete LinkState records.  When all agents succeeded, remove everything.
+    # When some agents failed, only delete LinkStates whose links are fully
+    # cleaned (both sides succeeded) and mark partially-cleaned ones as error.
     all_link_states = (
         session.query(models.LinkState)
         .filter(models.LinkState.lab_id == lab_id)
         .all()
     )
-    for ls in all_link_states:
-        session.delete(ls)
+    if fail_count == 0:
+        for ls in all_link_states:
+            session.delete(ls)
+    else:
+        for ls in all_link_states:
+            # Same-host links can always be deleted (no agent-side cleanup)
+            if not ls.is_cross_host:
+                session.delete(ls)
+                continue
+            # Cross-host: check if both hosting agents succeeded
+            both_sides_ok = (
+                (not ls.source_host_id or ls.source_host_id in succeeded_agents)
+                and (not ls.target_host_id or ls.target_host_id in succeeded_agents)
+            )
+            if both_sides_ok:
+                session.delete(ls)
+            else:
+                ls.actual_state = "error"
+                ls.desired_state = "down"
+                ls.error_message = "Cleanup incomplete — agent unreachable"
 
     session.commit()
 

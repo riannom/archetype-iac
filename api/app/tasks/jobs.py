@@ -279,6 +279,79 @@ def release_deploy_lock(lab_id: str, node_names: list[str]) -> None:
             pass  # Lock will auto-expire via TTL
 
 
+async def _cleanup_network_records_after_destroy(
+    session,
+    lab_id: str,
+    agent: models.Host,
+) -> None:
+    """Clean up VxlanTunnel and LinkState records after single-host destroy.
+
+    The multi-host destroy path calls teardown_deployment_links() explicitly;
+    the single-host path was missing this step, leaking network records.
+    This function reuses teardown_deployment_links() when tunnels exist and
+    falls back to a direct LinkState delete for same-host-only labs.
+    """
+    from app.tasks.link_orchestration import teardown_deployment_links
+
+    try:
+        tunnels = (
+            session.query(models.VxlanTunnel)
+            .filter(models.VxlanTunnel.lab_id == lab_id)
+            .all()
+        )
+
+        if tunnels:
+            # Build host_to_agent map from distinct agent IDs in tunnel records
+            agent_ids: set[str] = set()
+            for t in tunnels:
+                agent_ids.add(t.agent_a_id)
+                agent_ids.add(t.agent_b_id)
+
+            agents = (
+                session.query(models.Host)
+                .filter(models.Host.id.in_(agent_ids))
+                .all()
+            )
+            host_to_agent = {a.id: a for a in agents}
+
+            log_parts: list[str] = []
+            _release_db_transaction_for_io(
+                session,
+                context=f"network cleanup after destroy for lab {lab_id}",
+            )
+            ok, fail = await teardown_deployment_links(
+                session, lab_id, host_to_agent, log_parts,
+            )
+            if log_parts:
+                logger.info(
+                    "Single-host destroy network cleanup for lab %s: %s",
+                    lab_id,
+                    "; ".join(log_parts),
+                )
+        else:
+            # No tunnels — still clean up same-host LinkState records
+            deleted = (
+                session.query(models.LinkState)
+                .filter(models.LinkState.lab_id == lab_id)
+                .delete(synchronize_session="fetch")
+            )
+            if deleted:
+                session.commit()
+                logger.info(
+                    "Cleaned up %d same-host LinkState record(s) for lab %s",
+                    deleted,
+                    lab_id,
+                )
+    except Exception as e:
+        logger.warning(
+            "Network cleanup after destroy failed for lab %s: %s", lab_id, e
+        )
+        try:
+            session.rollback()
+        except Exception:
+            pass
+
+
 async def _auto_extract_configs_before_destroy(
     session,
     lab: models.Lab,
@@ -839,6 +912,15 @@ async def run_agent_job(
                         context=f"destroy request for job {job_id}",
                     )
                     result = await agent_client.destroy_on_agent(agent, job_id, lab_id)
+
+                    # Clean up network records (VxlanTunnel + LinkState) that the
+                    # single-host path would otherwise leak.  The multi-host path
+                    # already calls teardown_deployment_links(); this makes the
+                    # two paths behave identically.
+                    if result.get("status") == "completed":
+                        await _cleanup_network_records_after_destroy(
+                            session, lab_id, agent,
+                        )
                 else:
                     # Note: node:start/stop actions are deprecated - use sync:node:{id} instead
                     result = {"status": "failed", "error_message": f"Unknown action: {action}"}

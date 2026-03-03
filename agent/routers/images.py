@@ -149,6 +149,7 @@ async def receive_image(
     total_bytes: int = 0,
     job_id: str = "",
     sha256: str = "",
+    device_id: str = "",
 ) -> ImageReceiveResponse:
     """Receive a streamed Docker image tar from controller.
 
@@ -182,6 +183,8 @@ async def receive_image(
             job_id = str(form.get("job_id") or "")
         if not sha256:
             sha256 = str(form.get("sha256") or "")
+        if not device_id:
+            device_id = str(form.get("device_id") or "")
         if not total_bytes:
             total_bytes_raw = form.get("total_bytes")
             try:
@@ -296,6 +299,18 @@ async def receive_image(
                 )
                 _persist_transfer_state()
 
+            # Persist device metadata for file-based images
+            if device_id:
+                try:
+                    from agent.image_metadata import set_file_image_metadata
+                    set_file_image_metadata(
+                        path=str(destination),
+                        device_id=device_id,
+                        source="api-sync",
+                    )
+                except Exception as e:
+                    logger.debug(f"Failed to persist file image metadata: {e}")
+
             logger.info(f"Stored file image to {destination} ({bytes_written} bytes)")
             return ImageReceiveResponse(success=True, loaded_images=[str(destination)])
 
@@ -372,6 +387,21 @@ async def receive_image(
                     loaded_images.append(line.split("Loaded image ID:", 1)[-1].strip())
 
             logger.info(f"Successfully loaded images: {loaded_images}")
+
+            # Persist device metadata for Docker images
+            if device_id:
+                try:
+                    from agent.image_metadata import set_docker_image_metadata
+                    client = get_docker_client()
+                    img = client.images.get(reference)
+                    set_docker_image_metadata(
+                        image_id=img.id,
+                        tags=img.tags or [reference],
+                        device_id=device_id,
+                        source="api-sync",
+                    )
+                except Exception as e:
+                    logger.debug(f"Failed to persist Docker image metadata: {e}")
 
             # Update final status
             if job_id:
@@ -644,6 +674,35 @@ def get_active_transfers() -> dict:
         "temp_files": stale_temp_files,
         "agent_uptime_seconds": int(time.time() - _agent_start_time),
     }
+
+
+@router.post("/images/backfill-metadata")
+def backfill_metadata(entries: dict[str, str]) -> dict:
+    """Accept {reference: device_id} mappings and persist to metadata store.
+
+    Used by the API to push known device_ids for images that exist on
+    this agent but lack metadata (e.g. pre-existing images before this
+    feature was added).
+    """
+    from agent.image_metadata import set_docker_image_metadata
+
+    updated = 0
+    for reference, device_id in entries.items():
+        try:
+            client = get_docker_client()
+            img = client.images.get(reference)
+            set_docker_image_metadata(
+                image_id=img.id,
+                tags=img.tags or [reference],
+                device_id=device_id,
+                source="api-backfill",
+            )
+            updated += 1
+        except docker.errors.ImageNotFound:
+            continue
+        except Exception as e:
+            logger.debug(f"Failed to backfill metadata for {reference}: {e}")
+    return {"updated": updated}
 
 
 # MUST BE LAST: catch-all path parameter swallows any /images/* route defined after it.

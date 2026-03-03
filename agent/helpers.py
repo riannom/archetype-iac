@@ -646,6 +646,8 @@ get_docker_ovs_plugin = _get_docker_ovs_plugin
 def _get_docker_images() -> list[DockerImageInfo]:
     """Get list of Docker images on this agent."""
     try:
+        from agent.image_metadata import lookup_device_id_by_image_id
+
         client = get_docker_client()
         images = []
 
@@ -654,12 +656,14 @@ def _get_docker_images() -> list[DockerImageInfo]:
             tags = img.tags or []
             size_bytes = img.attrs.get("Size", 0)
             created = img.attrs.get("Created", None)
+            device_id = lookup_device_id_by_image_id(image_id)
 
             images.append(DockerImageInfo(
                 id=image_id,
                 tags=tags,
                 size_bytes=size_bytes,
                 created=created,
+                device_id=device_id,
             ))
 
         return images

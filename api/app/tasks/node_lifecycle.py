@@ -345,6 +345,11 @@ class NodeLifecycleManager(AgentResolutionMixin, DeploymentMixin, StopMixin):
                 return LifecycleResult(success=True, log=self.log_parts)
             nodes_need_deploy, nodes_need_start = result
 
+        # Phase: Pre-deploy cleanup (remove stale network records)
+        if nodes_need_deploy or nodes_need_start:
+            self._release_db_transaction_for_io("pre-deploy cleanup")
+            await self._pre_deploy_cleanup(nodes_need_deploy + nodes_need_start)
+
         # Phase: Deploy undeployed nodes
         if nodes_need_deploy:
             for device_type, grouped_nodes in self._group_nodes_by_device_type(nodes_need_deploy):
@@ -1087,10 +1092,130 @@ class NodeLifecycleManager(AgentResolutionMixin, DeploymentMixin, StopMixin):
 
     # --- Deploy/start/stop methods are in node_lifecycle_deploy.py ---
 
+    async def _pre_deploy_cleanup(
+        self, nodes_to_deploy_or_start: list[models.NodeState],
+    ) -> None:
+        """Remove stale network infrastructure before deploying new containers.
+
+        New containers get fresh VLAN tags, but leftover VxlanTunnel and
+        LinkState records (from a prior run that wasn't cleaned up on destroy)
+        still reference the old tags.  Clearing them here prevents VLAN
+        mismatches and guarantees _post_operation_cleanup() starts from a
+        clean slate.
+        """
+        node_names = {ns.node_name for ns in nodes_to_deploy_or_start}
+        lab_id = self.lab.id
+
+        # 1. Find stale VxlanTunnel records for links involving these nodes
+        stale_tunnels = (
+            self.session.query(models.VxlanTunnel)
+            .join(
+                models.LinkState,
+                models.VxlanTunnel.link_state_id == models.LinkState.id,
+            )
+            .filter(
+                models.VxlanTunnel.lab_id == lab_id,
+                models.LinkState.source_node.in_(node_names)
+                | models.LinkState.target_node.in_(node_names),
+            )
+            .all()
+        )
+
+        if stale_tunnels:
+            # Ask agents to clean OVS VXLAN ports for this lab
+            agent_ids: set[str] = set()
+            for t in stale_tunnels:
+                agent_ids.add(t.agent_a_id)
+                agent_ids.add(t.agent_b_id)
+
+            agents = (
+                self.session.query(models.Host)
+                .filter(
+                    models.Host.id.in_(agent_ids),
+                    models.Host.status == "online",
+                )
+                .all()
+            )
+            for a in agents:
+                try:
+                    await agent_client.cleanup_overlay_on_agent(a, lab_id)
+                except Exception as e:
+                    logger.warning(
+                        "Pre-deploy overlay cleanup on agent %s failed: %s",
+                        a.name,
+                        e,
+                    )
+
+            for t in stale_tunnels:
+                self.session.delete(t)
+            logger.info(
+                "Pre-deploy cleanup: removed %d stale VxlanTunnel record(s) "
+                "for lab %s",
+                len(stale_tunnels),
+                lab_id,
+            )
+
+        # 2. Delete stale LinkState records for links involving these nodes
+        stale_link_states = (
+            self.session.query(models.LinkState)
+            .filter(
+                models.LinkState.lab_id == lab_id,
+                models.LinkState.source_node.in_(node_names)
+                | models.LinkState.target_node.in_(node_names),
+            )
+            .all()
+        )
+        if stale_link_states:
+            for ls in stale_link_states:
+                self.session.delete(ls)
+            logger.info(
+                "Pre-deploy cleanup: removed %d stale LinkState record(s) "
+                "for lab %s",
+                len(stale_link_states),
+                lab_id,
+            )
+
+        # 3. Delete stale InterfaceMapping records for nodes being redeployed
+        #    (their OVS ports will be freshly assigned)
+        deleted_mappings = 0
+        node_def_ids = [
+            n.id
+            for n in self.session.query(models.Node)
+            .filter(
+                models.Node.lab_id == lab_id,
+                models.Node.display_name.in_(node_names),
+            )
+            .all()
+        ]
+        if node_def_ids:
+            deleted_mappings = (
+                self.session.query(models.InterfaceMapping)
+                .filter(
+                    models.InterfaceMapping.lab_id == lab_id,
+                    models.InterfaceMapping.node_id.in_(node_def_ids),
+                )
+                .delete(synchronize_session="fetch")
+            )
+            if deleted_mappings:
+                logger.info(
+                    "Pre-deploy cleanup: removed %d stale InterfaceMapping "
+                    "record(s) for lab %s",
+                    deleted_mappings,
+                    lab_id,
+                )
+
+        if stale_tunnels or stale_link_states or deleted_mappings:
+            self.session.commit()
+
     async def _post_operation_cleanup(self):
-        """Post-operation cleanup: create cross-host VXLAN links."""
+        """Post-operation cleanup: create cross-host VXLAN links and converge."""
         from app.tasks.jobs import _create_cross_host_links_if_ready
-        from app.tasks.link_reconciliation import reconcile_lab_links
+        from app.tasks.link_reconciliation import (
+            reconcile_lab_links,
+            refresh_interface_mappings,
+            run_cross_host_port_convergence,
+            run_overlay_convergence,
+        )
 
         self._release_db_transaction_for_io("cross-host link creation")
         await _create_cross_host_links_if_ready(
@@ -1117,6 +1242,32 @@ class NodeLifecycleManager(AgentResolutionMixin, DeploymentMixin, StopMixin):
                 pass
             logger.warning(f"Post-op link reconciliation failed for lab {self.lab.id}: {e}")
             self.log_parts.append(f"WARNING: Post-op link reconciliation failed: {e}")
+
+        # Immediate per-lab convergence: push VLAN tags to overlay + container
+        # ports so cross-host links work right away (no 60s wait).
+        try:
+            agents = (
+                self.session.query(models.Host)
+                .filter(models.Host.status == "online")
+                .all()
+            )
+            host_to_agent = {a.id: a for a in agents}
+            if host_to_agent:
+                self._release_db_transaction_for_io("post-op convergence")
+                await run_overlay_convergence(
+                    self.session, host_to_agent, lab_id=self.lab.id,
+                )
+                await refresh_interface_mappings(
+                    self.session, host_to_agent, lab_id=self.lab.id,
+                )
+                await run_cross_host_port_convergence(
+                    self.session, host_to_agent, lab_id=self.lab.id,
+                )
+        except Exception as e:
+            logger.warning(
+                "Post-op convergence failed for lab %s: %s", self.lab.id, e,
+            )
+            self.log_parts.append(f"WARNING: Post-op convergence failed: {e}")
 
     async def _reconcile_node_placement_statuses(self) -> None:
         """Align node_placements.status with final per-node outcomes.

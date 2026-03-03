@@ -305,6 +305,7 @@ async def cleanup_orphaned_tunnels(session: Session) -> int:
     Orphaned tunnels are those where:
     - link_state_id is NULL (LinkState was deleted but tunnel remained)
     - status is "cleanup" for more than 5 minutes (teardown stalled)
+    - status is "cleanup_failed" (teardown partially failed, retrying)
 
     Args:
         session: Database session
@@ -323,6 +324,7 @@ async def cleanup_orphaned_tunnels(session: Session) -> int:
                     models.VxlanTunnel.status == "cleanup",
                     models.VxlanTunnel.updated_at < cutoff_time,
                 ),
+                models.VxlanTunnel.status == "cleanup_failed",
             )
         )
         .all()
