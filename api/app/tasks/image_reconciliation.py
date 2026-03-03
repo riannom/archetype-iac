@@ -179,7 +179,7 @@ async def discover_unmanifested_images() -> int:
                         agent_images[tag] = {}
                     agent_images[tag][host.name] = reported_device_id
         except Exception as e:
-            logger.debug(f"Failed to query images on agent {host.name}: {e}")
+            logger.warning(f"Failed to query images on agent {host.name}: {e}")
 
     discovered = 0
     for tag in sorted(agent_images):
@@ -457,7 +457,7 @@ async def full_image_reconciliation() -> ImageReconciliationResult:
     try:
         await _backfill_agent_metadata()
     except Exception as e:
-        logger.debug(f"Metadata backfill error (non-critical): {e}")
+        logger.warning(f"Metadata backfill error: {e}")
 
     return result
 
@@ -510,7 +510,7 @@ async def _backfill_agent_metadata() -> None:
                     f"Backfilled {len(backfill)} image metadata entries on {host.name}"
                 )
         except Exception as e:
-            logger.debug(f"Metadata backfill failed on {host.name}: {e}")
+            logger.warning(f"Metadata backfill failed on {host.name}: {e}")
 
 
 async def image_reconciliation_monitor():
@@ -555,6 +555,12 @@ async def image_reconciliation_monitor():
             status_result = await verify_image_status_on_agents(run_sha256_check=run_sha256)
             if status_result.status_updates > 0:
                 logger.info(f"Image status verification: {status_result.status_updates} update(s)")
+
+            # Backfill metadata for images agents have but lack device_id for
+            try:
+                await _backfill_agent_metadata()
+            except Exception as e:
+                logger.warning(f"Metadata backfill error: {e}")
 
         except asyncio.CancelledError:
             logger.info("Image reconciliation monitor stopped")
