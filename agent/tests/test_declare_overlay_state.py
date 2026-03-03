@@ -539,7 +539,7 @@ async def test_declare_skips_orphan_cleanup_on_ovs_failure(tmp_path):
     overlay._batch_read_ovs_ports = AsyncMock(return_value=None)
     overlay._write_declared_state_cache = AsyncMock()
 
-    result = await overlay.declare_state([], declared_labs=["lab-1"])
+    await overlay.declare_state([], declared_labs=["lab-1"])
 
     # Orphan should still be tracked — not deleted
     assert "stale-link" in overlay._link_tunnels
