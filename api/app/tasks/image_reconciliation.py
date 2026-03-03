@@ -136,9 +136,10 @@ async def reconcile_image_hosts() -> ImageReconciliationResult:
 async def discover_unmanifested_images() -> int:
     """Discover Docker images on agents that are not in the manifest.
 
-    Queries each online agent for Docker images. Prefers agent-reported
+    Queries each online agent for Docker images and uses agent-reported
     ``device_id`` (set during image sync) for deterministic identification.
-    Falls back to keyword detection only for truly unknown images.
+    Images without metadata are skipped — all images must be synced through
+    the API to be tracked.
 
     Returns:
         Number of new manifest entries created.
@@ -162,8 +163,8 @@ async def discover_unmanifested_images() -> int:
         session.expunge_all()
 
     # Collect images with agent-reported device_id
-    # Key: tag, Value: dict with device_ids per host and host list
-    agent_images: dict[str, dict] = {}
+    # Key: tag, Value: dict with device_ids per host
+    agent_images: dict[str, dict[str, str]] = {}
     for host in online_hosts:
         if not agent_client.is_agent_online(host):
             continue
@@ -171,12 +172,12 @@ async def discover_unmanifested_images() -> int:
             images_response = await agent_client.get_agent_images(host)
             for img_info in images_response.get("images", []):
                 reported_device_id = img_info.get("device_id")
+                if not reported_device_id:
+                    continue  # No metadata — skip
                 for tag in img_info.get("tags", []):
                     if tag not in agent_images:
-                        agent_images[tag] = {"device_ids": {}, "hosts": []}
-                    agent_images[tag]["hosts"].append(host.name)
-                    if reported_device_id:
-                        agent_images[tag]["device_ids"][host.name] = reported_device_id
+                        agent_images[tag] = {}
+                    agent_images[tag][host.name] = reported_device_id
         except Exception as e:
             logger.debug(f"Failed to query images on agent {host.name}: {e}")
 
@@ -190,29 +191,17 @@ async def discover_unmanifested_images() -> int:
         if tag in known_references:
             continue
 
-        info = agent_images[tag]
-        device_ids = info["device_ids"]
+        device_ids = agent_images[tag]
         unique_ids = set(device_ids.values())
 
         if len(unique_ids) > 1:
-            # Conflict: different agents report different device_ids
             logger.warning(
                 f"Conflicting device_id for {tag}: {device_ids} — skipping"
             )
             continue
-        elif len(unique_ids) == 1:
-            device_id = unique_ids.pop()  # Deterministic: all agents agree
-            version = None
-            # Extract version from tag for manifest entry
-            _, version = detect_device_from_filename(tag)
-        else:
-            # No metadata — fallback to keyword detection
-            image_name = tag.split(":")[0] if ":" in tag else tag
-            device_id, version = detect_device_from_filename(image_name)
-            if not device_id:
-                continue
-            # Re-extract version from the full tag (more precise)
-            _, version = detect_device_from_filename(tag)
+
+        device_id = unique_ids.pop()
+        _, version = detect_device_from_filename(tag)
 
         image_id = f"docker:{tag}"
         entry = create_image_entry(
