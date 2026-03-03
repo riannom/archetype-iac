@@ -851,6 +851,85 @@ async def check_orphaned_image_sync_status():
 
 
 # ---------------------------------------------------------------------------
+# Startup recovery
+# ---------------------------------------------------------------------------
+
+async def recover_stranded_jobs():
+    """One-time recovery of jobs stranded by a scheduler/API restart.
+
+    Jobs stuck in running/queued state for more than 60 seconds are assumed
+    to be orphaned from a previous process and are retried immediately.
+    This collapses the normal timeout-based detection (up to 20 min for
+    deploy jobs) down to seconds after restart.
+    """
+    from datetime import timedelta
+
+    with get_session() as session:
+        try:
+            now = utcnow()
+            staleness_cutoff = now - timedelta(seconds=60)
+
+            stranded = (
+                session.query(models.Job)
+                .filter(
+                    models.Job.status.in_([
+                        JobStatus.QUEUED.value,
+                        JobStatus.RUNNING.value,
+                    ]),
+                    models.Job.created_at < staleness_cutoff,
+                )
+                .all()
+            )
+
+            if not stranded:
+                logger.info("Startup recovery: no stranded jobs found")
+                return
+
+            logger.warning(
+                "Startup recovery: found %d stranded job(s), triggering retries",
+                len(stranded),
+            )
+
+            for job in stranded:
+                try:
+                    logger.info(
+                        "Recovering stranded job %s: action=%s, status=%s, "
+                        "lab_id=%s, created_at=%s",
+                        job.id,
+                        job.action,
+                        job.status,
+                        job.lab_id,
+                        job.created_at,
+                    )
+                    if job.retry_count < settings.job_max_retries:
+                        await _retry_job(session, job)
+                    else:
+                        await _fail_job(
+                            session,
+                            job,
+                            reason="Job stranded after scheduler restart (max retries reached)",
+                        )
+                except Exception as e:
+                    logger.error(
+                        "Failed to recover stranded job %s: %s", job.id, e,
+                    )
+                    try:
+                        session.rollback()
+                    except Exception:
+                        pass
+
+            # Also clear stuck image sync statuses immediately
+            await check_orphaned_image_sync_status()
+
+        except Exception as e:
+            logger.error("Startup recovery failed: %s", e)
+            try:
+                session.rollback()
+            except Exception:
+                pass
+
+
+# ---------------------------------------------------------------------------
 # Orchestration entry point
 # ---------------------------------------------------------------------------
 

@@ -39,7 +39,7 @@ from app.utils.supervisor import supervised_task
 
 # Monitor imports
 from app.tasks.health import agent_health_monitor
-from app.tasks.job_health import job_health_monitor
+from app.tasks.job_health import job_health_monitor, recover_stranded_jobs
 from app.tasks.reconciliation import state_reconciliation_monitor
 from app.tasks.disk_cleanup import disk_cleanup_monitor
 from app.tasks.image_reconciliation import image_reconciliation_monitor
@@ -113,6 +113,14 @@ async def startup():
             with db.engine.connect() as conn:
                 conn.execute(text("SELECT 1"))
             logger.info("Database connection verified")
+
+            # One-time recovery: detect and retry jobs stranded by a prior
+            # scheduler crash/restart.  Runs once before monitors start.
+            try:
+                await recover_stranded_jobs()
+            except Exception as e:
+                logger.error("Startup job recovery failed: %s", e)
+
             break
         except Exception as e:
             if attempt == 29:

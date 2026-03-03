@@ -258,6 +258,8 @@ async def reconcile_link_states(session: Session) -> dict:
 async def run_overlay_convergence(
     session: Session,
     host_to_agent: dict[str, models.Host],
+    *,
+    lab_id: str | None = None,
 ) -> dict[str, Any]:
     """Declare full desired overlay state to each online agent.
 
@@ -268,6 +270,7 @@ async def run_overlay_convergence(
     Args:
         session: Database session
         host_to_agent: Map of agent_id to Host model
+        lab_id: If provided, only converge tunnels for this lab
 
     Returns:
         Dict with per-agent results
@@ -278,16 +281,17 @@ async def run_overlay_convergence(
     overlay_mtu = infra.overlay_mtu or 0
 
     # Single joined query: active tunnels with desired_state="up"
-    tunnels = (
+    tunnel_q = (
         session.query(models.VxlanTunnel)
         .join(models.LinkState, models.VxlanTunnel.link_state_id == models.LinkState.id)
         .filter(
             models.VxlanTunnel.status == "active",
             models.LinkState.desired_state == "up",
         )
-        .options(joinedload(models.VxlanTunnel.link_state))
-        .all()
     )
+    if lab_id is not None:
+        tunnel_q = tunnel_q.filter(models.VxlanTunnel.lab_id == lab_id)
+    tunnels = tunnel_q.options(joinedload(models.VxlanTunnel.link_state)).all()
 
     # Group by agent, building entries for both sides
     agent_tunnels: dict[str, list[dict]] = defaultdict(list)
@@ -297,13 +301,13 @@ async def run_overlay_convergence(
         if not ls:
             continue
 
-        lab_id = str(tunnel.lab_id)
-        port_name = tunnel.port_name or compute_vxlan_port_name(str(tunnel.lab_id), ls.link_name)
+        tun_lab_id = str(tunnel.lab_id)
+        port_name = tunnel.port_name or compute_vxlan_port_name(tun_lab_id, ls.link_name)
 
         # Side A (source)
         agent_tunnels[tunnel.agent_a_id].append({
             "link_id": ls.link_name,
-            "lab_id": lab_id,
+            "lab_id": tun_lab_id,
             "vni": tunnel.vni,
             "local_ip": tunnel.agent_a_ip,
             "remote_ip": tunnel.agent_b_ip,
@@ -311,12 +315,12 @@ async def run_overlay_convergence(
             "port_name": port_name,
             "mtu": overlay_mtu,
         })
-        agent_declared_labs[tunnel.agent_a_id].add(lab_id)
+        agent_declared_labs[tunnel.agent_a_id].add(tun_lab_id)
 
         # Side B (target)
         agent_tunnels[tunnel.agent_b_id].append({
             "link_id": ls.link_name,
-            "lab_id": lab_id,
+            "lab_id": tun_lab_id,
             "vni": tunnel.vni,
             "local_ip": tunnel.agent_b_ip,
             "remote_ip": tunnel.agent_a_ip,
@@ -324,20 +328,19 @@ async def run_overlay_convergence(
             "port_name": port_name,
             "mtu": overlay_mtu,
         })
-        agent_declared_labs[tunnel.agent_b_id].add(lab_id)
+        agent_declared_labs[tunnel.agent_b_id].add(tun_lab_id)
 
     # Also protect in-progress cross-host links (creating/connecting)
-    in_progress_links = (
-        session.query(models.LinkState)
-        .filter(
-            models.LinkState.is_cross_host.is_(True),
-            models.LinkState.actual_state.in_(["creating", "connecting"]),
-        )
-        .all()
+    ip_q = session.query(models.LinkState).filter(
+        models.LinkState.is_cross_host.is_(True),
+        models.LinkState.actual_state.in_(["creating", "connecting"]),
     )
+    if lab_id is not None:
+        ip_q = ip_q.filter(models.LinkState.lab_id == lab_id)
+    in_progress_links = ip_q.all()
     for ls in in_progress_links:
         port_name = compute_vxlan_port_name(ls.lab_id, ls.link_name)
-        lab_id = str(ls.lab_id)
+        ls_lab_id = str(ls.lab_id)
         # Add placeholder entries so declare-state won't orphan-clean them
         for host_id in [ls.source_host_id, ls.target_host_id]:
             if host_id:
@@ -345,7 +348,7 @@ async def run_overlay_convergence(
                 if not any(t["port_name"] == port_name for t in existing):
                     agent_tunnels[host_id].append({
                         "link_id": ls.link_name,
-                        "lab_id": lab_id,
+                        "lab_id": ls_lab_id,
                         "vni": ls.vni or 0,
                         "local_ip": "",
                         "remote_ip": "",
@@ -353,21 +356,21 @@ async def run_overlay_convergence(
                         "port_name": port_name,
                         "mtu": overlay_mtu,
                     })
-                agent_declared_labs[host_id].add(lab_id)
+                agent_declared_labs[host_id].add(ls_lab_id)
 
     # Include lab scope from placements so agents can safely converge empty
     # declarations when they no longer host active cross-host tunnels.
     online_agent_ids = list(host_to_agent.keys())
     if online_agent_ids:
-        placement_scopes = (
-            session.query(models.NodePlacement.host_id, models.NodePlacement.lab_id)
-            .filter(models.NodePlacement.host_id.in_(online_agent_ids))
-            .distinct()
-            .all()
-        )
-        for host_id, lab_id in placement_scopes:
-            if host_id and lab_id:
-                agent_declared_labs[host_id].add(str(lab_id))
+        placement_q = session.query(
+            models.NodePlacement.host_id, models.NodePlacement.lab_id,
+        ).filter(models.NodePlacement.host_id.in_(online_agent_ids))
+        if lab_id is not None:
+            placement_q = placement_q.filter(models.NodePlacement.lab_id == lab_id)
+        placement_scopes = placement_q.distinct().all()
+        for p_host_id, p_lab_id in placement_scopes:
+            if p_host_id and p_lab_id:
+                agent_declared_labs[p_host_id].add(str(p_lab_id))
 
     # Call each online agent in parallel
     all_results: dict[str, Any] = {}
@@ -443,6 +446,8 @@ async def run_overlay_convergence(
 async def refresh_interface_mappings(
     session: Session,
     host_to_agent: dict[str, models.Host],
+    *,
+    lab_id: str | None = None,
 ) -> dict[str, int]:
     """Bulk refresh InterfaceMapping records from agent port state.
 
@@ -452,6 +457,7 @@ async def refresh_interface_mappings(
     Args:
         session: Database session
         host_to_agent: Map of agent_id to Host model
+        lab_id: If provided, only refresh mappings for this lab
 
     Returns:
         Dict with 'updated' and 'created' counts
@@ -463,14 +469,13 @@ async def refresh_interface_mappings(
     # Find all labs with active links that need verification
     # Include both same-host and cross-host links so InterfaceMapping
     # stays fresh for cross-host port convergence.
-    active_links = (
-        session.query(models.LinkState)
-        .filter(
-            models.LinkState.desired_state == "up",
-            models.LinkState.actual_state.in_(["up", "creating", "connecting"]),
-        )
-        .all()
+    links_q = session.query(models.LinkState).filter(
+        models.LinkState.desired_state == "up",
+        models.LinkState.actual_state.in_(["up", "creating", "connecting"]),
     )
+    if lab_id is not None:
+        links_q = links_q.filter(models.LinkState.lab_id == lab_id)
+    active_links = links_q.all()
 
     if not active_links:
         return result
@@ -747,6 +752,8 @@ async def run_same_host_convergence(
 async def run_cross_host_port_convergence(
     session: Session,
     host_to_agent: dict[str, models.Host],
+    *,
+    lab_id: str | None = None,
 ) -> dict[str, Any]:
     """Push DB-stored VLAN tags to container ports on cross-host links.
 
@@ -767,6 +774,7 @@ async def run_cross_host_port_convergence(
     Args:
         session: Database session
         host_to_agent: Map of agent_id to Host model
+        lab_id: If provided, only converge ports for this lab
 
     Returns:
         Dict with 'updated' and 'errors' counts
@@ -774,15 +782,14 @@ async def run_cross_host_port_convergence(
     result: dict[str, int] = {"updated": 0, "errors": 0}
 
     # Query cross-host links that should be up
-    cross_host_links = (
-        session.query(models.LinkState)
-        .filter(
-            models.LinkState.is_cross_host.is_(True),
-            models.LinkState.desired_state == "up",
-            models.LinkState.actual_state == "up",
-        )
-        .all()
+    xh_q = session.query(models.LinkState).filter(
+        models.LinkState.is_cross_host.is_(True),
+        models.LinkState.desired_state == "up",
+        models.LinkState.actual_state == "up",
     )
+    if lab_id is not None:
+        xh_q = xh_q.filter(models.LinkState.lab_id == lab_id)
+    cross_host_links = xh_q.all()
 
     if not cross_host_links:
         return result
