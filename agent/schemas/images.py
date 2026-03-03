@@ -13,6 +13,7 @@ class DockerImageInfo(BaseModel):
     tags: list[str] = Field(default_factory=list)  # Image tags (e.g., ["ceos:4.28.0F"])
     size_bytes: int = 0
     created: str | None = None  # ISO timestamp
+    device_id: str | None = None  # From persistent metadata store
 
 
 class ImageInventoryResponse(BaseModel):

@@ -620,3 +620,12 @@ async def get_agent_images(agent: models.Host) -> dict:
         fallback={"images": []}, timeout=30.0,
         description="Get images", log_level="error",
     )
+
+
+async def backfill_image_metadata(agent: models.Host, entries: dict[str, str]) -> dict:
+    """Push {reference: device_id} mappings to an agent's metadata store."""
+    return await _safe_agent_request(
+        agent, "POST", "/images/backfill-metadata",
+        json_body=entries, fallback={"updated": 0}, timeout=30.0,
+        description="Backfill image metadata", log_level="warning",
+    )

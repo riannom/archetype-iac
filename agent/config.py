@@ -55,6 +55,9 @@ class Settings(BaseSettings):
     # Workspace for lab files
     workspace_path: str = "/var/lib/archetype-agent"
 
+    # Image store path (shared with API for file-based images)
+    image_store_path: str = "/var/lib/archetype/images"
+
     # Communication timeouts (seconds)
     registration_timeout: float = 10.0
     heartbeat_timeout: float = 5.0

@@ -340,6 +340,7 @@ async def _execute_sync_job(job_id: str, image_id: str, image: dict, host: model
                         "reference": reference,
                         "total_bytes": str(saved_bytes),
                         "job_id": job_id,
+                        "device_id": image.get("device_id", ""),
                     }
                 elif is_file_based:
                     source_path = Path(reference)
@@ -363,6 +364,7 @@ async def _execute_sync_job(job_id: str, image_id: str, image: dict, host: model
                         "total_bytes": str(size_bytes),
                         "job_id": job_id,
                         "sha256": image.get("sha256", ""),
+                        "device_id": image.get("device_id", ""),
                     }
                 else:
                     raise ValueError(f"Unsupported image kind for sync: {image_kind}")
