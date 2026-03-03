@@ -511,7 +511,7 @@ jobs:
           cd web
           npm ci
 
-      - name: Run tests with coverage
+      - name: Run tests
         run: |
           cd web
           set -euo pipefail
@@ -525,6 +525,20 @@ jobs:
             echo "Running frontend test file: ${test_file}"
             NODE_OPTIONS="--max-old-space-size=6144" npm test -- --run --pool=forks --poolOptions.forks.minForks=1 --poolOptions.forks.maxForks=1 "${test_file}"
           done
+
+      - name: Collect coverage
+        run: |
+          cd web
+          NODE_OPTIONS="--max-old-space-size=8192" npx vitest run --coverage --pool=forks --poolOptions.forks.minForks=1 --poolOptions.forks.maxForks=2
+        continue-on-error: true
+
+      - name: Upload frontend coverage
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-coverage
+          path: web/coverage/
+          if-no-files-found: warn
 
   lint:
     name: Lint
