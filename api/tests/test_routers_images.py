@@ -504,6 +504,72 @@ class TestChunkedImageUpload:
         assert final_path.exists()
         assert final_path.read_bytes() == b"hello"
 
+    def test_chunked_qcow2_init_accepts_gz_filename(
+        self,
+        test_client: TestClient,
+        admin_auth_headers: dict,
+        tmp_path,
+        monkeypatch,
+    ):
+        """Chunked qcow2 init should accept .img.gz filenames."""
+        from app.routers import images as images_router
+
+        images_router._chunk_upload_sessions.clear()
+        images_router._upload_progress.clear()
+
+        monkeypatch.setattr(images_router, "load_manifest", lambda: {"images": []})
+        monkeypatch.setattr(images_router, "find_image_by_id", lambda *_args, **_kwargs: None)
+        monkeypatch.setattr(images_router, "qcow2_path", lambda filename: tmp_path / filename)
+
+        init_response = test_client.post(
+            "/images/upload/init",
+            json={
+                "kind": "qcow2",
+                "filename": "sonic-vs.img.gz",
+                "total_size": 8,
+                "chunk_size": 4,
+            },
+            headers=admin_auth_headers,
+        )
+        assert init_response.status_code == 200
+        data = init_response.json()
+        assert data["filename"] == "sonic-vs.img.gz"
+        assert data["kind"] == "qcow2"
+
+    def test_chunked_qcow2_init_gz_duplicate_checks_uncompressed_name(
+        self,
+        test_client: TestClient,
+        admin_auth_headers: dict,
+        tmp_path,
+        monkeypatch,
+    ):
+        """Duplicate checks for .gz uploads should use the decompressed filename."""
+        from app.routers import images as images_router
+
+        images_router._chunk_upload_sessions.clear()
+        images_router._upload_progress.clear()
+
+        monkeypatch.setattr(images_router, "load_manifest", lambda: {"images": [{"id": "qcow2:sonic-vs.img"}]})
+        monkeypatch.setattr(
+            images_router,
+            "find_image_by_id",
+            lambda manifest, image_id: next((item for item in manifest["images"] if item["id"] == image_id), None),
+        )
+        monkeypatch.setattr(images_router, "qcow2_path", lambda filename: tmp_path / filename)
+
+        init_response = test_client.post(
+            "/images/upload/init",
+            json={
+                "kind": "qcow2",
+                "filename": "sonic-vs.img.gz",
+                "total_size": 8,
+                "chunk_size": 4,
+            },
+            headers=admin_auth_headers,
+        )
+        assert init_response.status_code == 409
+        assert "sonic-vs.img" in init_response.json()["detail"]
+
     def test_chunked_docker_upload_starts_processing(
         self,
         test_client: TestClient,

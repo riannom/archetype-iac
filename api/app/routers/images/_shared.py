@@ -34,6 +34,7 @@ _chunk_upload_lock = threading.Lock()
 DEFAULT_CHUNK_SIZE = 10 * 1024 * 1024
 CHUNK_UPLOAD_TTL_SECONDS = 24 * 60 * 60
 _CHUNK_UPLOAD_DIR = Path(tempfile.gettempdir()) / "archetype-image-uploads"
+_QCOW2_BASE_SUFFIXES = (".qcow2", ".qcow", ".img")
 
 
 def _is_docker_image_tar(tar_path: str) -> bool:
@@ -134,6 +135,27 @@ def _sanitize_upload_filename(filename: str) -> str:
     """Sanitize uploaded filename to a safe subset."""
     safe = "".join(c for c in filename if c.isalnum() or c in "._-")
     return safe
+
+
+def _resolved_qcow2_upload_filename(filename: str) -> str | None:
+    """Return the stored qcow2 filename, unwrapping optional .gz suffix."""
+    name = (filename or "").strip()
+    if not name:
+        return None
+    lower_name = name.lower()
+    if lower_name.endswith(".gz"):
+        base = name[:-3]
+        if base.lower().endswith(_QCOW2_BASE_SUFFIXES):
+            return base
+        return None
+    if lower_name.endswith(_QCOW2_BASE_SUFFIXES):
+        return name
+    return None
+
+
+def _is_supported_qcow2_upload_filename(filename: str) -> bool:
+    """Return True when filename is qcow2/qcow/img with optional .gz suffix."""
+    return _resolved_qcow2_upload_filename(filename) is not None
 
 
 def _cleanup_chunk_upload_session_files(session: dict) -> None:

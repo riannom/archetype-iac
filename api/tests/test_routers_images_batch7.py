@@ -189,6 +189,28 @@ class TestUploadQcow2:
         assert resp.status_code == 200
         mock_finalize.assert_called_once()
 
+    @patch("app.routers.images.ResourceMonitor")
+    @patch("app.routers.images._finalize_qcow2_upload")
+    @patch("app.routers.images.qcow2_path")
+    def test_upload_qcow2_gz_success(
+        self, mock_path, mock_finalize, mock_rm,
+        test_client: TestClient, admin_auth_headers: dict, tmp_path: Path,
+    ):
+        from app.services.resource_monitor import PressureLevel
+        mock_rm.check_disk_pressure.return_value = PressureLevel.NORMAL
+
+        dest = tmp_path / "sonic-vs.img.gz"
+        mock_path.return_value = dest
+        mock_finalize.return_value = {"device_id": "sonic-vs", "status": "registered"}
+
+        resp = test_client.post(
+            "/images/qcow2",
+            files={"file": ("sonic-vs.img.gz", io.BytesIO(b"\x00" * 64), "application/octet-stream")},
+            headers=admin_auth_headers,
+        )
+        assert resp.status_code == 200
+        mock_finalize.assert_called_once()
+
 
 # ---------------------------------------------------------------------------
 # POST /images/iol
