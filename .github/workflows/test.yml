@@ -439,7 +439,8 @@ jobs:
             --username "${ADMIN_EMAIL}" \
             --password "${ADMIN_PASSWORD}" \
             --compose-file docker-compose.gui.yml \
-            --output-zip /tmp/support-bundle-triage.zip
+            --output-zip /tmp/support-bundle-triage.zip \
+            --keep-seeded-lab
 
       - name: Run observability canary coverage gate (controlled traffic)
         env:

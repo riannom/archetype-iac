@@ -162,6 +162,7 @@ jobs:
             --password "${ADMIN_PASSWORD}" \
             --compose-file docker-compose.gui.yml \
             --output-zip /tmp/observability-maintenance/support-bundle-triage.zip \
+            --keep-seeded-lab \
             2>&1 | tee /tmp/observability-maintenance/support-bundle-triage.log
 
           python3 scripts/observability_canary.py \
