@@ -9,12 +9,10 @@ Covers:
 """
 from __future__ import annotations
 
-import hashlib
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import MagicMock, call
+from unittest.mock import MagicMock
 
-import pytest
 
 import agent.providers.libvirt_n9kv as n9kv_mod
 from agent.providers.libvirt_n9kv import (

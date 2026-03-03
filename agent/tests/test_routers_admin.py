@@ -235,7 +235,7 @@ class TestTriggerUpdate:
 
         client = TestClient(app, raise_server_exceptions=False)
         with patch("agent.routers.admin.detect_deployment_mode", return_value=DeploymentMode.SYSTEMD):
-            with patch("agent.routers.admin.perform_systemd_update", new_callable=AsyncMock) as mock_update:
+            with patch("agent.routers.admin.perform_systemd_update", new_callable=AsyncMock):
                 resp = client.post(
                     "/update",
                     json={

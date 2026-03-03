@@ -6,7 +6,6 @@ from datetime import datetime, timedelta
 from unittest.mock import MagicMock, patch
 from uuid import uuid4
 
-import pytest
 from sqlalchemy.orm import Session
 
 from app import models

@@ -10,8 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from datetime import datetime, timedelta, timezone
-from pathlib import Path
+from datetime import datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -724,7 +723,7 @@ class TestReconcileState:
 
         plugin._ovs_vsctl = _ovs_vsctl
 
-        stats = await plugin._reconcile_state()
+        await plugin._reconcile_state()
 
         assert "lab1" not in plugin.lab_bridges
 

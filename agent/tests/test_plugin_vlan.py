@@ -6,7 +6,7 @@ lookups, and edge cases (exhaustion, unallocated release, collision).
 """
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -308,8 +308,8 @@ class TestHotConnect:
     async def test_hot_connect_assigns_shared_vlan(self, tmp_path, monkeypatch):
         """hot_connect should set both endpoints to the same linked VLAN."""
         plugin = _make_plugin(tmp_path)
-        lb = _add_lab(plugin)
-        ovs = _stub_ovs(plugin, monkeypatch)
+        _add_lab(plugin)
+        _stub_ovs(plugin, monkeypatch)
         _stub_allocators(plugin, monkeypatch)
 
         ep_a = _add_endpoint(plugin, "lab1", "ep-a", "net-a", "eth1", "vhA", 100, "r1")
@@ -327,7 +327,7 @@ class TestHotConnect:
     async def test_hot_connect_releases_old_vlans(self, tmp_path, monkeypatch):
         """hot_connect should release the old isolated VLANs of both endpoints."""
         plugin = _make_plugin(tmp_path)
-        lb = _add_lab(plugin)
+        _add_lab(plugin)
         _stub_ovs(plugin, monkeypatch)
         _stub_allocators(plugin, monkeypatch)
 

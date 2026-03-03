@@ -11,7 +11,6 @@ Covers:
 """
 from __future__ import annotations
 
-import json
 from contextlib import contextmanager
 from dataclasses import dataclass
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -939,7 +938,7 @@ class TestMultihostDestroyLinkStateCleanup:
         lab = _make_lab(test_db, test_user, state="running")
         job = _make_job(test_db, lab, test_user, action="down")
         _make_node(test_db, lab, gui_id="n1", name="r1", host_id=host1.id)
-        ls = _make_link_state(test_db, lab)
+        _make_link_state(test_db, lab)
 
         patches = _standard_destroy_patches(test_db)
         with patch(f"{MODULE}.get_session", patches[f"{MODULE}.get_session"]):

@@ -20,7 +20,7 @@ import pytest
 from app import models
 from app.agent_client import AgentUnavailableError
 from app.state import JobStatus, NodeActualState, NodeDesiredState
-from app.tasks.node_lifecycle import LifecycleResult, NodeLifecycleManager, _get_container_name
+from app.tasks.node_lifecycle import NodeLifecycleManager, _get_container_name
 
 
 # ---------------------------------------------------------------------------
@@ -586,8 +586,8 @@ class TestStopMultiAgentGrouping:
         ns2 = _make_node_state(test_db, lab, "n2", "R2", desired="stopped", actual="running")
         _make_placement(test_db, lab, "R1", host_a.id)
         _make_placement(test_db, lab, "R2", host_b.id)
-        cn1 = _get_container_name(lab.id, "R1")
-        cn2 = _get_container_name(lab.id, "R2")
+        _get_container_name(lab.id, "R1")
+        _get_container_name(lab.id, "R2")
 
         manager = _make_manager(test_db, lab, job, [ns1.node_id, ns2.node_id], agent=host_a)
         manager.node_states = [ns1, ns2]
@@ -991,7 +991,7 @@ class TestStopPartialFailure:
         lab = _make_lab(test_db, test_user, agent_id=host.id)
         job = _make_job(test_db, lab, test_user)
         ns = _make_node_state(test_db, lab, "n1", "R1", desired="stopped", actual="running")
-        cn = _get_container_name(lab.id, "R1")
+        _get_container_name(lab.id, "R1")
 
         manager = _make_manager(test_db, lab, job, [ns.node_id], agent=host)
         manager.node_states = [ns]
