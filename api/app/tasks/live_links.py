@@ -227,14 +227,21 @@ async def teardown_link(
 
     source_host_id = link_info.get("source_host_id")
     target_host_id = link_info.get("target_host_id")
-    link_state_record = (
-        session.query(models.LinkState)
-        .filter(
-            models.LinkState.lab_id == lab_id,
-            models.LinkState.link_name == link_name,
+    link_state_record = None
+    link_state_id = link_info.get("link_state_id")
+    if link_state_id:
+        found = session.get(models.LinkState, link_state_id)
+        if found and found.lab_id == lab_id:
+            link_state_record = found
+    if link_state_record is None:
+        link_state_record = (
+            session.query(models.LinkState)
+            .filter(
+                models.LinkState.lab_id == lab_id,
+                models.LinkState.link_name == link_name,
+            )
+            .first()
         )
-        .first()
-    )
 
     if is_cross_host:
         # Two-phase teardown with rollback for cross-host links

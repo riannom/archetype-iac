@@ -128,14 +128,6 @@ async def _cleanup_lab_placements(lab_id: str) -> CleanupResult:
             .all()
             if name
         }
-        # Backward compatibility: some placement rows may still use display_name.
-        existing_names.update(
-            name
-            for (name,) in session.query(models.Node.display_name)
-            .filter(models.Node.lab_id == lab_id)
-            .all()
-            if name
-        )
         placements = (
             session.query(models.NodePlacement)
             .filter(models.NodePlacement.lab_id == lab_id)

@@ -190,14 +190,15 @@ async def test_get_agent_for_node_prefers_node_host_fk(test_db, sample_lab, monk
 
 
 @pytest.mark.asyncio
-async def test_get_agent_for_node_fallbacks_to_placement_and_backfills_node_fk(test_db, sample_lab, monkeypatch) -> None:
+async def test_get_agent_for_node_uses_placement_via_node_definition_fk(test_db, sample_lab, monkeypatch) -> None:
     node_host = _mk_host(test_db, host_id="agent-node", name="agent-node", status="offline")
     placement_host = _mk_host(test_db, host_id="agent-placement", name="agent-placement", status="online")
 
-    _mk_node(test_db, lab_id=sample_lab.id, name="r2", host_id=node_host.id)
+    node = _mk_node(test_db, lab_id=sample_lab.id, name="r2", host_id=node_host.id)
     placement = models.NodePlacement(
         lab_id=sample_lab.id,
         node_name="r2",
+        node_definition_id=node.id,
         host_id=placement_host.id,
         status="deployed",
     )
@@ -205,6 +206,7 @@ async def test_get_agent_for_node_fallbacks_to_placement_and_backfills_node_fk(t
     test_db.commit()
 
     ns = _mk_ns(lab_id=sample_lab.id, node_name="r2")
+    ns.node_definition_id = node.id
 
     monkeypatch.setattr(state_enforcement.agent_client, "is_agent_online", lambda h: h.status == "online")
 
@@ -212,7 +214,33 @@ async def test_get_agent_for_node_fallbacks_to_placement_and_backfills_node_fk(t
 
     assert result is not None
     assert result.id == placement_host.id
-    assert ns.node_definition_id is not None
+
+
+@pytest.mark.asyncio
+async def test_get_agent_for_node_ignores_name_only_placement_without_fk(test_db, sample_lab, monkeypatch) -> None:
+    placement_host = _mk_host(test_db, host_id="agent-placement-nofk", name="agent-placement-nofk", status="online")
+    lab_agent = _mk_host(test_db, host_id="agent-lab-nofk", name="agent-lab-nofk", status="online")
+    sample_lab.agent_id = lab_agent.id
+    test_db.commit()
+
+    test_db.add(
+        models.NodePlacement(
+            lab_id=sample_lab.id,
+            node_name="r-nofk",
+            node_definition_id=None,
+            host_id=placement_host.id,
+            status="deployed",
+        )
+    )
+    test_db.commit()
+
+    ns = _mk_ns(lab_id=sample_lab.id, node_name="r-nofk")
+    monkeypatch.setattr(state_enforcement.agent_client, "is_agent_online", lambda h: h.status == "online")
+
+    result = await state_enforcement._get_agent_for_node(test_db, sample_lab, ns)
+
+    assert result is not None
+    assert result.id == lab_agent.id
 
 
 @pytest.mark.asyncio

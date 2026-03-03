@@ -122,6 +122,61 @@ async def test_verify_cross_host_link_missing_tunnel(test_db, sample_lab, multip
 
 
 @pytest.mark.asyncio
+async def test_verify_cross_host_link_does_not_match_by_interface_name(
+    test_db,
+    sample_lab,
+    multiple_hosts,
+    monkeypatch,
+) -> None:
+    host_a, host_b = multiple_hosts[:2]
+    link_state = models.LinkState(
+        lab_id=sample_lab.id,
+        link_name="r1:eth1-r2:eth1",
+        source_node="r1",
+        source_interface="Ethernet1",
+        target_node="r2",
+        target_interface="Ethernet1",
+        is_cross_host=True,
+        source_host_id=host_a.id,
+        target_host_id=host_b.id,
+    )
+    test_db.add(link_state)
+    test_db.commit()
+
+    async def fake_vlan(agent, lab_id, node, iface, read_from_ovs=True):
+        return 100 if agent.id == host_a.id else 200
+
+    async def fake_overlay_status(agent):
+        return {
+            "link_tunnels": [{
+                "link_id": "placeholder-key",
+                "interface_name": "vxlan-abcdef12",
+                "vni": 40001,
+                "local_vlan": 100 if agent.id == host_a.id else 200,
+            }]
+        }
+
+    monkeypatch.setattr(
+        "app.services.link_validator.agent_client.get_interface_vlan_from_agent",
+        fake_vlan,
+    )
+    monkeypatch.setattr(
+        "app.services.link_validator.agent_client.get_overlay_status_from_agent",
+        fake_overlay_status,
+    )
+    monkeypatch.setattr(
+        "app.services.link_validator.agent_client.compute_vxlan_port_name",
+        lambda *_args, **_kwargs: "vxlan-abcdef12",
+    )
+
+    ok, error = await link_validator.verify_cross_host_link(
+        test_db, link_state, {host_a.id: host_a, host_b.id: host_b}
+    )
+    assert not ok
+    assert error and "TUNNEL_MISSING" in error
+
+
+@pytest.mark.asyncio
 async def test_verify_cross_host_link_local_vlan_mismatch_fails(
     test_db,
     sample_lab,

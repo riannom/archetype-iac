@@ -197,12 +197,11 @@ async def verify_cross_host_link(
             link_tunnels = status.get("link_tunnels", [])
             if not link_tunnels:
                 return False, f"{TUNNEL_MISSING}: on {agent.name} for link {link_name}"
-            # Accept recovered tunnels that still have placeholder link_id but correct port name
-            expected_port = agent_client.compute_vxlan_port_name(link_state.lab_id, link_name)
+            # Deterministic identity only: match tunnel by link_id.
             matching_tunnel = next(
                 (
                     t for t in link_tunnels
-                    if t.get("link_id") == link_name or t.get("interface_name") == expected_port
+                    if t.get("link_id") == link_name
                 ),
                 None,
             )

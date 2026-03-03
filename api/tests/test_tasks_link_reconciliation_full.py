@@ -142,7 +142,7 @@ class TestReconcileLinkStates:
         """Links with desired=down and actual=up should be torn down."""
         from app.tasks.link_reconciliation import reconcile_link_states
 
-        _make_link_state(
+        link = _make_link_state(
             test_db, sample_lab.id,
             desired_state="down", actual_state="up",
             source_host_id=sample_host.id, target_host_id=sample_host.id,
@@ -155,6 +155,8 @@ class TestReconcileLinkStates:
 
         assert results["torn_down"] >= 1
         mock_teardown.assert_awaited()
+        args, _kwargs = mock_teardown.await_args
+        assert args[2]["link_state_id"] == link.id
 
     @pytest.mark.asyncio
     async def test_offline_agent_skipped(

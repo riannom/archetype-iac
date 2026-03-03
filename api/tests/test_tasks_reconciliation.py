@@ -17,8 +17,8 @@ from app import models
 @pytest.fixture(autouse=True)
 def _disable_link_broadcasts():
     """Disable background broadcast tasks during reconciliation tests."""
-    with patch("app.tasks.reconciliation.broadcast_link_state_change", new_callable=AsyncMock):
-        with patch("app.tasks.reconciliation.broadcast_node_state_change", new_callable=AsyncMock):
+    with patch("app.tasks.reconciliation_db.broadcast_link_state_change", new_callable=AsyncMock):
+        with patch("app.tasks.reconciliation_db.broadcast_node_state_change", new_callable=AsyncMock):
             yield
 
 
@@ -1722,7 +1722,7 @@ async def test_reconcile_link_broadcast_includes_oper_fields(
     test_db.add(link)
     test_db.commit()
 
-    with patch("app.tasks.reconciliation.broadcast_link_state_change", new_callable=AsyncMock) as mock_bcast:
+    with patch("app.tasks.reconciliation_db.broadcast_link_state_change", new_callable=AsyncMock) as mock_bcast:
         with patch("app.tasks.reconciliation.agent_client.is_agent_online", return_value=True):
             with patch("app.tasks.reconciliation.agent_client.get_lab_status_from_agent", new_callable=AsyncMock) as mock_status:
                 mock_status.return_value = {

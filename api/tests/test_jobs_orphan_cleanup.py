@@ -15,16 +15,33 @@ async def test_cleanup_orphan_containers_uses_scoped_cleanup(
     old_host = multiple_hosts[0]
     new_host = multiple_hosts[1]
 
+    node1 = models.Node(
+        lab_id=sample_lab.id,
+        gui_id="node-r1",
+        display_name="R1",
+        container_name="r1",
+    )
+    node2 = models.Node(
+        lab_id=sample_lab.id,
+        gui_id="node-r2",
+        display_name="R2",
+        container_name="r2",
+    )
+    test_db.add_all([node1, node2])
+    test_db.flush()
+
     test_db.add_all([
         models.NodePlacement(
             lab_id=sample_lab.id,
             node_name="r1",
+            node_definition_id=node1.id,
             host_id=old_host.id,
             status="deployed",
         ),
         models.NodePlacement(
             lab_id=sample_lab.id,
             node_name="r2",
+            node_definition_id=node2.id,
             host_id=new_host.id,
             status="deployed",
         ),

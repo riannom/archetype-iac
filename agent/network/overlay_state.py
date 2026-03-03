@@ -368,7 +368,8 @@ async def recover_link_tunnels(manager: OverlayManager) -> int:
     """Recover link tunnel tracking from local cache or OVS state on startup.
 
     Tries local declared-state cache first (provides real link IDs).
-    Falls back to OVS port scan if no cache (placeholder link IDs).
+    Falls back to OVS port scan only to refresh already-known interface mappings.
+    Ports without a known deterministic link_id mapping are skipped.
 
     Args:
         manager: OverlayManager instance
@@ -392,9 +393,14 @@ async def recover_link_tunnels(manager: OverlayManager) -> int:
         except Exception as e:
             logger.warning(f"Cache-based recovery failed, falling back to OVS scan: {e}")
 
-    # Fallback: scan OVS ports (placeholder link_ids)
+    # Fallback: scan OVS ports only for known interface->link_id mappings.
     recovered = 0
     try:
+        known_link_id_by_interface = {
+            tunnel.interface_name: tunnel.link_id
+            for tunnel in manager._link_tunnels.values()
+            if tunnel.link_id and tunnel.link_id != tunnel.interface_name
+        }
         code, stdout, _ = await _shared_ovs_vsctl(
             "list-ports", manager._bridge_name
         )
@@ -424,19 +430,26 @@ async def recover_link_tunnels(manager: OverlayManager) -> int:
 
             if not vni or not remote_ip:
                 continue
+            link_id = known_link_id_by_interface.get(port_name)
+            if not link_id:
+                logger.debug(
+                    "Skipping fallback recovery for %s: link_id mapping unavailable",
+                    port_name,
+                )
+                continue
 
             from agent.network.overlay import LinkTunnel
             tunnel = LinkTunnel(
-                link_id=port_name,
+                link_id=link_id,
                 vni=vni,
                 local_ip=local_ip,
                 remote_ip=remote_ip,
                 local_vlan=local_vlan,
                 interface_name=port_name,
-                lab_id="recovered",
+                lab_id=manager._link_tunnels[link_id].lab_id if link_id in manager._link_tunnels else "recovered",
                 tenant_mtu=settings.overlay_mtu,
             )
-            manager._link_tunnels[port_name] = tunnel
+            manager._link_tunnels[link_id] = tunnel
             recovered += 1
 
         if recovered > 0:

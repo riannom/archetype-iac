@@ -173,6 +173,7 @@ async def reconcile_link_states(session: Session) -> dict:
             # Enforce desired state: tear down links that should be down
             if link.actual_state == "up" and link.desired_state == "down":
                 link_info = {
+                    "link_state_id": link.id,
                     "link_name": link.link_name,
                     "is_cross_host": link.is_cross_host,
                     "actual_state": link.actual_state,
@@ -1137,6 +1138,7 @@ async def reconcile_lab_links(session: Session, lab_id: str) -> dict:
             # Enforce desired state: tear down links that should be down
             if link.actual_state == "up" and link.desired_state == "down":
                 link_info = {
+                    "link_state_id": link.id,
                     "link_name": link.link_name,
                     "is_cross_host": link.is_cross_host,
                     "actual_state": link.actual_state,

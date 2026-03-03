@@ -258,6 +258,19 @@ class TestGetNodeState:
         )
         assert response.status_code == 404
 
+    def test_404_for_missing_node_definition(
+        self,
+        test_client: TestClient,
+        sample_lab: models.Lab,
+        auth_headers: dict,
+    ):
+        """Does not create placeholder NodeState rows for unknown node IDs."""
+        response = test_client.get(
+            f"/labs/{sample_lab.id}/nodes/missing-node/state",
+            headers=auth_headers,
+        )
+        assert response.status_code == 404
+
 
 # ============================================================================
 # TestSetDesiredState
