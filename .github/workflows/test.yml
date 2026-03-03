@@ -343,7 +343,6 @@ jobs:
     name: Backend Tests
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    continue-on-error: true
 
     steps:
       - uses: actions/checkout@v4
@@ -384,6 +383,14 @@ jobs:
         run: |
           cd agent
           pytest tests/ -v --tb=short --cov=agent --cov-report=term-missing --cov-report=xml:../reports/agent-coverage.xml --cov-fail-under=50
+
+      - name: Upload coverage reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-reports
+          path: reports/*-coverage.xml
+          if-no-files-found: warn
 
   observability-guardrails:
     name: Observability Guardrails
@@ -522,7 +529,6 @@ jobs:
   lint:
     name: Lint
     runs-on: ubuntu-latest
-    continue-on-error: true
 
     steps:
       - uses: actions/checkout@v4
