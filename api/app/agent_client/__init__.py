@@ -66,6 +66,7 @@ from app.agent_client.overlay import (  # noqa: F401
 
 # --- node_ops.py: Per-node + lab-level operations ---
 from app.agent_client.node_ops import (  # noqa: F401
+    backfill_image_metadata,
     check_node_readiness,
     cleanup_lab_orphans,
     cleanup_orphans_on_agent,
@@ -172,6 +173,7 @@ __all__ = [
     "reconcile_vxlan_ports_on_agent",
     "setup_cross_host_link_v2",
     # Node/lab operations
+    "backfill_image_metadata",
     "check_node_readiness",
     "cleanup_lab_orphans",
     "cleanup_orphans_on_agent",
