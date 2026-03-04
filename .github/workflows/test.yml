@@ -342,7 +342,7 @@ jobs:
   backend-tests:
     name: Backend Tests
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 90
 
     steps:
       - uses: actions/checkout@v4
@@ -372,7 +372,7 @@ jobs:
           WORKSPACE: /tmp/archetype-test
         run: |
           cd api
-          PYTHONPATH="${PYTHONPATH}:$(pwd)/.." pytest tests/ -v --tb=short --timeout=60 --cov=app --cov-report=term-missing --cov-report=xml:../reports/api-coverage.xml --cov-fail-under=55
+          PYTHONPATH="${PYTHONPATH}:$(pwd)/.." pytest tests/ -q --tb=short --timeout=60 --cov=app --cov-report=term-missing --cov-report=xml:../reports/api-coverage.xml --cov-fail-under=55
 
       - name: Install Agent dependencies
         run: |
@@ -382,7 +382,7 @@ jobs:
       - name: Run Agent tests with coverage
         run: |
           cd agent
-          pytest tests/ -v --tb=short --cov=agent --cov-report=term-missing --cov-report=xml:../reports/agent-coverage.xml --cov-fail-under=50
+          pytest tests/ -q --tb=short --cov=agent --cov-report=term-missing --cov-report=xml:../reports/agent-coverage.xml --cov-fail-under=50
 
       - name: Upload coverage reports
         if: always()

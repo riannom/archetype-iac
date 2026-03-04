@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -855,7 +855,7 @@ async def test_declare_state_creation_uses_fallback_mtu(tmp_path):
 
     with patch.object(settings, "overlay_mtu", 0):
         tunnel = _tunnel_dict(mtu=0)
-        result = await declare_state(manager, [tunnel])
+        await declare_state(manager, [tunnel])
 
     call_kwargs = manager._create_vxlan_device.call_args.kwargs
     assert call_kwargs["tenant_mtu"] == 1500

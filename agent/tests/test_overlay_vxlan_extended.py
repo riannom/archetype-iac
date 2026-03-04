@@ -773,7 +773,6 @@ async def test_health_monitor_concurrent_removal_guard(tmp_path):
     )
 
     # Remove the tunnel during the del-port call
-    original_ovs = overlay._ovs_vsctl
 
     async def _race_del_port(*args):
         if args[0] == "del-port":

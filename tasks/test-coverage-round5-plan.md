@@ -1,5 +1,8 @@
 # Test Coverage Improvement Plan — Round 5+
 
+**Status:** Completed (2026-03-04)  
+**Superseded by:** `tasks/test-coverage-round7-plan.md`
+
 ## Current State (Feb 27, 2026)
 
 ### Overall Numbers

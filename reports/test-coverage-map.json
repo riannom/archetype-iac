@@ -48,8 +48,6 @@
       "api/app/models/state.py",
       "api/app/models/topology.py",
       "api/app/models/webhook.py",
-      "api/app/netlab.py",
-      "api/app/providers.py",
       "api/app/routers/__init__.py",
       "api/app/routers/admin.py",
       "api/app/routers/agents.py",
@@ -181,6 +179,8 @@
       "api/tests/conftest.py",
       "api/tests/test_agent_auth.py",
       "api/tests/test_agent_client.py",
+      "api/tests/test_agent_client_midpaths_batch2.py",
+      "api/tests/test_agent_client_wrappers_batch.py",
       "api/tests/test_agent_create_node_payload_contract.py",
       "api/tests/test_agent_provider_selection.py",
       "api/tests/test_agent_request_timing.py",
@@ -211,10 +211,17 @@
       "api/tests/test_device_service.py",
       "api/tests/test_device_specs.py",
       "api/tests/test_e2e_lab_cat9k_ceos_ping.py",
+      "api/tests/test_image_discovery.py",
       "api/tests/test_image_provider.py",
       "api/tests/test_image_reconciliation.py",
       "api/tests/test_image_store.py",
+      "api/tests/test_image_store_aliases.py",
       "api/tests/test_image_store_batch6.py",
+      "api/tests/test_image_store_custom_devices.py",
+      "api/tests/test_image_store_detection.py",
+      "api/tests/test_image_store_manifest.py",
+      "api/tests/test_image_store_metadata.py",
+      "api/tests/test_image_store_overrides.py",
       "api/tests/test_interface_mapping.py",
       "api/tests/test_interface_naming.py",
       "api/tests/test_iol_build.py",
@@ -237,6 +244,7 @@
       "api/tests/test_link_orchestration.py",
       "api/tests/test_link_reconciliation_cleanup.py",
       "api/tests/test_link_repair.py",
+      "api/tests/test_link_repair_batch2.py",
       "api/tests/test_link_reservations.py",
       "api/tests/test_link_state_canonicalization.py",
       "api/tests/test_link_utils.py",
@@ -249,9 +257,10 @@
       "api/tests/test_metrics.py",
       "api/tests/test_middleware.py",
       "api/tests/test_migration_048_link_oper_state.py",
+      "api/tests/test_migration_058_deterministic_identifier_backfill.py",
+      "api/tests/test_migration_059_identifier_constraints.py",
       "api/tests/test_migration_cleanup.py",
       "api/tests/test_models.py",
-      "api/tests/test_netlab.py",
       "api/tests/test_nlm_timing.py",
       "api/tests/test_node_lifecycle.py",
       "api/tests/test_node_lifecycle_batch6.py",
@@ -259,13 +268,13 @@
       "api/tests/test_on_demand_sync_broadcasting.py",
       "api/tests/test_overlay_convergence.py",
       "api/tests/test_port_convergence.py",
-      "api/tests/test_providers.py",
       "api/tests/test_rate_limiting.py",
       "api/tests/test_reconciliation_batch6.py",
       "api/tests/test_resource_capacity.py",
       "api/tests/test_resource_monitor.py",
       "api/tests/test_routers_admin.py",
       "api/tests/test_routers_admin_extra.py",
+      "api/tests/test_routers_admin_system_extended.py",
       "api/tests/test_routers_agents.py",
       "api/tests/test_routers_agents_console_extra.py",
       "api/tests/test_routers_auth_extra.py",
@@ -275,11 +284,17 @@
       "api/tests/test_routers_events.py",
       "api/tests/test_routers_events_callbacks_extra.py",
       "api/tests/test_routers_images.py",
+      "api/tests/test_routers_images_archive_loader_batch9.py",
       "api/tests/test_routers_images_batch7.py",
+      "api/tests/test_routers_images_catalog_batch9.py",
+      "api/tests/test_routers_images_chunk_helpers_batch8.py",
       "api/tests/test_routers_images_infra_extra.py",
+      "api/tests/test_routers_images_streaming_qcow_batch10.py",
       "api/tests/test_routers_images_upload_build.py",
       "api/tests/test_routers_infrastructure.py",
+      "api/tests/test_routers_infrastructure_interfaces.py",
       "api/tests/test_routers_iso.py",
+      "api/tests/test_routers_iso_batch2.py",
       "api/tests/test_routers_iso_webhooks_extra.py",
       "api/tests/test_routers_jobs.py",
       "api/tests/test_routers_labs_batch7.py",
@@ -293,16 +308,31 @@
       "api/tests/test_routers_system_jobs_extra.py",
       "api/tests/test_routers_users.py",
       "api/tests/test_routers_vendors.py",
+      "api/tests/test_routers_vendors_extended.py",
       "api/tests/test_routers_vendors_extra.py",
+      "api/tests/test_routers_webhooks.py",
       "api/tests/test_scheduler.py",
       "api/tests/test_schemas.py",
       "api/tests/test_schemas_batch6.py",
       "api/tests/test_services_broadcaster.py",
+      "api/tests/test_services_catalog_identity.py",
+      "api/tests/test_services_catalog_identity_extended.py",
+      "api/tests/test_services_catalog_query.py",
       "api/tests/test_services_catalog_service.py",
       "api/tests/test_services_config_service.py",
       "api/tests/test_services_device_resolver.py",
+      "api/tests/test_services_device_resolver_metrics.py",
+      "api/tests/test_services_device_service_extended.py",
+      "api/tests/test_services_interface_mapping_extended.py",
+      "api/tests/test_services_link_operational_state_extended.py",
+      "api/tests/test_services_link_reservations_extended.py",
+      "api/tests/test_services_link_validator_extended.py",
       "api/tests/test_services_support_bundle.py",
+      "api/tests/test_services_support_bundle_batch2.py",
+      "api/tests/test_services_topology_deploy.py",
+      "api/tests/test_services_topology_resolution.py",
       "api/tests/test_state_enforcement.py",
+      "api/tests/test_state_enforcement_batch2.py",
       "api/tests/test_state_machine.py",
       "api/tests/test_state_ws.py",
       "api/tests/test_state_ws_integration.py",
@@ -312,16 +342,35 @@
       "api/tests/test_tasks_disk_cleanup.py",
       "api/tests/test_tasks_health.py",
       "api/tests/test_tasks_image_sync.py",
+      "api/tests/test_tasks_image_sync_extended.py",
       "api/tests/test_tasks_job_health.py",
+      "api/tests/test_tasks_job_health_batch2.py",
       "api/tests/test_tasks_jobs_advanced.py",
       "api/tests/test_tasks_jobs_deploy.py",
       "api/tests/test_tasks_jobs_full.py",
+      "api/tests/test_tasks_jobs_multihost.py",
+      "api/tests/test_tasks_jobs_multihost_extended.py",
+      "api/tests/test_tasks_jobs_node_reconcile.py",
+      "api/tests/test_tasks_jobs_node_reconcile_extended.py",
       "api/tests/test_tasks_link_cleanup.py",
+      "api/tests/test_tasks_link_orchestration_extended.py",
+      "api/tests/test_tasks_link_reconciliation_extended.py",
       "api/tests/test_tasks_link_reconciliation_full.py",
+      "api/tests/test_tasks_link_repair_depth.py",
       "api/tests/test_tasks_node_lifecycle_agents.py",
+      "api/tests/test_tasks_node_lifecycle_agents_extended.py",
       "api/tests/test_tasks_node_lifecycle_deploy.py",
+      "api/tests/test_tasks_node_lifecycle_deploy_extended.py",
+      "api/tests/test_tasks_node_lifecycle_stop.py",
+      "api/tests/test_tasks_node_lifecycle_stop_extended.py",
       "api/tests/test_tasks_reconciliation.py",
+      "api/tests/test_tasks_reconciliation_db.py",
+      "api/tests/test_tasks_reconciliation_db_extended.py",
+      "api/tests/test_tasks_reconciliation_refresh.py",
+      "api/tests/test_tasks_reconciliation_refresh_extended.py",
       "api/tests/test_tasks_scenario_executor.py",
+      "api/tests/test_tasks_stuck_nodes.py",
+      "api/tests/test_tasks_stuck_nodes_extended.py",
       "api/tests/test_tasks_test_runner_full.py",
       "api/tests/test_tasks_vrnetlab_build.py",
       "api/tests/test_timing.py",
@@ -330,10 +379,12 @@
       "api/tests/test_transitional_states.py",
       "api/tests/test_uncovered_module_imports_batch2.py",
       "api/tests/test_utils_cache_extra.py",
+      "api/tests/test_utils_extended.py",
       "api/tests/test_utils_http_extra.py",
       "api/tests/test_utils_image_integrity.py",
       "api/tests/test_utils_job.py",
       "api/tests/test_utils_lab.py",
+      "api/tests/test_utils_locks.py",
       "api/tests/test_utils_misc.py",
       "api/tests/test_utils_pagination_extra.py",
       "api/tests/test_utils_time_range_extra.py",
@@ -348,8 +399,21 @@
       "api/tests/test_async_db.py": [
         "api/app/db.py"
       ],
+      "api/tests/test_image_store_manifest.py": [
+        "api/app/image_store/manifest.py"
+      ],
       "api/tests/test_timing.py": [
         "api/app/timing.py"
+      ],
+      "api/tests/test_routers_webhooks.py": [
+        "api/app/auth.py",
+        "api/app/models/__init__.py"
+      ],
+      "api/tests/test_services_catalog_identity.py": [
+        "api/app/models/__init__.py",
+        "api/app/services/__init__.py",
+        "api/app/services/catalog_identity.py",
+        "api/app/services/catalog_service.py"
       ],
       "api/tests/test_db.py": [
         "api/app/db.py"
@@ -368,12 +432,13 @@
         "api/app/state.py",
         "api/app/tasks/node_lifecycle.py"
       ],
+      "api/tests/test_routers_images_archive_loader_batch9.py": [
+        "api/app/routers/__init__.py",
+        "api/app/routers/images/__init__.py"
+      ],
       "api/tests/test_webhooks.py": [
         "api/app/models/__init__.py",
         "api/app/webhooks.py"
-      ],
-      "api/tests/test_netlab.py": [
-        "api/app/netlab.py"
       ],
       "api/tests/test_agent_provider_selection.py": [
         "api/app/agent_client/__init__.py",
@@ -416,10 +481,20 @@
       "api/tests/test_routers_callbacks.py": [
         "api/app/models/__init__.py"
       ],
+      "api/tests/test_routers_admin_system_extended.py": [
+        "api/app/models/__init__.py",
+        "api/app/routers/system.py"
+      ],
       "api/tests/test_link_normalization.py": [
         "api/app/models/__init__.py",
         "api/app/services/topology.py",
         "api/app/utils/link.py"
+      ],
+      "api/tests/test_tasks_node_lifecycle_deploy_extended.py": [
+        "api/app/agent_client/__init__.py",
+        "api/app/models/__init__.py",
+        "api/app/state.py",
+        "api/app/tasks/node_lifecycle.py"
       ],
       "api/tests/test_routers_images.py": [
         "api/app/models/__init__.py",
@@ -452,6 +527,11 @@
         "api/app/routers/images/__init__.py",
         "api/app/routers/infrastructure.py"
       ],
+      "api/tests/test_tasks_stuck_nodes.py": [
+        "api/app/models/__init__.py",
+        "api/app/state.py",
+        "api/app/tasks/stuck_nodes.py"
+      ],
       "api/tests/test_tasks_jobs_deploy.py": [
         "api/app/models/__init__.py",
         "api/app/tasks/jobs.py"
@@ -479,6 +559,11 @@
       "api/tests/test_utils_lab.py": [
         "api/app/models/__init__.py",
         "api/app/utils/lab.py"
+      ],
+      "api/tests/test_tasks_image_sync_extended.py": [
+        "api/app/config.py",
+        "api/app/models/__init__.py",
+        "api/app/tasks/image_sync.py"
       ],
       "api/tests/test_services_support_bundle.py": [
         "api/app/models/__init__.py",
@@ -583,10 +668,27 @@
         "api/app/tasks/node_lifecycle.py",
         "api/app/timing.py"
       ],
+      "api/tests/test_services_catalog_query.py": [
+        "api/app/models/__init__.py",
+        "api/app/services/catalog_query.py",
+        "api/app/services/catalog_service.py"
+      ],
+      "api/tests/test_services_link_operational_state_extended.py": [
+        "api/app/agent_client/__init__.py",
+        "api/app/models/__init__.py",
+        "api/app/services/link_operational_state.py"
+      ],
+      "api/tests/test_services_device_service_extended.py": [
+        "api/app/services/device_service.py"
+      ],
       "api/tests/test_tasks_disk_cleanup.py": [
         "api/app/services/resource_monitor.py",
         "api/app/tasks/cleanup_base.py",
         "api/app/tasks/disk_cleanup.py"
+      ],
+      "api/tests/test_tasks_jobs_multihost.py": [
+        "api/app/models/__init__.py",
+        "api/app/tasks/jobs_multihost.py"
       ],
       "api/tests/test_iol_mapping.py": [
         "api/app/image_store/__init__.py"
@@ -605,8 +707,18 @@
       "api/tests/test_utils_http_extra.py": [
         "api/app/utils/http.py"
       ],
+      "api/tests/test_tasks_link_reconciliation_extended.py": [
+        "api/app/models/__init__.py",
+        "api/app/tasks/link_reconciliation.py"
+      ],
       "api/tests/test_iso_extractor.py": [
         "api/app/iso/extractor.py"
+      ],
+      "api/tests/test_services_support_bundle_batch2.py": [
+        "api/app/db.py",
+        "api/app/models/__init__.py",
+        "api/app/services/__init__.py",
+        "api/app/services/support_bundle.py"
       ],
       "api/tests/test_agent_create_node_payload_contract.py": [
         "api/app/agent_client/__init__.py"
@@ -615,11 +727,19 @@
         "api/app/metrics.py",
         "api/app/models/__init__.py"
       ],
+      "api/tests/test_routers_infrastructure_interfaces.py": [
+        "api/app/models/__init__.py"
+      ],
       "api/tests/test_cleanup_handler.py": [
         "api/app/events/cleanup_events.py",
         "api/app/models/__init__.py",
         "api/app/tasks/cleanup_base.py",
         "api/app/tasks/cleanup_handler.py"
+      ],
+      "api/tests/test_services_device_resolver_metrics.py": [
+        "api/app/models/__init__.py",
+        "api/app/services/device_resolver.py",
+        "api/app/services/metrics_service.py"
       ],
       "api/tests/test_models.py": [
         "api/app/models/__init__.py"
@@ -637,6 +757,10 @@
       ],
       "api/tests/test_link_operational_state.py": [
         "api/app/services/link_operational_state.py"
+      ],
+      "api/tests/test_services_link_validator_extended.py": [
+        "api/app/models/__init__.py",
+        "api/app/services/link_validator.py"
       ],
       "api/tests/test_tasks_job_health.py": [
         "api/app/config.py",
@@ -681,6 +805,10 @@
         "api/app/utils/time_range.py",
         "api/app/utils/timeouts.py"
       ],
+      "api/tests/test_services_interface_mapping_extended.py": [
+        "api/app/models/__init__.py",
+        "api/app/services/interface_mapping.py"
+      ],
       "api/tests/test_agent_updates.py": [
         "api/app/config.py",
         "api/app/models/__init__.py"
@@ -701,12 +829,23 @@
         "api/app/models/__init__.py",
         "api/app/services/resource_capacity.py"
       ],
+      "api/tests/test_image_store_detection.py": [
+        "api/app/image_store/detection.py"
+      ],
       "api/tests/test_jobs_orphan_cleanup.py": [
         "api/app/models/__init__.py",
         "api/app/tasks/jobs.py"
       ],
       "api/tests/test_utils_pagination_extra.py": [
         "api/app/utils/pagination.py"
+      ],
+      "api/tests/test_agent_client_wrappers_batch.py": [
+        "api/app/agent_client/__init__.py"
+      ],
+      "api/tests/test_tasks_reconciliation_db.py": [
+        "api/app/models/__init__.py",
+        "api/app/state.py",
+        "api/app/tasks/reconciliation_db.py"
       ],
       "api/tests/test_config_extraction.py": [
         "api/app/models/__init__.py",
@@ -753,6 +892,11 @@
         "api/app/routers/jobs.py",
         "api/app/routers/system.py"
       ],
+      "api/tests/test_tasks_reconciliation_refresh.py": [
+        "api/app/models/__init__.py",
+        "api/app/state.py",
+        "api/app/tasks/reconciliation_refresh.py"
+      ],
       "api/tests/test_on_demand_image_sync.py": [
         "api/app/config.py",
         "api/app/models/__init__.py",
@@ -774,6 +918,9 @@
         "api/app/config.py",
         "api/app/models/__init__.py"
       ],
+      "api/tests/test_image_store_custom_devices.py": [
+        "api/app/image_store/custom_devices.py"
+      ],
       "api/tests/test_routers_auth_extra.py": [
         "api/app/auth.py",
         "api/app/models/__init__.py",
@@ -781,7 +928,8 @@
       ],
       "api/tests/test_reconciliation_batch6.py": [
         "api/app/models/__init__.py",
-        "api/app/tasks/reconciliation.py"
+        "api/app/tasks/reconciliation.py",
+        "api/app/tasks/reconciliation_db.py"
       ],
       "api/tests/test_uncovered_module_imports_batch2.py": [
         "api/app/agent_auth.py",
@@ -816,17 +964,41 @@
         "api/app/models/__init__.py",
         "api/app/tasks/migration_cleanup.py"
       ],
+      "api/tests/test_tasks_jobs_node_reconcile.py": [
+        "api/app/models/__init__.py",
+        "api/app/state.py",
+        "api/app/tasks/jobs_node_reconcile.py"
+      ],
       "api/tests/test_schemas_batch6.py": [
         "api/app/schemas/__init__.py"
+      ],
+      "api/tests/test_tasks_jobs_multihost_extended.py": [
+        "api/app/models/__init__.py",
+        "api/app/state.py",
+        "api/app/tasks/jobs_multihost.py"
       ],
       "api/tests/test_config_service_units.py": [
         "api/app/config.py",
         "api/app/models/__init__.py",
         "api/app/services/config_service.py"
       ],
+      "api/tests/test_tasks_link_orchestration_extended.py": [
+        "api/app/models/__init__.py",
+        "api/app/tasks/link_orchestration.py"
+      ],
+      "api/tests/test_routers_images_streaming_qcow_batch10.py": [
+        "api/app/routers/__init__.py",
+        "api/app/routers/images/__init__.py"
+      ],
       "api/tests/test_routers_vendors_extra.py": [
         "api/app/models/__init__.py",
         "api/app/routers/vendors.py"
+      ],
+      "api/tests/test_services_catalog_identity_extended.py": [
+        "api/app/models/__init__.py",
+        "api/app/services/__init__.py",
+        "api/app/services/catalog_identity.py",
+        "api/app/services/catalog_service.py"
       ],
       "api/tests/test_routers_iso.py": [
         "api/app/config.py"
@@ -842,6 +1014,11 @@
         "api/app/agent_client/__init__.py",
         "api/app/models/__init__.py",
         "api/app/services/link_operational_state.py"
+      ],
+      "api/tests/test_tasks_stuck_nodes_extended.py": [
+        "api/app/models/__init__.py",
+        "api/app/state.py",
+        "api/app/tasks/stuck_nodes.py"
       ],
       "api/tests/test_debouncing.py": [
         "api/app/tasks/live_nodes.py"
@@ -869,6 +1046,12 @@
       "api/tests/test_broadcaster.py": [
         "api/app/services/broadcaster.py"
       ],
+      "api/tests/test_tasks_reconciliation_db_extended.py": [
+        "api/app/config.py",
+        "api/app/models/__init__.py",
+        "api/app/state.py",
+        "api/app/tasks/reconciliation_db.py"
+      ],
       "api/tests/test_image_store_batch6.py": [
         "api/app/image_store/__init__.py"
       ],
@@ -888,6 +1071,19 @@
       "api/tests/test_utils_timeouts_extra.py": [
         "api/app/utils/timeouts.py"
       ],
+      "api/tests/test_utils_extended.py": [
+        "api/app/utils/cache.py",
+        "api/app/utils/image_integrity.py",
+        "api/app/utils/naming.py",
+        "api/app/utils/pagination.py"
+      ],
+      "api/tests/test_image_store_overrides.py": [
+        "api/app/image_store/overrides.py"
+      ],
+      "api/tests/test_image_store_aliases.py": [
+        "api/app/image_store/aliases.py",
+        "api/app/image_store/detection.py"
+      ],
       "api/tests/test_catalog_cutover.py": [
         "api/app/image_store/__init__.py",
         "api/app/models/__init__.py"
@@ -901,8 +1097,28 @@
         "api/app/models/__init__.py",
         "api/app/tasks/jobs.py"
       ],
+      "api/tests/test_link_repair_batch2.py": [
+        "api/app/tasks/link_repair.py"
+      ],
+      "api/tests/test_tasks_job_health_batch2.py": [
+        "api/app/models/__init__.py",
+        "api/app/services/broadcaster.py",
+        "api/app/services/topology.py",
+        "api/app/tasks/job_health.py",
+        "api/app/tasks/jobs.py",
+        "api/app/utils/lab.py"
+      ],
+      "api/tests/test_routers_images_catalog_batch9.py": [
+        "api/app/routers/__init__.py",
+        "api/app/routers/images/__init__.py"
+      ],
       "api/tests/test_link_repair.py": [
         "api/app/tasks/link_repair.py"
+      ],
+      "api/tests/test_image_store_metadata.py": [
+        "api/app/image_store/manifest.py",
+        "api/app/image_store/metadata.py",
+        "api/app/services/device_service.py"
       ],
       "api/tests/test_routers_events_callbacks_extra.py": [
         "api/app/models/__init__.py",
@@ -917,6 +1133,12 @@
       "api/tests/test_tasks_health.py": [
         "api/app/tasks/health.py"
       ],
+      "api/tests/test_tasks_node_lifecycle_stop_extended.py": [
+        "api/app/agent_client/__init__.py",
+        "api/app/models/__init__.py",
+        "api/app/state.py",
+        "api/app/tasks/node_lifecycle.py"
+      ],
       "api/tests/test_services_device_resolver.py": [
         "api/app/services/device_resolver.py"
       ],
@@ -926,6 +1148,9 @@
         "api/app/models/__init__.py",
         "api/app/routers/__init__.py",
         "api/app/routers/support.py"
+      ],
+      "api/tests/test_tasks_link_repair_depth.py": [
+        "api/app/tasks/link_repair.py"
       ],
       "api/tests/test_topology.py": [
         "api/app/schemas/__init__.py",
@@ -939,6 +1164,14 @@
         "api/app/models/__init__.py",
         "api/app/tasks/image_sync.py"
       ],
+      "api/tests/test_tasks_jobs_node_reconcile_extended.py": [
+        "api/app/models/__init__.py",
+        "api/app/state.py",
+        "api/app/tasks/jobs_node_reconcile.py"
+      ],
+      "api/tests/test_services_topology_resolution.py": [
+        "api/app/services/topology_resolution.py"
+      ],
       "api/tests/test_auth_and_events.py": [
         "api/app/dependencies.py",
         "api/app/enums.py",
@@ -948,16 +1181,27 @@
         "api/app/models/__init__.py",
         "api/app/services/audit.py"
       ],
-      "api/tests/test_providers.py": [
-        "api/app/providers.py"
-      ],
       "api/tests/test_state_enforcement.py": [
         "api/app/models/__init__.py",
         "api/app/state.py",
         "api/app/tasks/state_enforcement.py"
       ],
+      "api/tests/test_services_topology_deploy.py": [
+        "api/app/schemas/__init__.py",
+        "api/app/schemas/lab.py",
+        "api/app/services/topology_deploy.py"
+      ],
+      "api/tests/test_tasks_reconciliation_refresh_extended.py": [
+        "api/app/models/__init__.py",
+        "api/app/state.py",
+        "api/app/tasks/reconciliation_refresh.py"
+      ],
       "api/tests/test_image_provider.py": [
         "api/app/image_store/__init__.py"
+      ],
+      "api/tests/test_services_link_reservations_extended.py": [
+        "api/app/models/__init__.py",
+        "api/app/services/link_reservations.py"
       ],
       "api/tests/test_jobs_placement_events.py": [
         "api/app/models/__init__.py",
@@ -1019,15 +1263,44 @@
         "api/app/routers/__init__.py",
         "api/app/routers/users.py"
       ],
+      "api/tests/test_routers_iso_batch2.py": [
+        "api/app/config.py",
+        "api/app/iso/models.py",
+        "api/app/routers/__init__.py",
+        "api/app/routers/iso.py"
+      ],
       "api/tests/test_tasks_vrnetlab_build.py": [
         "api/app/config.py",
         "api/app/tasks/vrnetlab_build.py"
+      ],
+      "api/tests/test_image_discovery.py": [
+        "api/app/models/__init__.py",
+        "api/app/tasks/image_reconciliation.py"
       ],
       "api/tests/test_link_manager.py": [
         "api/app/agent_client/__init__.py",
         "api/app/models/__init__.py",
         "api/app/services/link_manager.py",
         "api/app/utils/link.py"
+      ],
+      "api/tests/test_utils_locks.py": [
+        "api/app/models/__init__.py",
+        "api/app/utils/locks.py"
+      ],
+      "api/tests/test_tasks_node_lifecycle_agents_extended.py": [
+        "api/app/models/__init__.py",
+        "api/app/services/resource_capacity.py",
+        "api/app/state.py",
+        "api/app/tasks/node_lifecycle_agents.py"
+      ],
+      "api/tests/test_agent_client_midpaths_batch2.py": [
+        "api/app/agent_client/__init__.py",
+        "api/app/models/__init__.py"
+      ],
+      "api/tests/test_routers_images_chunk_helpers_batch8.py": [
+        "api/app/routers/__init__.py",
+        "api/app/routers/images/__init__.py",
+        "api/app/services/resource_monitor.py"
       ],
       "api/tests/test_link_reservations.py": [
         "api/app/models/__init__.py",
@@ -1055,6 +1328,20 @@
       "api/tests/test_image_store.py": [
         "api/app/image_store/__init__.py"
       ],
+      "api/tests/test_tasks_node_lifecycle_stop.py": [
+        "api/app/agent_client/__init__.py",
+        "api/app/models/__init__.py",
+        "api/app/state.py",
+        "api/app/tasks/node_lifecycle.py"
+      ],
+      "api/tests/test_state_enforcement_batch2.py": [
+        "api/app/models/__init__.py",
+        "api/app/services/broadcaster.py",
+        "api/app/services/config_service.py",
+        "api/app/tasks/jobs.py",
+        "api/app/tasks/state_enforcement.py",
+        "api/app/utils/lab.py"
+      ],
       "api/tests/test_iso_models.py": [
         "api/app/iso/models.py"
       ],
@@ -1081,6 +1368,12 @@
       "api/app/events/cleanup_events.py",
       "api/app/events/publisher.py",
       "api/app/image_store/__init__.py",
+      "api/app/image_store/aliases.py",
+      "api/app/image_store/custom_devices.py",
+      "api/app/image_store/detection.py",
+      "api/app/image_store/manifest.py",
+      "api/app/image_store/metadata.py",
+      "api/app/image_store/overrides.py",
       "api/app/iso/__init__.py",
       "api/app/iso/extractor.py",
       "api/app/iso/mapper.py",
@@ -1093,8 +1386,6 @@
       "api/app/metrics.py",
       "api/app/middleware.py",
       "api/app/models/__init__.py",
-      "api/app/netlab.py",
-      "api/app/providers.py",
       "api/app/routers/__init__.py",
       "api/app/routers/admin.py",
       "api/app/routers/agents.py",
@@ -1122,9 +1413,12 @@
       "api/app/routers/webhooks.py",
       "api/app/scheduler.py",
       "api/app/schemas/__init__.py",
+      "api/app/schemas/lab.py",
       "api/app/services/__init__.py",
       "api/app/services/audit.py",
       "api/app/services/broadcaster.py",
+      "api/app/services/catalog_identity.py",
+      "api/app/services/catalog_query.py",
       "api/app/services/catalog_service.py",
       "api/app/services/config_service.py",
       "api/app/services/device_constraints.py",
@@ -1144,6 +1438,8 @@
       "api/app/services/state_machine.py",
       "api/app/services/support_bundle.py",
       "api/app/services/topology.py",
+      "api/app/services/topology_deploy.py",
+      "api/app/services/topology_resolution.py",
       "api/app/state.py",
       "api/app/storage.py",
       "api/app/tasks/__init__.py",
@@ -1156,6 +1452,8 @@
       "api/app/tasks/iol_build.py",
       "api/app/tasks/job_health.py",
       "api/app/tasks/jobs.py",
+      "api/app/tasks/jobs_multihost.py",
+      "api/app/tasks/jobs_node_reconcile.py",
       "api/app/tasks/link_cleanup.py",
       "api/app/tasks/link_orchestration.py",
       "api/app/tasks/link_reconciliation.py",
@@ -1167,8 +1465,11 @@
       "api/app/tasks/node_lifecycle_agents.py",
       "api/app/tasks/node_lifecycle_deploy.py",
       "api/app/tasks/reconciliation.py",
+      "api/app/tasks/reconciliation_db.py",
+      "api/app/tasks/reconciliation_refresh.py",
       "api/app/tasks/scenario_executor.py",
       "api/app/tasks/state_enforcement.py",
+      "api/app/tasks/stuck_nodes.py",
       "api/app/tasks/test_runner.py",
       "api/app/tasks/vrnetlab_build.py",
       "api/app/timing.py",
@@ -1201,12 +1502,6 @@
       "api/app/agent_client/node_ops.py",
       "api/app/agent_client/overlay.py",
       "api/app/agent_client/selection.py",
-      "api/app/image_store/aliases.py",
-      "api/app/image_store/custom_devices.py",
-      "api/app/image_store/detection.py",
-      "api/app/image_store/manifest.py",
-      "api/app/image_store/metadata.py",
-      "api/app/image_store/overrides.py",
       "api/app/image_store/paths.py",
       "api/app/models/auth.py",
       "api/app/models/base.py",
@@ -1230,26 +1525,16 @@
       "api/app/routers/labs/operations.py",
       "api/app/routers/labs/topology.py",
       "api/app/schemas/agents.py",
-      "api/app/schemas/lab.py",
       "api/app/schemas/system.py",
       "api/app/schemas/users.py",
       "api/app/schemas/webhooks.py",
-      "api/app/services/catalog_identity.py",
-      "api/app/services/catalog_query.py",
-      "api/app/services/topology_deploy.py",
-      "api/app/services/topology_resolution.py",
-      "api/app/tasks/jobs_multihost.py",
-      "api/app/tasks/jobs_node_reconcile.py",
       "api/app/tasks/node_lifecycle_stop.py",
-      "api/app/tasks/reconciliation_db.py",
-      "api/app/tasks/reconciliation_refresh.py",
-      "api/app/tasks/stuck_agents.py",
-      "api/app/tasks/stuck_nodes.py"
+      "api/app/tasks/stuck_agents.py"
     ],
     "counts": {
-      "source": 175,
-      "covered": 125,
-      "uncovered": 50
+      "source": 173,
+      "covered": 139,
+      "uncovered": 34
     }
   },
   "agent": {
@@ -1270,6 +1555,7 @@
       "agent/helpers.py",
       "agent/http_client.py",
       "agent/image_cleanup.py",
+      "agent/image_metadata.py",
       "agent/locks.py",
       "agent/logging_config.py",
       "agent/main.py",
@@ -1287,6 +1573,7 @@
       "agent/network/interface_config.py",
       "agent/network/local.py",
       "agent/network/overlay.py",
+      "agent/network/overlay_health.py",
       "agent/network/overlay_state.py",
       "agent/network/overlay_vxlan.py",
       "agent/network/ovs.py",
@@ -1353,6 +1640,7 @@
     ],
     "test_files": [
       "agent/tests/conftest.py",
+      "agent/tests/test_agent_state.py",
       "agent/tests/test_asyncio_primitive_binding.py",
       "agent/tests/test_auth_middleware.py",
       "agent/tests/test_bootflash_inject.py",
@@ -1375,7 +1663,9 @@
       "agent/tests/test_create_node_backward_compat.py",
       "agent/tests/test_declare_overlay_state.py",
       "agent/tests/test_deploy_reliability.py",
+      "agent/tests/test_docker_config_extract.py",
       "agent/tests/test_docker_network_conflict_integration.py",
+      "agent/tests/test_docker_networks_extended.py",
       "agent/tests/test_docker_plugin_batch5.py",
       "agent/tests/test_docker_plugin_carrier.py",
       "agent/tests/test_docker_plugin_discovery.py",
@@ -1385,6 +1675,7 @@
       "agent/tests/test_docker_plugin_state_gap_paths.py",
       "agent/tests/test_docker_plugin_state_helpers_batch.py",
       "agent/tests/test_docker_plugin_vlan_collision_avoidance.py",
+      "agent/tests/test_docker_plugin_vlan_tunnel_lifecycle.py",
       "agent/tests/test_docker_provider_gap_network_ops.py",
       "agent/tests/test_docker_provider_gap_paths_batch3.py",
       "agent/tests/test_docker_provider_gap_paths_batch4.py",
@@ -1394,12 +1685,17 @@
       "agent/tests/test_docker_provider_interfaces.py",
       "agent/tests/test_docker_provider_lifecycle_gap_batch5.py",
       "agent/tests/test_docker_provider_ops_corner_cases.py",
+      "agent/tests/test_docker_setup_extended.py",
       "agent/tests/test_docker_snapshotter_drift.py",
       "agent/tests/test_events_console_logging_version_batch2.py",
+      "agent/tests/test_events_docker_listener_batch3.py",
       "agent/tests/test_hardware_spec_override.py",
+      "agent/tests/test_helpers_batch6.py",
+      "agent/tests/test_helpers_batch7.py",
       "agent/tests/test_helpers_gap_batch.py",
       "agent/tests/test_http_client.py",
       "agent/tests/test_image_cleanup.py",
+      "agent/tests/test_image_metadata.py",
       "agent/tests/test_input_validation.py",
       "agent/tests/test_interface_config_gap_paths_batch2.py",
       "agent/tests/test_interface_config_gap_paths_batch3.py",
@@ -1407,11 +1703,14 @@
       "agent/tests/test_iso_inject.py",
       "agent/tests/test_labs_reconcile_cleanup.py",
       "agent/tests/test_libvirt_carrier.py",
+      "agent/tests/test_libvirt_config_extended.py",
       "agent/tests/test_libvirt_console_command_fallback.py",
       "agent/tests/test_libvirt_domain_xml.py",
       "agent/tests/test_libvirt_gap_paths_batch2.py",
       "agent/tests/test_libvirt_low_coverage_helpers.py",
+      "agent/tests/test_libvirt_n9kv.py",
       "agent/tests/test_libvirt_preflight_default_network.py",
+      "agent/tests/test_libvirt_readiness_extended.py",
       "agent/tests/test_libvirt_readiness_gap_paths.py",
       "agent/tests/test_libvirt_security.py",
       "agent/tests/test_libvirt_vlan_collision_avoidance.py",
@@ -1438,14 +1737,22 @@
       "agent/tests/test_nvram_parser.py",
       "agent/tests/test_overlay_batch5.py",
       "agent/tests/test_overlay_gap_paths_batch6.py",
+      "agent/tests/test_overlay_health.py",
       "agent/tests/test_overlay_recovery.py",
+      "agent/tests/test_overlay_recovery_extended.py",
+      "agent/tests/test_overlay_state_extended.py",
+      "agent/tests/test_overlay_vxlan_extended.py",
       "agent/tests/test_ovs_batch5.py",
       "agent/tests/test_ovs_dataplane_smoke.py",
       "agent/tests/test_ovs_interface_naming.py",
       "agent/tests/test_ovs_network_manager.py",
+      "agent/tests/test_ovs_provision.py",
       "agent/tests/test_ovs_stale_detection.py",
       "agent/tests/test_ovs_startup_discovery.py",
       "agent/tests/test_ovs_vlan_tags.py",
+      "agent/tests/test_plugin_handlers_extended.py",
+      "agent/tests/test_plugin_state.py",
+      "agent/tests/test_plugin_vlan.py",
       "agent/tests/test_plugins_providers_batch1.py",
       "agent/tests/test_port_state.py",
       "agent/tests/test_provider_registry.py",
@@ -1457,6 +1764,7 @@
       "agent/tests/test_registry_singleton.py",
       "agent/tests/test_registry_transport_console.py",
       "agent/tests/test_remaining_agent_gaps_batch3.py",
+      "agent/tests/test_routers_admin.py",
       "agent/tests/test_routers_console_full.py",
       "agent/tests/test_routers_console_gap_handlers.py",
       "agent/tests/test_routers_console_gap_handlers_batch2.py",
@@ -1466,17 +1774,22 @@
       "agent/tests/test_routers_health.py",
       "agent/tests/test_routers_images.py",
       "agent/tests/test_routers_images_full.py",
+      "agent/tests/test_routers_interfaces_batch2.py",
       "agent/tests/test_routers_interfaces_full.py",
       "agent/tests/test_routers_interfaces_gap_paths.py",
       "agent/tests/test_routers_jobs_full.py",
+      "agent/tests/test_routers_labs_batch2.py",
       "agent/tests/test_routers_labs_gap_paths.py",
       "agent/tests/test_routers_links.py",
       "agent/tests/test_routers_nodes.py",
       "agent/tests/test_routers_nodes_full.py",
       "agent/tests/test_routers_overlay_full.py",
+      "agent/tests/test_routers_ovs_plugin.py",
       "agent/tests/test_timing.py",
       "agent/tests/test_uncovered_module_imports_batch4.py",
       "agent/tests/test_updater.py",
+      "agent/tests/test_vendor_registry_validation.py",
+      "agent/tests/test_vendor_schema.py",
       "agent/tests/test_vendors_comprehensive.py",
       "agent/tests/test_virsh_console_lock.py",
       "agent/tests/test_vjunos_vendor.py",
@@ -1505,10 +1818,19 @@
       "agent/tests/test_interface_config_gap_paths_batch3.py": [
         "agent/network/interface_config.py"
       ],
+      "agent/tests/test_docker_setup_extended.py": [
+        "agent/providers/docker.py",
+        "agent/providers/docker_setup.py",
+        "agent/vendors.py"
+      ],
       "agent/tests/test_docker_provider_gap_paths_batch4.py": [
         "agent/config.py",
         "agent/providers/__init__.py",
         "agent/providers/docker.py"
+      ],
+      "agent/tests/test_image_metadata.py": [
+        "agent/config.py",
+        "agent/image_metadata.py"
       ],
       "agent/tests/test_routers_jobs_full.py": [
         "agent/agent_state.py",
@@ -1528,6 +1850,9 @@
         "agent/providers/libvirt.py",
         "agent/vendors.py"
       ],
+      "agent/tests/test_docker_plugin_vlan_tunnel_lifecycle.py": [
+        "agent/network/docker_plugin.py"
+      ],
       "agent/tests/test_docker_plugin_state_gap_paths.py": [
         "agent/network/__init__.py",
         "agent/network/docker_plugin.py"
@@ -1542,6 +1867,10 @@
         "agent/schemas/__init__.py",
         "agent/schemas/common.py"
       ],
+      "agent/tests/test_docker_networks_extended.py": [
+        "agent/config.py",
+        "agent/network/docker_plugin.py"
+      ],
       "agent/tests/test_overlay_recovery.py": [
         "agent/network/overlay.py"
       ],
@@ -1553,6 +1882,9 @@
       ],
       "agent/tests/test_libvirt_carrier.py": [
         "agent/providers/libvirt.py"
+      ],
+      "agent/tests/test_agent_state.py": [
+        "agent/agent_state.py"
       ],
       "agent/tests/test_libvirt_gap_paths_batch2.py": [
         "agent/providers/libvirt.py"
@@ -1568,6 +1900,13 @@
       "agent/tests/test_bootflash_inject.py": [
         "agent/providers/__init__.py",
         "agent/providers/bootflash_inject.py"
+      ],
+      "agent/tests/test_routers_labs_batch2.py": [
+        "agent/config.py",
+        "agent/providers/__init__.py",
+        "agent/routers/__init__.py",
+        "agent/routers/labs.py",
+        "agent/schemas/__init__.py"
       ],
       "agent/tests/test_docker_plugin_migrate.py": [
         "agent/network/docker_plugin.py"
@@ -1611,6 +1950,14 @@
         "agent/providers/__init__.py",
         "agent/providers/naming.py"
       ],
+      "agent/tests/test_routers_interfaces_batch2.py": [
+        "agent/routers/__init__.py",
+        "agent/routers/interfaces.py",
+        "agent/schemas/__init__.py"
+      ],
+      "agent/tests/test_docker_config_extract.py": [
+        "agent/providers/docker_config_extract.py"
+      ],
       "agent/tests/test_docker_network_conflict_integration.py": [
         "agent/providers/docker.py"
       ],
@@ -1629,6 +1976,11 @@
       ],
       "agent/tests/test_console_session_registry_full.py": [
         "agent/console_session_registry.py"
+      ],
+      "agent/tests/test_overlay_state_extended.py": [
+        "agent/config.py",
+        "agent/network/overlay.py",
+        "agent/network/overlay_state.py"
       ],
       "agent/tests/test_routers_interfaces_full.py": [
         "agent/config.py",
@@ -1656,6 +2008,9 @@
         "agent/main.py",
         "agent/schemas/__init__.py"
       ],
+      "agent/tests/test_plugin_vlan.py": [
+        "agent/network/docker_plugin.py"
+      ],
       "agent/tests/test_reconcile_overlay_ports.py": [
         "agent/config.py",
         "agent/main.py"
@@ -1673,11 +2028,19 @@
       "agent/tests/test_network_interface_config_write_helpers.py": [
         "agent/network/interface_config.py"
       ],
+      "agent/tests/test_overlay_health.py": [
+        "agent/network/overlay.py",
+        "agent/network/overlay_health.py"
+      ],
       "agent/tests/test_locks.py": [
         "agent/locks.py"
       ],
       "agent/tests/test_node_ready.py": [
         "agent/main.py"
+      ],
+      "agent/tests/test_events_docker_listener_batch3.py": [
+        "agent/events/base.py",
+        "agent/events/docker_events.py"
       ],
       "agent/tests/test_libvirt_console_command_fallback.py": [
         "agent/providers/libvirt.py"
@@ -1717,6 +2080,9 @@
       "agent/tests/test_console_injector.py": [
         "agent/console_session_registry.py"
       ],
+      "agent/tests/test_libvirt_n9kv.py": [
+        "agent/providers/libvirt_n9kv.py"
+      ],
       "agent/tests/test_interface_config_unit.py": [
         "agent/network/interface_config.py"
       ],
@@ -1737,6 +2103,9 @@
         "agent/main.py",
         "agent/schemas/__init__.py"
       ],
+      "agent/tests/test_vendor_schema.py": [
+        "agent/vendor_schema.py"
+      ],
       "agent/tests/test_vendors_comprehensive.py": [
         "agent/vendors.py"
       ],
@@ -1754,6 +2123,10 @@
         "agent/config.py",
         "agent/main.py",
         "agent/schemas/__init__.py"
+      ],
+      "agent/tests/test_ovs_provision.py": [
+        "agent/network/ovs.py",
+        "agent/network/ovs_provision.py"
       ],
       "agent/tests/test_ovs_network_manager.py": [
         "agent/network/ovs.py"
@@ -1803,6 +2176,11 @@
         "agent/schemas/__init__.py",
         "agent/vendors.py"
       ],
+      "agent/tests/test_routers_admin.py": [
+        "agent/config.py",
+        "agent/main.py",
+        "agent/updater.py"
+      ],
       "agent/tests/test_nvram_parser.py": [
         "agent/providers/docker.py"
       ],
@@ -1821,6 +2199,10 @@
       ],
       "agent/tests/test_console.py": [
         "agent/console/docker_exec.py"
+      ],
+      "agent/tests/test_libvirt_config_extended.py": [
+        "agent/providers/libvirt_config.py",
+        "agent/providers/libvirt_xml.py"
       ],
       "agent/tests/test_readiness.py": [
         "agent/readiness.py",
@@ -1881,6 +2263,14 @@
       "agent/tests/test_iso_inject.py": [
         "agent/providers/iso_inject.py"
       ],
+      "agent/tests/test_plugin_state.py": [
+        "agent/network/__init__.py",
+        "agent/network/docker_plugin.py"
+      ],
+      "agent/tests/test_routers_ovs_plugin.py": [
+        "agent/config.py",
+        "agent/main.py"
+      ],
       "agent/tests/test_network_interface_config_detection.py": [
         "agent/network/interface_config.py"
       ],
@@ -1921,6 +2311,16 @@
         "agent/helpers.py",
         "agent/main.py"
       ],
+      "agent/tests/test_overlay_vxlan_extended.py": [
+        "agent/config.py",
+        "agent/network/overlay.py",
+        "agent/network/overlay_health.py",
+        "agent/network/overlay_vxlan.py"
+      ],
+      "agent/tests/test_plugin_handlers_extended.py": [
+        "agent/network/__init__.py",
+        "agent/network/docker_plugin.py"
+      ],
       "agent/tests/test_n9kv_poap_endpoints.py": [
         "agent/config.py",
         "agent/main.py"
@@ -1960,9 +2360,19 @@
         "agent/main.py",
         "agent/providers/base.py"
       ],
+      "agent/tests/test_helpers_batch6.py": [
+        "agent/config.py",
+        "agent/helpers.py",
+        "agent/providers/__init__.py",
+        "agent/schemas/__init__.py"
+      ],
       "agent/tests/test_node_lifecycle.py": [
         "agent/providers/base.py",
         "agent/providers/docker.py"
+      ],
+      "agent/tests/test_helpers_batch7.py": [
+        "agent/config.py",
+        "agent/helpers.py"
       ],
       "agent/tests/test_network_interface_config_host_helpers.py": [
         "agent/network/interface_config.py"
@@ -2013,12 +2423,28 @@
         "agent/config.py",
         "agent/main.py"
       ],
+      "agent/tests/test_overlay_recovery_extended.py": [
+        "agent/config.py",
+        "agent/network/__init__.py",
+        "agent/network/cmd.py",
+        "agent/network/overlay.py",
+        "agent/network/overlay_state.py",
+        "agent/network/overlay_vxlan.py"
+      ],
       "agent/tests/test_overlay_batch5.py": [
         "agent/network/overlay.py"
+      ],
+      "agent/tests/test_libvirt_readiness_extended.py": [
+        "agent/config.py",
+        "agent/providers/libvirt_readiness.py"
       ],
       "agent/tests/test_docker_plugin_gap_paths_batch2.py": [
         "agent/network/__init__.py",
         "agent/network/docker_plugin.py"
+      ],
+      "agent/tests/test_vendor_registry_validation.py": [
+        "agent/vendor_registry.py",
+        "agent/vendor_schema.py"
       ]
     },
     "covered_sources": [
@@ -2038,6 +2464,7 @@
       "agent/helpers.py",
       "agent/http_client.py",
       "agent/image_cleanup.py",
+      "agent/image_metadata.py",
       "agent/locks.py",
       "agent/logging_config.py",
       "agent/main.py",
@@ -2055,7 +2482,11 @@
       "agent/network/interface_config.py",
       "agent/network/local.py",
       "agent/network/overlay.py",
+      "agent/network/overlay_health.py",
+      "agent/network/overlay_state.py",
+      "agent/network/overlay_vxlan.py",
       "agent/network/ovs.py",
+      "agent/network/ovs_provision.py",
       "agent/network/ovs_vlan_tags.py",
       "agent/network/transport.py",
       "agent/network/vlan.py",
@@ -2064,10 +2495,15 @@
       "agent/providers/bootflash_inject.py",
       "agent/providers/config_disk_inject.py",
       "agent/providers/docker.py",
+      "agent/providers/docker_config_extract.py",
       "agent/providers/docker_networks.py",
+      "agent/providers/docker_setup.py",
       "agent/providers/iso_inject.py",
       "agent/providers/libvirt.py",
+      "agent/providers/libvirt_config.py",
+      "agent/providers/libvirt_n9kv.py",
       "agent/providers/libvirt_readiness.py",
+      "agent/providers/libvirt_xml.py",
       "agent/providers/naming.py",
       "agent/providers/registry.py",
       "agent/readiness.py",
@@ -2102,29 +2538,21 @@
       "agent/tests/__init__.py",
       "agent/timing.py",
       "agent/updater.py",
+      "agent/vendor_registry.py",
+      "agent/vendor_schema.py",
       "agent/vendors.py",
       "agent/version.py",
       "agent/virsh_console_lock.py"
     ],
     "uncovered_sources": [
-      "agent/network/overlay_state.py",
-      "agent/network/overlay_vxlan.py",
-      "agent/network/ovs_provision.py",
       "agent/network/plugin_handlers.py",
       "agent/network/plugin_state.py",
-      "agent/network/plugin_vlan.py",
-      "agent/providers/docker_config_extract.py",
-      "agent/providers/docker_setup.py",
-      "agent/providers/libvirt_config.py",
-      "agent/providers/libvirt_n9kv.py",
-      "agent/providers/libvirt_xml.py",
-      "agent/vendor_registry.py",
-      "agent/vendor_schema.py"
+      "agent/network/plugin_vlan.py"
     ],
     "counts": {
-      "source": 96,
-      "covered": 83,
-      "uncovered": 13
+      "source": 98,
+      "covered": 95,
+      "uncovered": 3
     }
   },
   "web": {
@@ -2380,6 +2808,10 @@
       "web/src/components/backgrounds/animations/allAnimations.test.ts",
       "web/src/components/icons/ArchetypeIcon.test.tsx",
       "web/src/components/icons/index.test.tsx",
+      "web/src/components/isoImport/ISOImportModal.test.tsx",
+      "web/src/components/isoImport/ISOInputStep.test.tsx",
+      "web/src/components/isoImport/ISOReviewStep.test.tsx",
+      "web/src/components/isoImport/useISOUpload.test.ts",
       "web/src/components/ui/Badge.test.tsx",
       "web/src/components/ui/Button.test.tsx",
       "web/src/components/ui/Card.test.tsx",
@@ -2409,6 +2841,17 @@
       "web/src/pages/UserManagementPage.extended.test.tsx",
       "web/src/pages/UserManagementPage.modal.test.tsx",
       "web/src/pages/UserManagementPage.test.tsx",
+      "web/src/pages/infrastructure/AgentMeshSection.test.tsx",
+      "web/src/pages/infrastructure/HostCard.test.tsx",
+      "web/src/pages/infrastructure/InfrastructurePage.test.tsx",
+      "web/src/pages/infrastructure/MtuConfigModal.test.tsx",
+      "web/src/pages/infrastructure/NetworkTab.test.tsx",
+      "web/src/pages/infrastructure/NicGroupModal.test.tsx",
+      "web/src/pages/infrastructure/badgeHelpers.test.ts",
+      "web/src/pages/infrastructure/useAgentUpdates.test.ts",
+      "web/src/pages/infrastructure/useInfrastructureData.test.ts",
+      "web/src/pages/infrastructure/useMtuConfig.test.ts",
+      "web/src/pages/infrastructure/useNicGroups.test.tsx",
       "web/src/setupTests.test.ts",
       "web/src/studio/StudioPage.extract-config.test.tsx",
       "web/src/studio/StudioPage.test.tsx",
@@ -2442,6 +2885,7 @@
       "web/src/studio/components/FilterChip.test.tsx",
       "web/src/studio/components/ImageCard.test.tsx",
       "web/src/studio/components/ImageFilterBar.test.tsx",
+      "web/src/studio/components/InfraView/AgentDetailView.test.tsx",
       "web/src/studio/components/InfraView/AgentGraph.test.tsx",
       "web/src/studio/components/InfraView/AgentNode.test.tsx",
       "web/src/studio/components/InfraView/DetailPanel.test.tsx",
@@ -2450,6 +2894,7 @@
       "web/src/studio/components/InfraView/InfraView.smoke.test.tsx",
       "web/src/studio/components/InfraView/LinkTable.test.tsx",
       "web/src/studio/components/InfraView/NotificationsPanel.test.tsx",
+      "web/src/studio/components/InfraView/TunnelDetailView.test.tsx",
       "web/src/studio/components/InfraView/VniLinkDetailPanel.test.tsx",
       "web/src/studio/components/InfraView/index.test.tsx",
       "web/src/studio/components/InterfaceSelect.test.tsx",
@@ -2475,17 +2920,33 @@
       "web/src/studio/components/TopBar.test.tsx",
       "web/src/studio/components/VendorOptionsPanel.test.tsx",
       "web/src/studio/components/VerificationPanel.test.tsx",
+      "web/src/studio/components/canvas/Canvas.extended.test.tsx",
+      "web/src/studio/components/canvas/ContextMenuOverlay.test.tsx",
+      "web/src/studio/components/canvas/useCanvasInteraction.test.ts",
+      "web/src/studio/components/canvas/useCanvasViewport.test.ts",
+      "web/src/studio/components/deviceManager/BuildJobsView.test.tsx",
+      "web/src/studio/components/deviceManager/DeviceCatalogView.test.tsx",
+      "web/src/studio/components/deviceManager/DeviceManager.test.tsx",
+      "web/src/studio/components/deviceManager/UploadControls.test.tsx",
+      "web/src/studio/components/deviceManager/useDeviceFilters.test.ts",
+      "web/src/studio/components/deviceManager/useImageUpload.test.ts",
+      "web/src/studio/components/deviceManager/useIolBuildManager.test.ts",
       "web/src/studio/constants.test.tsx",
       "web/src/studio/contexts/DragContext.test.tsx",
       "web/src/studio/hardware-specs.test.ts",
       "web/src/studio/hooks/useConfigManager.extended.test.tsx",
       "web/src/studio/hooks/useConfigManager.test.tsx",
+      "web/src/studio/hooks/useConsoleManager.test.ts",
+      "web/src/studio/hooks/useJobTracking.test.ts",
       "web/src/studio/hooks/useLabStateWS.ondemand.test.ts",
       "web/src/studio/hooks/useLabStateWS.test.ts",
+      "web/src/studio/hooks/useLabTopology.test.ts",
+      "web/src/studio/hooks/useNodeStates.test.ts",
       "web/src/studio/hooks/usePersistedState.test.tsx",
       "web/src/studio/hooks/usePolling.test.tsx",
       "web/src/studio/hooks/usePortManager.test.ts",
       "web/src/studio/hooks/useUptime.test.ts",
+      "web/src/studio/studioUtils.test.ts",
       "web/src/studio/types.test.ts",
       "web/src/studio/utils/interfaceRegistry.test.ts",
       "web/src/studio/utils/linkLabelPlacement.test.ts",
@@ -2567,6 +3028,52 @@
       "web/src/pages/UserManagementPage.test.tsx": [
         "web/src/pages/UserManagementPage.tsx"
       ],
+      "web/src/pages/infrastructure/AgentMeshSection.test.tsx": [
+        "web/src/pages/infrastructure/AgentMeshSection.tsx",
+        "web/src/pages/infrastructure/infrastructureTypes.ts"
+      ],
+      "web/src/pages/infrastructure/InfrastructurePage.test.tsx": [
+        "web/src/pages/infrastructure/InfrastructurePage.tsx",
+        "web/src/pages/infrastructure/infrastructureTypes.ts"
+      ],
+      "web/src/pages/infrastructure/NicGroupModal.test.tsx": [
+        "web/src/pages/infrastructure/NicGroupModal.tsx",
+        "web/src/pages/infrastructure/infrastructureTypes.ts"
+      ],
+      "web/src/pages/infrastructure/MtuConfigModal.test.tsx": [
+        "web/src/pages/infrastructure/MtuConfigModal.tsx",
+        "web/src/pages/infrastructure/infrastructureTypes.ts"
+      ],
+      "web/src/pages/infrastructure/NetworkTab.test.tsx": [
+        "web/src/pages/infrastructure/NetworkTab.tsx",
+        "web/src/pages/infrastructure/infrastructureTypes.ts"
+      ],
+      "web/src/pages/infrastructure/useInfrastructureData.test.ts": [
+        "web/src/api.ts",
+        "web/src/pages/infrastructure/infrastructureTypes.ts",
+        "web/src/pages/infrastructure/useInfrastructureData.ts"
+      ],
+      "web/src/pages/infrastructure/badgeHelpers.test.ts": [
+        "web/src/pages/infrastructure/badgeHelpers.ts"
+      ],
+      "web/src/pages/infrastructure/useAgentUpdates.test.ts": [
+        "web/src/api.ts",
+        "web/src/pages/infrastructure/infrastructureTypes.ts",
+        "web/src/pages/infrastructure/useAgentUpdates.ts"
+      ],
+      "web/src/pages/infrastructure/useMtuConfig.test.ts": [
+        "web/src/api.ts",
+        "web/src/pages/infrastructure/infrastructureTypes.ts",
+        "web/src/pages/infrastructure/useMtuConfig.ts"
+      ],
+      "web/src/pages/infrastructure/useNicGroups.test.tsx": [
+        "web/src/pages/infrastructure/infrastructureTypes.ts",
+        "web/src/pages/infrastructure/useNicGroups.ts"
+      ],
+      "web/src/pages/infrastructure/HostCard.test.tsx": [
+        "web/src/pages/infrastructure/HostCard.tsx",
+        "web/src/pages/infrastructure/infrastructureTypes.ts"
+      ],
       "web/src/studio/StudioPage.extract-config.test.tsx": [
         "web/src/studio/StudioPage.tsx"
       ],
@@ -2577,6 +3084,11 @@
       ],
       "web/src/studio/types.test.ts": [
         "web/src/studio/types.ts"
+      ],
+      "web/src/studio/studioUtils.test.ts": [
+        "web/src/studio/studioUtils.ts",
+        "web/src/studio/types.ts",
+        "web/src/types.ts"
       ],
       "web/src/studio/constants.test.tsx": [
         "web/src/studio/constants.tsx"
@@ -2601,14 +3113,31 @@
         "web/src/studio/types.ts",
         "web/src/studio/utils/interfaceRegistry.ts"
       ],
+      "web/src/studio/hooks/useJobTracking.test.ts": [
+        "web/src/studio/hooks/useJobTracking.ts",
+        "web/src/types/notifications.ts"
+      ],
+      "web/src/studio/hooks/useNodeStates.test.ts": [
+        "web/src/studio/hooks/useNodeStates.ts",
+        "web/src/types/nodeState.ts",
+        "web/src/types/notifications.ts"
+      ],
       "web/src/studio/hooks/useUptime.test.ts": [
         "web/src/studio/hooks/useUptime.ts"
+      ],
+      "web/src/studio/hooks/useLabTopology.test.ts": [
+        "web/src/studio/hooks/useLabTopology.ts",
+        "web/src/studio/types.ts"
       ],
       "web/src/studio/hooks/useConfigManager.extended.test.tsx": [
         "web/src/api.ts",
         "web/src/studio/hooks/useConfigManager.ts",
         "web/src/studio/types.ts",
         "web/src/utils/download.ts"
+      ],
+      "web/src/studio/hooks/useConsoleManager.test.ts": [
+        "web/src/studio/hooks/useConsoleManager.ts",
+        "web/src/studio/types.ts"
       ],
       "web/src/studio/hooks/usePersistedState.test.tsx": [
         "web/src/studio/hooks/usePersistedState.ts"
@@ -2808,6 +3337,37 @@
       "web/src/studio/components/DetailPopup.test.tsx": [
         "web/src/studio/components/DetailPopup.tsx"
       ],
+      "web/src/studio/components/deviceManager/UploadControls.test.tsx": [
+        "web/src/studio/components/deviceManager/UploadControls.tsx",
+        "web/src/studio/components/deviceManager/deviceManagerTypes.ts"
+      ],
+      "web/src/studio/components/deviceManager/DeviceCatalogView.test.tsx": [
+        "web/src/studio/components/deviceManager/DeviceCatalogView.tsx",
+        "web/src/studio/types.ts"
+      ],
+      "web/src/studio/components/deviceManager/useIolBuildManager.test.ts": [
+        "web/src/api.ts",
+        "web/src/studio/components/deviceManager/useIolBuildManager.ts",
+        "web/src/studio/types.ts"
+      ],
+      "web/src/studio/components/deviceManager/DeviceManager.test.tsx": [
+        "web/src/studio/components/deviceManager/DeviceManager.tsx",
+        "web/src/studio/types.ts"
+      ],
+      "web/src/studio/components/deviceManager/useImageUpload.test.ts": [
+        "web/src/api.ts",
+        "web/src/studio/components/deviceManager/useImageUpload.ts",
+        "web/src/studio/types.ts"
+      ],
+      "web/src/studio/components/deviceManager/BuildJobsView.test.tsx": [
+        "web/src/studio/components/deviceManager/BuildJobsView.tsx",
+        "web/src/studio/components/deviceManager/deviceManagerTypes.ts",
+        "web/src/studio/types.ts"
+      ],
+      "web/src/studio/components/deviceManager/useDeviceFilters.test.ts": [
+        "web/src/studio/components/deviceManager/useDeviceFilters.ts",
+        "web/src/studio/types.ts"
+      ],
       "web/src/studio/components/InfraView/GraphLink.test.tsx": [
         "web/src/studio/components/InfraView/GraphLink.tsx",
         "web/src/studio/hooks/useLabStateWS.ts"
@@ -2824,6 +3384,11 @@
       "web/src/studio/components/InfraView/VniLinkDetailPanel.test.tsx": [
         "web/src/api.ts",
         "web/src/studio/components/InfraView/VniLinkDetailPanel.tsx",
+        "web/src/studio/hooks/useLabStateWS.ts"
+      ],
+      "web/src/studio/components/InfraView/TunnelDetailView.test.tsx": [
+        "web/src/studio/components/InfraView/TunnelDetailView.tsx",
+        "web/src/studio/components/InfraView/types.ts",
         "web/src/studio/hooks/useLabStateWS.ts"
       ],
       "web/src/studio/components/InfraView/InfraHeader.test.tsx": [
@@ -2854,6 +3419,11 @@
         "web/src/studio/components/InfraView/types.ts",
         "web/src/studio/hooks/useLabStateWS.ts"
       ],
+      "web/src/studio/components/InfraView/AgentDetailView.test.tsx": [
+        "web/src/studio/components/InfraView/AgentDetailView.tsx",
+        "web/src/studio/components/InfraView/types.ts",
+        "web/src/studio/hooks/useLabStateWS.ts"
+      ],
       "web/src/studio/components/InfraView/NotificationsPanel.test.tsx": [
         "web/src/api.ts",
         "web/src/studio/components/InfraView/NotificationsPanel.tsx"
@@ -2878,6 +3448,27 @@
       ],
       "web/src/studio/components/ConfigsView/NodeList.test.tsx": [
         "web/src/studio/components/ConfigsView/NodeList.tsx"
+      ],
+      "web/src/studio/components/canvas/useCanvasInteraction.test.ts": [
+        "web/src/studio/components/canvas/useCanvasInteraction.ts",
+        "web/src/studio/types.ts"
+      ],
+      "web/src/studio/components/canvas/Canvas.extended.test.tsx": [
+        "web/src/studio/components/RuntimeControl.tsx",
+        "web/src/studio/components/canvas/Canvas.tsx",
+        "web/src/studio/hooks/useLabStateWS.ts",
+        "web/src/studio/types.ts",
+        "web/src/theme/ThemeProvider.tsx"
+      ],
+      "web/src/studio/components/canvas/useCanvasViewport.test.ts": [
+        "web/src/studio/components/canvas/useCanvasViewport.ts",
+        "web/src/studio/types.ts"
+      ],
+      "web/src/studio/components/canvas/ContextMenuOverlay.test.tsx": [
+        "web/src/studio/components/RuntimeControl.tsx",
+        "web/src/studio/components/canvas/ContextMenuOverlay.tsx",
+        "web/src/studio/components/canvas/types.ts",
+        "web/src/studio/types.ts"
       ],
       "web/src/contexts/DeviceCatalogContext.test.tsx": [
         "web/src/contexts/DeviceCatalogContext.tsx",
@@ -3002,6 +3593,23 @@
       "web/src/components/ui/ToastContainer.test.tsx": [
         "web/src/components/ui/ToastContainer.tsx",
         "web/src/types/notifications.ts"
+      ],
+      "web/src/components/isoImport/ISOImportModal.test.tsx": [
+        "web/src/components/isoImport/ISOImportModal.tsx",
+        "web/src/components/isoImport/types.ts"
+      ],
+      "web/src/components/isoImport/useISOUpload.test.ts": [
+        "web/src/api.ts",
+        "web/src/components/isoImport/types.ts",
+        "web/src/components/isoImport/useISOUpload.ts"
+      ],
+      "web/src/components/isoImport/ISOReviewStep.test.tsx": [
+        "web/src/components/isoImport/ISOReviewStep.tsx",
+        "web/src/components/isoImport/types.ts"
+      ],
+      "web/src/components/isoImport/ISOInputStep.test.tsx": [
+        "web/src/components/isoImport/ISOInputStep.tsx",
+        "web/src/components/isoImport/types.ts"
       ],
       "web/src/components/icons/ArchetypeIcon.test.tsx": [
         "web/src/components/icons/ArchetypeIcon.tsx"
@@ -3143,6 +3751,11 @@
       "web/src/components/backgrounds/animations/zenSandGarden.ts",
       "web/src/components/icons/ArchetypeIcon.tsx",
       "web/src/components/icons/index.ts",
+      "web/src/components/isoImport/ISOImportModal.tsx",
+      "web/src/components/isoImport/ISOInputStep.tsx",
+      "web/src/components/isoImport/ISOReviewStep.tsx",
+      "web/src/components/isoImport/types.ts",
+      "web/src/components/isoImport/useISOUpload.ts",
       "web/src/components/ui/Badge.tsx",
       "web/src/components/ui/Button.tsx",
       "web/src/components/ui/Card.tsx",
@@ -3167,6 +3780,18 @@
       "web/src/pages/StudioConsolePage.tsx",
       "web/src/pages/SupportBundlesPage.tsx",
       "web/src/pages/UserManagementPage.tsx",
+      "web/src/pages/infrastructure/AgentMeshSection.tsx",
+      "web/src/pages/infrastructure/HostCard.tsx",
+      "web/src/pages/infrastructure/InfrastructurePage.tsx",
+      "web/src/pages/infrastructure/MtuConfigModal.tsx",
+      "web/src/pages/infrastructure/NetworkTab.tsx",
+      "web/src/pages/infrastructure/NicGroupModal.tsx",
+      "web/src/pages/infrastructure/badgeHelpers.ts",
+      "web/src/pages/infrastructure/infrastructureTypes.ts",
+      "web/src/pages/infrastructure/useAgentUpdates.ts",
+      "web/src/pages/infrastructure/useInfrastructureData.ts",
+      "web/src/pages/infrastructure/useMtuConfig.ts",
+      "web/src/pages/infrastructure/useNicGroups.ts",
       "web/src/setupTests.ts",
       "web/src/studio/StudioPage.tsx",
       "web/src/studio/components/AgentAlertBanner.tsx",
@@ -3229,14 +3854,32 @@
       "web/src/studio/components/TopBar.tsx",
       "web/src/studio/components/VendorOptionsPanel.tsx",
       "web/src/studio/components/VerificationPanel.tsx",
+      "web/src/studio/components/canvas/Canvas.tsx",
+      "web/src/studio/components/canvas/ContextMenuOverlay.tsx",
+      "web/src/studio/components/canvas/types.ts",
+      "web/src/studio/components/canvas/useCanvasInteraction.ts",
+      "web/src/studio/components/canvas/useCanvasViewport.ts",
+      "web/src/studio/components/deviceManager/BuildJobsView.tsx",
+      "web/src/studio/components/deviceManager/DeviceCatalogView.tsx",
+      "web/src/studio/components/deviceManager/DeviceManager.tsx",
+      "web/src/studio/components/deviceManager/UploadControls.tsx",
+      "web/src/studio/components/deviceManager/deviceManagerTypes.ts",
+      "web/src/studio/components/deviceManager/useDeviceFilters.ts",
+      "web/src/studio/components/deviceManager/useImageUpload.ts",
+      "web/src/studio/components/deviceManager/useIolBuildManager.ts",
       "web/src/studio/constants.tsx",
       "web/src/studio/contexts/DragContext.tsx",
       "web/src/studio/hooks/useConfigManager.ts",
+      "web/src/studio/hooks/useConsoleManager.ts",
+      "web/src/studio/hooks/useJobTracking.ts",
       "web/src/studio/hooks/useLabStateWS.ts",
+      "web/src/studio/hooks/useLabTopology.ts",
+      "web/src/studio/hooks/useNodeStates.ts",
       "web/src/studio/hooks/usePersistedState.ts",
       "web/src/studio/hooks/usePolling.ts",
       "web/src/studio/hooks/usePortManager.ts",
       "web/src/studio/hooks/useUptime.ts",
+      "web/src/studio/studioUtils.ts",
       "web/src/studio/types.ts",
       "web/src/studio/utils/interfaceRegistry.ts",
       "web/src/studio/utils/linkLabelPlacement.ts",
@@ -3262,60 +3905,25 @@
       "web/src/vite-env.d.ts"
     ],
     "uncovered_sources": [
-      "web/src/components/isoImport/ISOImportModal.tsx",
       "web/src/components/isoImport/ISOImportProgress.tsx",
-      "web/src/components/isoImport/ISOInputStep.tsx",
-      "web/src/components/isoImport/ISOReviewStep.tsx",
       "web/src/components/isoImport/index.ts",
-      "web/src/components/isoImport/types.ts",
-      "web/src/components/isoImport/useISOUpload.ts",
-      "web/src/pages/infrastructure/AgentMeshSection.tsx",
       "web/src/pages/infrastructure/DeregisterModal.tsx",
-      "web/src/pages/infrastructure/HostCard.tsx",
       "web/src/pages/infrastructure/HostsTab.tsx",
-      "web/src/pages/infrastructure/InfrastructurePage.tsx",
-      "web/src/pages/infrastructure/MtuConfigModal.tsx",
-      "web/src/pages/infrastructure/NetworkTab.tsx",
-      "web/src/pages/infrastructure/NicGroupModal.tsx",
-      "web/src/pages/infrastructure/badgeHelpers.ts",
       "web/src/pages/infrastructure/index.ts",
-      "web/src/pages/infrastructure/infrastructureTypes.ts",
-      "web/src/pages/infrastructure/useAgentUpdates.ts",
-      "web/src/pages/infrastructure/useInfrastructureData.ts",
-      "web/src/pages/infrastructure/useMtuConfig.ts",
-      "web/src/pages/infrastructure/useNicGroups.ts",
-      "web/src/studio/components/canvas/Canvas.tsx",
       "web/src/studio/components/canvas/CanvasControls.tsx",
-      "web/src/studio/components/canvas/ContextMenuOverlay.tsx",
       "web/src/studio/components/canvas/index.ts",
-      "web/src/studio/components/canvas/types.ts",
-      "web/src/studio/components/canvas/useCanvasInteraction.ts",
-      "web/src/studio/components/canvas/useCanvasViewport.ts",
-      "web/src/studio/components/deviceManager/BuildJobsView.tsx",
-      "web/src/studio/components/deviceManager/DeviceCatalogView.tsx",
-      "web/src/studio/components/deviceManager/DeviceManager.tsx",
       "web/src/studio/components/deviceManager/ImageLibraryView.tsx",
-      "web/src/studio/components/deviceManager/UploadControls.tsx",
       "web/src/studio/components/deviceManager/UploadLogsModal.tsx",
-      "web/src/studio/components/deviceManager/deviceManagerTypes.ts",
       "web/src/studio/components/deviceManager/deviceManagerUtils.ts",
       "web/src/studio/components/deviceManager/index.ts",
-      "web/src/studio/components/deviceManager/useDeviceFilters.ts",
       "web/src/studio/components/deviceManager/useImageFilters.ts",
       "web/src/studio/components/deviceManager/useImageManagementLog.ts",
-      "web/src/studio/components/deviceManager/useImageUpload.ts",
-      "web/src/studio/components/deviceManager/useIolBuildManager.ts",
-      "web/src/studio/hooks/useConsoleManager.ts",
-      "web/src/studio/hooks/useJobTracking.ts",
-      "web/src/studio/hooks/useLabDataLoading.ts",
-      "web/src/studio/hooks/useLabTopology.ts",
-      "web/src/studio/hooks/useNodeStates.ts",
-      "web/src/studio/studioUtils.ts"
+      "web/src/studio/hooks/useLabDataLoading.ts"
     ],
     "counts": {
       "source": 235,
-      "covered": 186,
-      "uncovered": 49
+      "covered": 221,
+      "uncovered": 14
     }
   }
 }

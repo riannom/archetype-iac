@@ -18,10 +18,8 @@ Covers:
 """
 from __future__ import annotations
 
-import asyncio
 import json
 from datetime import datetime, timezone
-from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -309,7 +307,7 @@ class TestVlanAllocation:
     @pytest.mark.asyncio
     async def test_allocate_vlan_returns_in_isolated_range(self, tmp_path, monkeypatch):
         plugin = _make_plugin(tmp_path)
-        calls = _stub_ovs(plugin, monkeypatch)
+        _stub_ovs(plugin, monkeypatch)
         bridge = _seed_lab(plugin)
 
         vlan = await plugin._allocate_vlan(bridge)
@@ -397,7 +395,7 @@ class TestNetworkHandlers:
             },
         })
 
-        resp = await plugin.handle_create_network(request)
+        await plugin.handle_create_network(request)
         assert "net-12345" in plugin.networks
         net = plugin.networks["net-12345"]
         assert net.lab_id == "lab1"
@@ -415,7 +413,7 @@ class TestNetworkHandlers:
             },
         })
 
-        resp = await plugin.handle_create_network(request)
+        await plugin.handle_create_network(request)
         # Should return error response, network not added
         assert "net-abc" not in plugin.networks
 
@@ -471,7 +469,7 @@ class TestNetworkHandlers:
         plugin = _make_plugin(tmp_path)
 
         request = _make_aiohttp_request({"NetworkID": "nonexistent"})
-        resp = await plugin.handle_delete_network(request)
+        await plugin.handle_delete_network(request)
         # Should not raise
 
 
@@ -498,7 +496,7 @@ class TestEndpointHandlers:
         monkeypatch.setattr(plugin, "_ovs_vsctl", _ovs_vsctl)
         monkeypatch.setattr(plugin, "_run_cmd", AsyncMock(return_value=(0, "", "")))
 
-        bridge = _seed_lab(plugin)
+        _seed_lab(plugin)
         _seed_network(plugin, "net-1", lab_id="lab1", interface_name="eth1")
 
         request = _make_aiohttp_request({
@@ -506,7 +504,7 @@ class TestEndpointHandlers:
             "EndpointID": "ep-new-1",
         })
 
-        resp = await plugin.handle_create_endpoint(request)
+        await plugin.handle_create_endpoint(request)
         assert "ep-new-1" in plugin.endpoints
         ep = plugin.endpoints["ep-new-1"]
         assert ep.interface_name == "eth1"
@@ -522,7 +520,7 @@ class TestEndpointHandlers:
             "EndpointID": "ep-bad",
         })
 
-        resp = await plugin.handle_create_endpoint(request)
+        await plugin.handle_create_endpoint(request)
         assert "ep-bad" not in plugin.endpoints
 
     @pytest.mark.asyncio
@@ -545,7 +543,7 @@ class TestEndpointHandlers:
 
         monkeypatch.setattr(plugin, "_run_cmd", _run_cmd)
 
-        bridge = _seed_lab(plugin)
+        _seed_lab(plugin)
         _seed_network(plugin, "net-1", lab_id="lab1")
 
         request = _make_aiohttp_request({
@@ -553,7 +551,7 @@ class TestEndpointHandlers:
             "EndpointID": "ep-fail",
         })
 
-        resp = await plugin.handle_create_endpoint(request)
+        await plugin.handle_create_endpoint(request)
         assert "ep-fail" not in plugin.endpoints
 
     @pytest.mark.asyncio
@@ -562,7 +560,7 @@ class TestEndpointHandlers:
         _stub_ovs(plugin, monkeypatch)
         _stub_save(plugin, monkeypatch)
 
-        bridge = _seed_lab(plugin)
+        _seed_lab(plugin)
         _seed_network(plugin, "net-1", lab_id="lab1")
         _seed_endpoint(plugin, "ep-del", "net-1", vlan_tag=150)
 
@@ -585,7 +583,7 @@ class TestEndpointHandlers:
             "EndpointID": "nonexistent",
         })
 
-        resp = await plugin.handle_delete_endpoint(request)
+        await plugin.handle_delete_endpoint(request)
         # Should not raise
 
 
@@ -653,7 +651,7 @@ class TestHotConnect:
         monkeypatch.setattr(plugin, "_run_cmd", AsyncMock(return_value=(0, "", "")))
         monkeypatch.setattr(plugin, "_validate_endpoint_exists", AsyncMock(return_value=True))
 
-        bridge = _seed_lab(plugin)
+        _seed_lab(plugin)
         _seed_network(plugin, "net-a", interface_name="eth1")
         _seed_network(plugin, "net-b", interface_name="eth1")
         _seed_endpoint(
@@ -718,7 +716,7 @@ class TestHotConnect:
 
         monkeypatch.setattr(plugin, "_validate_endpoint_exists", _validate)
 
-        bridge = _seed_lab(plugin)
+        _seed_lab(plugin)
         _seed_network(plugin, "net-a")
         _seed_network(plugin, "net-b")
         _seed_endpoint(plugin, "ep-a", "net-a", container_name="a", host_veth="vha")
@@ -740,11 +738,11 @@ class TestHotConnect:
         monkeypatch.setattr(plugin, "_ovs_vsctl", _ovs_vsctl)
         monkeypatch.setattr(plugin, "_validate_endpoint_exists", AsyncMock(return_value=True))
 
-        bridge = _seed_lab(plugin)
+        _seed_lab(plugin)
         _seed_network(plugin, "net-a")
         _seed_network(plugin, "net-b")
-        ep_a = _seed_endpoint(plugin, "ep-a", "net-a", vlan_tag=100, container_name="a", host_veth="vha")
-        ep_b = _seed_endpoint(plugin, "ep-b", "net-b", vlan_tag=101, container_name="b", host_veth="vhb")
+        _seed_endpoint(plugin, "ep-a", "net-a", vlan_tag=100, container_name="a", host_veth="vha")
+        _seed_endpoint(plugin, "ep-b", "net-b", vlan_tag=101, container_name="b", host_veth="vhb")
 
         assert 100 in plugin._allocated_vlans
         assert 101 in plugin._allocated_vlans
@@ -767,7 +765,7 @@ class TestHotConnect:
 
         monkeypatch.setattr(plugin, "_ovs_vsctl", _ovs_vsctl)
 
-        bridge = _seed_lab(plugin)
+        _seed_lab(plugin)
         _seed_network(plugin, "net-a")
         _seed_endpoint(
             plugin, "ep-a", "net-a",
@@ -1043,7 +1041,7 @@ class TestStatePersistence:
 
     def test_serialize_state(self, tmp_path, monkeypatch):
         plugin = _make_plugin(tmp_path)
-        bridge = _seed_lab(plugin)
+        _seed_lab(plugin)
         _seed_network(plugin, "net-1")
         _seed_endpoint(plugin, "ep-1", "net-1", vlan_tag=150, container_name="ctr-1")
 
@@ -1225,7 +1223,7 @@ class TestMiscMethods:
 
     def test_get_lab_status(self, tmp_path, monkeypatch):
         plugin = _make_plugin(tmp_path)
-        bridge = _seed_lab(plugin)
+        _seed_lab(plugin)
         _seed_network(plugin, "net-1")
         _seed_endpoint(plugin, "ep-1", "net-1", container_name="ctr-1", vlan_tag=150)
 
@@ -1313,7 +1311,7 @@ class TestSimpleHandlers:
         plugin = _make_plugin(tmp_path)
         request = _make_aiohttp_request({"EndpointID": "ep-123"})
 
-        resp = await plugin.handle_leave(request)
+        await plugin.handle_leave(request)
         # Should succeed with empty response
 
     @pytest.mark.asyncio
@@ -1329,25 +1327,25 @@ class TestSimpleHandlers:
     async def test_handle_discover_new(self, tmp_path, monkeypatch):
         plugin = _make_plugin(tmp_path)
         request = _make_aiohttp_request({})
-        resp = await plugin.handle_discover_new(request)
+        await plugin.handle_discover_new(request)
 
     @pytest.mark.asyncio
     async def test_handle_discover_delete(self, tmp_path, monkeypatch):
         plugin = _make_plugin(tmp_path)
         request = _make_aiohttp_request({})
-        resp = await plugin.handle_discover_delete(request)
+        await plugin.handle_discover_delete(request)
 
     @pytest.mark.asyncio
     async def test_handle_program_external_connectivity(self, tmp_path, monkeypatch):
         plugin = _make_plugin(tmp_path)
         request = _make_aiohttp_request({})
-        resp = await plugin.handle_program_external_connectivity(request)
+        await plugin.handle_program_external_connectivity(request)
 
     @pytest.mark.asyncio
     async def test_handle_revoke_external_connectivity(self, tmp_path, monkeypatch):
         plugin = _make_plugin(tmp_path)
         request = _make_aiohttp_request({})
-        resp = await plugin.handle_revoke_external_connectivity(request)
+        await plugin.handle_revoke_external_connectivity(request)
 
 
 # ===========================================================================
