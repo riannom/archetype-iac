@@ -108,14 +108,10 @@ async def test_check_agent_health_success():
     """Test health check returns True for healthy agent."""
     mock_agent = MagicMock()
     mock_agent.address = "localhost:8001"
+    mock_client = AsyncMock()
+    mock_client.get.return_value = MagicMock(status_code=200)
 
-    with patch("app.agent_client.httpx.AsyncClient") as mock_client_class:
-        mock_client = AsyncMock()
-        mock_client.__aenter__.return_value = mock_client
-        mock_client.__aexit__.return_value = None
-        mock_client.get.return_value = MagicMock(status_code=200)
-        mock_client_class.return_value = mock_client
-
+    with patch("app.agent_client.selection.get_http_client", return_value=mock_client):
         result = await agent_client.check_agent_health(mock_agent)
 
     assert result is True
@@ -131,7 +127,7 @@ async def test_check_agent_health_failure():
     mock_client = AsyncMock()
     mock_client.get.side_effect = httpx.ConnectError("Connection refused")
 
-    with patch("app.agent_client.get_http_client", return_value=mock_client):
+    with patch("app.agent_client.selection.get_http_client", return_value=mock_client):
         result = await agent_client.check_agent_health(mock_agent)
 
     assert result is False

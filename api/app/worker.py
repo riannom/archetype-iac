@@ -5,13 +5,19 @@ import logging
 from os import getenv
 
 from redis import Redis
-from rq import Connection, SimpleWorker, Worker
+from rq import SimpleWorker, Worker
 
 from app.config import settings
 from app.logging_config import setup_logging
 
 setup_logging()
 logger = logging.getLogger(__name__)
+
+try:
+    # RQ <2 exposed Connection as a context manager at top-level import.
+    from rq import Connection  # type: ignore[attr-defined]
+except ImportError:  # pragma: no cover - exercised through main() behavior tests.
+    Connection = None
 
 
 def _start_metrics_server() -> None:
@@ -39,9 +45,15 @@ def main() -> None:
     worker_mode = getenv("WORKER_EXECUTION_MODE", "simple").strip().lower()
     worker_cls = SimpleWorker if worker_mode == "simple" else Worker
     logger.info("Starting worker with execution_mode=%s (%s)", worker_mode, worker_cls.__name__)
-    with Connection(redis_conn):
-        worker = worker_cls(["archetype"])
-        worker.work()
+    if Connection is not None:
+        with Connection(redis_conn):
+            worker = worker_cls(["archetype"])
+            worker.work()
+        return
+
+    # RQ >=2 removed the Connection context manager.
+    worker = worker_cls(["archetype"], connection=redis_conn)
+    worker.work()
 
 
 if __name__ == "__main__":
