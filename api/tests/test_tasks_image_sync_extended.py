@@ -14,8 +14,7 @@ Focuses on:
 """
 from __future__ import annotations
 
-import json
-from unittest.mock import AsyncMock, MagicMock, patch, call
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from sqlalchemy.orm import Session
@@ -217,7 +216,7 @@ class TestMarkNodesSyncFailed:
         lab, nodes = sample_lab_with_nodes
         node_names = [n.node_name for n in nodes]
 
-        with patch("app.utils.async_tasks.safe_create_task") as mock_task:
+        with patch("app.utils.async_tasks.safe_create_task"):
             _mark_nodes_sync_failed(test_db, lab.id, node_names, "Transfer failed")
 
         for node in nodes:
@@ -372,7 +371,7 @@ class TestTriggerReReconcile:
             coro.close()
             return None
 
-        with patch("app.utils.async_tasks.safe_create_task", side_effect=_consume) as mock_task:
+        with patch("app.utils.async_tasks.safe_create_task", side_effect=_consume):
             _trigger_re_reconcile(
                 session=test_db,
                 lab_id=lab.id,

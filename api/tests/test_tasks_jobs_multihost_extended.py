@@ -17,7 +17,7 @@ import pytest
 from sqlalchemy.orm import Session
 
 from app import models
-from app.state import JobStatus, LabState, LinkActualState
+from app.state import JobStatus, LabState
 from app.tasks.jobs_multihost import run_multihost_deploy, run_multihost_destroy
 
 

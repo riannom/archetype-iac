@@ -23,7 +23,7 @@ import json
 from datetime import datetime, timezone
 from enum import Enum
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 from uuid import uuid4
 
 import pytest
@@ -45,8 +45,6 @@ from app.services.catalog_identity import (
     resolve_catalog_device_id,
 )
 from app.services.catalog_service import (
-    AliasIndex,
-    CatalogAliasConflictError,
     _IDENTITY_SYNC_STAMP_BY_BIND,
     _bind_cache_key,
 )
@@ -661,7 +659,7 @@ class TestResolveTokenToCanonicalSetExtended:
         through the runtime_kind alias.
         """
         vendor = _seed_vendor(test_db, "v")
-        dev = _seed_device(test_db, vendor, "mydev", runtime_kind="mykind")
+        _seed_device(test_db, vendor, "mydev", runtime_kind="mykind")
         test_db.commit()
 
         index = _build_alias_index(test_db)
@@ -803,7 +801,7 @@ class TestEnsureCatalogIdentitySyncedExtended:
         # Now change vendor name but keep same vendor_key
         # (vendor_key is derived from vendor name, so changing the name
         # while keeping the same normalized key tests the update path)
-        config = _fake_vendor_config(vendor="OldVendor", label="Dev")
+        _fake_vendor_config(vendor="OldVendor", label="Dev")
         # Manually adjust — vendor_key stays 'oldvendor' but we change display
         # Actually vendor display_name comes from the vendor string itself,
         # which is "OldVendor". Let's use a different approach:
@@ -897,7 +895,6 @@ class TestEnsureCatalogIdentitySyncedExtended:
 
         # We need to cause an error inside the try block.
         # Patch _build_desired_catalog_identity_data to raise after tables check.
-        original_build = _ci_mod._build_desired_catalog_identity_data
 
         def _raise_on_build():
             raise RuntimeError("deliberate test error")
@@ -977,7 +974,7 @@ class TestEnsureCatalogIdentitySyncedExtended:
     def test_already_retired_device_not_double_counted(self, test_db: Session, monkeypatch):
         """A device already retired should not increment devices_retired again."""
         vendor = _seed_vendor(test_db, "v")
-        device = _seed_device(
+        _seed_device(
             test_db, vendor, "olddev",
             source="builtin",
             lifecycle_status="retired",

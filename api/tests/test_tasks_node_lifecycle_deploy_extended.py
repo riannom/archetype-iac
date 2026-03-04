@@ -29,7 +29,6 @@ from app.agent_client import AgentUnavailableError
 from app.state import JobStatus, NodeActualState, NodeDesiredState
 from app.tasks.node_lifecycle import (
     NodeLifecycleManager,
-    _get_container_name,
 )
 
 

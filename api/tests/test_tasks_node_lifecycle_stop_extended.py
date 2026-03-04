@@ -16,16 +16,15 @@ Covers additional scenarios beyond the base test file:
 """
 from __future__ import annotations
 
-import asyncio
 import json
 from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock, call, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from app import models
 from app.agent_client import AgentUnavailableError
-from app.state import NodeActualState, NodeDesiredState
+from app.state import NodeActualState
 from app.tasks.node_lifecycle import NodeLifecycleManager, _get_container_name
 
 

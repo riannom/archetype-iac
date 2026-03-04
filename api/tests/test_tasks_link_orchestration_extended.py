@@ -1,7 +1,7 @@
 """Extended tests for app/tasks/link_orchestration.py — gaps not covered by test_link_orchestration.py."""
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 
 import pytest
@@ -324,7 +324,7 @@ class TestCreateDeploymentLinksExtended:
             test_db, sample_lab, sample_host,
             gui_id="n2", display_name="R2", container_name="r2", device="ceos",
         )
-        link = _make_link(test_db, sample_lab, node1, "Ethernet1", node2, "Ethernet2")
+        _make_link(test_db, sample_lab, node1, "Ethernet1", node2, "Ethernet2")
         test_db.commit()
 
         host_to_agent = {sample_host.id: sample_host}
@@ -942,7 +942,7 @@ class TestTeardownDeploymentLinksExtended:
             actual_state="up",
             is_cross_host=True,
         )
-        same_ls = _make_link_state(
+        _make_link_state(
             test_db, sample_lab,
             link_name="R1:eth2-R1:eth3",
             source_node="r1", source_interface="eth2",

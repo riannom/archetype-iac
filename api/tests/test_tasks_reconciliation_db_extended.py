@@ -23,9 +23,7 @@ from app import models
 from app.state import (
     LabState,
     LinkActualState,
-    LinkDesiredState,
     NodeActualState,
-    NodeDesiredState,
 )
 
 

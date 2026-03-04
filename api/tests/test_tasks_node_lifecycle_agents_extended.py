@@ -25,7 +25,7 @@ import pytest
 from sqlalchemy.orm import Session
 
 from app import models
-from app.state import JobStatus, NodeActualState, NodeDesiredState
+from app.state import JobStatus, NodeActualState
 
 
 # ---------------------------------------------------------------------------
@@ -368,7 +368,7 @@ class TestRunBinPackPlacement:
         self, test_db: Session, ext_lab: models.Lab, ext_job: models.Job,
     ):
         """When bin-packer reports unplaceable nodes the job is marked FAILED."""
-        host = _make_host(test_db, name="tight-agent")
+        _make_host(test_db, name="tight-agent")
         ns = _make_node_state(test_db, ext_lab, "R1")
         mixin = _make_mixin(test_db, ext_lab, ext_job, [ns])
 
@@ -494,7 +494,7 @@ class TestRunBinPackPlacement:
         ) as mock_settings, patch(
             "app.services.resource_capacity.plan_placement",
             return_value=fake_plan,
-        ) as mock_plan:
+        ):
             mock_settings.agent_stale_timeout = 90
             mock_settings.placement_controller_reserve_mb = 0
             mock_client.ping_agent = AsyncMock(return_value=None)

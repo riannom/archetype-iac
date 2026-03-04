@@ -11,9 +11,8 @@ from __future__ import annotations
 import json
 import subprocess
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
-import pytest
 
 from app.utils.naming import (
     DOCKER_PREFIX,
@@ -141,7 +140,7 @@ class TestDockerContainerName:
         long_lab_id = "a" * 30
         name = docker_container_name(long_lab_id, "node")
         # safe_lab_id must be at most 20 chars
-        parts = name.split("-")
+        name.split("-")
         # archetype - <lab_id_segment> - node  (but lab_id may contain dashes)
         # Easier: strip the prefix and suffix
         after_prefix = name[len(DOCKER_PREFIX) + 1:]   # remove "archetype-"
