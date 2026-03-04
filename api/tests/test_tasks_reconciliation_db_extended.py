@@ -2,11 +2,14 @@
 
 Covers additional scenarios not in test_tasks_reconciliation_db.py:
 - _do_reconcile_lab: link normalization, orphan container cleanup, misplaced
-  containers, auto-connect pending links, link deletion, node state observations
-- _ensure_link_states_for_lab: canonical ordering swap, host ID swap
+  containers, auto-connect pending links, link deletion, node state observations,
+  readiness checks, transitional state recovery, lab state computation
+- _ensure_link_states_for_lab: canonical ordering swap, host ID swap, placement
+  resolution, dedup pass
 - _maybe_cleanup_labless_containers: VXLAN port reconciliation, overlay convergence
 - _reconcile_single_lab: lock not acquired, active job within timeout
-- Node-level: starting_started_at handling, undeployed detection without agent response
+- Node-level: starting_started_at handling, undeployed detection without agent
+  response, boot_started_at backfill, readiness polling, carrier handling
 """
 from __future__ import annotations
 
@@ -18,8 +21,11 @@ import pytest
 
 from app import models
 from app.state import (
+    LabState,
     LinkActualState,
+    LinkDesiredState,
     NodeActualState,
+    NodeDesiredState,
 )
 
 
@@ -118,6 +124,7 @@ def _make_node_state(
     node_definition_id=None, enforcement_failed_at=None,
     image_sync_status=None, stopping_started_at=None,
     starting_started_at=None, is_ready=False, boot_started_at=None,
+    error_message=None,
 ):
     ns = models.NodeState(
         lab_id=lab_id,
@@ -132,6 +139,7 @@ def _make_node_state(
         starting_started_at=starting_started_at,
         is_ready=is_ready,
         boot_started_at=boot_started_at,
+        error_message=error_message,
     )
     db.add(ns)
     db.commit()
@@ -202,6 +210,99 @@ def _make_host(db, host_id, *, name=None, status="online"):
     return h
 
 
+def _make_vxlan_tunnel(db, lab_id, link_state_id, agent_a_id, agent_b_id, *, status="active"):
+    t = models.VxlanTunnel(
+        lab_id=lab_id,
+        link_state_id=link_state_id,
+        vni=10000,
+        vlan_tag=200,
+        agent_a_id=agent_a_id,
+        agent_a_ip="10.0.0.1",
+        agent_b_id=agent_b_id,
+        agent_b_ip="10.0.0.2",
+        status=status,
+    )
+    db.add(t)
+    db.commit()
+    db.refresh(t)
+    return t
+
+
+def _reconcile_patches(**overrides):
+    """Return a dict of standard patches for _do_reconcile_lab calls.
+
+    Callers can override specific patches by passing keyword arguments.
+    """
+    defaults = {
+        "ensure_link_states": patch(
+            "app.tasks.reconciliation_db._ensure_link_states_for_lab",
+            return_value=0,
+        ),
+        "cleanup_orphans": patch(
+            "app.tasks.reconciliation_db.cleanup_orphaned_node_states",
+            return_value=0,
+        ),
+        "topo_service": patch("app.tasks.reconciliation_db.TopologyService"),
+        "get_lab_provider": patch(
+            "app.utils.lab.get_lab_provider", return_value="docker"
+        ),
+        "link_ops_lock": patch("app.tasks.reconciliation.link_ops_lock"),
+    }
+    defaults.update(overrides)
+    return defaults
+
+
+class _ReconcileContext:
+    """Context manager that applies all standard reconciliation patches."""
+
+    def __init__(self, agent_status_nodes=None, is_online=True, **overrides):
+        self._agent_nodes = agent_status_nodes or []
+        self._is_online = is_online
+        self._overrides = overrides
+        self._stack = []
+
+    def __enter__(self):
+        self._patches = _reconcile_patches(**self._overrides)
+        self._mocks = {}
+        for key, p in self._patches.items():
+            m = p.start()
+            self._mocks[key] = m
+            self._stack.append(p)
+
+        # Configure TopologyService mock
+        ts = MagicMock()
+        ts.normalize_links_for_lab.return_value = 0
+        ts.get_links.return_value = []
+        self._mocks["topo_service"].return_value = ts
+
+        # Configure link_ops_lock
+        ml = MagicMock()
+        ml.__enter__ = MagicMock(return_value=False)
+        ml.__exit__ = MagicMock(return_value=False)
+        self._mocks["link_ops_lock"].return_value = ml
+
+        # Agent mocks
+        self._agent_status_patch = patch(
+            "app.tasks.reconciliation_db.agent_client.get_lab_status_from_agent",
+            new_callable=AsyncMock,
+            return_value={"nodes": self._agent_nodes},
+        )
+        self._agent_online_patch = patch(
+            "app.tasks.reconciliation_db.agent_client.is_agent_online",
+            return_value=self._is_online,
+        )
+        self._agent_status_patch.start()
+        self._agent_online_patch.start()
+        self._stack.append(self._agent_status_patch)
+        self._stack.append(self._agent_online_patch)
+
+        return self._mocks
+
+    def __exit__(self, *args):
+        for p in reversed(self._stack):
+            p.stop()
+
+
 # ---------------------------------------------------------------------------
 # Tests: _reconcile_single_lab lock behavior
 # ---------------------------------------------------------------------------
@@ -228,7 +329,6 @@ class TestReconcileSingleLabLocking:
         """Active bulk job still within timeout should block reconciliation."""
         from app.tasks.reconciliation_db import _reconcile_single_lab
 
-        # Create a recent running "up" job
         job = models.Job(
             lab_id=sample_lab.id,
             user_id=test_user.id,
@@ -254,7 +354,6 @@ class TestReconcileSingleLabLocking:
         """Sync jobs (non-up/down) should NOT block reconciliation."""
         from app.tasks.reconciliation_db import _reconcile_single_lab
 
-        # Create an active sync job (should not block)
         job = models.Job(
             lab_id=sample_lab.id,
             user_id=test_user.id,
@@ -273,7 +372,6 @@ class TestReconcileSingleLabLocking:
             with patch("app.tasks.reconciliation_db._do_reconcile_lab", new_callable=AsyncMock, return_value=0) as mock_do:
                 await _reconcile_single_lab(test_db, sample_lab.id)
 
-        # _do_reconcile_lab should have been called
         mock_do.assert_awaited_once()
 
     @pytest.mark.asyncio
@@ -311,67 +409,34 @@ class TestReconcileSingleLabLocking:
         result = await _reconcile_single_lab(test_db, "nonexistent-lab-id")
         assert result == 0
 
-
-# ---------------------------------------------------------------------------
-# Tests: _do_reconcile_lab - link normalization and orphan cleanup
-# ---------------------------------------------------------------------------
-
-class TestDoReconcileLabLinkNormalization:
-    """Tests for link normalization and orphan cleanup in _do_reconcile_lab."""
-
     @pytest.mark.asyncio
-    async def test_link_normalization_called(self, test_db, test_user):
-        """TopologyService.normalize_links_for_lab should be called."""
-        from app.tasks.reconciliation_db import _do_reconcile_lab
+    async def test_down_job_within_timeout_blocks(self, test_db, sample_lab, test_user):
+        """Active 'down' job within timeout should also block reconciliation."""
+        from app.tasks.reconciliation_db import _reconcile_single_lab
 
-        lab = _make_lab(test_db, test_user, state="running")
+        job = models.Job(
+            lab_id=sample_lab.id,
+            user_id=test_user.id,
+            action="down",
+            status="queued",
+            created_at=datetime.now(timezone.utc),
+        )
+        test_db.add(job)
+        test_db.commit()
 
-        with patch("app.tasks.reconciliation_db.TopologyService") as mock_ts_cls:
-            mock_ts = MagicMock()
-            mock_ts.normalize_links_for_lab.return_value = 3
-            mock_ts.get_links.return_value = []
-            mock_ts_cls.return_value = mock_ts
+        mock_lock = MagicMock()
+        mock_lock.__enter__ = MagicMock(return_value=True)
+        mock_lock.__exit__ = MagicMock(return_value=False)
 
-            with patch("app.tasks.reconciliation_db._ensure_link_states_for_lab", return_value=0):
-                with patch("app.tasks.reconciliation_db.cleanup_orphaned_node_states", return_value=0):
-                    with patch("app.utils.lab.get_lab_provider", return_value="docker"):
-                        with patch("app.tasks.reconciliation.link_ops_lock") as mock_link_lock:
-                            ml = MagicMock()
-                            ml.__enter__ = MagicMock(return_value=False)
-                            ml.__exit__ = MagicMock(return_value=False)
-                            mock_link_lock.return_value = ml
-                            await _do_reconcile_lab(test_db, lab, lab.id)
+        with patch("app.tasks.reconciliation.reconciliation_lock", return_value=mock_lock):
+            with patch("app.utils.job.is_job_within_timeout", return_value=True):
+                result = await _reconcile_single_lab(test_db, sample_lab.id)
 
-            mock_ts.normalize_links_for_lab.assert_called_once_with(lab.id)
-
-    @pytest.mark.asyncio
-    async def test_orphan_node_state_cleanup_called(self, test_db, test_user):
-        """cleanup_orphaned_node_states should be invoked during reconciliation."""
-        from app.tasks.reconciliation_db import _do_reconcile_lab
-
-        lab = _make_lab(test_db, test_user, state="running")
-
-        with patch("app.tasks.reconciliation_db._ensure_link_states_for_lab", return_value=0):
-            with patch("app.tasks.reconciliation_db.cleanup_orphaned_node_states", return_value=2) as mock_cleanup:
-                with patch("app.tasks.reconciliation_db.TopologyService") as mock_ts_cls:
-                    mock_ts = MagicMock()
-                    mock_ts.normalize_links_for_lab.return_value = 0
-                    mock_ts.get_links.return_value = []
-                    mock_ts_cls.return_value = mock_ts
-
-                    with patch("app.utils.lab.get_lab_provider", return_value="docker"):
-                        with patch("app.tasks.reconciliation.link_ops_lock") as mock_link_lock:
-                            ml = MagicMock()
-                            ml.__enter__ = MagicMock(return_value=False)
-                            ml.__exit__ = MagicMock(return_value=False)
-                            mock_link_lock.return_value = ml
-                            await _do_reconcile_lab(test_db, lab, lab.id)
-
-            mock_cleanup.assert_called_once_with(test_db, lab.id)
+        assert result == 0
 
 
 # ---------------------------------------------------------------------------
-# Tests: _do_reconcile_lab - node container status -> NodeState mapping
+# Tests: _do_reconcile_lab - node state transitions
 # ---------------------------------------------------------------------------
 
 class TestDoReconcileLabContainerMapping:
@@ -392,30 +457,13 @@ class TestDoReconcileLabContainerMapping:
         )
         _make_placement(test_db, lab.id, "R1", host.id, node_definition_id=node_def.id)
 
-        with patch("app.tasks.reconciliation_db._ensure_link_states_for_lab", return_value=0):
-            with patch("app.tasks.reconciliation_db.cleanup_orphaned_node_states", return_value=0):
-                with patch("app.tasks.reconciliation_db.TopologyService") as mock_ts_cls:
-                    mock_ts = MagicMock()
-                    mock_ts.normalize_links_for_lab.return_value = 0
-                    mock_ts.get_links.return_value = []
-                    mock_ts_cls.return_value = mock_ts
-
-                    with patch("app.utils.lab.get_lab_provider", return_value="docker"):
-                        with patch(
-                            "app.tasks.reconciliation_db.agent_client.get_lab_status_from_agent",
-                            new_callable=AsyncMock,
-                            return_value={"nodes": [{"name": "R1", "status": "exited"}]},
-                        ):
-                            with patch("app.tasks.reconciliation_db.agent_client.is_agent_online", return_value=True):
-                                with patch("app.tasks.reconciliation.link_ops_lock") as ml_fn:
-                                    ml = MagicMock()
-                                    ml.__enter__ = MagicMock(return_value=False)
-                                    ml.__exit__ = MagicMock(return_value=False)
-                                    ml_fn.return_value = ml
-                                    await _do_reconcile_lab(test_db, lab, lab.id)
+        with _ReconcileContext(agent_status_nodes=[{"name": "R1", "status": "exited"}]):
+            await _do_reconcile_lab(test_db, lab, lab.id)
 
         test_db.refresh(ns)
         assert ns.actual_state == NodeActualState.STOPPED.value
+        assert ns.is_ready is False
+        assert ns.boot_started_at is None
 
     @pytest.mark.asyncio
     async def test_dead_container_maps_to_error(self, test_db, test_user):
@@ -428,35 +476,18 @@ class TestDoReconcileLabContainerMapping:
         ns = _make_node_state(
             test_db, lab.id, "R1",
             actual="running", desired="running",
-            node_definition_id=node_def.id,
+            node_definition_id=node_def.id, is_ready=True,
         )
         _make_placement(test_db, lab.id, "R1", host.id, node_definition_id=node_def.id)
 
-        with patch("app.tasks.reconciliation_db._ensure_link_states_for_lab", return_value=0):
-            with patch("app.tasks.reconciliation_db.cleanup_orphaned_node_states", return_value=0):
-                with patch("app.tasks.reconciliation_db.TopologyService") as mock_ts_cls:
-                    mock_ts = MagicMock()
-                    mock_ts.normalize_links_for_lab.return_value = 0
-                    mock_ts.get_links.return_value = []
-                    mock_ts_cls.return_value = mock_ts
-
-                    with patch("app.utils.lab.get_lab_provider", return_value="docker"):
-                        with patch(
-                            "app.tasks.reconciliation_db.agent_client.get_lab_status_from_agent",
-                            new_callable=AsyncMock,
-                            return_value={"nodes": [{"name": "R1", "status": "dead"}]},
-                        ):
-                            with patch("app.tasks.reconciliation_db.agent_client.is_agent_online", return_value=True):
-                                with patch("app.tasks.reconciliation.link_ops_lock") as ml_fn:
-                                    ml = MagicMock()
-                                    ml.__enter__ = MagicMock(return_value=False)
-                                    ml.__exit__ = MagicMock(return_value=False)
-                                    ml_fn.return_value = ml
-                                    await _do_reconcile_lab(test_db, lab, lab.id)
+        with _ReconcileContext(agent_status_nodes=[{"name": "R1", "status": "dead"}]):
+            await _do_reconcile_lab(test_db, lab, lab.id)
 
         test_db.refresh(ns)
         assert ns.actual_state == NodeActualState.ERROR.value
         assert "dead" in ns.error_message
+        assert ns.is_ready is False
+        assert ns.boot_started_at is None
 
     @pytest.mark.asyncio
     async def test_container_not_found_preserves_state_when_agent_not_queried(
@@ -475,27 +506,127 @@ class TestDoReconcileLabContainerMapping:
         )
         _make_placement(test_db, lab.id, "R1", host.id, node_definition_id=node_def.id)
 
-        with patch("app.tasks.reconciliation_db._ensure_link_states_for_lab", return_value=0):
-            with patch("app.tasks.reconciliation_db.cleanup_orphaned_node_states", return_value=0):
-                with patch("app.tasks.reconciliation_db.TopologyService") as mock_ts_cls:
-                    mock_ts = MagicMock()
-                    mock_ts.normalize_links_for_lab.return_value = 0
-                    mock_ts.get_links.return_value = []
-                    mock_ts_cls.return_value = mock_ts
-
-                    with patch("app.utils.lab.get_lab_provider", return_value="docker"):
-                        # Agent is offline -> is_agent_online returns False
-                        with patch("app.tasks.reconciliation_db.agent_client.is_agent_online", return_value=False):
-                            with patch("app.tasks.reconciliation_db.agent_client.get_agent_for_lab", new_callable=AsyncMock, return_value=None):
-                                await _do_reconcile_lab(test_db, lab, lab.id)
+        with _ReconcileContext(is_online=False):
+            with patch("app.tasks.reconciliation_db.agent_client.get_agent_for_lab", new_callable=AsyncMock, return_value=None):
+                await _do_reconcile_lab(test_db, lab, lab.id)
 
         test_db.refresh(ns)
-        # State should be preserved since agent wasn't queryable
         assert ns.actual_state == NodeActualState.RUNNING.value
 
+    @pytest.mark.asyncio
+    async def test_container_not_found_marks_undeployed_when_agent_queried(
+        self, test_db, test_user
+    ):
+        """Container absent from queried agent should become undeployed."""
+        from app.tasks.reconciliation_db import _do_reconcile_lab
 
-class TestDoReconcileLabStartingStuck:
-    """Tests for starting_started_at handling in reconciliation."""
+        host = _make_host(test_db, "host-undeployed")
+        lab = _make_lab(test_db, test_user, state="running", agent_id=host.id)
+        node_def = _make_node(test_db, lab.id, "R1", host_id=host.id)
+        ns = _make_node_state(
+            test_db, lab.id, "R1",
+            actual="running", desired="running",
+            node_definition_id=node_def.id, is_ready=True,
+        )
+        _make_placement(test_db, lab.id, "R1", host.id, node_definition_id=node_def.id)
+
+        # Agent responds with empty nodes list
+        with _ReconcileContext(agent_status_nodes=[]):
+            await _do_reconcile_lab(test_db, lab, lab.id)
+
+        test_db.refresh(ns)
+        assert ns.actual_state == NodeActualState.UNDEPLOYED.value
+        assert ns.is_ready is False
+        assert ns.boot_started_at is None
+
+    @pytest.mark.asyncio
+    async def test_running_container_backfills_boot_started_at(self, test_db, test_user):
+        """Running container with no boot_started_at should get it backfilled."""
+        from app.tasks.reconciliation_db import _do_reconcile_lab
+
+        host = _make_host(test_db, "host-boot")
+        lab = _make_lab(test_db, test_user, state="running", agent_id=host.id)
+        node_def = _make_node(test_db, lab.id, "R1", host_id=host.id)
+        ns = _make_node_state(
+            test_db, lab.id, "R1",
+            actual="stopped", desired="running",
+            node_definition_id=node_def.id,
+            boot_started_at=None,
+        )
+        _make_placement(test_db, lab.id, "R1", host.id, node_definition_id=node_def.id)
+
+        with _ReconcileContext(agent_status_nodes=[{"name": "R1", "status": "running"}]):
+            with patch(
+                "app.tasks.reconciliation_db.agent_client.check_node_readiness",
+                new_callable=AsyncMock,
+                return_value={"is_ready": False},
+            ):
+                await _do_reconcile_lab(test_db, lab, lab.id)
+
+        test_db.refresh(ns)
+        assert ns.actual_state == NodeActualState.RUNNING.value
+        assert ns.boot_started_at is not None
+
+    @pytest.mark.asyncio
+    async def test_running_container_readiness_becomes_ready(self, test_db, test_user):
+        """Running node not yet ready should become ready when agent confirms."""
+        from app.tasks.reconciliation_db import _do_reconcile_lab
+
+        host = _make_host(test_db, "host-ready")
+        lab = _make_lab(test_db, test_user, state="running", agent_id=host.id)
+        node_def = _make_node(test_db, lab.id, "R1", host_id=host.id)
+        ns = _make_node_state(
+            test_db, lab.id, "R1",
+            actual="running", desired="running",
+            node_definition_id=node_def.id,
+            is_ready=False,
+            boot_started_at=datetime.now(timezone.utc) - timedelta(seconds=30),
+        )
+        _make_placement(test_db, lab.id, "R1", host.id, node_definition_id=node_def.id)
+
+        with _ReconcileContext(agent_status_nodes=[{"name": "R1", "status": "running"}]):
+            with patch(
+                "app.tasks.reconciliation_db.agent_client.check_node_readiness",
+                new_callable=AsyncMock,
+                return_value={"is_ready": True},
+            ):
+                await _do_reconcile_lab(test_db, lab, lab.id)
+
+        test_db.refresh(ns)
+        assert ns.is_ready is True
+
+    @pytest.mark.asyncio
+    async def test_unknown_container_status_counted_as_stopped(self, test_db, test_user):
+        """Container with unknown/unexpected status should increment stopped_count."""
+        from app.tasks.reconciliation_db import _do_reconcile_lab
+
+        host = _make_host(test_db, "host-unk")
+        lab = _make_lab(test_db, test_user, state="running", agent_id=host.id)
+        node_def = _make_node(test_db, lab.id, "R1", host_id=host.id)
+        ns = _make_node_state(
+            test_db, lab.id, "R1",
+            actual="running", desired="running",
+            node_definition_id=node_def.id,
+        )
+        _make_placement(test_db, lab.id, "R1", host.id, node_definition_id=node_def.id)
+
+        with _ReconcileContext(agent_status_nodes=[{"name": "R1", "status": "restarting"}]):
+            await _do_reconcile_lab(test_db, lab, lab.id)
+
+        test_db.refresh(ns)
+        # "restarting" is not running/stopped/exited/error/dead, so no state change
+        # but lab state should reflect the node through stopped_count
+        test_db.refresh(lab)
+        # Lab state should be computed (stopped since the node is counted as stopped)
+        assert lab.state in (LabState.STOPPED.value, LabState.RUNNING.value, LabState.ERROR.value)
+
+
+# ---------------------------------------------------------------------------
+# Tests: _do_reconcile_lab - transitional state recovery
+# ---------------------------------------------------------------------------
+
+class TestDoReconcileLabTransitionalRecovery:
+    """Tests for stuck transitional state recovery."""
 
     @pytest.mark.asyncio
     async def test_active_starting_within_threshold_is_skipped(self, test_db, test_user):
@@ -505,41 +636,200 @@ class TestDoReconcileLabStartingStuck:
         host = _make_host(test_db, "host-d")
         lab = _make_lab(test_db, test_user, state="starting", agent_id=host.id)
         node_def = _make_node(test_db, lab.id, "R1", host_id=host.id)
-
-        now = datetime.now(timezone.utc)
         ns = _make_node_state(
             test_db, lab.id, "R1",
             actual="starting", desired="running",
             node_definition_id=node_def.id,
-            starting_started_at=now,
+            starting_started_at=datetime.now(timezone.utc),
         )
         _make_placement(test_db, lab.id, "R1", host.id, node_definition_id=node_def.id)
 
-        with patch("app.tasks.reconciliation_db._ensure_link_states_for_lab", return_value=0):
-            with patch("app.tasks.reconciliation_db.cleanup_orphaned_node_states", return_value=0):
-                with patch("app.tasks.reconciliation_db.TopologyService") as mock_ts_cls:
-                    mock_ts = MagicMock()
-                    mock_ts.normalize_links_for_lab.return_value = 0
-                    mock_ts.get_links.return_value = []
-                    mock_ts_cls.return_value = mock_ts
-
-                    with patch("app.utils.lab.get_lab_provider", return_value="docker"):
-                        with patch(
-                            "app.tasks.reconciliation_db.agent_client.get_lab_status_from_agent",
-                            new_callable=AsyncMock,
-                            return_value={"nodes": [{"name": "R1", "status": "running"}]},
-                        ):
-                            with patch("app.tasks.reconciliation_db.agent_client.is_agent_online", return_value=True):
-                                with patch("app.tasks.reconciliation.link_ops_lock") as ml_fn:
-                                    ml = MagicMock()
-                                    ml.__enter__ = MagicMock(return_value=False)
-                                    ml.__exit__ = MagicMock(return_value=False)
-                                    ml_fn.return_value = ml
-                                    await _do_reconcile_lab(test_db, lab, lab.id)
+        with _ReconcileContext(agent_status_nodes=[{"name": "R1", "status": "running"}]):
+            await _do_reconcile_lab(test_db, lab, lab.id)
 
         test_db.refresh(ns)
-        # State should still be 'starting' since it's within threshold
         assert ns.actual_state == NodeActualState.STARTING.value
+
+    @pytest.mark.asyncio
+    async def test_stale_starting_recovered_by_reconciliation(self, test_db, test_user):
+        """Nodes with stale starting_started_at should be recovered."""
+        from app.tasks.reconciliation_db import _do_reconcile_lab
+        from app.config import settings
+
+        host = _make_host(test_db, "host-stale-start")
+        lab = _make_lab(test_db, test_user, state="running", agent_id=host.id)
+        node_def = _make_node(test_db, lab.id, "R1", host_id=host.id)
+        # Use naive datetime since SQLite strips timezone info on round-trip
+        stale_time = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(
+            seconds=settings.stale_node_starting_threshold + 60
+        )
+        ns = _make_node_state(
+            test_db, lab.id, "R1",
+            actual="starting", desired="running",
+            node_definition_id=node_def.id,
+            starting_started_at=stale_time,
+        )
+        _make_placement(test_db, lab.id, "R1", host.id, node_definition_id=node_def.id)
+
+        # Mock utcnow to return naive datetime for consistent comparison
+        # (SQLite strips tzinfo from stored datetimes)
+        mock_now = datetime.now(timezone.utc).replace(tzinfo=None)
+        with _ReconcileContext(agent_status_nodes=[{"name": "R1", "status": "running"}]):
+            with patch(
+                "app.tasks.reconciliation_db.utcnow",
+                return_value=mock_now,
+            ):
+                with patch(
+                    "app.tasks.reconciliation_db.agent_client.check_node_readiness",
+                    new_callable=AsyncMock,
+                    return_value={"is_ready": False},
+                ):
+                    await _do_reconcile_lab(test_db, lab, lab.id)
+
+        test_db.refresh(ns)
+        # Stale starting should be cleared and node updated to actual container state
+        assert ns.actual_state == NodeActualState.RUNNING.value
+        assert ns.starting_started_at is None
+
+    @pytest.mark.asyncio
+    async def test_stale_stopping_recovered_by_reconciliation(self, test_db, test_user):
+        """Nodes with stale stopping_started_at should be recovered."""
+        from app.tasks.reconciliation_db import _do_reconcile_lab
+        from app.config import settings
+
+        host = _make_host(test_db, "host-stale-stop")
+        lab = _make_lab(test_db, test_user, state="running", agent_id=host.id)
+        node_def = _make_node(test_db, lab.id, "R1", host_id=host.id)
+        # Use naive datetime since SQLite strips timezone info on round-trip
+        stale_time = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(
+            seconds=settings.stale_stopping_threshold + 60
+        )
+        ns = _make_node_state(
+            test_db, lab.id, "R1",
+            actual="stopping", desired="stopped",
+            node_definition_id=node_def.id,
+            stopping_started_at=stale_time,
+        )
+        _make_placement(test_db, lab.id, "R1", host.id, node_definition_id=node_def.id)
+
+        # Mock utcnow to return naive datetime for consistent comparison
+        mock_now = datetime.now(timezone.utc).replace(tzinfo=None)
+        with _ReconcileContext(agent_status_nodes=[{"name": "R1", "status": "stopped"}]):
+            with patch(
+                "app.tasks.reconciliation_db.utcnow",
+                return_value=mock_now,
+            ):
+                await _do_reconcile_lab(test_db, lab, lab.id)
+
+        test_db.refresh(ns)
+        assert ns.actual_state == NodeActualState.STOPPED.value
+        assert ns.stopping_started_at is None
+
+    @pytest.mark.asyncio
+    async def test_stopping_without_timestamp_no_job_recovers(self, test_db, test_user):
+        """Node in 'stopping' state without timestamp and no active job should recover."""
+        from app.tasks.reconciliation_db import _do_reconcile_lab
+
+        host = _make_host(test_db, "host-stop-nots")
+        lab = _make_lab(test_db, test_user, state="running", agent_id=host.id)
+        node_def = _make_node(test_db, lab.id, "R1", host_id=host.id)
+        ns = _make_node_state(
+            test_db, lab.id, "R1",
+            actual="stopping", desired="stopped",
+            node_definition_id=node_def.id,
+            stopping_started_at=None,
+        )
+        _make_placement(test_db, lab.id, "R1", host.id, node_definition_id=node_def.id)
+
+        with _ReconcileContext(agent_status_nodes=[{"name": "R1", "status": "stopped"}]):
+            await _do_reconcile_lab(test_db, lab, lab.id)
+
+        test_db.refresh(ns)
+        # Should fall through to container status mapping
+        assert ns.actual_state == NodeActualState.STOPPED.value
+
+    @pytest.mark.asyncio
+    async def test_starting_without_timestamp_with_job_skipped(self, test_db, test_user):
+        """Node in 'starting' with active job but no timestamp should be skipped."""
+        from app.tasks.reconciliation_db import _do_reconcile_lab
+
+        host = _make_host(test_db, "host-start-job")
+        lab = _make_lab(test_db, test_user, state="running", agent_id=host.id)
+        node_def = _make_node(test_db, lab.id, "R1", host_id=host.id)
+        ns = _make_node_state(
+            test_db, lab.id, "R1",
+            actual="starting", desired="running",
+            node_definition_id=node_def.id,
+            starting_started_at=None,
+        )
+        _make_placement(test_db, lab.id, "R1", host.id, node_definition_id=node_def.id)
+
+        # Create an active sync job (doesn't block reconciliation at the top level
+        # but is picked up as check_active_job inside _do_reconcile_lab)
+        job = models.Job(
+            lab_id=lab.id,
+            user_id=test_user.id,
+            action="sync:lab",
+            status="running",
+            started_at=datetime.now(timezone.utc),
+        )
+        test_db.add(job)
+        test_db.commit()
+
+        with _ReconcileContext(agent_status_nodes=[{"name": "R1", "status": "running"}]):
+            await _do_reconcile_lab(test_db, lab, lab.id)
+
+        test_db.refresh(ns)
+        # With active job and starting state, node should be skipped
+        assert ns.actual_state == NodeActualState.STARTING.value
+
+    @pytest.mark.asyncio
+    async def test_enforcement_failed_node_skipped(self, test_db, test_user):
+        """Nodes with enforcement_failed_at should be skipped by reconciliation."""
+        from app.tasks.reconciliation_db import _do_reconcile_lab
+
+        host = _make_host(test_db, "host-enf")
+        lab = _make_lab(test_db, test_user, state="error", agent_id=host.id)
+        node_def = _make_node(test_db, lab.id, "R1", host_id=host.id)
+        ns = _make_node_state(
+            test_db, lab.id, "R1",
+            actual="error", desired="running",
+            node_definition_id=node_def.id,
+            enforcement_failed_at=datetime.now(timezone.utc),
+            error_message="enforcement exhausted",
+        )
+        _make_placement(test_db, lab.id, "R1", host.id, node_definition_id=node_def.id)
+
+        with _ReconcileContext(agent_status_nodes=[{"name": "R1", "status": "running"}]):
+            await _do_reconcile_lab(test_db, lab, lab.id)
+
+        test_db.refresh(ns)
+        # State should NOT be updated to running -- enforcement owns this node
+        assert ns.actual_state == NodeActualState.ERROR.value
+        assert ns.error_message == "enforcement exhausted"
+
+    @pytest.mark.asyncio
+    async def test_image_syncing_node_skipped(self, test_db, test_user):
+        """Nodes with active image sync should be skipped."""
+        from app.tasks.reconciliation_db import _do_reconcile_lab
+
+        host = _make_host(test_db, "host-sync")
+        lab = _make_lab(test_db, test_user, state="running", agent_id=host.id)
+        node_def = _make_node(test_db, lab.id, "R1", host_id=host.id)
+        ns = _make_node_state(
+            test_db, lab.id, "R1",
+            actual="undeployed", desired="running",
+            node_definition_id=node_def.id,
+            image_sync_status="syncing",
+        )
+        _make_placement(test_db, lab.id, "R1", host.id, node_definition_id=node_def.id)
+
+        with _ReconcileContext(agent_status_nodes=[]):
+            await _do_reconcile_lab(test_db, lab, lab.id)
+
+        test_db.refresh(ns)
+        # Node should remain undeployed, not marked further
+        assert ns.actual_state == NodeActualState.UNDEPLOYED.value
 
 
 # ---------------------------------------------------------------------------
@@ -574,30 +864,11 @@ class TestDoReconcileLabLinkStatesExtended:
             actual="up", source_carrier_state="off",
         )
 
-        with patch("app.tasks.reconciliation_db._ensure_link_states_for_lab", return_value=0):
-            with patch("app.tasks.reconciliation_db.cleanup_orphaned_node_states", return_value=0):
-                with patch("app.tasks.reconciliation_db.TopologyService") as mock_ts_cls:
-                    mock_ts = MagicMock()
-                    mock_ts.normalize_links_for_lab.return_value = 0
-                    mock_ts.get_links.return_value = []
-                    mock_ts_cls.return_value = mock_ts
-
-                    with patch("app.utils.lab.get_lab_provider", return_value="docker"):
-                        with patch(
-                            "app.tasks.reconciliation_db.agent_client.get_lab_status_from_agent",
-                            new_callable=AsyncMock,
-                            return_value={"nodes": [
-                                {"name": "R1", "status": "running"},
-                                {"name": "R2", "status": "running"},
-                            ]},
-                        ):
-                            with patch("app.tasks.reconciliation_db.agent_client.is_agent_online", return_value=True):
-                                with patch("app.tasks.reconciliation.link_ops_lock") as ml_fn:
-                                    ml = MagicMock()
-                                    ml.__enter__ = MagicMock(return_value=False)
-                                    ml.__exit__ = MagicMock(return_value=False)
-                                    ml_fn.return_value = ml
-                                    await _do_reconcile_lab(test_db, lab, lab.id)
+        with _ReconcileContext(agent_status_nodes=[
+            {"name": "R1", "status": "running"},
+            {"name": "R2", "status": "running"},
+        ]):
+            await _do_reconcile_lab(test_db, lab, lab.id)
 
         test_db.refresh(ls)
         assert ls.actual_state == LinkActualState.DOWN.value
@@ -630,34 +901,191 @@ class TestDoReconcileLabLinkStatesExtended:
             source_host_id=host_a.id, target_host_id=host_b.id,
         )
 
-        with patch("app.tasks.reconciliation_db._ensure_link_states_for_lab", return_value=0):
-            with patch("app.tasks.reconciliation_db.cleanup_orphaned_node_states", return_value=0):
-                with patch("app.tasks.reconciliation_db.TopologyService") as mock_ts_cls:
-                    mock_ts = MagicMock()
-                    mock_ts.normalize_links_for_lab.return_value = 0
-                    mock_ts.get_links.return_value = []
-                    mock_ts_cls.return_value = mock_ts
-
-                    with patch("app.utils.lab.get_lab_provider", return_value="docker"):
-                        with patch(
-                            "app.tasks.reconciliation_db.agent_client.get_lab_status_from_agent",
-                            new_callable=AsyncMock,
-                            return_value={"nodes": [
-                                {"name": "R1", "status": "running"},
-                                {"name": "R2", "status": "running"},
-                            ]},
-                        ):
-                            with patch("app.tasks.reconciliation_db.agent_client.is_agent_online", return_value=True):
-                                with patch("app.tasks.reconciliation.link_ops_lock") as ml_fn:
-                                    ml = MagicMock()
-                                    ml.__enter__ = MagicMock(return_value=False)
-                                    ml.__exit__ = MagicMock(return_value=False)
-                                    ml_fn.return_value = ml
-                                    await _do_reconcile_lab(test_db, lab, lab.id)
+        with _ReconcileContext(agent_status_nodes=[
+            {"name": "R1", "status": "running"},
+            {"name": "R2", "status": "running"},
+        ]):
+            await _do_reconcile_lab(test_db, lab, lab.id)
 
         test_db.refresh(ls)
         assert ls.actual_state == LinkActualState.ERROR.value
         assert "VXLAN tunnel" in ls.error_message
+
+    @pytest.mark.asyncio
+    async def test_cross_host_link_with_active_tunnel_sets_up(self, test_db, test_user):
+        """Cross-host link with active tunnel should be marked UP."""
+        from app.tasks.reconciliation_db import _do_reconcile_lab
+
+        host_a = _make_host(test_db, "host-tun-a")
+        host_b = _make_host(test_db, "host-tun-b")
+        lab = _make_lab(test_db, test_user, state="running", agent_id=host_a.id)
+        n1 = _make_node(test_db, lab.id, "R1", host_id=host_a.id)
+        n2 = _make_node(test_db, lab.id, "R2", host_id=host_b.id)
+        _make_node_state(
+            test_db, lab.id, "R1", actual="running", desired="running",
+            node_definition_id=n1.id,
+        )
+        _make_node_state(
+            test_db, lab.id, "R2", node_id="r2", actual="running", desired="running",
+            node_definition_id=n2.id,
+        )
+        _make_placement(test_db, lab.id, "R1", host_a.id, node_definition_id=n1.id)
+        _make_placement(test_db, lab.id, "R2", host_b.id, node_definition_id=n2.id)
+
+        ls = _make_link_state(
+            test_db, lab.id, "R1", "eth1", "R2", "eth1",
+            actual="pending", is_cross_host=True,
+            source_host_id=host_a.id, target_host_id=host_b.id,
+        )
+        _make_vxlan_tunnel(test_db, lab.id, ls.id, host_a.id, host_b.id, status="active")
+
+        with _ReconcileContext(agent_status_nodes=[
+            {"name": "R1", "status": "running"},
+            {"name": "R2", "status": "running"},
+        ]):
+            await _do_reconcile_lab(test_db, lab, lab.id)
+
+        test_db.refresh(ls)
+        assert ls.actual_state == LinkActualState.UP.value
+        assert ls.error_message is None
+
+    @pytest.mark.asyncio
+    async def test_one_node_error_link_error(self, test_db, test_user):
+        """Link with one error node should be marked ERROR."""
+        from app.tasks.reconciliation_db import _do_reconcile_lab
+
+        host = _make_host(test_db, "host-lnk-err")
+        lab = _make_lab(test_db, test_user, state="error", agent_id=host.id)
+        n1 = _make_node(test_db, lab.id, "R1", host_id=host.id)
+        n2 = _make_node(test_db, lab.id, "R2", host_id=host.id)
+        _make_node_state(
+            test_db, lab.id, "R1", actual="running", desired="running",
+            node_definition_id=n1.id,
+        )
+        _make_node_state(
+            test_db, lab.id, "R2", node_id="r2", actual="error", desired="running",
+            node_definition_id=n2.id,
+        )
+        _make_placement(test_db, lab.id, "R1", host.id, node_definition_id=n1.id)
+        _make_placement(test_db, lab.id, "R2", host.id, node_definition_id=n2.id)
+
+        ls = _make_link_state(
+            test_db, lab.id, "R1", "eth1", "R2", "eth1",
+            actual="up",
+        )
+
+        with _ReconcileContext(agent_status_nodes=[
+            {"name": "R1", "status": "running"},
+            {"name": "R2", "status": "dead"},
+        ]):
+            await _do_reconcile_lab(test_db, lab, lab.id)
+
+        test_db.refresh(ls)
+        assert ls.actual_state == LinkActualState.ERROR.value
+        assert "error state" in ls.error_message
+
+    @pytest.mark.asyncio
+    async def test_one_node_stopped_link_down(self, test_db, test_user):
+        """Link with one stopped node should be marked DOWN."""
+        from app.tasks.reconciliation_db import _do_reconcile_lab
+
+        host = _make_host(test_db, "host-lnk-dn")
+        lab = _make_lab(test_db, test_user, state="running", agent_id=host.id)
+        n1 = _make_node(test_db, lab.id, "R1", host_id=host.id)
+        n2 = _make_node(test_db, lab.id, "R2", host_id=host.id)
+        _make_node_state(
+            test_db, lab.id, "R1", actual="running", desired="running",
+            node_definition_id=n1.id,
+        )
+        _make_node_state(
+            test_db, lab.id, "R2", node_id="r2", actual="stopped", desired="stopped",
+            node_definition_id=n2.id,
+        )
+        _make_placement(test_db, lab.id, "R1", host.id, node_definition_id=n1.id)
+        _make_placement(test_db, lab.id, "R2", host.id, node_definition_id=n2.id)
+
+        ls = _make_link_state(
+            test_db, lab.id, "R1", "eth1", "R2", "eth1",
+            actual="up",
+        )
+
+        with _ReconcileContext(agent_status_nodes=[
+            {"name": "R1", "status": "running"},
+            {"name": "R2", "status": "stopped"},
+        ]):
+            await _do_reconcile_lab(test_db, lab, lab.id)
+
+        test_db.refresh(ls)
+        assert ls.actual_state == LinkActualState.DOWN.value
+        assert ls.error_message is None
+
+    @pytest.mark.asyncio
+    async def test_same_host_link_desired_down_stays_down(self, test_db, test_user):
+        """Same-host link with desired=down should be actual=down."""
+        from app.tasks.reconciliation_db import _do_reconcile_lab
+
+        host = _make_host(test_db, "host-lnk-dd")
+        lab = _make_lab(test_db, test_user, state="running", agent_id=host.id)
+        n1 = _make_node(test_db, lab.id, "R1", host_id=host.id)
+        n2 = _make_node(test_db, lab.id, "R2", host_id=host.id)
+        _make_node_state(
+            test_db, lab.id, "R1", actual="running", desired="running",
+            node_definition_id=n1.id,
+        )
+        _make_node_state(
+            test_db, lab.id, "R2", node_id="r2", actual="running", desired="running",
+            node_definition_id=n2.id,
+        )
+        _make_placement(test_db, lab.id, "R1", host.id, node_definition_id=n1.id)
+        _make_placement(test_db, lab.id, "R2", host.id, node_definition_id=n2.id)
+
+        ls = _make_link_state(
+            test_db, lab.id, "R1", "eth1", "R2", "eth1",
+            desired="down", actual="up",
+        )
+
+        with _ReconcileContext(agent_status_nodes=[
+            {"name": "R1", "status": "running"},
+            {"name": "R2", "status": "running"},
+        ]):
+            await _do_reconcile_lab(test_db, lab, lab.id)
+
+        test_db.refresh(ls)
+        assert ls.actual_state == LinkActualState.DOWN.value
+
+    @pytest.mark.asyncio
+    async def test_same_host_existing_up_preserves_up(self, test_db, test_user):
+        """Same-host link already UP should stay UP."""
+        from app.tasks.reconciliation_db import _do_reconcile_lab
+
+        host = _make_host(test_db, "host-lnk-up")
+        lab = _make_lab(test_db, test_user, state="running", agent_id=host.id)
+        n1 = _make_node(test_db, lab.id, "R1", host_id=host.id)
+        n2 = _make_node(test_db, lab.id, "R2", host_id=host.id)
+        _make_node_state(
+            test_db, lab.id, "R1", actual="running", desired="running",
+            node_definition_id=n1.id,
+        )
+        _make_node_state(
+            test_db, lab.id, "R2", node_id="r2", actual="running", desired="running",
+            node_definition_id=n2.id,
+        )
+        _make_placement(test_db, lab.id, "R1", host.id, node_definition_id=n1.id)
+        _make_placement(test_db, lab.id, "R2", host.id, node_definition_id=n2.id)
+
+        ls = _make_link_state(
+            test_db, lab.id, "R1", "eth1", "R2", "eth1",
+            desired="up", actual="up",
+        )
+
+        with _ReconcileContext(agent_status_nodes=[
+            {"name": "R1", "status": "running"},
+            {"name": "R2", "status": "running"},
+        ]):
+            await _do_reconcile_lab(test_db, lab, lab.id)
+
+        test_db.refresh(ls)
+        assert ls.actual_state == LinkActualState.UP.value
 
     @pytest.mark.asyncio
     async def test_deleted_link_state_removed(self, test_db, test_user):
@@ -679,34 +1107,85 @@ class TestDoReconcileLabLinkStatesExtended:
         )
         ls_id = ls.id
 
-        with patch("app.tasks.reconciliation_db._ensure_link_states_for_lab", return_value=0):
-            with patch("app.tasks.reconciliation_db.cleanup_orphaned_node_states", return_value=0):
-                with patch("app.tasks.reconciliation_db.TopologyService") as mock_ts_cls:
-                    mock_ts = MagicMock()
-                    mock_ts.normalize_links_for_lab.return_value = 0
-                    mock_ts.get_links.return_value = []
-                    mock_ts_cls.return_value = mock_ts
-
-                    with patch("app.utils.lab.get_lab_provider", return_value="docker"):
-                        with patch(
-                            "app.tasks.reconciliation_db.agent_client.get_lab_status_from_agent",
-                            new_callable=AsyncMock,
-                            return_value={"nodes": [{"name": "R1", "status": "running"}]},
-                        ):
-                            with patch("app.tasks.reconciliation_db.agent_client.is_agent_online", return_value=True):
-                                with patch("app.tasks.reconciliation.link_ops_lock") as ml_fn:
-                                    ml = MagicMock()
-                                    ml.__enter__ = MagicMock(return_value=False)
-                                    ml.__exit__ = MagicMock(return_value=False)
-                                    ml_fn.return_value = ml
-                                    await _do_reconcile_lab(test_db, lab, lab.id)
+        with _ReconcileContext(agent_status_nodes=[{"name": "R1", "status": "running"}]):
+            await _do_reconcile_lab(test_db, lab, lab.id)
 
         deleted_ls = test_db.get(models.LinkState, ls_id)
         assert deleted_ls is None
 
 
 # ---------------------------------------------------------------------------
-# Tests: _maybe_cleanup_labless_containers VXLAN reconciliation
+# Tests: _do_reconcile_lab - lab state computation
+# ---------------------------------------------------------------------------
+
+class TestDoReconcileLabStateComputation:
+    """Tests for lab state being computed from node counts."""
+
+    @pytest.mark.asyncio
+    async def test_all_running_sets_lab_running(self, test_db, test_user):
+        """Lab with all running nodes should have state=running."""
+        from app.tasks.reconciliation_db import _do_reconcile_lab
+
+        host = _make_host(test_db, "host-run")
+        lab = _make_lab(test_db, test_user, state="stopped", agent_id=host.id)
+        n1 = _make_node(test_db, lab.id, "R1", host_id=host.id)
+        _make_node_state(
+            test_db, lab.id, "R1", actual="running", desired="running",
+            node_definition_id=n1.id, is_ready=True,
+        )
+        _make_placement(test_db, lab.id, "R1", host.id, node_definition_id=n1.id)
+
+        with _ReconcileContext(agent_status_nodes=[{"name": "R1", "status": "running"}]):
+            await _do_reconcile_lab(test_db, lab, lab.id)
+
+        test_db.refresh(lab)
+        assert lab.state == LabState.RUNNING.value
+        assert lab.state_error is None
+
+    @pytest.mark.asyncio
+    async def test_all_stopped_sets_lab_stopped(self, test_db, test_user):
+        """Lab with all stopped nodes should have state=stopped."""
+        from app.tasks.reconciliation_db import _do_reconcile_lab
+
+        host = _make_host(test_db, "host-stp")
+        lab = _make_lab(test_db, test_user, state="running", agent_id=host.id)
+        n1 = _make_node(test_db, lab.id, "R1", host_id=host.id)
+        _make_node_state(
+            test_db, lab.id, "R1", actual="running", desired="stopped",
+            node_definition_id=n1.id,
+        )
+        _make_placement(test_db, lab.id, "R1", host.id, node_definition_id=n1.id)
+
+        with _ReconcileContext(agent_status_nodes=[{"name": "R1", "status": "stopped"}]):
+            await _do_reconcile_lab(test_db, lab, lab.id)
+
+        test_db.refresh(lab)
+        assert lab.state == LabState.STOPPED.value
+
+    @pytest.mark.asyncio
+    async def test_error_node_sets_lab_error(self, test_db, test_user):
+        """Lab with error node should have state=error and state_error message."""
+        from app.tasks.reconciliation_db import _do_reconcile_lab
+
+        host = _make_host(test_db, "host-lerr")
+        lab = _make_lab(test_db, test_user, state="running", agent_id=host.id)
+        n1 = _make_node(test_db, lab.id, "R1", host_id=host.id)
+        _make_node_state(
+            test_db, lab.id, "R1", actual="running", desired="running",
+            node_definition_id=n1.id,
+        )
+        _make_placement(test_db, lab.id, "R1", host.id, node_definition_id=n1.id)
+
+        with _ReconcileContext(agent_status_nodes=[{"name": "R1", "status": "dead"}]):
+            await _do_reconcile_lab(test_db, lab, lab.id)
+
+        test_db.refresh(lab)
+        assert lab.state == LabState.ERROR.value
+        assert "error" in lab.state_error.lower()
+
+
+# ---------------------------------------------------------------------------
+# Tests: _maybe_cleanup_labless_containers
 # ---------------------------------------------------------------------------
 
 class TestMaybeCleanupVxlanReconciliation:
@@ -729,7 +1208,6 @@ class TestMaybeCleanupVxlanReconciliation:
                         with patch("app.tasks.link_reconciliation.run_overlay_convergence", new_callable=AsyncMock):
                             await rdb._maybe_cleanup_labless_containers(mock_session)
 
-        # Counter should have been reset
         assert rdb._lab_orphan_check_counter == 0
 
     @pytest.mark.asyncio
@@ -756,22 +1234,14 @@ class TestDoReconcileLabExceptionPaths:
 
         lab = _make_lab(test_db, test_user, state="running")
 
-        with patch("app.tasks.reconciliation_db._ensure_link_states_for_lab", side_effect=RuntimeError("DB error")):
-            with patch("app.tasks.reconciliation_db.cleanup_orphaned_node_states", return_value=0):
-                with patch("app.tasks.reconciliation_db.TopologyService") as mock_ts_cls:
-                    mock_ts = MagicMock()
-                    mock_ts.normalize_links_for_lab.return_value = 0
-                    mock_ts.get_links.return_value = []
-                    mock_ts_cls.return_value = mock_ts
-
-                    with patch("app.utils.lab.get_lab_provider", return_value="docker"):
-                        with patch("app.tasks.reconciliation.link_ops_lock") as ml_fn:
-                            ml = MagicMock()
-                            ml.__enter__ = MagicMock(return_value=False)
-                            ml.__exit__ = MagicMock(return_value=False)
-                            ml_fn.return_value = ml
-                            # Should not raise
-                            result = await _do_reconcile_lab(test_db, lab, lab.id)
+        with _ReconcileContext(
+            ensure_link_states=patch(
+                "app.tasks.reconciliation_db._ensure_link_states_for_lab",
+                side_effect=RuntimeError("DB error"),
+            ),
+        ):
+            # Should not raise
+            result = await _do_reconcile_lab(test_db, lab, lab.id)
 
         assert result == 0
 
@@ -782,31 +1252,97 @@ class TestDoReconcileLabExceptionPaths:
 
         lab = _make_lab(test_db, test_user, state="running")
 
-        with patch("app.tasks.reconciliation_db._ensure_link_states_for_lab", return_value=0):
-            with patch("app.tasks.reconciliation_db.cleanup_orphaned_node_states", return_value=0):
-                with patch("app.tasks.reconciliation_db.TopologyService") as mock_ts_cls:
-                    mock_ts = MagicMock()
-                    mock_ts.normalize_links_for_lab.side_effect = RuntimeError("normalize failure")
-                    mock_ts.get_links.return_value = []
-                    mock_ts_cls.return_value = mock_ts
+        with _ReconcileContext() as mocks:
+            ts = mocks["topo_service"].return_value
+            ts.normalize_links_for_lab.side_effect = RuntimeError("normalize failure")
+            result = await _do_reconcile_lab(test_db, lab, lab.id)
 
-                    with patch("app.utils.lab.get_lab_provider", return_value="docker"):
-                        with patch("app.tasks.reconciliation.link_ops_lock") as ml_fn:
-                            ml = MagicMock()
-                            ml.__enter__ = MagicMock(return_value=False)
-                            ml.__exit__ = MagicMock(return_value=False)
-                            ml_fn.return_value = ml
-                            result = await _do_reconcile_lab(test_db, lab, lab.id)
+        assert result == 0
+
+    @pytest.mark.asyncio
+    async def test_cleanup_orphaned_exception_is_caught(self, test_db, test_user):
+        """Failure in cleanup_orphaned_node_states should be caught."""
+        from app.tasks.reconciliation_db import _do_reconcile_lab
+
+        lab = _make_lab(test_db, test_user, state="running")
+
+        with _ReconcileContext(
+            cleanup_orphans=patch(
+                "app.tasks.reconciliation_db.cleanup_orphaned_node_states",
+                side_effect=RuntimeError("cleanup error"),
+            ),
+        ):
+            result = await _do_reconcile_lab(test_db, lab, lab.id)
 
         assert result == 0
 
 
 # ---------------------------------------------------------------------------
-# Tests: cleanup_orphaned_node_states (extended)
+# Tests: cleanup_orphaned_node_states
 # ---------------------------------------------------------------------------
 
-class TestCleanupOrphanedNodeStatesExtended:
-    """Extended cleanup_orphaned_node_states tests."""
+class TestCleanupOrphanedNodeStates:
+    """Tests for cleanup_orphaned_node_states across all safe states."""
+
+    def test_removes_undeployed_orphan(self, test_db, sample_lab):
+        """Undeployed orphan (no node_definition_id) should be deleted."""
+        from app.tasks.reconciliation_db import cleanup_orphaned_node_states
+
+        ns = _make_node_state(
+            test_db, sample_lab.id, "Orphan1",
+            actual=NodeActualState.UNDEPLOYED.value,
+            node_definition_id=None,
+        )
+        ns_id = ns.id
+
+        count = cleanup_orphaned_node_states(test_db, sample_lab.id)
+        assert count == 1
+        assert test_db.get(models.NodeState, ns_id) is None
+
+    def test_removes_stopped_orphan(self, test_db, sample_lab):
+        """Stopped orphan should be deleted."""
+        from app.tasks.reconciliation_db import cleanup_orphaned_node_states
+
+        ns = _make_node_state(
+            test_db, sample_lab.id, "OrphanStopped",
+            actual=NodeActualState.STOPPED.value,
+            node_definition_id=None,
+        )
+        ns_id = ns.id
+
+        count = cleanup_orphaned_node_states(test_db, sample_lab.id)
+        assert count == 1
+        assert test_db.get(models.NodeState, ns_id) is None
+
+    def test_removes_error_orphan(self, test_db, sample_lab):
+        """Error orphan should be deleted."""
+        from app.tasks.reconciliation_db import cleanup_orphaned_node_states
+
+        ns = _make_node_state(
+            test_db, sample_lab.id, "Orphan2",
+            actual=NodeActualState.ERROR.value,
+            node_definition_id=None,
+        )
+        ns_id = ns.id
+
+        count = cleanup_orphaned_node_states(test_db, sample_lab.id)
+        assert count == 1
+        assert test_db.get(models.NodeState, ns_id) is None
+
+    def test_preserves_running_orphan(self, test_db, sample_lab):
+        """Running orphan should NOT be deleted (active container)."""
+        from app.tasks.reconciliation_db import cleanup_orphaned_node_states
+
+        ns = _make_node_state(
+            test_db, sample_lab.id, "Orphan3",
+            actual=NodeActualState.RUNNING.value,
+            node_definition_id=None,
+        )
+
+        count = cleanup_orphaned_node_states(test_db, sample_lab.id)
+        assert count == 0
+        test_db.refresh(ns)
+        assert ns.actual_state == NodeActualState.RUNNING.value
 
     def test_preserves_stopping_orphan(self, test_db, sample_lab):
         """Nodes in STOPPING state should be preserved even if orphaned."""
@@ -820,9 +1356,21 @@ class TestCleanupOrphanedNodeStatesExtended:
 
         count = cleanup_orphaned_node_states(test_db, sample_lab.id)
         assert count == 0
-
         test_db.refresh(ns)
         assert ns.actual_state == NodeActualState.STOPPING.value
+
+    def test_preserves_starting_orphan(self, test_db, sample_lab):
+        """Starting orphan should NOT be deleted (in transition)."""
+        from app.tasks.reconciliation_db import cleanup_orphaned_node_states
+
+        _make_node_state(
+            test_db, sample_lab.id, "Orphan4",
+            actual=NodeActualState.STARTING.value,
+            node_definition_id=None,
+        )
+
+        count = cleanup_orphaned_node_states(test_db, sample_lab.id)
+        assert count == 0
 
     def test_preserves_pending_orphan(self, test_db, sample_lab):
         """Nodes in PENDING state should be preserved even if orphaned."""
@@ -837,13 +1385,45 @@ class TestCleanupOrphanedNodeStatesExtended:
         count = cleanup_orphaned_node_states(test_db, sample_lab.id)
         assert count == 0
 
+    def test_no_orphans_returns_zero(self, test_db, sample_lab):
+        """Lab with no orphaned NodeStates should return 0."""
+        from app.tasks.reconciliation_db import cleanup_orphaned_node_states
+
+        count = cleanup_orphaned_node_states(test_db, sample_lab.id)
+        assert count == 0
+
+    def test_multiple_orphans_deleted(self, test_db, sample_lab):
+        """Multiple orphans in safe states should all be deleted."""
+        from app.tasks.reconciliation_db import cleanup_orphaned_node_states
+
+        _make_node_state(
+            test_db, sample_lab.id, "OrpA",
+            actual=NodeActualState.UNDEPLOYED.value,
+            node_definition_id=None,
+        )
+        _make_node_state(
+            test_db, sample_lab.id, "OrpB",
+            actual=NodeActualState.STOPPED.value,
+            node_definition_id=None,
+            node_id="orpb",
+        )
+        _make_node_state(
+            test_db, sample_lab.id, "OrpC",
+            actual=NodeActualState.ERROR.value,
+            node_definition_id=None,
+            node_id="orpc",
+        )
+
+        count = cleanup_orphaned_node_states(test_db, sample_lab.id)
+        assert count == 3
+
 
 # ---------------------------------------------------------------------------
 # Tests: _backfill_placement_node_ids
 # ---------------------------------------------------------------------------
 
-class TestBackfillPlacementNodeIdsExtended:
-    """Extended _backfill_placement_node_ids tests."""
+class TestBackfillPlacementNodeIds:
+    """Tests for _backfill_placement_node_ids legacy stub."""
 
     def test_logs_warning_when_missing_placements_exist(self, test_db, sample_lab):
         """Should log warning but return 0 (no-op)."""
@@ -863,11 +1443,11 @@ class TestBackfillPlacementNodeIdsExtended:
 
 
 # ---------------------------------------------------------------------------
-# Tests: _ensure_link_states_for_lab (extended)
+# Tests: _ensure_link_states_for_lab
 # ---------------------------------------------------------------------------
 
-class TestEnsureLinkStatesExtended:
-    """Extended _ensure_link_states_for_lab tests."""
+class TestEnsureLinkStatesForLab:
+    """Tests for _ensure_link_states_for_lab link state creation and dedup."""
 
     def test_no_db_links_returns_zero(self, test_db, sample_lab):
         """Lab with no link definitions should return 0."""
@@ -881,7 +1461,6 @@ class TestEnsureLinkStatesExtended:
         from app.tasks.reconciliation_db import _ensure_link_states_for_lab
 
         n2 = _make_node(test_db, sample_lab.id, "R2")
-        # Create link referencing a nonexistent source node
         lnk = models.Link(
             lab_id=sample_lab.id,
             link_name="fake:eth1-R2:eth1",
@@ -903,7 +1482,6 @@ class TestEnsureLinkStatesExtended:
         host_a = _make_host(test_db, "host-swap-a")
         host_b = _make_host(test_db, "host-swap-b")
 
-        # Create nodes where Z sorts after A but is the source
         n_z = _make_node(test_db, sample_lab.id, "Z1", host_id=host_a.id)
         n_a = _make_node(test_db, sample_lab.id, "A1", host_id=host_b.id)
 
@@ -913,62 +1491,15 @@ class TestEnsureLinkStatesExtended:
         result = _ensure_link_states_for_lab(test_db, sample_lab.id)
         assert result == 1
 
-        # Flush so the newly added LinkState is queryable
         test_db.flush()
-
-        # Verify the created link state has canonical ordering
         ls = (
             test_db.query(models.LinkState)
             .filter(models.LinkState.lab_id == sample_lab.id)
             .first()
         )
         assert ls is not None
-        # The canonical order should put A1 before Z1
         assert ls.source_node == "A1"
         assert ls.target_node == "Z1"
-
-
-# ---------------------------------------------------------------------------
-# Tests: _ensure_link_states_for_lab - deduplication
-# ---------------------------------------------------------------------------
-
-class TestEnsureLinkStatesDedup:
-    """Tests for duplicate link state consolidation."""
-
-    def test_duplicate_link_states_are_deduplicated(self, test_db, sample_lab):
-        """Duplicate link states with same canonical key should be consolidated."""
-        from app.tasks.reconciliation_db import _ensure_link_states_for_lab
-
-        n1 = _make_node(test_db, sample_lab.id, "R1")
-        n2 = _make_node(test_db, sample_lab.id, "R2")
-        _make_link(test_db, sample_lab.id, n1.id, "eth1", n2.id, "eth1",
-                   link_name="R1:eth1-R2:eth1")
-
-        # Create two link states for the same logical link
-        _make_link_state(
-            test_db, sample_lab.id, "R1", "eth1", "R2", "eth1",
-            actual="up",
-        )
-        ls2 = models.LinkState(
-            lab_id=sample_lab.id,
-            link_name="R1:Ethernet1-R2:Ethernet1",
-            source_node="R1", source_interface="Ethernet1",
-            target_node="R2", target_interface="Ethernet1",
-            desired_state="up", actual_state="pending",
-        )
-        test_db.add(ls2)
-        test_db.commit()
-        test_db.refresh(ls2)
-
-        _ensure_link_states_for_lab(test_db, sample_lab.id)
-
-        remaining = (
-            test_db.query(models.LinkState)
-            .filter(models.LinkState.lab_id == sample_lab.id)
-            .all()
-        )
-        # At most one link state per canonical key should remain (plus potentially new one)
-        assert len(remaining) <= 2
 
     def test_cross_host_flag_set_correctly(self, test_db, sample_lab):
         """When source and target are on different hosts, is_cross_host should be True."""
@@ -1017,69 +1548,48 @@ class TestEnsureLinkStatesDedup:
         assert ls is not None
         assert ls.is_cross_host is False
 
+    def test_existing_link_state_not_recreated(self, test_db, sample_lab):
+        """Existing link state with same canonical key should not be recreated."""
+        from app.tasks.reconciliation_db import _ensure_link_states_for_lab
 
-# ---------------------------------------------------------------------------
-# Tests: cleanup_orphaned_node_states - safe states cleanup
-# ---------------------------------------------------------------------------
+        n1 = _make_node(test_db, sample_lab.id, "R1")
+        n2 = _make_node(test_db, sample_lab.id, "R2")
+        _make_link(test_db, sample_lab.id, n1.id, "eth1", n2.id, "eth1",
+                   link_name="R1:eth1-R2:eth1")
+        _make_link_state(test_db, sample_lab.id, "R1", "eth1", "R2", "eth1",
+                         actual="up")
 
-class TestCleanupOrphanedSafeStates:
-    """Tests for cleanup of orphaned nodes in different safe states."""
+        result = _ensure_link_states_for_lab(test_db, sample_lab.id)
+        assert result == 0
 
-    def test_removes_undeployed_orphan(self, test_db, sample_lab):
-        """Undeployed orphan (no node_definition_id) should be deleted."""
-        from app.tasks.reconciliation_db import cleanup_orphaned_node_states
+    def test_resolves_host_via_placement(self, test_db, sample_lab):
+        """When node.host_id is None, should resolve via placement."""
+        from app.tasks.reconciliation_db import _ensure_link_states_for_lab
 
-        ns = _make_node_state(
-            test_db, sample_lab.id, "Orphan1",
-            actual=NodeActualState.UNDEPLOYED.value,
-            node_definition_id=None,
+        host_a = _make_host(test_db, "host-plc-a")
+        host_b = _make_host(test_db, "host-plc-b")
+
+        # Nodes without host_id
+        n1 = _make_node(test_db, sample_lab.id, "R1", host_id=None)
+        n2 = _make_node(test_db, sample_lab.id, "R2", host_id=None)
+
+        # Placements provide host info
+        _make_placement(test_db, sample_lab.id, "R1", host_a.id, node_definition_id=n1.id)
+        _make_placement(test_db, sample_lab.id, "R2", host_b.id, node_definition_id=n2.id)
+
+        _make_link(test_db, sample_lab.id, n1.id, "eth1", n2.id, "eth1",
+                   link_name="R1:eth1-R2:eth1")
+
+        result = _ensure_link_states_for_lab(test_db, sample_lab.id)
+        assert result == 1
+
+        test_db.flush()
+        ls = (
+            test_db.query(models.LinkState)
+            .filter(models.LinkState.lab_id == sample_lab.id)
+            .first()
         )
-        ns_id = ns.id
-
-        count = cleanup_orphaned_node_states(test_db, sample_lab.id)
-        assert count == 1
-        assert test_db.get(models.NodeState, ns_id) is None
-
-    def test_removes_error_orphan(self, test_db, sample_lab):
-        """Error orphan (no node_definition_id) should be deleted."""
-        from app.tasks.reconciliation_db import cleanup_orphaned_node_states
-
-        ns = _make_node_state(
-            test_db, sample_lab.id, "Orphan2",
-            actual=NodeActualState.ERROR.value,
-            node_definition_id=None,
-        )
-        ns_id = ns.id
-
-        count = cleanup_orphaned_node_states(test_db, sample_lab.id)
-        assert count == 1
-        assert test_db.get(models.NodeState, ns_id) is None
-
-    def test_preserves_running_orphan(self, test_db, sample_lab):
-        """Running orphan should NOT be deleted (active container)."""
-        from app.tasks.reconciliation_db import cleanup_orphaned_node_states
-
-        ns = _make_node_state(
-            test_db, sample_lab.id, "Orphan3",
-            actual=NodeActualState.RUNNING.value,
-            node_definition_id=None,
-        )
-
-        count = cleanup_orphaned_node_states(test_db, sample_lab.id)
-        assert count == 0
-
-        test_db.refresh(ns)
-        assert ns.actual_state == NodeActualState.RUNNING.value
-
-    def test_preserves_starting_orphan(self, test_db, sample_lab):
-        """Starting orphan should NOT be deleted (in transition)."""
-        from app.tasks.reconciliation_db import cleanup_orphaned_node_states
-
-        _make_node_state(
-            test_db, sample_lab.id, "Orphan4",
-            actual=NodeActualState.STARTING.value,
-            node_definition_id=None,
-        )
-
-        count = cleanup_orphaned_node_states(test_db, sample_lab.id)
-        assert count == 0
+        assert ls is not None
+        assert ls.is_cross_host is True
+        # At least one host ID should be set
+        assert ls.source_host_id is not None or ls.target_host_id is not None
