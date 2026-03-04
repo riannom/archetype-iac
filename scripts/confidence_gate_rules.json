@@ -28,6 +28,14 @@
       ],
       "required": true
     },
+    "test-api-catalog-regression": {
+      "description": "Targeted API regression for catalog/manifest sync safety",
+      "command": [
+        "make",
+        "test-api-catalog-regression"
+      ],
+      "required": true
+    },
     "test-agent": {
       "description": "Agent unit/integration suite",
       "command": [
@@ -120,6 +128,24 @@
       ],
       "checks": [
         "test-api-observability-regression"
+      ]
+    },
+    {
+      "name": "api-catalog-regressions",
+      "areas": [
+        "api",
+        "catalog"
+      ],
+      "globs": [
+        "api/app/image_store/manifest.py",
+        "api/app/services/catalog_query.py",
+        "api/app/routers/iso.py",
+        "api/tests/test_catalog_cutover.py",
+        "api/tests/test_services_catalog_query.py",
+        "api/tests/test_image_store_manifest.py"
+      ],
+      "checks": [
+        "test-api-catalog-regression"
       ]
     },
     {

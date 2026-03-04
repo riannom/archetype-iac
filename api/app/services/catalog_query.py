@@ -533,8 +533,17 @@ def sync_catalog_from_manifest(
     manifest: dict[str, Any],
     *,
     source: str = "manifest_sync",
+    prune_missing: bool = True,
 ) -> None:
-    """Synchronize catalog image tables from a manifest payload."""
+    """Synchronize catalog image tables from a manifest payload.
+
+    Args:
+        session: Active SQLAlchemy session.
+        manifest: Manifest-style payload containing ``images`` entries.
+        source: Event source label recorded in ingest history.
+        prune_missing: When True, delete catalog rows not present in payload.
+            When False, only upsert/update rows from the payload.
+    """
     images = [
         dict(entry)
         for entry in (manifest.get("images") or [])
@@ -548,16 +557,23 @@ def sync_catalog_from_manifest(
 
     _persist_catalog_snapshot(session, images)
 
-    for row in session.query(models.CatalogImage).all():
-        if row.external_id in desired_external_ids:
-            continue
-        session.delete(row)
+    deleted_count = 0
+    if prune_missing:
+        for row in session.query(models.CatalogImage).all():
+            if row.external_id in desired_external_ids:
+                continue
+            session.delete(row)
+            deleted_count += 1
 
     record_catalog_ingest_event(
         session,
         source=source,
         event_type="manifest_sync",
         summary="Synchronized catalog from manifest",
-        payload={"image_count": len(desired_external_ids)},
+        payload={
+            "image_count": len(desired_external_ids),
+            "prune_missing": prune_missing,
+            "deleted_count": deleted_count,
+        },
     )
     invalidate_image_index_cache(session)

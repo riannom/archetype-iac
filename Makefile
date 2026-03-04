@@ -1,7 +1,8 @@
-.PHONY: audit audit-ovs test-agent test-api test-api-container test-web-container test-web-container-down observability-canary observability-db-report observability-canary-nonprod observability-maintenance-nonprod observability-cron-install iso-metadata-parity confidence-gate confidence-gate-run confidence-gate-json backfill-device-image-catalog backfill-manifest-compatible-devices catalog-manifest-drift-check catalog-maintenance install-gitleaks install-hooks scan-secrets
+.PHONY: audit audit-ovs test-agent test-api test-api-container test-api-catalog-regression test-web-container test-web-container-down observability-canary observability-db-report observability-canary-nonprod observability-maintenance-nonprod observability-cron-install iso-metadata-parity confidence-gate confidence-gate-run confidence-gate-json backfill-device-image-catalog backfill-manifest-compatible-devices catalog-manifest-drift-check catalog-maintenance install-gitleaks install-hooks scan-secrets
 
 API_TEST ?= tests
 WEB_TEST ?=
+CATALOG_REGRESSION_TESTS ?= tests/test_services_catalog_query.py tests/test_catalog_cutover.py tests/test_image_store_manifest.py
 ISO ?=
 JSON_OUT ?=
 BASE ?= origin/main
@@ -40,6 +41,18 @@ test-api:
 
 test-api-container:
 	docker exec archetype-iac-api-1 /bin/sh -lc 'cd /app && pytest -q $(API_TEST)'
+
+test-api-catalog-regression:
+	@if command -v python3.14 >/dev/null 2>&1; then \
+		cd api && DATABASE_URL=sqlite:///test.db REDIS_URL=redis://localhost:6379/0 WORKSPACE=/tmp/archetype-test PYTHONPATH="$${PYTHONPATH}:$$(pwd)/.." python3.14 -m pytest -q $(CATALOG_REGRESSION_TESTS); \
+	elif docker ps --format '{{.Names}}' | grep -q '^archetype-iac-api-1$$'; then \
+		echo "python3.14 not found locally; running catalog regression tests in container archetype-iac-api-1"; \
+		docker exec archetype-iac-api-1 /bin/sh -lc 'cd /app && pytest -q $(CATALOG_REGRESSION_TESTS)'; \
+	else \
+		echo "python3.14 is not available locally and API container archetype-iac-api-1 is not running."; \
+		echo "Start the stack (docker compose -f docker-compose.gui.yml up -d api) or run make test-api-catalog-regression after the container is up."; \
+		exit 1; \
+	fi
 
 test-web-container:
 	docker compose -f docker-compose.gui.yml --profile test up -d web-test
