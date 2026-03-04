@@ -4,7 +4,7 @@ import json
 from uuid import uuid4
 
 from app import models
-from app.image_store import save_manifest
+from app.image_store import load_manifest, save_manifest
 
 
 def _seed_vendor_device(
@@ -259,6 +259,202 @@ def test_manifest_write_syncs_catalog_when_seeded(
         .all()
     )
     assert {canonical for _, canonical in compat} == {"ceos"}
+
+
+def test_manifest_write_merge_does_not_prune_existing_catalog_images(
+    test_client,
+    test_db,
+    monkeypatch,
+    tmp_path,
+) -> None:
+    monkeypatch.setattr(
+        "app.image_store.manifest.manifest_path",
+        lambda: tmp_path / "manifest.json",
+    )
+    _seed_vendor_device(test_db, canonical_device_id="ceos", runtime_kind="ceos")
+    test_db.add(
+        models.CatalogImage(
+            id=str(uuid4()),
+            external_id="docker:existing:1.0",
+            kind="docker",
+            reference="existing:1.0",
+            source="manual",
+            metadata_json=json.dumps(
+                {
+                    "id": "docker:existing:1.0",
+                    "kind": "docker",
+                    "reference": "existing:1.0",
+                    "device_id": "ceos",
+                    "compatible_devices": ["ceos"],
+                }
+            ),
+        )
+    )
+    test_db.commit()
+
+    save_manifest(
+        {
+            "images": [
+                {
+                    "id": "docker:new:1.0",
+                    "kind": "docker",
+                    "reference": "new:1.0",
+                    "device_id": "ceos",
+                    "compatible_devices": ["ceos"],
+                }
+            ]
+        }
+    )
+
+    ids = {
+        row.external_id
+        for row in test_db.query(models.CatalogImage.external_id).all()
+    }
+    assert ids == {"docker:existing:1.0", "docker:new:1.0"}
+
+    event = (
+        test_db.query(models.CatalogIngestEvent)
+        .filter(models.CatalogIngestEvent.source == "image_store.save_manifest")
+        .filter(models.CatalogIngestEvent.event_type == "manifest_sync")
+        .order_by(models.CatalogIngestEvent.created_at.desc())
+        .first()
+    )
+    assert event is not None
+    payload = json.loads(event.payload_json)
+    assert payload["prune_missing"] is False
+    assert payload["deleted_count"] == 0
+
+
+def test_manifest_fallback_load_then_save_preserves_existing_catalog_rows(
+    test_client,
+    test_db,
+    monkeypatch,
+    tmp_path,
+) -> None:
+    monkeypatch.setattr(
+        "app.image_store.manifest.manifest_path",
+        lambda: tmp_path / "manifest.json",
+    )
+    _seed_vendor_device(test_db, canonical_device_id="ceos", runtime_kind="ceos")
+    test_db.add(
+        models.CatalogImage(
+            id=str(uuid4()),
+            external_id="docker:db-existing:1.0",
+            kind="docker",
+            reference="db-existing:1.0",
+            source="manual",
+            metadata_json=json.dumps(
+                {
+                    "id": "docker:db-existing:1.0",
+                    "kind": "docker",
+                    "reference": "db-existing:1.0",
+                    "device_id": "ceos",
+                    "compatible_devices": ["ceos"],
+                }
+            ),
+        )
+    )
+    test_db.commit()
+
+    # Stale file-backed subset that would be returned by load fallback.
+    (tmp_path / "manifest.json").write_text(
+        json.dumps(
+            {
+                "images": [
+                    {
+                        "id": "docker:file-only:1.0",
+                        "kind": "docker",
+                        "reference": "file-only:1.0",
+                        "device_id": "ceos",
+                        "compatible_devices": ["ceos"],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    def _raise_catalog_read(_session, **_kwargs):
+        raise RuntimeError("simulated catalog read failure")
+
+    monkeypatch.setattr(
+        "app.services.catalog_service.list_catalog_library_images",
+        _raise_catalog_read,
+    )
+
+    manifest = load_manifest()
+    manifest["images"].append(
+        {
+            "id": "docker:new-from-fallback:1.0",
+            "kind": "docker",
+            "reference": "new-from-fallback:1.0",
+            "device_id": "ceos",
+            "compatible_devices": ["ceos"],
+        }
+    )
+    save_manifest(manifest)
+
+    ids = {
+        row.external_id
+        for row in test_db.query(models.CatalogImage.external_id).all()
+    }
+    assert ids == {
+        "docker:db-existing:1.0",
+        "docker:file-only:1.0",
+        "docker:new-from-fallback:1.0",
+    }
+
+    event = (
+        test_db.query(models.CatalogIngestEvent)
+        .filter(models.CatalogIngestEvent.source == "image_store.save_manifest")
+        .filter(models.CatalogIngestEvent.event_type == "manifest_sync")
+        .order_by(models.CatalogIngestEvent.created_at.desc())
+        .first()
+    )
+    assert event is not None
+    payload = json.loads(event.payload_json)
+    assert payload["prune_missing"] is False
+    assert payload["deleted_count"] == 0
+
+
+def test_manifest_save_empty_payload_does_not_prune_catalog_rows(
+    test_client,
+    test_db,
+    monkeypatch,
+    tmp_path,
+) -> None:
+    monkeypatch.setattr(
+        "app.image_store.manifest.manifest_path",
+        lambda: tmp_path / "manifest.json",
+    )
+    _seed_vendor_device(test_db, canonical_device_id="ceos", runtime_kind="ceos")
+    test_db.add(
+        models.CatalogImage(
+            id=str(uuid4()),
+            external_id="docker:keep:1.0",
+            kind="docker",
+            reference="keep:1.0",
+            source="manual",
+            metadata_json=json.dumps(
+                {
+                    "id": "docker:keep:1.0",
+                    "kind": "docker",
+                    "reference": "keep:1.0",
+                    "device_id": "ceos",
+                    "compatible_devices": ["ceos"],
+                }
+            ),
+        )
+    )
+    test_db.commit()
+
+    save_manifest({"images": []})
+
+    ids = {
+        row.external_id
+        for row in test_db.query(models.CatalogImage.external_id).all()
+    }
+    assert ids == {"docker:keep:1.0"}
 
 
 def test_manifest_default_scope_is_added_to_compatibility(

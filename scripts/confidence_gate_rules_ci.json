@@ -43,6 +43,15 @@
       ],
       "required": true
     },
+    "test-api-catalog-regression": {
+      "description": "Targeted API regression for catalog/manifest sync safety",
+      "command": [
+        "/bin/bash",
+        "-lc",
+        "cd api && DATABASE_URL=sqlite:///test.db REDIS_URL=redis://localhost:6379/0 WORKSPACE=/tmp/archetype-test PYTHONPATH=\"${PYTHONPATH}:$(pwd)/..\" pytest -q tests/test_services_catalog_query.py tests/test_catalog_cutover.py tests/test_image_store_manifest.py"
+      ],
+      "required": true
+    },
     "test-agent": {
       "description": "Agent pytest suite in CI",
       "command": [
@@ -128,6 +137,24 @@
       ],
       "checks": [
         "test-api-observability-regression"
+      ]
+    },
+    {
+      "name": "api-catalog-regressions",
+      "areas": [
+        "api",
+        "catalog"
+      ],
+      "globs": [
+        "api/app/image_store/manifest.py",
+        "api/app/services/catalog_query.py",
+        "api/app/routers/iso.py",
+        "api/tests/test_catalog_cutover.py",
+        "api/tests/test_services_catalog_query.py",
+        "api/tests/test_image_store_manifest.py"
+      ],
+      "checks": [
+        "test-api-catalog-regression"
       ]
     },
     {

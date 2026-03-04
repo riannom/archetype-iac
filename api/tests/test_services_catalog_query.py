@@ -475,6 +475,165 @@ class TestSyncCatalogFromManifest:
         count = test_db.query(models.CatalogImage).count()
         assert count == 0
 
+    def test_sync_with_prune_disabled_keeps_unmentioned_rows(self, test_db) -> None:
+        from app.services.catalog_query import sync_catalog_from_manifest
+        from app import models
+        from uuid import uuid4
+
+        test_db.add(models.CatalogImage(
+            id=str(uuid4()), external_id="kept-image",
+            kind="docker", source="api", metadata_json="{}",
+        ))
+        test_db.flush()
+
+        manifest = {
+            "images": [
+                {"id": "new-image", "kind": "docker", "source": "manifest"},
+            ]
+        }
+        sync_catalog_from_manifest(test_db, manifest, prune_missing=False)
+        test_db.flush()
+
+        kept = test_db.query(models.CatalogImage).filter(
+            models.CatalogImage.external_id == "kept-image"
+        ).first()
+        new = test_db.query(models.CatalogImage).filter(
+            models.CatalogImage.external_id == "new-image"
+        ).first()
+        assert kept is not None
+        assert new is not None
+
+    def test_sync_records_prune_event_payload(self, test_db) -> None:
+        from app.services.catalog_query import sync_catalog_from_manifest
+        from app import models
+        from uuid import uuid4
+        import json
+
+        test_db.add(models.CatalogImage(
+            id=str(uuid4()), external_id="stale-image",
+            kind="docker", source="api", metadata_json="{}",
+        ))
+        test_db.flush()
+
+        sync_catalog_from_manifest(
+            test_db,
+            {"images": [{"id": "fresh-image", "kind": "docker"}]},
+            source="unit-test",
+            prune_missing=True,
+        )
+        test_db.flush()
+
+        event = (
+            test_db.query(models.CatalogIngestEvent)
+            .filter(models.CatalogIngestEvent.source == "unit-test")
+            .filter(models.CatalogIngestEvent.event_type == "manifest_sync")
+            .order_by(models.CatalogIngestEvent.created_at.desc())
+            .first()
+        )
+        assert event is not None
+        payload = json.loads(event.payload_json)
+        assert payload["prune_missing"] is True
+        assert payload["deleted_count"] == 1
+        assert payload["image_count"] == 1
+
+    def test_sync_records_merge_event_payload_without_deletes(self, test_db) -> None:
+        from app.services.catalog_query import sync_catalog_from_manifest
+        from app import models
+        from uuid import uuid4
+        import json
+
+        test_db.add(models.CatalogImage(
+            id=str(uuid4()), external_id="kept-image",
+            kind="docker", source="api", metadata_json="{}",
+        ))
+        test_db.flush()
+
+        sync_catalog_from_manifest(
+            test_db,
+            {"images": [{"id": "fresh-image", "kind": "docker"}]},
+            source="unit-test",
+            prune_missing=False,
+        )
+        test_db.flush()
+
+        event = (
+            test_db.query(models.CatalogIngestEvent)
+            .filter(models.CatalogIngestEvent.source == "unit-test")
+            .filter(models.CatalogIngestEvent.event_type == "manifest_sync")
+            .order_by(models.CatalogIngestEvent.created_at.desc())
+            .first()
+        )
+        assert event is not None
+        payload = json.loads(event.payload_json)
+        assert payload["prune_missing"] is False
+        assert payload["deleted_count"] == 0
+        assert payload["image_count"] == 1
+
+    def test_sync_with_prune_disabled_empty_payload_keeps_existing_rows(self, test_db) -> None:
+        from app.services.catalog_query import sync_catalog_from_manifest
+        from app import models
+        from uuid import uuid4
+
+        test_db.add(models.CatalogImage(
+            id=str(uuid4()),
+            external_id="kept-image",
+            kind="docker",
+            source="api",
+            metadata_json='{"reference":"kept:1.0"}',
+            reference="kept:1.0",
+        ))
+        test_db.flush()
+
+        sync_catalog_from_manifest(test_db, {"images": []}, prune_missing=False)
+        test_db.flush()
+
+        kept = test_db.query(models.CatalogImage).filter(
+            models.CatalogImage.external_id == "kept-image"
+        ).first()
+        assert kept is not None
+        assert kept.reference == "kept:1.0"
+
+    def test_sync_with_prune_disabled_updates_existing_row_without_duplication(self, test_db) -> None:
+        from app.services.catalog_query import sync_catalog_from_manifest
+        from app import models
+        from uuid import uuid4
+
+        existing = models.CatalogImage(
+            id=str(uuid4()),
+            external_id="docker:ceos:1.0",
+            kind="docker",
+            source="api",
+            metadata_json='{"reference":"ceos:1.0"}',
+            reference="ceos:1.0",
+            filename="old.tar",
+        )
+        test_db.add(existing)
+        test_db.flush()
+
+        sync_catalog_from_manifest(
+            test_db,
+            {
+                "images": [
+                    {
+                        "id": "docker:ceos:1.0",
+                        "kind": "docker",
+                        "reference": "ceos:2.0",
+                        "filename": "new.tar",
+                        "source": "manifest",
+                    }
+                ]
+            },
+            prune_missing=False,
+        )
+        test_db.flush()
+
+        rows = test_db.query(models.CatalogImage).filter(
+            models.CatalogImage.external_id == "docker:ceos:1.0"
+        ).all()
+        assert len(rows) == 1
+        assert rows[0].reference == "ceos:2.0"
+        assert rows[0].filename == "new.tar"
+
 
 # ---------------------------------------------------------------------------
 # Tests: record_catalog_ingest_event

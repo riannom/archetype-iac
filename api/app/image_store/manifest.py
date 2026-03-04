@@ -143,7 +143,15 @@ def save_manifest(data: dict) -> None:
 
         with get_session() as session:
             if catalog_is_seeded(session):
-                sync_catalog_from_manifest(session, data, source="image_store.save_manifest")
+                # Runtime callers usually submit a partial in-memory payload derived
+                # from the current library. Avoid destructive pruning here to prevent
+                # accidental catalog truncation during transient fallback reads.
+                sync_catalog_from_manifest(
+                    session,
+                    data,
+                    source="image_store.save_manifest",
+                    prune_missing=False,
+                )
                 session.commit()
                 wrote_catalog = True
     except Exception:

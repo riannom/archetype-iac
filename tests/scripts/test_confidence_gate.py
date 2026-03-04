@@ -159,6 +159,30 @@ def test_scope_filtered_report_keeps_all_selected_checks():
     ]
 
 
+def test_ci_catalog_rule_selects_catalog_regression_check():
+    module = _load_module()
+    rules = _load_ci_rules(module)
+
+    plan = module.build_plan(
+        ["api/app/services/catalog_query.py"],
+        rules,
+    )
+
+    assert "test-api-catalog-regression" in plan["selected_checks"]
+
+
+def test_local_catalog_rule_selects_catalog_regression_check():
+    module = _load_module()
+    rules = _load_rules(module)
+
+    plan = module.build_plan(
+        ["api/app/image_store/manifest.py"],
+        rules,
+    )
+
+    assert "test-api-catalog-regression" in plan["selected_checks"]
+
+
 def test_min_score_exit_code_for_dry_run():
     module = _load_module()
 
