@@ -449,3 +449,13 @@
 **Fix**: Deleted all algorithm usage. Replaced with 3 lines of inline math in Canvas.tsx: `source.x + 0.2 * (target.x - source.x)` for each coordinate. Labels placed at exactly 20% along the link line from each endpoint. Confirmed with RED debug text, then restored proper theme colors.
 
 **Rule**: For UI element positioning on geometric shapes (lines, curves), start with the simplest possible math (linear interpolation) before reaching for algorithms. A complex placement algorithm with overlap avoidance and scoring is only justified after proving the simple approach fails. In this case, the simple approach was both correct and sufficient — the algorithm was pure over-engineering that introduced bugs.
+
+## 2026-03-03: Runtime manifest writes must never use destructive catalog pruning
+
+**Bug/Issue**: `save_manifest()` synced catalog rows using prune semantics even when the payload was partial (for example, read via fallback path after catalog read failures). Missing rows in that partial payload were treated as deletions.
+
+**Impact**: Existing image catalog entries could be removed unintentionally, collapsing available/assignable images in the UI from expected historical totals to a small subset.
+
+**Fix**: Added `prune_missing` control to `sync_catalog_from_manifest()`, switched runtime `save_manifest()` sync to `prune_missing=False`, and added regression coverage plus dedicated gates (`make test-api-catalog-regression`, confidence-gate rules, CI job) for merge-vs-prune behavior.
+
+**Rule**: Only use prune semantics for explicit full-snapshot reconciliation jobs. Any runtime read/modify/write path must default to merge/upsert behavior and carry regression tests for fallback-read then save flows.
