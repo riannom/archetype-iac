@@ -8,9 +8,7 @@ startup config normalization, injection diagnostics).
 
 from __future__ import annotations
 
-import asyncio
 import hashlib
-import re
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from types import SimpleNamespace

@@ -1,78 +1,64 @@
 # Coverage Priorities Summary
 
-Generated: 2026-03-01
-Worktree: `worktree/test-coverage-gap-plan-20260301`
+Generated: 2026-03-04
 
-## Scope and Inputs
+## Inputs
 
-- Regenerated import-map coverage via `python3 scripts/coverage_map.py`.
-- Updated `scripts/coverage_map.py`:
-  - Python import parsing now uses AST (`Import` + `ImportFrom`) and handles submodules from `from x import y`.
-  - TypeScript/TSX parsing now detects standard `import ... from`, side-effect imports, and `export ... from`.
-  - Test-file detection now avoids false positives for production files such as `api/app/tasks/test_runner.py`.
-- Reviewed support-bundle and observability regression tests:
-  - `api/tests/test_support_bundles.py`
-  - `api/tests/test_services_support_bundle.py`
-  - `tests/scripts/test_support_bundle_triage_drill.py`
-  - `tests/test_prometheus_alert_rules.py`
-  - `tests/test_grafana_dashboards.py`
+- Static import-map coverage: `python3 scripts/coverage_map.py`
+- Runtime probes:
+  - Agent: `tests/test_plugin_state.py`, `tests/test_plugin_vlan.py`, `tests/test_plugin_handlers_extended.py`
+  - API: `tests/test_tasks_node_lifecycle_stop.py`
+- CI failure review: GitHub Actions run `22655838213` (`Tests` workflow)
 
-Note: this import-map is a static signal. It does not prove branch/line runtime coverage.
+## Current Snapshot
 
-## Current Snapshot (Import-Map)
+### Static import-map coverage
 
-- API: 125 source, 125 covered, 0 uncovered.
-- Agent: 82 source, 82 covered, 0 uncovered.
-- Web: 186 source, 186 covered, 0 uncovered.
+- API: 173 source, 139 covered, 34 uncovered.
+- Agent: 98 source, 95 covered, 3 uncovered.
+- Web: 235 source, 221 covered, 14 uncovered.
 
-## New Test Coverage Added In This Iteration
+### Runtime probe coverage (sampled)
 
-- Web component coverage:
-  - `web/src/components/AdminMenuButton.test.tsx`
-  - `web/src/studio/components/ConfigRebootConfirmModal.test.tsx`
-  - `web/src/studio/components/InfraView/AgentNode.test.tsx`
-  - `web/src/studio/components/InfraView/GraphLink.test.tsx`
-  - `web/src/studio/components/InfraView/DetailPanel.test.tsx`
-- Agent utility/behavior coverage:
-  - `agent/tests/test_http_client.py`
-  - `agent/tests/test_image_cleanup.py`
-  - `agent/tests/test_providers_naming.py`
-  - `agent/tests/test_network_cmd.py`
-  - `agent/tests/test_n9kv_poap.py`
-- Support-bundle router hardening:
-  - Expanded `api/tests/test_support_bundles.py` with download/error-path and completeness-preview edge cases.
-- Import-smoke coverage for app-wired modules that static mapping previously missed:
-  - `agent/tests/test_uncovered_module_imports_batch4.py`
-  - `api/tests/test_uncovered_module_imports_batch2.py`
+- `agent/network/plugin_handlers.py`: 100%
+- `agent/network/plugin_state.py`: 53%
+- `agent/network/plugin_vlan.py`: 55%
+- `api/app/tasks/node_lifecycle_stop.py`: 98%
 
-## Validation Run
+## Key Findings
 
-- `pytest -q agent/tests/test_http_client.py agent/tests/test_image_cleanup.py agent/tests/test_providers_naming.py agent/tests/test_uncovered_module_imports_batch4.py`
-  - Result: 15 passed.
-- `pytest -q agent/tests/test_network_cmd.py agent/tests/test_n9kv_poap.py`
-  - Result: 7 passed.
-- `make test-api-container API_TEST=tests/test_uncovered_module_imports_batch2.py`
-  - Result: 2 passed (in API container).
-- `make test-api-container API_TEST=tests/test_support_bundles.py`
-  - Result: 10 passed (in API container).
-- `make test-web-container WEB_TEST=...` (each new web file run individually)
-  - Result: all new web tests passed.
+1. Static import-map output is directional, not authoritative runtime coverage.
+2. Some static "uncovered" modules are exercised indirectly at runtime (confirmed for agent plugin modules and API node lifecycle stop).
+3. Highest-confidence real gaps are in currently uncovered Web components/hooks and deeper error/recovery branches for agent plugin state/VLAN code.
 
-## Support-Bundle Triage Readiness
+## CI Reliability Findings
 
-Current strengths:
+Latest failing `Tests` run (`22655838213`) failed on:
 
-- Support-bundle API/service tests already cover degraded observability and completeness warnings.
-- Observability drill and canary checks are exercised in CI.
-- Static import-map no longer shows blind spots in triage-adjacent modules.
+- `Lint`: Ruff violations in agent tests.
+- `Backend Tests`: timeout at 30 minutes while running API coverage step.
 
-Remaining risks:
+### Fixes applied
 
-- Static import-map can be satisfied by shallow import-smoke tests; this does not guarantee deep behavior coverage.
-- Support-bundle triage still depends on cross-service runtime behavior (Prometheus/Loki/worker paths) that import-map does not validate.
+- Cleaned Ruff violations in:
+  - `agent/tests/test_docker_networks_extended.py`
+  - `agent/tests/test_docker_setup_extended.py`
+  - `agent/tests/test_libvirt_config_extended.py`
+  - `agent/tests/test_overlay_state_extended.py`
+  - `agent/tests/test_overlay_vxlan_extended.py`
+  - `agent/tests/test_plugin_handlers_extended.py`
+- Updated `.github/workflows/test.yml`:
+  - `backend-tests.timeout-minutes`: `30` -> `90`
+  - API/Agent coverage command verbosity: `-v` -> `-q`
 
-## Next High-Value Work
+## Next Priorities
 
-1. Replace remaining import-smoke-only modules with behavior tests for router error paths and auth boundaries.
-2. Add per-module runtime coverage reports (XML/HTML artifacts) and enforce minimums for support-bundle critical modules.
-3. Extend support-bundle drill fixtures to assert triage quality for mixed-failure scenarios (partial telemetry + worker backlog + stale scheduler).
+1. Fill P1 Web uncovered modules (`isoImport`, `infrastructure`, `deviceManager`, `useLabDataLoading`).
+2. Raise branch depth for `agent/network/plugin_state.py` and `agent/network/plugin_vlan.py` via recovery/error-path tests.
+3. Validate API split-module runtime coverage (`agent_client`, split routers/models/schemas) before writing new tests for static-only gaps.
+4. After stabilization, ratchet thresholds:
+   - API: 55 -> 60 (then 65)
+   - Agent: 50 -> 55 (then 60)
+   - Web lines/statements: 50 -> 60
+
+Detailed implementation plan: `tasks/test-coverage-round7-plan.md`
