@@ -24,7 +24,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
 from app import models
-from app.state import JobStatus, NodeActualState, NodeDesiredState
+from app.state import NodeActualState, NodeDesiredState
 
 
 # ---------------------------------------------------------------------------
@@ -732,7 +732,7 @@ class TestListNodeStatesDeepPaths:
         ns = _make_node_state(test_db, sample_lab, "n1", "r1",
                               desired_state="running", actual_state="pending")
 
-        with patch("app.routers.labs_node_states.agent_client") as mock_ac, \
+        with patch("app.routers.labs_node_states.agent_client"), \
              patch("app.routers.labs_node_states.get_online_agent_for_lab",
                     AsyncMock(side_effect=ConnectionError("boom"))):
             response = test_client.get(

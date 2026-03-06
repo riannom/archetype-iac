@@ -6,13 +6,10 @@ resolution, console ownership, and domain introspection helpers.
 """
 from __future__ import annotations
 
-import asyncio
 import hashlib
-import json
-import xml.etree.ElementTree as ET
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 

@@ -22,7 +22,6 @@ from app.tasks.jobs import (
     _auto_extract_configs_before_destroy,
     _capture_node_ips,
     _cleanup_network_records_after_destroy,
-    _dispatch_webhook,
     _get_node_info_for_webhook,
     _release_db_transaction_for_io,
     _reset_session_after_db_error,

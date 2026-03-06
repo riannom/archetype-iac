@@ -8,13 +8,13 @@ cross-host link detail, and error paths.
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone, timedelta
-from unittest.mock import MagicMock, AsyncMock, patch
+from datetime import datetime, timezone
+from unittest.mock import MagicMock, AsyncMock
 
 import pytest
 
 import app.routers.labs as _labs_pkg
-from app import models, schemas
+from app import models
 from app.routers.labs.link_states import (
     _choose_preferred_link_state,
     _find_matching_link_state,
