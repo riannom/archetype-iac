@@ -7,7 +7,6 @@ _node_from_container, _topology_from_json, discover_labs.
 
 from __future__ import annotations
 
-import asyncio
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -20,8 +19,8 @@ _AGENT_ROOT = str(Path(__file__).resolve().parents[1])
 if _AGENT_ROOT not in sys.path:
     sys.path.insert(0, _AGENT_ROOT)
 
-from agent.providers.docker import DockerProvider
-from providers.base import NodeStatus
+from agent.providers.docker import DockerProvider  # noqa: E402
+from providers.base import NodeStatus  # noqa: E402
 
 
 # ---------------------------------------------------------------------------

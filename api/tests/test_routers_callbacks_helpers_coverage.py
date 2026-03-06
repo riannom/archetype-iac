@@ -11,7 +11,6 @@ from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
 from app import models
-from app.state import JobStatus, LinkDesiredState, NodeActualState
 
 
 # ── Helpers ─────────────────────────────────────────────────────────────
@@ -145,7 +144,7 @@ class TestAutoConnectPendingLinks:
 
         host = _make_host(test_db)
         lab = _make_lab(test_db, test_user.id)
-        ls = _make_link_state(
+        _make_link_state(
             test_db, lab.id,
             source_node="R1", target_node="R2",
             desired_state="up", actual_state="pending",

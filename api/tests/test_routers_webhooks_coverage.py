@@ -7,8 +7,6 @@ Covers:
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
-from unittest.mock import AsyncMock, patch
 
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
@@ -140,7 +138,7 @@ class TestListWebhookDeliveries:
         test_user: models.User, auth_headers: dict,
     ):
         """A webhook owned by another user returns 404."""
-        from app.auth import create_access_token, hash_password
+        from app.auth import hash_password
 
         other_user = models.User(
             username="webhook_other",
@@ -234,7 +232,7 @@ class TestTestWebhookEndpoint:
         test_user: models.User, auth_headers: dict,
     ):
         """Testing another user's webhook returns 404."""
-        from app.auth import create_access_token, hash_password
+        from app.auth import hash_password
 
         other_user = models.User(
             username="wh_other2",

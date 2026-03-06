@@ -7,11 +7,10 @@ backfill_metadata, list_images, check_image.
 from __future__ import annotations
 
 import json
-import os
 import sys
 import time
 from pathlib import Path
-from unittest.mock import MagicMock, PropertyMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -21,14 +20,13 @@ for p in [str(REPO_ROOT), str(AGENT_ROOT)]:
     if p not in sys.path:
         sys.path.insert(0, p)
 
-from agent.routers.images import (
+from agent.routers.images import (  # noqa: E402
     _clear_persisted_transfer_state,
     _image_pull_jobs,
     _load_persisted_transfer_state,
     _persist_transfer_state,
-    _TRANSFER_STATE_FILE,
 )
-from agent.schemas import DockerImageInfo, ImagePullProgress
+from agent.schemas import DockerImageInfo, ImagePullProgress  # noqa: E402
 
 
 # ---------------------------------------------------------------------------

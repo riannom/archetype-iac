@@ -1,9 +1,7 @@
 """Tests for api/app/services/support_bundle.py — ZipBuilder, completeness warnings (round 11)."""
 from __future__ import annotations
 
-import json
 
-import pytest
 
 from app.services.support_bundle import (
     ZipBuilder,
@@ -28,7 +26,7 @@ class TestZipBuilder:
     def test_json_counts_toward_cap(self):
         zb = ZipBuilder(max_bytes=50)
         data = {"key": "value" * 10}  # Should be > 50 bytes when serialized
-        result = zb.add_json("data.json", data)
+        zb.add_json("data.json", data)
         # Either fits or doesn't — depends on exact size
         assert zb.total_input_bytes >= 0
 

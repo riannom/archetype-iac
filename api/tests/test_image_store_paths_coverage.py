@@ -8,8 +8,8 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from app.config import settings
-from app.image_store.paths import (
+from app.config import settings  # noqa: E402
+from app.image_store.paths import (  # noqa: E402
     image_store_root, ensure_image_store, qcow2_path, iol_path,
     manifest_path, rules_path, custom_devices_path, hidden_devices_path, device_overrides_path,
 )

@@ -7,9 +7,8 @@ import json
 import subprocess
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
-import pytest
 
 from agent.network import interface_config as ic
 
@@ -27,7 +26,7 @@ class TestIsInContainer:
     def test_detects_cgroup_docker(self, monkeypatch):
         with patch.object(Path, "exists", side_effect=lambda self=None: False):
             # Override per-path behavior
-            original_exists = Path.exists
+            Path.exists  # keep reference for patching
 
             def _fake_exists(self):
                 if str(self) == "/.dockerenv":

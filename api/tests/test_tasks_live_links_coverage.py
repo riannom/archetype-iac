@@ -1,10 +1,9 @@
 """Tests for app.tasks.live_links — create_link_if_ready, teardown_link, _build_host_to_agent_map."""
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
-import pytest_asyncio
 from sqlalchemy.orm import Session
 
 from app import models

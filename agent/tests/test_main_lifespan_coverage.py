@@ -16,8 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import ipaddress
-import types
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -512,7 +511,6 @@ class TestLifespan:
         monkeypatch.setattr("agent.main.get_capabilities", lambda: [])
 
         # First call for logging, second for init — make init fail
-        call_count = 0
         mock_backend = AsyncMock()
         mock_backend.name = "ovs"
         mock_backend.initialize = AsyncMock(side_effect=RuntimeError("OVS not available"))
@@ -660,7 +658,7 @@ class TestAgentAuthMiddleware:
 
         mock_next = AsyncMock(return_value=MagicMock(status_code=200))
 
-        response = await middleware.dispatch(request, mock_next)
+        await middleware.dispatch(request, mock_next)
         mock_next.assert_awaited_once()
 
     @pytest.mark.asyncio
@@ -677,7 +675,7 @@ class TestAgentAuthMiddleware:
         request.headers = {}
 
         mock_next = AsyncMock(return_value=MagicMock(status_code=200))
-        response = await middleware.dispatch(request, mock_next)
+        await middleware.dispatch(request, mock_next)
         mock_next.assert_awaited_once()
 
     @pytest.mark.asyncio
@@ -726,7 +724,7 @@ class TestAgentAuthMiddleware:
         request.headers = {"authorization": "Bearer mysecret", "upgrade": ""}
 
         mock_next = AsyncMock(return_value=MagicMock(status_code=200))
-        response = await middleware.dispatch(request, mock_next)
+        await middleware.dispatch(request, mock_next)
         mock_next.assert_awaited_once()
 
     @pytest.mark.asyncio
@@ -743,7 +741,7 @@ class TestAgentAuthMiddleware:
         request.headers = {"upgrade": "websocket", "authorization": ""}
 
         mock_next = AsyncMock(return_value=MagicMock(status_code=101))
-        response = await middleware.dispatch(request, mock_next)
+        await middleware.dispatch(request, mock_next)
         mock_next.assert_awaited_once()
 
     @pytest.mark.asyncio
@@ -760,5 +758,5 @@ class TestAgentAuthMiddleware:
         request.headers = {"upgrade": ""}
 
         mock_next = AsyncMock(return_value=MagicMock(status_code=200))
-        response = await middleware.dispatch(request, mock_next)
+        await middleware.dispatch(request, mock_next)
         mock_next.assert_awaited_once()

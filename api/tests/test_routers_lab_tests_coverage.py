@@ -13,15 +13,12 @@ Covers:
 """
 from __future__ import annotations
 
-import json
-from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
 from app import models
-from app.config import settings
 
 
 # ---------------------------------------------------------------------------

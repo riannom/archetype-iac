@@ -4,9 +4,8 @@ from __future__ import annotations
 import asyncio
 import json
 from contextlib import asynccontextmanager
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
-import pytest
 from aiohttp import web
 
 
@@ -113,7 +112,7 @@ class TestCreateNetwork:
             "NetworkID": "net-1",
             "Options": {"com.docker.network.generic": {"lab_id": "lab1", "interface_name": "eth1"}},
         })
-        resp = _run(plugin.handle_create_network(req))
+        _run(plugin.handle_create_network(req))
         assert "net-1" in plugin.networks
         assert plugin.networks["net-1"].lab_id == "lab1"
         plugin._mark_dirty_and_save.assert_awaited_once()

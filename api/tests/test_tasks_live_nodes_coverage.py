@@ -1,16 +1,12 @@
 """Tests for app.tasks.live_nodes — deploy/destroy, cleanup, debouncer, host map."""
 from __future__ import annotations
 
-import asyncio
-import json
-from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from sqlalchemy.orm import Session
 
 from app import models
-from app.auth import hash_password
 
 
 # ---------------------------------------------------------------------------

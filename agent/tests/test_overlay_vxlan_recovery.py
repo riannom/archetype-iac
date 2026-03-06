@@ -535,7 +535,7 @@ class TestCleanupOrphanPorts:
         monkeypatch.setattr(mgr, "_delete_vxlan_device", _delete_vxlan_device)
         monkeypatch.setattr(mgr, "_write_declared_state_cache", _write_cache)
 
-        result = await mgr.declare_state([], declared_labs=["lab1"])
+        await mgr.declare_state([], declared_labs=["lab1"])
         assert len(deleted_devices) == 0
 
 

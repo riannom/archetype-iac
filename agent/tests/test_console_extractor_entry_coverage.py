@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import sys
 import os
-import threading
 from dataclasses import dataclass
 from unittest.mock import MagicMock, patch
 
@@ -19,7 +18,7 @@ _AGENT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if _AGENT_ROOT not in sys.path:
     sys.path.insert(0, _AGENT_ROOT)
 
-from agent.console_extractor import (
+from agent.console_extractor import (  # noqa: E402
     CommandCaptureResult,
     CommandResult,
     ExtractionResult,

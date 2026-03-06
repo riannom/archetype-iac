@@ -18,7 +18,6 @@ by test_console_ssh_coverage.py:
 
 from __future__ import annotations
 
-import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest

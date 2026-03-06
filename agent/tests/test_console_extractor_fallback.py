@@ -15,7 +15,7 @@ import contextlib
 import importlib.util
 import sys
 import types
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -40,13 +40,11 @@ if importlib.util.find_spec("pexpect") is None:
     _pexpect_stub.spawn = _FakeSpawn
     sys.modules["pexpect"] = _pexpect_stub
 
-import pexpect  # noqa: E402
 
 import agent.console_extractor as ce
 from agent.console_extractor import (
     ExtractionResult,
     CommandResult,
-    CommandCaptureResult,
     SerialConsoleExtractor,
 )
 

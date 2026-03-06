@@ -1,12 +1,10 @@
 """Tests for app.routers.images.sync — image sync endpoints coverage."""
 from __future__ import annotations
 
-import json
 from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import patch
 from uuid import uuid4
 
-import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
@@ -286,7 +284,7 @@ class TestGetSyncJob:
         auth_headers: dict,
         sample_host: models.Host,
     ):
-        job = _make_sync_job(test_db, sample_host.id, job_id="test-job-sync")
+        _make_sync_job(test_db, sample_host.id, job_id="test-job-sync")
 
         resp = test_client.get("/images/sync-jobs/test-job-sync", headers=auth_headers)
         assert resp.status_code == 200
