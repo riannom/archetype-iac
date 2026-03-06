@@ -23,41 +23,43 @@ def _agent() -> SimpleNamespace:
 @pytest.mark.asyncio
 async def test_overlay_and_images_wrappers_use_safe_request():
     host = _agent()
-    with patch("app.agent_client._safe_agent_request", new_callable=AsyncMock) as mock_req:
-        mock_req.side_effect = [
-            {"tunnels": [], "bridges": []},
-            {"images": ["img:a"]},
-        ]
+    # get_overlay_status_from_agent is in overlay.py, get_agent_images is in node_ops.py
+    # Both import _safe_agent_request from http.py
+    with patch("app.agent_client.overlay._safe_agent_request", new_callable=AsyncMock) as mock_overlay, \
+         patch("app.agent_client.node_ops._safe_agent_request", new_callable=AsyncMock) as mock_node:
+        mock_overlay.return_value = {"tunnels": [], "bridges": []}
+        mock_node.return_value = {"images": ["img:a"]}
 
         overlay = await agent_client.get_overlay_status_from_agent(host)
         images = await agent_client.get_agent_images(host)
 
     assert overlay["tunnels"] == []
     assert images["images"] == ["img:a"]
-    assert mock_req.await_count == 2
+    assert mock_overlay.await_count == 1
+    assert mock_node.await_count == 1
 
 
 @pytest.mark.asyncio
 async def test_container_action_lab_reconcile_success_and_failures():
     host = _agent()
 
-    with patch("app.agent_client.reconcile_nodes_on_agent", new_callable=AsyncMock) as mock_reconcile:
+    with patch("app.agent_client.node_ops.reconcile_nodes_on_agent", new_callable=AsyncMock) as mock_reconcile:
         mock_reconcile.return_value = {"results": [{"success": True, "action": "start"}]}
         ok = await agent_client.container_action(host, "arch-lab-node", "start", lab_id="lab-1")
     assert ok == {"success": True, "message": "Container start"}
 
-    with patch("app.agent_client.reconcile_nodes_on_agent", new_callable=AsyncMock) as mock_reconcile:
+    with patch("app.agent_client.node_ops.reconcile_nodes_on_agent", new_callable=AsyncMock) as mock_reconcile:
         mock_reconcile.return_value = {"results": [{"success": False, "error": "denied"}]}
         denied = await agent_client.container_action(host, "arch-lab-node", "stop", lab_id="lab-1")
     assert denied == {"success": False, "error": "denied"}
 
-    with patch("app.agent_client.reconcile_nodes_on_agent", new_callable=AsyncMock) as mock_reconcile:
+    with patch("app.agent_client.node_ops.reconcile_nodes_on_agent", new_callable=AsyncMock) as mock_reconcile:
         mock_reconcile.return_value = {"results": []}
         no_result = await agent_client.container_action(host, "arch-lab-node", "stop", lab_id="lab-1")
     assert no_result == {"success": False, "error": "No result from reconcile"}
 
     with patch(
-        "app.agent_client.reconcile_nodes_on_agent",
+        "app.agent_client.node_ops.reconcile_nodes_on_agent",
         new_callable=AsyncMock,
         side_effect=AgentError("agent unavailable", agent_id=host.id),
     ):
@@ -66,7 +68,7 @@ async def test_container_action_lab_reconcile_success_and_failures():
     assert "agent unavailable" in agent_err["error"]
 
     with patch(
-        "app.agent_client.reconcile_nodes_on_agent",
+        "app.agent_client.node_ops.reconcile_nodes_on_agent",
         new_callable=AsyncMock,
         side_effect=RuntimeError("boom"),
     ):
@@ -77,8 +79,8 @@ async def test_container_action_lab_reconcile_success_and_failures():
 @pytest.mark.asyncio
 async def test_container_action_legacy_path_and_job_error_parsing():
     host = _agent()
-    with patch("app.agent_client.get_agent_url", return_value="http://agent"), patch(
-        "app.agent_client._agent_request", new_callable=AsyncMock
+    with patch("app.agent_client.node_ops.get_agent_url", return_value="http://agent"), patch(
+        "app.agent_client.node_ops._agent_request", new_callable=AsyncMock
     ) as mock_req:
         mock_req.return_value = {"success": True}
         result = await agent_client.container_action(host, "arch-lab-node", "start")
@@ -87,8 +89,8 @@ async def test_container_action_legacy_path_and_job_error_parsing():
     assert args[0] == "POST"
     assert args[1].endswith("/containers/arch-lab-node/start")
 
-    with patch("app.agent_client.get_agent_url", return_value="http://agent"), patch(
-        "app.agent_client._agent_request",
+    with patch("app.agent_client.node_ops.get_agent_url", return_value="http://agent"), patch(
+        "app.agent_client.node_ops._agent_request",
         new_callable=AsyncMock,
         side_effect=AgentJobError(
             "job failed",
@@ -99,16 +101,16 @@ async def test_container_action_legacy_path_and_job_error_parsing():
         parsed = await agent_client.container_action(host, "arch-lab-node", "stop")
     assert parsed == {"success": False, "error": "container missing"}
 
-    with patch("app.agent_client.get_agent_url", return_value="http://agent"), patch(
-        "app.agent_client._agent_request",
+    with patch("app.agent_client.node_ops.get_agent_url", return_value="http://agent"), patch(
+        "app.agent_client.node_ops._agent_request",
         new_callable=AsyncMock,
         side_effect=AgentJobError("job failed", agent_id=host.id, stderr="not-json"),
     ):
         unparsed = await agent_client.container_action(host, "arch-lab-node", "stop")
     assert unparsed == {"success": False, "error": "job failed"}
 
-    with patch("app.agent_client.get_agent_url", return_value="http://agent"), patch(
-        "app.agent_client._agent_request",
+    with patch("app.agent_client.node_ops.get_agent_url", return_value="http://agent"), patch(
+        "app.agent_client.node_ops._agent_request",
         new_callable=AsyncMock,
         side_effect=RuntimeError("unexpected"),
     ):
@@ -119,8 +121,8 @@ async def test_container_action_legacy_path_and_job_error_parsing():
 @pytest.mark.asyncio
 async def test_create_node_payload_includes_optional_fields():
     host = _agent()
-    with patch("app.agent_client.get_agent_url", return_value="http://agent"), patch(
-        "app.agent_client._timed_node_operation", new_callable=AsyncMock, return_value={"success": True}
+    with patch("app.agent_client.node_ops.get_agent_url", return_value="http://agent"), patch(
+        "app.agent_client.node_ops._timed_node_operation", new_callable=AsyncMock, return_value={"success": True}
     ) as mock_op:
         result = await agent_client.create_node_on_agent(
             host,
@@ -178,8 +180,8 @@ async def test_create_node_payload_includes_optional_fields():
 @pytest.mark.asyncio
 async def test_start_stop_destroy_node_wrappers_delegate_to_timed_operation():
     host = _agent()
-    with patch("app.agent_client.get_agent_url", return_value="http://agent"), patch(
-        "app.agent_client._timed_node_operation", new_callable=AsyncMock, return_value={"success": True}
+    with patch("app.agent_client.node_ops.get_agent_url", return_value="http://agent"), patch(
+        "app.agent_client.node_ops._timed_node_operation", new_callable=AsyncMock, return_value={"success": True}
     ) as mock_op:
         await agent_client.start_node_on_agent(host, "lab-1", "r1", provider="docker")
         await agent_client.stop_node_on_agent(host, "lab-1", "r1", provider="docker")
@@ -191,7 +193,7 @@ async def test_start_stop_destroy_node_wrappers_delegate_to_timed_operation():
 @pytest.mark.asyncio
 async def test_extract_and_update_config_wrappers_cover_success_branches():
     host = _agent()
-    with patch("app.agent_client._safe_agent_request", new_callable=AsyncMock) as mock_req:
+    with patch("app.agent_client.maintenance._safe_agent_request", new_callable=AsyncMock) as mock_req:
         mock_req.side_effect = [
             {"success": True, "extracted_count": 2},
             {"success": True, "node_name": "r1"},
@@ -209,7 +211,7 @@ async def test_extract_and_update_config_wrappers_cover_success_branches():
 @pytest.mark.asyncio
 async def test_prune_and_workspace_cleanup_wrappers():
     host = _agent()
-    with patch("app.agent_client._safe_agent_request", new_callable=AsyncMock) as mock_req:
+    with patch("app.agent_client.maintenance._safe_agent_request", new_callable=AsyncMock) as mock_req:
         mock_req.side_effect = [
             {"success": True, "images_removed": 1},
             {"success": True},
@@ -236,8 +238,8 @@ async def test_prune_and_workspace_cleanup_wrappers():
 async def test_mtu_and_interface_config_wrappers_success_and_error_paths():
     host = _agent()
 
-    with patch("app.agent_client.get_agent_url", return_value="http://agent"), patch(
-        "app.agent_client._agent_request",
+    with patch("app.agent_client.maintenance.get_agent_url", return_value="http://agent"), patch(
+        "app.agent_client.maintenance._agent_request",
         new_callable=AsyncMock,
         return_value={"success": True, "tested_mtu": 1450},
     ) as mock_req:
@@ -246,40 +248,40 @@ async def test_mtu_and_interface_config_wrappers_success_and_error_paths():
     _, kwargs = mock_req.await_args
     assert kwargs["json_body"]["source_ip"] == "10.10.10.1"
 
-    with patch("app.agent_client.get_agent_url", return_value="http://agent"), patch(
-        "app.agent_client._agent_request",
+    with patch("app.agent_client.maintenance.get_agent_url", return_value="http://agent"), patch(
+        "app.agent_client.maintenance._agent_request",
         new_callable=AsyncMock,
         side_effect=RuntimeError("mtu failed"),
     ):
         mtu_err = await agent_client.test_mtu_on_agent(host, "10.10.10.2", 1450)
     assert mtu_err == {"success": False, "error": "mtu failed"}
 
-    with patch("app.agent_client.get_agent_url", return_value="http://agent"), patch(
-        "app.agent_client._agent_request",
+    with patch("app.agent_client.maintenance.get_agent_url", return_value="http://agent"), patch(
+        "app.agent_client.maintenance._agent_request",
         new_callable=AsyncMock,
         return_value={"interfaces": []},
     ):
         details = await agent_client.get_agent_interface_details(host)
     assert details["interfaces"] == []
 
-    with patch("app.agent_client.get_agent_url", return_value="http://agent"), patch(
-        "app.agent_client._agent_request",
+    with patch("app.agent_client.maintenance.get_agent_url", return_value="http://agent"), patch(
+        "app.agent_client.maintenance._agent_request",
         new_callable=AsyncMock,
         side_effect=RuntimeError("details failed"),
     ):
         with pytest.raises(RuntimeError):
             await agent_client.get_agent_interface_details(host)
 
-    with patch("app.agent_client.get_agent_url", return_value="http://agent"), patch(
-        "app.agent_client._agent_request",
+    with patch("app.agent_client.maintenance.get_agent_url", return_value="http://agent"), patch(
+        "app.agent_client.maintenance._agent_request",
         new_callable=AsyncMock,
         return_value={"success": True, "new_mtu": 1600},
     ):
         mtu_set = await agent_client.set_agent_interface_mtu(host, "eth1", 1600)
     assert mtu_set["success"] is True
 
-    with patch("app.agent_client.get_agent_url", return_value="http://agent"), patch(
-        "app.agent_client._agent_request",
+    with patch("app.agent_client.maintenance.get_agent_url", return_value="http://agent"), patch(
+        "app.agent_client.maintenance._agent_request",
         new_callable=AsyncMock,
         side_effect=RuntimeError("set mtu failed"),
     ):
@@ -287,8 +289,8 @@ async def test_mtu_and_interface_config_wrappers_success_and_error_paths():
     assert mtu_set_err["success"] is False
     assert mtu_set_err["new_mtu"] == 1600
 
-    with patch("app.agent_client.get_agent_url", return_value="http://agent"), patch(
-        "app.agent_client._agent_request",
+    with patch("app.agent_client.maintenance.get_agent_url", return_value="http://agent"), patch(
+        "app.agent_client.maintenance._agent_request",
         new_callable=AsyncMock,
         return_value={"success": True, "interface_name": "eth1.100"},
     ) as mock_req:
@@ -305,8 +307,8 @@ async def test_mtu_and_interface_config_wrappers_success_and_error_paths():
     assert "name" not in kwargs["json_body"]
     assert kwargs["json_body"]["parent_interface"] == "eth1"
 
-    with patch("app.agent_client.get_agent_url", return_value="http://agent"), patch(
-        "app.agent_client._agent_request",
+    with patch("app.agent_client.maintenance.get_agent_url", return_value="http://agent"), patch(
+        "app.agent_client.maintenance._agent_request",
         new_callable=AsyncMock,
         side_effect=RuntimeError("provision failed"),
     ):
@@ -318,13 +320,17 @@ async def test_mtu_and_interface_config_wrappers_success_and_error_paths():
 async def test_link_and_ovs_wrappers_success_false_and_exception_branches():
     host = _agent()
 
-    with patch("app.agent_client.get_agent_url", return_value="http://agent"), patch(
-        "app.agent_client._agent_request", new_callable=AsyncMock
-    ) as mock_req:
-        mock_req.side_effect = [
+    # Links functions are in links.py, OVS/boot-log functions are in maintenance.py
+    with patch("app.agent_client.links.get_agent_url", return_value="http://agent"), \
+         patch("app.agent_client.maintenance.get_agent_url", return_value="http://agent"), \
+         patch("app.agent_client.links._agent_request", new_callable=AsyncMock) as mock_link_req, \
+         patch("app.agent_client.maintenance._agent_request", new_callable=AsyncMock) as mock_maint_req:
+        mock_link_req.side_effect = [
             {"success": True, "link": {"link_id": "a-b"}},
             {"success": False, "error": "already disconnected"},
             {"links": [{"id": "a-b"}]},
+        ]
+        mock_maint_req.side_effect = [
             {"bridge_name": "arch-ovs", "initialized": True, "ports": [], "links": []},
             {"boot_logs": {"r1": "booting"}},
             {"bridge": "arch-ovs", "flows": "table=0"},
@@ -346,9 +352,10 @@ async def test_link_and_ovs_wrappers_success_false_and_exception_branches():
     missing_lab = await agent_client.get_agent_boot_logs(host)
     assert missing_lab["error"] == "lab_id required"
 
-    with patch("app.agent_client.get_agent_url", return_value="http://agent"), patch(
-        "app.agent_client._agent_request", new_callable=AsyncMock, side_effect=RuntimeError("link failed")
-    ):
+    with patch("app.agent_client.links.get_agent_url", return_value="http://agent"), \
+         patch("app.agent_client.maintenance.get_agent_url", return_value="http://agent"), \
+         patch("app.agent_client.links._agent_request", new_callable=AsyncMock, side_effect=RuntimeError("link failed")), \
+         patch("app.agent_client.maintenance._agent_request", new_callable=AsyncMock, side_effect=RuntimeError("link failed")):
         assert (await agent_client.create_link_on_agent(host, "lab-1", "r1", "eth1", "r2", "eth1"))["success"] is False
         assert (await agent_client.delete_link_on_agent(host, "lab-1", "r1:eth1-r2:eth1"))["success"] is False
         assert await agent_client.list_links_on_agent(host, "lab-1") == {"links": []}
@@ -361,8 +368,8 @@ async def test_link_and_ovs_wrappers_success_false_and_exception_branches():
 async def test_external_vlan_and_repair_wrappers():
     host = _agent()
 
-    with patch("app.agent_client.get_agent_url", return_value="http://agent"), patch(
-        "app.agent_client._agent_request", new_callable=AsyncMock
+    with patch("app.agent_client.links.get_agent_url", return_value="http://agent"), patch(
+        "app.agent_client.links._agent_request", new_callable=AsyncMock
     ) as mock_req:
         mock_req.side_effect = [
             {"success": True, "vlan_tag": 3111},
@@ -373,32 +380,37 @@ async def test_external_vlan_and_repair_wrappers():
             {"vlan_tag": 2222},
             {"success": True},
             {"success": True, "total_endpoints_repaired": 2},
-            {"exit_code": 0, "output": "ok"},
         ]
-        connected = await agent_client.connect_external_on_agent(
-            host,
-            "lab-1",
-            "r1",
-            "eth2",
-            "ens192",
-            vlan_tag=3111,
-        )
-        connected_fail = await agent_client.connect_external_on_agent(
-            host,
-            "lab-1",
-            "r1",
-            "eth2",
-            "ens192",
-        )
-        detached = await agent_client.detach_external_on_agent(host, "ens192")
-        detached_fail = await agent_client.detach_external_on_agent(host, "ens193")
-        ports = await agent_client.get_lab_ports_from_agent(host, "lab-1")
-        vlan = await agent_client.get_interface_vlan_from_agent(
-            host, "lab-1", "r1", "eth1", read_from_ovs=True
-        )
-        set_ok = await agent_client.set_port_vlan_on_agent(host, "vh1", 3333)
-        repaired = await agent_client.repair_endpoints_on_agent(host, "lab-1", nodes=["r1"])
-        cmd = await agent_client.exec_node_on_agent(host, "lab-1", "r1", "show ver")
+
+        # exec_node_on_agent is in maintenance.py
+        with patch("app.agent_client.maintenance.get_agent_url", return_value="http://agent"), \
+             patch("app.agent_client.maintenance._agent_request", new_callable=AsyncMock) as mock_maint_req:
+            mock_maint_req.return_value = {"exit_code": 0, "output": "ok"}
+
+            connected = await agent_client.connect_external_on_agent(
+                host,
+                "lab-1",
+                "r1",
+                "eth2",
+                "ens192",
+                vlan_tag=3111,
+            )
+            connected_fail = await agent_client.connect_external_on_agent(
+                host,
+                "lab-1",
+                "r1",
+                "eth2",
+                "ens192",
+            )
+            detached = await agent_client.detach_external_on_agent(host, "ens192")
+            detached_fail = await agent_client.detach_external_on_agent(host, "ens193")
+            ports = await agent_client.get_lab_ports_from_agent(host, "lab-1")
+            vlan = await agent_client.get_interface_vlan_from_agent(
+                host, "lab-1", "r1", "eth1", read_from_ovs=True
+            )
+            set_ok = await agent_client.set_port_vlan_on_agent(host, "vh1", 3333)
+            repaired = await agent_client.repair_endpoints_on_agent(host, "lab-1", nodes=["r1"])
+            cmd = await agent_client.exec_node_on_agent(host, "lab-1", "r1", "show ver")
 
     assert connected["success"] is True
     assert connected_fail["success"] is False
@@ -409,11 +421,11 @@ async def test_external_vlan_and_repair_wrappers():
     assert set_ok is True
     assert repaired["total_endpoints_repaired"] == 2
     assert cmd["exit_code"] == 0
-    assert mock_req.await_count == 9
+    assert mock_req.await_count == 8
+    assert mock_maint_req.await_count == 1
 
-    with patch("app.agent_client.get_agent_url", return_value="http://agent"), patch(
-        "app.agent_client._agent_request", new_callable=AsyncMock, side_effect=RuntimeError("agent err")
-    ):
+    with patch("app.agent_client.links.get_agent_url", return_value="http://agent"), \
+         patch("app.agent_client.links._agent_request", new_callable=AsyncMock, side_effect=RuntimeError("agent err")):
         assert await agent_client.get_lab_ports_from_agent(host, "lab-1") == []
         assert await agent_client.get_interface_vlan_from_agent(host, "lab-1", "r1", "eth1") is None
         assert await agent_client.set_port_vlan_on_agent(host, "vh1", 2) is False

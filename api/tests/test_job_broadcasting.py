@@ -371,11 +371,11 @@ class TestMultihostDeployBroadcasts:
         test_db.add_all([node1, node2])
         test_db.commit()
 
-        with patch("app.tasks.jobs.get_session", _mock_get_session(test_db)):
+        with patch("app.tasks.jobs_multihost.get_session", _mock_get_session(test_db)):
             with patch("app.services.broadcaster.get_broadcaster", return_value=mock_broadcaster):
-                with patch("app.tasks.jobs.agent_client.deploy_to_agent", new_callable=AsyncMock) as mock_deploy:
+                with patch("app.tasks.jobs_multihost.agent_client.deploy_to_agent", new_callable=AsyncMock) as mock_deploy:
                     mock_deploy.return_value = {"status": "completed"}
-                    with patch("app.tasks.jobs.agent_client.is_agent_online", return_value=True):
+                    with patch("app.tasks.jobs_multihost.agent_client.is_agent_online", return_value=True):
                         await run_multihost_deploy(job.id, lab.id)
 
         # Check for host count in progress messages

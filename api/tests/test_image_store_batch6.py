@@ -23,6 +23,15 @@ from __future__ import annotations
 import json
 
 
+def _patch_custom_devices_path(monkeypatch, tmp_path):
+    """Patch custom_devices_path in both the package and submodule namespaces."""
+    from app import image_store
+    from app.image_store import custom_devices as _cd_mod
+    monkeypatch.setattr(image_store, "ensure_image_store", lambda: tmp_path)
+    monkeypatch.setattr(_cd_mod, "custom_devices_path", lambda: tmp_path / "custom_devices.json")
+    monkeypatch.setattr(image_store, "custom_devices_path", lambda: tmp_path / "custom_devices.json")
+    return image_store
+
 
 # ---------------------------------------------------------------------------
 # detect_iol_device_type
@@ -85,40 +94,38 @@ class TestGetImageProvider:
 # ---------------------------------------------------------------------------
 
 class TestHiddenDevices:
-    def test_hide_device(self, tmp_path, monkeypatch):
+    def _patch_hidden(self, tmp_path, monkeypatch):
         from app import image_store
+        from app.image_store import custom_devices as _cd_mod
         monkeypatch.setattr(image_store, "ensure_image_store", lambda: tmp_path)
+        monkeypatch.setattr(_cd_mod, "hidden_devices_path", lambda: tmp_path / "hidden_devices.json")
         monkeypatch.setattr(image_store, "hidden_devices_path", lambda: tmp_path / "hidden_devices.json")
+        return image_store
 
+    def test_hide_device(self, tmp_path, monkeypatch):
+        image_store = self._patch_hidden(tmp_path, monkeypatch)
         assert image_store.hide_device("ceos") is True
         assert image_store.is_device_hidden("ceos") is True
 
     def test_hide_device_already_hidden(self, tmp_path, monkeypatch):
-        from app import image_store
-        monkeypatch.setattr(image_store, "ensure_image_store", lambda: tmp_path)
-        monkeypatch.setattr(image_store, "hidden_devices_path", lambda: tmp_path / "hidden_devices.json")
-
+        image_store = self._patch_hidden(tmp_path, monkeypatch)
         image_store.hide_device("ceos")
         assert image_store.hide_device("ceos") is False
 
     def test_unhide_device(self, tmp_path, monkeypatch):
-        from app import image_store
-        monkeypatch.setattr(image_store, "ensure_image_store", lambda: tmp_path)
-        monkeypatch.setattr(image_store, "hidden_devices_path", lambda: tmp_path / "hidden_devices.json")
-
+        image_store = self._patch_hidden(tmp_path, monkeypatch)
         image_store.hide_device("ceos")
         assert image_store.unhide_device("ceos") is True
         assert image_store.is_device_hidden("ceos") is False
 
     def test_unhide_not_hidden(self, tmp_path, monkeypatch):
-        from app import image_store
-        monkeypatch.setattr(image_store, "ensure_image_store", lambda: tmp_path)
-        monkeypatch.setattr(image_store, "hidden_devices_path", lambda: tmp_path / "hidden_devices.json")
-
+        image_store = self._patch_hidden(tmp_path, monkeypatch)
         assert image_store.unhide_device("linux") is False
 
     def test_load_hidden_missing_file(self, tmp_path, monkeypatch):
         from app import image_store
+        from app.image_store import custom_devices as _cd_mod
+        monkeypatch.setattr(_cd_mod, "hidden_devices_path", lambda: tmp_path / "missing.json")
         monkeypatch.setattr(image_store, "hidden_devices_path", lambda: tmp_path / "missing.json")
         assert image_store.load_hidden_devices() == []
 
@@ -130,7 +137,9 @@ class TestHiddenDevices:
 class TestDeviceOverrides:
     def _setup(self, tmp_path, monkeypatch):
         from app import image_store
+        from app.image_store import overrides as _ov_mod
         path = tmp_path / "device_overrides.json"
+        monkeypatch.setattr(_ov_mod, "device_overrides_path", lambda: path)
         monkeypatch.setattr(image_store, "device_overrides_path", lambda: path)
         return image_store
 
@@ -372,12 +381,9 @@ class TestImageMatchesDevice:
 
 class TestCleanupOrphanedCustomDevices:
     def test_removes_orphans(self, tmp_path, monkeypatch):
-        from app import image_store
-
-        monkeypatch.setattr(image_store, "ensure_image_store", lambda: tmp_path)
-        monkeypatch.setattr(image_store, "custom_devices_path", lambda: tmp_path / "custom_devices.json")
+        image_store = _patch_custom_devices_path(monkeypatch, tmp_path)
         # Mock load_manifest to return empty images (bypasses DB path)
-        monkeypatch.setattr(image_store, "load_manifest", lambda: {"images": []})
+        monkeypatch.setattr("app.image_store.manifest.load_manifest", lambda: {"images": []})
 
         # Write custom device
         (tmp_path / "custom_devices.json").write_text(json.dumps({
@@ -388,12 +394,9 @@ class TestCleanupOrphanedCustomDevices:
         assert "orphan-dev" in removed
 
     def test_keeps_devices_with_images(self, tmp_path, monkeypatch):
-        from app import image_store
-
-        monkeypatch.setattr(image_store, "ensure_image_store", lambda: tmp_path)
-        monkeypatch.setattr(image_store, "custom_devices_path", lambda: tmp_path / "custom_devices.json")
+        image_store = _patch_custom_devices_path(monkeypatch, tmp_path)
         # Mock load_manifest with matching image
-        monkeypatch.setattr(image_store, "load_manifest", lambda: {
+        monkeypatch.setattr("app.image_store.manifest.load_manifest", lambda: {
             "images": [{"device_id": "my-device", "compatible_devices": ["my-device"]}]
         })
 
@@ -412,9 +415,7 @@ class TestCleanupOrphanedCustomDevices:
 
 class TestFindCustomDevice:
     def test_finds_existing(self, tmp_path, monkeypatch):
-        from app import image_store
-        monkeypatch.setattr(image_store, "ensure_image_store", lambda: tmp_path)
-        monkeypatch.setattr(image_store, "custom_devices_path", lambda: tmp_path / "custom_devices.json")
+        image_store = _patch_custom_devices_path(monkeypatch, tmp_path)
 
         (tmp_path / "custom_devices.json").write_text(json.dumps({
             "devices": [{"id": "test-dev", "name": "Test"}]
@@ -425,15 +426,15 @@ class TestFindCustomDevice:
         assert result["id"] == "test-dev"
 
     def test_returns_none_not_found(self, tmp_path, monkeypatch):
-        from app import image_store
-        monkeypatch.setattr(image_store, "ensure_image_store", lambda: tmp_path)
-        monkeypatch.setattr(image_store, "custom_devices_path", lambda: tmp_path / "custom_devices.json")
+        image_store = _patch_custom_devices_path(monkeypatch, tmp_path)
 
         (tmp_path / "custom_devices.json").write_text(json.dumps({"devices": []}))
         assert image_store.find_custom_device("missing") is None
 
     def test_returns_none_missing_file(self, tmp_path, monkeypatch):
         from app import image_store
+        from app.image_store import custom_devices as _cd_mod
+        monkeypatch.setattr(_cd_mod, "custom_devices_path", lambda: tmp_path / "missing.json")
         monkeypatch.setattr(image_store, "custom_devices_path", lambda: tmp_path / "missing.json")
         monkeypatch.setattr(image_store, "ensure_image_store", lambda: tmp_path)
         assert image_store.find_custom_device("anything") is None
@@ -445,9 +446,7 @@ class TestFindCustomDevice:
 
 class TestDeleteCustomDevice:
     def test_deletes_existing(self, tmp_path, monkeypatch):
-        from app import image_store
-        monkeypatch.setattr(image_store, "ensure_image_store", lambda: tmp_path)
-        monkeypatch.setattr(image_store, "custom_devices_path", lambda: tmp_path / "custom_devices.json")
+        image_store = _patch_custom_devices_path(monkeypatch, tmp_path)
 
         (tmp_path / "custom_devices.json").write_text(json.dumps({
             "devices": [{"id": "test-dev", "name": "Test"}]
@@ -459,9 +458,7 @@ class TestDeleteCustomDevice:
         assert image_store.find_custom_device("test-dev") is None
 
     def test_returns_none_not_found(self, tmp_path, monkeypatch):
-        from app import image_store
-        monkeypatch.setattr(image_store, "ensure_image_store", lambda: tmp_path)
-        monkeypatch.setattr(image_store, "custom_devices_path", lambda: tmp_path / "custom_devices.json")
+        image_store = _patch_custom_devices_path(monkeypatch, tmp_path)
 
         (tmp_path / "custom_devices.json").write_text(json.dumps({"devices": []}))
         assert image_store.delete_custom_device("missing") is None

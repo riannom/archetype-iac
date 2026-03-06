@@ -137,7 +137,7 @@ class TestRunMultihostDeploy:
     @pytest.mark.asyncio
     async def test_job_not_found_returns_early(self, test_db: Session):
         """Job that doesn't exist should log error and return without crashing."""
-        with patch("app.tasks.jobs.get_session", _mock_get_session(test_db)):
+        with patch("app.tasks.jobs_multihost.get_session", _mock_get_session(test_db)):
             # Should not raise
             await run_multihost_deploy("nonexistent-job", "lab-id")
 
@@ -156,7 +156,7 @@ class TestRunMultihostDeploy:
         test_db.commit()
         test_db.refresh(job)
 
-        with patch("app.tasks.jobs.get_session", _mock_get_session(test_db)):
+        with patch("app.tasks.jobs_multihost.get_session", _mock_get_session(test_db)):
             await run_multihost_deploy(job.id, "nonexistent-lab")
 
         test_db.refresh(job)
@@ -216,18 +216,18 @@ class TestRunMultihostDeploy:
         test_db.add_all([node1, node2])
         test_db.commit()
 
-        with patch("app.tasks.jobs.get_session", _mock_get_session(test_db)):
+        with patch("app.tasks.jobs_multihost.get_session", _mock_get_session(test_db)):
             with patch(
-                "app.tasks.jobs.agent_client.is_agent_online",
+                "app.tasks.jobs_multihost.agent_client.is_agent_online",
                 return_value=True,
             ):
                 with patch(
-                    "app.tasks.jobs.agent_client.get_lab_status_from_agent",
+                    "app.tasks.jobs_multihost.agent_client.get_lab_status_from_agent",
                     new_callable=AsyncMock,
                     return_value={"nodes": []},
                 ):
                     with patch(
-                        "app.tasks.jobs.agent_client.deploy_to_agent",
+                        "app.tasks.jobs_multihost.agent_client.deploy_to_agent",
                         new_callable=AsyncMock,
                     ) as mock_deploy:
                         mock_deploy.return_value = {"status": "completed", "stdout": "OK"}
@@ -237,15 +237,15 @@ class TestRunMultihostDeploy:
                             return_value=(0, 0),
                         ):
                             with patch(
-                                "app.tasks.jobs._dispatch_webhook",
+                                "app.tasks.jobs_multihost._dispatch_webhook",
                                 new_callable=AsyncMock,
                             ):
                                 with patch(
-                                    "app.tasks.jobs.emit_deploy_finished",
+                                    "app.tasks.jobs_multihost.emit_deploy_finished",
                                     new_callable=AsyncMock,
                                 ):
                                     with patch(
-                                        "app.tasks.jobs._capture_node_ips",
+                                        "app.tasks.jobs_multihost._capture_node_ips",
                                         new_callable=AsyncMock,
                                     ):
                                         await run_multihost_deploy(job.id, lab.id)
@@ -264,7 +264,7 @@ class TestRunMultihostDestroy:
     @pytest.mark.asyncio
     async def test_job_not_found_returns_early(self, test_db: Session):
         """Non-existent job should return early without crashing."""
-        with patch("app.tasks.jobs.get_session", _mock_get_session(test_db)):
+        with patch("app.tasks.jobs_multihost.get_session", _mock_get_session(test_db)):
             await run_multihost_destroy("nonexistent-job", "lab-id")
 
     @pytest.mark.asyncio
@@ -282,7 +282,7 @@ class TestRunMultihostDestroy:
         test_db.commit()
         test_db.refresh(job)
 
-        with patch("app.tasks.jobs.get_session", _mock_get_session(test_db)):
+        with patch("app.tasks.jobs_multihost.get_session", _mock_get_session(test_db)):
             await run_multihost_destroy(job.id, "nonexistent-lab")
 
         test_db.refresh(job)
@@ -341,9 +341,9 @@ class TestRunMultihostDestroy:
         test_db.add_all([node1, node2])
         test_db.commit()
 
-        with patch("app.tasks.jobs.get_session", _mock_get_session(test_db)):
+        with patch("app.tasks.jobs_multihost.get_session", _mock_get_session(test_db)):
             with patch(
-                "app.tasks.jobs.agent_client.is_agent_online",
+                "app.tasks.jobs_multihost.agent_client.is_agent_online",
                 side_effect=lambda host: host.id in {host1.id, host2.id},
             ):
                 with patch(
@@ -352,7 +352,7 @@ class TestRunMultihostDestroy:
                     return_value=(0, 0),
                 ):
                     with patch(
-                        "app.tasks.jobs.agent_client.destroy_on_agent",
+                        "app.tasks.jobs_multihost.agent_client.destroy_on_agent",
                         new_callable=AsyncMock,
                     ) as mock_destroy:
                         mock_destroy.side_effect = [
@@ -360,11 +360,11 @@ class TestRunMultihostDestroy:
                             {"status": "completed"},
                         ]
                         with patch(
-                            "app.tasks.jobs._dispatch_webhook",
+                            "app.tasks.jobs_multihost._dispatch_webhook",
                             new_callable=AsyncMock,
                         ):
                             with patch(
-                                "app.tasks.jobs.emit_destroy_finished",
+                                "app.tasks.jobs_multihost.emit_destroy_finished",
                                 new_callable=AsyncMock,
                             ):
                                 await run_multihost_destroy(job.id, lab.id)
@@ -427,9 +427,9 @@ class TestRunMultihostDestroy:
         test_db.add_all([node1, node2])
         test_db.commit()
 
-        with patch("app.tasks.jobs.get_session", _mock_get_session(test_db)):
+        with patch("app.tasks.jobs_multihost.get_session", _mock_get_session(test_db)):
             with patch(
-                "app.tasks.jobs.agent_client.is_agent_online",
+                "app.tasks.jobs_multihost.agent_client.is_agent_online",
                 side_effect=lambda host: host.id == online_host.id,
             ):
                 with patch(
@@ -438,16 +438,16 @@ class TestRunMultihostDestroy:
                     return_value=(0, 0),
                 ):
                     with patch(
-                        "app.tasks.jobs.agent_client.destroy_on_agent",
+                        "app.tasks.jobs_multihost.agent_client.destroy_on_agent",
                         new_callable=AsyncMock,
                     ) as mock_destroy:
                         mock_destroy.return_value = {"status": "completed"}
                         with patch(
-                            "app.tasks.jobs._dispatch_webhook",
+                            "app.tasks.jobs_multihost._dispatch_webhook",
                             new_callable=AsyncMock,
                         ):
                             with patch(
-                                "app.tasks.jobs.emit_job_failed",
+                                "app.tasks.jobs_multihost.emit_job_failed",
                                 new_callable=AsyncMock,
                             ):
                                 await run_multihost_destroy(job.id, lab.id)
@@ -501,9 +501,9 @@ class TestRunMultihostDestroy:
         test_db.add(node1)
         test_db.commit()
 
-        with patch("app.tasks.jobs.get_session", _mock_get_session(test_db)):
+        with patch("app.tasks.jobs_multihost.get_session", _mock_get_session(test_db)):
             with patch(
-                "app.tasks.jobs.agent_client.is_agent_online",
+                "app.tasks.jobs_multihost.agent_client.is_agent_online",
                 return_value=False,
             ):
                 await run_multihost_destroy(job.id, lab.id)

@@ -91,11 +91,25 @@ def _make_node(test_db, lab, *, gui_id, name, device="linux", host_id=None):
     return node
 
 
-def _make_node_state(test_db, lab, *, node_id, node_name, actual="running", desired="running"):
+def _make_node_state(test_db, lab, *, node_id, node_name, actual="running", desired="running", host_id=None):
+    # Create a Node definition so _capture_node_ips can look up by container_name
+    node_def = models.Node(
+        lab_id=lab.id,
+        gui_id=node_id,
+        display_name=node_name,
+        container_name=node_name,
+        node_type="device",
+        device="linux",
+        host_id=host_id,
+    )
+    test_db.add(node_def)
+    test_db.flush()
+
     ns = models.NodeState(
         lab_id=lab.id,
         node_id=node_id,
         node_name=node_name,
+        node_definition_id=node_def.id,
         desired_state=desired,
         actual_state=actual,
         is_ready=actual == "running",
@@ -421,20 +435,25 @@ class TestAutoExtractAdditional:
             "configs": [{"node_name": "r1", "content": "hostname r1"}],
         }
 
+        mock_snapshot = MagicMock()
+        mock_snapshot.snapshot_type = "auto_stop"
+
         with patch("app.tasks.jobs.settings") as mock_settings:
             mock_settings.feature_auto_extract_on_destroy = True
             with patch("app.tasks.jobs.agent_client") as mock_ac:
                 mock_ac.is_agent_online.return_value = True
                 mock_ac.extract_configs_on_agent = AsyncMock(return_value=mock_result)
-                await _auto_extract_configs_before_destroy(test_db, lab, sample_host)
+                with patch("app.services.config_service.ConfigService") as MockConfigSvc:
+                    mock_svc_instance = MagicMock()
+                    mock_svc_instance.save_extracted_config.return_value = mock_snapshot
+                    MockConfigSvc.return_value = mock_svc_instance
+                    await _auto_extract_configs_before_destroy(test_db, lab, sample_host)
 
-        snapshots = (
-            test_db.query(models.ConfigSnapshot)
-            .filter(models.ConfigSnapshot.lab_id == lab.id)
-            .all()
+        mock_svc_instance.save_extracted_config.assert_called_once()
+        call_kwargs = mock_svc_instance.save_extracted_config.call_args
+        assert call_kwargs.kwargs.get("snapshot_type") == "auto_stop" or (
+            len(call_kwargs.args) > 0 and call_kwargs[1].get("snapshot_type") == "auto_stop"
         )
-        assert len(snapshots) == 1
-        assert snapshots[0].snapshot_type == "auto_stop"
 
     @pytest.mark.asyncio
     async def test_partial_failure_one_agent_errors(
@@ -454,19 +473,21 @@ class TestAutoExtractAdditional:
                 return {"success": True, "configs": [{"node_name": "r1", "content": "!"}]}
             raise RuntimeError("agent unreachable")
 
+        mock_snapshot = MagicMock()
+
         with patch("app.tasks.jobs.settings") as mock_settings:
             mock_settings.feature_auto_extract_on_destroy = True
             with patch("app.tasks.jobs.agent_client") as mock_ac:
                 mock_ac.is_agent_online.return_value = True
                 mock_ac.extract_configs_on_agent = AsyncMock(side_effect=mock_extract)
-                await _auto_extract_configs_before_destroy(test_db, lab, host1)
+                with patch("app.services.config_service.ConfigService") as MockConfigSvc:
+                    mock_svc_instance = MagicMock()
+                    mock_svc_instance.save_extracted_config.return_value = mock_snapshot
+                    MockConfigSvc.return_value = mock_svc_instance
+                    await _auto_extract_configs_before_destroy(test_db, lab, host1)
 
-        snapshots = (
-            test_db.query(models.ConfigSnapshot)
-            .filter(models.ConfigSnapshot.lab_id == lab.id)
-            .all()
-        )
-        assert len(snapshots) == 1
+        # Only 1 config saved (host2 raised an error)
+        assert mock_svc_instance.save_extracted_config.call_count == 1
 
     @pytest.mark.asyncio
     async def test_multihost_both_agents_called(
@@ -932,10 +953,10 @@ class TestMultihostDeployAdvanced:
     def _base_patches(self, test_db):
         """Return a dict of common patches for deploy tests."""
         return {
-            "app.tasks.jobs.get_session": _mock_get_session(test_db),
-            "app.tasks.jobs._dispatch_webhook": AsyncMock(),
-            "app.tasks.jobs._capture_node_ips": AsyncMock(),
-            "app.tasks.jobs.emit_deploy_finished": AsyncMock(),
+            "app.tasks.jobs_multihost.get_session": _mock_get_session(test_db),
+            "app.tasks.jobs_multihost._dispatch_webhook": AsyncMock(),
+            "app.tasks.jobs_multihost._capture_node_ips": AsyncMock(),
+            "app.tasks.jobs_multihost.emit_deploy_finished": AsyncMock(),
         }
 
     @pytest.mark.asyncio
@@ -957,13 +978,13 @@ class TestMultihostDeployAdvanced:
         )
 
         patches = self._base_patches(test_db)
-        with patch("app.tasks.jobs.get_session", patches["app.tasks.jobs.get_session"]):
-            with patch("app.tasks.jobs._dispatch_webhook", patches["app.tasks.jobs._dispatch_webhook"]):
-                with patch("app.tasks.jobs._capture_node_ips", patches["app.tasks.jobs._capture_node_ips"]):
-                    with patch("app.tasks.jobs.emit_deploy_finished", patches["app.tasks.jobs.emit_deploy_finished"]):
-                        with patch("app.tasks.jobs.agent_client.is_agent_online", return_value=True):
-                            with patch("app.tasks.jobs.agent_client.get_lab_status_from_agent", new_callable=AsyncMock, return_value={"nodes": []}):
-                                with patch("app.tasks.jobs.agent_client.deploy_to_agent", new_callable=AsyncMock, return_value={"status": "completed", "stdout": "OK"}):
+        with patch("app.tasks.jobs_multihost.get_session", patches["app.tasks.jobs_multihost.get_session"]):
+            with patch("app.tasks.jobs_multihost._dispatch_webhook", patches["app.tasks.jobs_multihost._dispatch_webhook"]):
+                with patch("app.tasks.jobs_multihost._capture_node_ips", patches["app.tasks.jobs_multihost._capture_node_ips"]):
+                    with patch("app.tasks.jobs_multihost.emit_deploy_finished", patches["app.tasks.jobs_multihost.emit_deploy_finished"]):
+                        with patch("app.tasks.jobs_multihost.agent_client.is_agent_online", return_value=True):
+                            with patch("app.tasks.jobs_multihost.agent_client.get_lab_status_from_agent", new_callable=AsyncMock, return_value={"nodes": []}):
+                                with patch("app.tasks.jobs_multihost.agent_client.deploy_to_agent", new_callable=AsyncMock, return_value={"status": "completed", "stdout": "OK"}):
                                     with patch("app.tasks.link_orchestration.create_deployment_links", new_callable=AsyncMock, return_value=(2, 0)) as mock_links:
                                         await run_multihost_deploy(job.id, lab.id)
 
@@ -995,13 +1016,13 @@ class TestMultihostDeployAdvanced:
         cap_result = MagicMock()
         cap_result.fits = False
 
-        with patch("app.tasks.jobs.get_session", _mock_get_session(test_db)):
-            with patch("app.tasks.jobs.settings") as mock_settings:
+        with patch("app.tasks.jobs_multihost.get_session", _mock_get_session(test_db)):
+            with patch("app.tasks.jobs_multihost.settings") as mock_settings:
                 mock_settings.resource_validation_enabled = True
                 mock_settings.image_sync_enabled = False
-                with patch("app.tasks.jobs._dispatch_webhook", new_callable=AsyncMock):
-                    with patch("app.tasks.jobs.agent_client.is_agent_online", return_value=True):
-                        with patch("app.tasks.jobs.agent_client.get_lab_status_from_agent", new_callable=AsyncMock, return_value={"nodes": []}):
+                with patch("app.tasks.jobs_multihost._dispatch_webhook", new_callable=AsyncMock):
+                    with patch("app.tasks.jobs_multihost.agent_client.is_agent_online", return_value=True):
+                        with patch("app.tasks.jobs_multihost.agent_client.get_lab_status_from_agent", new_callable=AsyncMock, return_value={"nodes": []}):
                             with patch("app.services.resource_capacity.check_multihost_capacity", return_value={host1.id: cap_result}):
                                 with patch("app.services.resource_capacity.format_capacity_error", return_value="Insufficient CPU"):
                                     await run_multihost_deploy(job.id, lab.id)
@@ -1044,13 +1065,13 @@ class TestMultihostDeployAdvanced:
                 raise result
             return result
 
-        with patch("app.tasks.jobs.get_session", _mock_get_session(test_db)):
-            with patch("app.tasks.jobs._dispatch_webhook", new_callable=AsyncMock):
-                with patch("app.tasks.jobs.emit_deploy_finished", new_callable=AsyncMock):
-                    with patch("app.tasks.jobs.agent_client.is_agent_online", return_value=True):
-                        with patch("app.tasks.jobs.agent_client.get_lab_status_from_agent", new_callable=AsyncMock, return_value={"nodes": []}):
-                            with patch("app.tasks.jobs.agent_client.deploy_to_agent", new_callable=AsyncMock, side_effect=mock_deploy):
-                                with patch("app.tasks.jobs.agent_client.destroy_on_agent", new_callable=AsyncMock, return_value={"status": "completed"}) as mock_rollback:
+        with patch("app.tasks.jobs_multihost.get_session", _mock_get_session(test_db)):
+            with patch("app.tasks.jobs_multihost._dispatch_webhook", new_callable=AsyncMock):
+                with patch("app.tasks.jobs_multihost.emit_deploy_finished", new_callable=AsyncMock):
+                    with patch("app.tasks.jobs_multihost.agent_client.is_agent_online", return_value=True):
+                        with patch("app.tasks.jobs_multihost.agent_client.get_lab_status_from_agent", new_callable=AsyncMock, return_value={"nodes": []}):
+                            with patch("app.tasks.jobs_multihost.agent_client.deploy_to_agent", new_callable=AsyncMock, side_effect=mock_deploy):
+                                with patch("app.tasks.jobs_multihost.agent_client.destroy_on_agent", new_callable=AsyncMock, return_value={"status": "completed"}) as mock_rollback:
                                     await run_multihost_deploy(job.id, lab.id)
 
         test_db.refresh(job)
@@ -1072,14 +1093,14 @@ class TestMultihostDeployAdvanced:
         # Node WITHOUT host_id
         node = _make_node(test_db, lab, gui_id="n1", name="r1", host_id=None)
 
-        with patch("app.tasks.jobs.get_session", _mock_get_session(test_db)):
-            with patch("app.tasks.jobs._dispatch_webhook", new_callable=AsyncMock):
-                with patch("app.tasks.jobs._capture_node_ips", new_callable=AsyncMock):
-                    with patch("app.tasks.jobs.emit_deploy_finished", new_callable=AsyncMock):
-                        with patch("app.tasks.jobs.agent_client.get_agent_for_lab", new_callable=AsyncMock, return_value=host1):
-                            with patch("app.tasks.jobs.agent_client.is_agent_online", return_value=True):
-                                with patch("app.tasks.jobs.agent_client.get_lab_status_from_agent", new_callable=AsyncMock, return_value={"nodes": []}):
-                                    with patch("app.tasks.jobs.agent_client.deploy_to_agent", new_callable=AsyncMock, return_value={"status": "completed", "stdout": "OK"}):
+        with patch("app.tasks.jobs_multihost.get_session", _mock_get_session(test_db)):
+            with patch("app.tasks.jobs_multihost._dispatch_webhook", new_callable=AsyncMock):
+                with patch("app.tasks.jobs_multihost._capture_node_ips", new_callable=AsyncMock):
+                    with patch("app.tasks.jobs_multihost.emit_deploy_finished", new_callable=AsyncMock):
+                        with patch("app.tasks.jobs_multihost.agent_client.get_agent_for_lab", new_callable=AsyncMock, return_value=host1):
+                            with patch("app.tasks.jobs_multihost.agent_client.is_agent_online", return_value=True):
+                                with patch("app.tasks.jobs_multihost.agent_client.get_lab_status_from_agent", new_callable=AsyncMock, return_value={"nodes": []}):
+                                    with patch("app.tasks.jobs_multihost.agent_client.deploy_to_agent", new_callable=AsyncMock, return_value={"status": "completed", "stdout": "OK"}):
                                         with patch("app.tasks.link_orchestration.create_deployment_links", new_callable=AsyncMock, return_value=(0, 0)):
                                             await run_multihost_deploy(job.id, lab.id)
 
@@ -1100,8 +1121,8 @@ class TestMultihostDeployAdvanced:
         job = _make_job(test_db, lab, test_user, action="up")
         _make_node(test_db, lab, gui_id="n1", name="r1", host_id=None)
 
-        with patch("app.tasks.jobs.get_session", _mock_get_session(test_db)):
-            with patch("app.tasks.jobs.agent_client.get_agent_for_lab", new_callable=AsyncMock, return_value=None):
+        with patch("app.tasks.jobs_multihost.get_session", _mock_get_session(test_db)):
+            with patch("app.tasks.jobs_multihost.agent_client.get_agent_for_lab", new_callable=AsyncMock, return_value=None):
                 await run_multihost_deploy(job.id, lab.id)
 
         test_db.refresh(job)
@@ -1120,9 +1141,9 @@ class TestMultihostDeployAdvanced:
         # Node assigned to a nonexistent host
         _make_node(test_db, lab, gui_id="n1", name="r1", host_id="nonexistent-host-id")
 
-        with patch("app.tasks.jobs.get_session", _mock_get_session(test_db)):
-            with patch("app.tasks.jobs._dispatch_webhook", new_callable=AsyncMock):
-                with patch("app.tasks.jobs.agent_client.is_agent_online", return_value=False):
+        with patch("app.tasks.jobs_multihost.get_session", _mock_get_session(test_db)):
+            with patch("app.tasks.jobs_multihost._dispatch_webhook", new_callable=AsyncMock):
+                with patch("app.tasks.jobs_multihost.agent_client.is_agent_online", return_value=False):
                     await run_multihost_deploy(job.id, lab.id)
 
         test_db.refresh(job)
@@ -1142,13 +1163,13 @@ class TestMultihostDeployAdvanced:
         job = _make_job(test_db, lab, test_user, action="up")
         _make_node(test_db, lab, gui_id="n1", name="r1", host_id=host1.id)
 
-        with patch("app.tasks.jobs.get_session", _mock_get_session(test_db)):
-            with patch("app.tasks.jobs._dispatch_webhook", new_callable=AsyncMock):
-                with patch("app.tasks.jobs._capture_node_ips", new_callable=AsyncMock):
-                    with patch("app.tasks.jobs.emit_deploy_finished", new_callable=AsyncMock):
-                        with patch("app.tasks.jobs.agent_client.is_agent_online", return_value=True):
-                            with patch("app.tasks.jobs.agent_client.get_lab_status_from_agent", new_callable=AsyncMock, return_value={"nodes": []}):
-                                with patch("app.tasks.jobs.agent_client.deploy_to_agent", new_callable=AsyncMock, return_value={"status": "completed", "stdout": "OK"}):
+        with patch("app.tasks.jobs_multihost.get_session", _mock_get_session(test_db)):
+            with patch("app.tasks.jobs_multihost._dispatch_webhook", new_callable=AsyncMock):
+                with patch("app.tasks.jobs_multihost._capture_node_ips", new_callable=AsyncMock):
+                    with patch("app.tasks.jobs_multihost.emit_deploy_finished", new_callable=AsyncMock):
+                        with patch("app.tasks.jobs_multihost.agent_client.is_agent_online", return_value=True):
+                            with patch("app.tasks.jobs_multihost.agent_client.get_lab_status_from_agent", new_callable=AsyncMock, return_value={"nodes": []}):
+                                with patch("app.tasks.jobs_multihost.agent_client.deploy_to_agent", new_callable=AsyncMock, return_value={"status": "completed", "stdout": "OK"}):
                                     with patch("app.tasks.link_orchestration.create_deployment_links", new_callable=AsyncMock, return_value=(1, 2)):
                                         await run_multihost_deploy(job.id, lab.id)
 
@@ -1172,16 +1193,16 @@ class TestMultihostDeployAdvanced:
         cap_result = MagicMock()
         cap_result.fits = True
 
-        with patch("app.tasks.jobs.get_session", _mock_get_session(test_db)):
-            with patch("app.tasks.jobs.settings") as mock_settings:
+        with patch("app.tasks.jobs_multihost.get_session", _mock_get_session(test_db)):
+            with patch("app.tasks.jobs_multihost.settings") as mock_settings:
                 mock_settings.resource_validation_enabled = True
                 mock_settings.image_sync_enabled = False
-                with patch("app.tasks.jobs._dispatch_webhook", new_callable=AsyncMock):
-                    with patch("app.tasks.jobs._capture_node_ips", new_callable=AsyncMock):
-                        with patch("app.tasks.jobs.emit_deploy_finished", new_callable=AsyncMock):
-                            with patch("app.tasks.jobs.agent_client.is_agent_online", return_value=True):
-                                with patch("app.tasks.jobs.agent_client.get_lab_status_from_agent", new_callable=AsyncMock, return_value={"nodes": []}):
-                                    with patch("app.tasks.jobs.agent_client.deploy_to_agent", new_callable=AsyncMock, return_value={"status": "completed", "stdout": "OK"}):
+                with patch("app.tasks.jobs_multihost._dispatch_webhook", new_callable=AsyncMock):
+                    with patch("app.tasks.jobs_multihost._capture_node_ips", new_callable=AsyncMock):
+                        with patch("app.tasks.jobs_multihost.emit_deploy_finished", new_callable=AsyncMock):
+                            with patch("app.tasks.jobs_multihost.agent_client.is_agent_online", return_value=True):
+                                with patch("app.tasks.jobs_multihost.agent_client.get_lab_status_from_agent", new_callable=AsyncMock, return_value={"nodes": []}):
+                                    with patch("app.tasks.jobs_multihost.agent_client.deploy_to_agent", new_callable=AsyncMock, return_value={"status": "completed", "stdout": "OK"}):
                                         with patch("app.tasks.link_orchestration.create_deployment_links", new_callable=AsyncMock, return_value=(0, 0)):
                                             with patch("app.services.resource_capacity.check_multihost_capacity", return_value={host1.id: cap_result}):
                                                 with patch("app.services.resource_capacity.format_capacity_warnings", return_value=["High CPU usage on agent-1"]):
@@ -1214,12 +1235,12 @@ class TestMultihostDestroyAdvanced:
         job = _make_job(test_db, lab, test_user, action="down")
         _make_node(test_db, lab, gui_id="n1", name="r1", host_id=host1.id)
 
-        with patch("app.tasks.jobs.get_session", _mock_get_session(test_db)):
-            with patch("app.tasks.jobs.agent_client.is_agent_online", return_value=True):
+        with patch("app.tasks.jobs_multihost.get_session", _mock_get_session(test_db)):
+            with patch("app.tasks.jobs_multihost.agent_client.is_agent_online", return_value=True):
                 with patch("app.tasks.link_orchestration.teardown_deployment_links", new_callable=AsyncMock, return_value=(1, 0)) as mock_teardown:
-                    with patch("app.tasks.jobs.agent_client.destroy_on_agent", new_callable=AsyncMock, return_value={"status": "completed"}):
-                        with patch("app.tasks.jobs._dispatch_webhook", new_callable=AsyncMock):
-                            with patch("app.tasks.jobs.emit_destroy_finished", new_callable=AsyncMock):
+                    with patch("app.tasks.jobs_multihost.agent_client.destroy_on_agent", new_callable=AsyncMock, return_value={"status": "completed"}):
+                        with patch("app.tasks.jobs_multihost._dispatch_webhook", new_callable=AsyncMock):
+                            with patch("app.tasks.jobs_multihost.emit_destroy_finished", new_callable=AsyncMock):
                                 await run_multihost_destroy(job.id, lab.id)
 
         mock_teardown.assert_awaited_once()
@@ -1240,12 +1261,12 @@ class TestMultihostDestroyAdvanced:
         _make_node(test_db, lab, gui_id="n1", name="r1", host_id=host1.id)
         _make_node(test_db, lab, gui_id="n2", name="r2", host_id=host3.id)
 
-        with patch("app.tasks.jobs.get_session", _mock_get_session(test_db)):
-            with patch("app.tasks.jobs.agent_client.is_agent_online", side_effect=lambda h: h.id == host1.id):
+        with patch("app.tasks.jobs_multihost.get_session", _mock_get_session(test_db)):
+            with patch("app.tasks.jobs_multihost.agent_client.is_agent_online", side_effect=lambda h: h.id == host1.id):
                 with patch("app.tasks.link_orchestration.teardown_deployment_links", new_callable=AsyncMock, return_value=(0, 0)):
-                    with patch("app.tasks.jobs.agent_client.destroy_on_agent", new_callable=AsyncMock, return_value={"status": "completed"}):
-                        with patch("app.tasks.jobs._dispatch_webhook", new_callable=AsyncMock):
-                            with patch("app.tasks.jobs.emit_job_failed", new_callable=AsyncMock):
+                    with patch("app.tasks.jobs_multihost.agent_client.destroy_on_agent", new_callable=AsyncMock, return_value={"status": "completed"}):
+                        with patch("app.tasks.jobs_multihost._dispatch_webhook", new_callable=AsyncMock):
+                            with patch("app.tasks.jobs_multihost.emit_job_failed", new_callable=AsyncMock):
                                 await run_multihost_destroy(job.id, lab.id)
 
         test_db.refresh(job)
@@ -1280,12 +1301,12 @@ class TestMultihostDestroyAdvanced:
         test_db.commit()
         ls_id = ls.id
 
-        with patch("app.tasks.jobs.get_session", _mock_get_session(test_db)):
-            with patch("app.tasks.jobs.agent_client.is_agent_online", return_value=True):
+        with patch("app.tasks.jobs_multihost.get_session", _mock_get_session(test_db)):
+            with patch("app.tasks.jobs_multihost.agent_client.is_agent_online", return_value=True):
                 with patch("app.tasks.link_orchestration.teardown_deployment_links", new_callable=AsyncMock, return_value=(0, 0)):
-                    with patch("app.tasks.jobs.agent_client.destroy_on_agent", new_callable=AsyncMock, return_value={"status": "completed"}):
-                        with patch("app.tasks.jobs._dispatch_webhook", new_callable=AsyncMock):
-                            with patch("app.tasks.jobs.emit_destroy_finished", new_callable=AsyncMock):
+                    with patch("app.tasks.jobs_multihost.agent_client.destroy_on_agent", new_callable=AsyncMock, return_value={"status": "completed"}):
+                        with patch("app.tasks.jobs_multihost._dispatch_webhook", new_callable=AsyncMock):
+                            with patch("app.tasks.jobs_multihost.emit_destroy_finished", new_callable=AsyncMock):
                                 await run_multihost_destroy(job.id, lab.id)
 
         test_db.refresh(job)
@@ -1327,12 +1348,12 @@ class TestMultihostDestroyAdvanced:
         test_db.commit()
         ls_id = ls.id
 
-        with patch("app.tasks.jobs.get_session", _mock_get_session(test_db)):
-            with patch("app.tasks.jobs.agent_client.is_agent_online", side_effect=lambda h: h.id == host1.id):
+        with patch("app.tasks.jobs_multihost.get_session", _mock_get_session(test_db)):
+            with patch("app.tasks.jobs_multihost.agent_client.is_agent_online", side_effect=lambda h: h.id == host1.id):
                 with patch("app.tasks.link_orchestration.teardown_deployment_links", new_callable=AsyncMock, return_value=(0, 0)):
-                    with patch("app.tasks.jobs.agent_client.destroy_on_agent", new_callable=AsyncMock, return_value={"status": "completed"}):
-                        with patch("app.tasks.jobs._dispatch_webhook", new_callable=AsyncMock):
-                            with patch("app.tasks.jobs.emit_job_failed", new_callable=AsyncMock):
+                    with patch("app.tasks.jobs_multihost.agent_client.destroy_on_agent", new_callable=AsyncMock, return_value={"status": "completed"}):
+                        with patch("app.tasks.jobs_multihost._dispatch_webhook", new_callable=AsyncMock):
+                            with patch("app.tasks.jobs_multihost.emit_job_failed", new_callable=AsyncMock):
                                 await run_multihost_destroy(job.id, lab.id)
 
         test_db.refresh(job)
@@ -1357,12 +1378,12 @@ class TestMultihostDestroyAdvanced:
         job = _make_job(test_db, lab, test_user, action="down")
         _make_node(test_db, lab, gui_id="n1", name="r1", host_id=host1.id)
 
-        with patch("app.tasks.jobs.get_session", _mock_get_session(test_db)):
-            with patch("app.tasks.jobs.agent_client.is_agent_online", return_value=True):
+        with patch("app.tasks.jobs_multihost.get_session", _mock_get_session(test_db)):
+            with patch("app.tasks.jobs_multihost.agent_client.is_agent_online", return_value=True):
                 with patch("app.tasks.link_orchestration.teardown_deployment_links", new_callable=AsyncMock, return_value=(0, 0)):
-                    with patch("app.tasks.jobs.agent_client.destroy_on_agent", new_callable=AsyncMock, return_value={"status": "completed"}):
-                        with patch("app.tasks.jobs._dispatch_webhook", new_callable=AsyncMock) as mock_wh:
-                            with patch("app.tasks.jobs.emit_destroy_finished", new_callable=AsyncMock):
+                    with patch("app.tasks.jobs_multihost.agent_client.destroy_on_agent", new_callable=AsyncMock, return_value={"status": "completed"}):
+                        with patch("app.tasks.jobs_multihost._dispatch_webhook", new_callable=AsyncMock) as mock_wh:
+                            with patch("app.tasks.jobs_multihost.emit_destroy_finished", new_callable=AsyncMock):
                                 await run_multihost_destroy(job.id, lab.id)
 
         # Webhook should have been called with destroy_complete
@@ -1384,12 +1405,12 @@ class TestMultihostDestroyAdvanced:
         _make_node(test_db, lab, gui_id="n1", name="r1", host_id=host1.id)
         _make_node(test_db, lab, gui_id="n2", name="r2", host_id=host3.id)
 
-        with patch("app.tasks.jobs.get_session", _mock_get_session(test_db)):
-            with patch("app.tasks.jobs.agent_client.is_agent_online", side_effect=lambda h: h.id == host1.id):
+        with patch("app.tasks.jobs_multihost.get_session", _mock_get_session(test_db)):
+            with patch("app.tasks.jobs_multihost.agent_client.is_agent_online", side_effect=lambda h: h.id == host1.id):
                 with patch("app.tasks.link_orchestration.teardown_deployment_links", new_callable=AsyncMock, return_value=(0, 0)):
-                    with patch("app.tasks.jobs.agent_client.destroy_on_agent", new_callable=AsyncMock, return_value={"status": "completed"}):
-                        with patch("app.tasks.jobs._dispatch_webhook", new_callable=AsyncMock) as mock_wh:
-                            with patch("app.tasks.jobs.emit_job_failed", new_callable=AsyncMock):
+                    with patch("app.tasks.jobs_multihost.agent_client.destroy_on_agent", new_callable=AsyncMock, return_value={"status": "completed"}):
+                        with patch("app.tasks.jobs_multihost._dispatch_webhook", new_callable=AsyncMock) as mock_wh:
+                            with patch("app.tasks.jobs_multihost.emit_job_failed", new_callable=AsyncMock):
                                 await run_multihost_destroy(job.id, lab.id)
 
         mock_wh.assert_awaited()

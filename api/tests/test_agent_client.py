@@ -538,7 +538,7 @@ async def test_get_healthy_agent_capacity_check():
     mock_db.query.return_value = mock_query
 
     # agent1 is at capacity (2/2), agent2 has room (1/4)
-    with patch.object(agent_client, 'count_active_jobs_by_agent', return_value={"agent1": 2, "agent2": 1}):
+    with patch('app.agent_client.selection.count_active_jobs_by_agent', return_value={"agent1": 2, "agent2": 1}):
         result = await agent_client.get_healthy_agent(mock_db)
 
     # Should select agent2 (agent1 at capacity)
@@ -559,7 +559,7 @@ async def test_get_healthy_agent_all_at_capacity():
     mock_db.query.return_value = mock_query
 
     # Both at capacity
-    with patch.object(agent_client, 'count_active_jobs_by_agent', return_value={"agent1": 2, "agent2": 2}):
+    with patch('app.agent_client.selection.count_active_jobs_by_agent', return_value={"agent1": 2, "agent2": 2}):
         result = await agent_client.get_healthy_agent(mock_db)
 
     assert result is None
@@ -659,7 +659,7 @@ async def test_destroy_container_on_agent_success():
 
     mock_request = AsyncMock(return_value={"message": "Container removed"})
 
-    with patch.object(agent_client, "_agent_request", mock_request):
+    with patch("app.agent_client.node_ops._agent_request", mock_request):
         result = await agent_client.destroy_container_on_agent(
             mock_agent, "test-lab", "test-container"
         )
@@ -697,7 +697,7 @@ async def test_destroy_container_on_agent_timeout():
 
     mock_request = AsyncMock(side_effect=Exception("Request timed out"))
 
-    with patch.object(agent_client, "_agent_request", mock_request):
+    with patch("app.agent_client.node_ops._agent_request", mock_request):
         result = await agent_client.destroy_container_on_agent(
             mock_agent, "test-lab", "test-container"
         )
@@ -717,7 +717,7 @@ async def test_destroy_container_on_agent_already_removed():
         "message": "Container not found (already removed)"
     })
 
-    with patch.object(agent_client, "_agent_request", mock_request):
+    with patch("app.agent_client.node_ops._agent_request", mock_request):
         result = await agent_client.destroy_container_on_agent(
             mock_agent, "test-lab", "already-gone"
         )
@@ -749,7 +749,7 @@ async def test_destroy_container_on_agent_url_construction():
 
     mock_request = AsyncMock(return_value={"success": True})
 
-    with patch.object(agent_client, "_agent_request", mock_request):
+    with patch("app.agent_client.node_ops._agent_request", mock_request):
         await agent_client.destroy_container_on_agent(
             mock_agent, "my-lab-123", "archetype-my-lab-123-router1"
         )
