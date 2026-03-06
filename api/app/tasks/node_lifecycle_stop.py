@@ -23,6 +23,10 @@ from app.tasks.node_lifecycle import _get_container_name
 logger = logging.getLogger(__name__)
 
 
+class _ExtractionTimedOut(Exception):
+    """Per-agent config extraction timeout sentinel."""
+
+
 class StopMixin:
     """Mixin providing stop-related methods for NodeLifecycleManager."""
 
@@ -71,35 +75,46 @@ class StopMixin:
                 )
                 entry[1].append(ns.node_name)
 
-            # Call agents concurrently with timeout
-            EXTRACTION_TIMEOUT = 15  # seconds
-            tasks = [
-                agent_client.extract_configs_on_agent(a, self.lab.id)
-                for a, _ in agent_node_map.values()
-            ]
-            try:
-                self._release_db_transaction_for_io(
-                    f"auto-extract before stop for lab {self.lab.id}"
-                )
-                results = await asyncio.wait_for(
-                    asyncio.gather(*tasks, return_exceptions=True),
-                    timeout=EXTRACTION_TIMEOUT,
-                )
-            except asyncio.TimeoutError:
-                logger.warning(
-                    f"Config extraction timed out after {EXTRACTION_TIMEOUT}s "
-                    f"for lab {self.lab.id}"
-                )
-                self.log_parts.append(
-                    f"    Auto-extract timed out after {EXTRACTION_TIMEOUT}s "
-                    f"(proceeding with stop)"
-                )
-                return
+            # Call agents concurrently with per-agent timeout so partial
+            # success is preserved when one agent is slow.
+            extraction_timeout = max(
+                0.1,
+                float(getattr(settings, "auto_extract_on_stop_timeout_seconds", 30.0)),
+            )
+
+            async def _extract_for_agent(extract_agent: models.Host) -> dict | Exception:
+                try:
+                    return await asyncio.wait_for(
+                        agent_client.extract_configs_on_agent(extract_agent, self.lab.id),
+                        timeout=extraction_timeout,
+                    )
+                except asyncio.TimeoutError:
+                    return _ExtractionTimedOut(
+                        f"Config extraction timed out after {extraction_timeout}s "
+                        f"for agent {extract_agent.id}"
+                    )
+                except Exception as exc:
+                    return exc
+
+            self._release_db_transaction_for_io(
+                f"auto-extract before stop for lab {self.lab.id}"
+            )
+            results = await asyncio.gather(
+                *[_extract_for_agent(a) for a, _ in agent_node_map.values()],
+                return_exceptions=False,
+            )
 
             # Collect configs (filter to only nodes being stopped)
             stop_node_names = {ns.node_name for ns in running_nodes}
             configs = []
             for (a, _node_names), result in zip(agent_node_map.values(), results):
+                if isinstance(result, _ExtractionTimedOut):
+                    logger.warning(str(result))
+                    self.log_parts.append(
+                        f"    Auto-extract timed out on {a.name or a.id} "
+                        f"after {extraction_timeout}s (continuing)"
+                    )
+                    continue
                 if isinstance(result, Exception):
                     logger.warning(f"Auto-extract failed on agent {a.id}: {result}")
                     continue

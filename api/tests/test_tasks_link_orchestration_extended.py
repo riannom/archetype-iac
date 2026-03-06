@@ -603,6 +603,64 @@ class TestCreateSameHostLinkExtended:
         assert link_state.actual_state == "error"
         assert "Verification failed" in (link_state.error_message or "")
 
+    @pytest.mark.asyncio
+    async def test_logs_warning_when_agent_lacks_ovs_port_hints(
+        self, test_db: Session, sample_lab: models.Lab, sample_host: models.Host
+    ):
+        """Successful same-host create should warn when durable mappings remain missing."""
+        from app.tasks.link_orchestration import create_same_host_link
+
+        sample_host.version = "0.5.1-rc1"
+        sample_host.git_sha = "2a2e4f7b18b512faf1802f60303a0e8a77a0e0d1"
+
+        _make_node(
+            test_db, sample_lab, sample_host,
+            gui_id="n1", display_name="CEOS-5", container_name="ceos_5", device="ceos",
+        )
+        _make_node(
+            test_db, sample_lab, sample_host,
+            gui_id="n2", display_name="CISCO_N9KV-4", container_name="cisco_n9kv_4", device="cisco_n9kv",
+        )
+        link_state = _make_link_state(
+            test_db, sample_lab,
+            link_name="ceos_5:eth4-cisco_n9kv_4:eth1",
+            source_node="ceos_5", source_interface="eth4",
+            target_node="cisco_n9kv_4", target_interface="eth1",
+            source_host_id=sample_host.id,
+            target_host_id=sample_host.id,
+        )
+        test_db.commit()
+
+        host_to_agent = {sample_host.id: sample_host}
+
+        with patch("app.tasks.link_orchestration.agent_client") as mock_client, \
+             patch(
+                 "app.tasks.link_orchestration.verify_link_connected",
+                 new_callable=AsyncMock,
+                 return_value=(True, None),
+             ), \
+             patch(
+                 "app.tasks.link_orchestration.update_interface_mappings",
+                 new_callable=AsyncMock,
+             ), \
+             patch("app.tasks.link_orchestration.logger.warning") as warning_mock:
+            mock_client.create_link_on_agent = AsyncMock(return_value={
+                "success": True,
+                "link": {
+                    "vlan_tag": 2053,
+                },
+            })
+
+            result = await create_same_host_link(
+                test_db, sample_lab.id, link_state, host_to_agent, []
+            )
+
+        assert result is True
+        warning_mock.assert_called_once()
+        warning_msg = warning_mock.call_args[0][0]
+        assert "Agent upgrade may be required" in warning_msg
+        assert "InterfaceMapping is still missing" in warning_msg
+
 
 # ---------------------------------------------------------------------------
 # 4. create_cross_host_link — extended gaps

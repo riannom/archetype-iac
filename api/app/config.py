@@ -134,6 +134,7 @@ class Settings(BaseSettings):
     feature_auto_extract_on_destroy: bool = True
     # Auto-extract configs before stop operations (unified lifecycle)
     feature_auto_extract_on_stop: bool = True
+    auto_extract_on_stop_timeout_seconds: float = 30.0
     # Auto-extract configs before enforcement restart of crashed/exited nodes
     feature_auto_extract_on_enforcement: bool = True
     # Per-node lifecycle: create/start/stop/destroy individual containers

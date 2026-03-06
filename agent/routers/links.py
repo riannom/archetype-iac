@@ -208,6 +208,8 @@ async def create_link(lab_id: str, link: LinkCreate) -> LinkCreateResponse:
                 target_interface=link.target_interface,
                 state=LinkState.CONNECTED,
                 vlan_tag=shared_vlan,
+                source_ovs_port=port_a.port_name,
+                target_ovs_port=port_b.port_name,
             ),
         )
 

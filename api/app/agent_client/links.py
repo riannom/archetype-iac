@@ -265,6 +265,34 @@ async def get_interface_vlan_from_agent(
         return None
 
 
+async def get_interface_port_details_from_agent(
+    agent: models.Host,
+    lab_id: str,
+    node_name: str,
+    interface: str,
+    read_from_ovs: bool = False,
+) -> dict:
+    """Get provider-agnostic OVS port details for a specific interface."""
+    url = f"{get_agent_url(agent)}/labs/{lab_id}/interfaces/{node_name}/{interface}/vlan"
+    if read_from_ovs:
+        url += "?read_from_ovs=true"
+    try:
+        data = await _agent_request(
+            "GET",
+            url,
+            timeout=10.0,
+            max_retries=0,
+        )
+        return {
+            "vlan_tag": data.get("vlan_tag"),
+            "ovs_port_name": data.get("ovs_port_name"),
+            "error": data.get("error"),
+        }
+    except Exception as e:
+        logger.warning(f"Get interface port details failed: {e}")
+        return {"vlan_tag": None, "ovs_port_name": None, "error": str(e)}
+
+
 async def set_port_vlan_on_agent(
     agent: models.Host,
     port_name: str,

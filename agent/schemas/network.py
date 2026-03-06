@@ -29,6 +29,8 @@ class LinkInfo(BaseModel):
     target_interface: str
     state: LinkState = LinkState.DISCONNECTED
     vlan_tag: int | None = None  # OVS VLAN tag for this link
+    source_ovs_port: str | None = None
+    target_ovs_port: str | None = None
     error: str | None = None
 
 
@@ -174,6 +176,7 @@ class PortVlanResponse(BaseModel):
     container: str
     interface: str
     vlan_tag: int | None = None
+    ovs_port_name: str | None = None
     error: str | None = None
 
 

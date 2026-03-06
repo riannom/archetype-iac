@@ -26,6 +26,7 @@ from app import agent_client, models
 from app.db import get_session
 from app.services.link_operational_state import recompute_link_oper_state
 from app.services.link_validator import verify_link_connected, is_vlan_mismatch
+from app.services.link_validator import ensure_link_interface_mappings
 from app.services.link_reservations import reconcile_link_endpoint_reservations
 from app.services.link_reservations import get_link_endpoint_reservation_drift_counts
 from app.metrics import set_link_endpoint_reservation_metrics
@@ -674,20 +675,27 @@ async def run_same_host_convergence(
         return pairings, missing_mappings, links_missing_mapping
 
     # First pass, then one refresh/retry pass if mappings are missing.
-    agent_pairings, missing_mappings, _ = _build_pairings()
+    agent_pairings, missing_mappings, missing_link_ids = _build_pairings()
     if missing_mappings:
-        logger.warning(
-            "Same-host convergence skipped %s link(s) due to missing InterfaceMapping data; "
+        hydrated = 0
+        for link_id in missing_link_ids:
+            link = session.get(models.LinkState, link_id)
+            if not link:
+                continue
+            hydrated += await ensure_link_interface_mappings(session, link, host_to_agent)
+        if hydrated:
+            session.flush()
+            agent_pairings, missing_mappings, missing_link_ids = _build_pairings()
+
+    if missing_mappings:
+        logger.debug(
+            "Same-host convergence missing InterfaceMapping data for %s link(s); "
             "refreshing mappings and retrying once",
             missing_mappings,
         )
         await refresh_interface_mappings(session, host_to_agent)
         agent_pairings, still_missing, still_missing_link_ids = _build_pairings()
         if still_missing:
-            logger.warning(
-                "Same-host convergence still missing InterfaceMapping data for %s link(s) after refresh",
-                still_missing,
-            )
             repaired = 0
             failed = 0
             for link_id in still_missing_link_ids:
@@ -703,6 +711,13 @@ async def run_same_host_convergence(
                 logger.info(
                     "Same-host fallback repair after mapping miss: repaired=%s failed=%s",
                     repaired,
+                    failed,
+                )
+            if failed:
+                logger.warning(
+                    "Same-host convergence still missing InterfaceMapping data for %s link(s) "
+                    "after refresh; repair failed for %s link(s)",
+                    still_missing,
                     failed,
                 )
 

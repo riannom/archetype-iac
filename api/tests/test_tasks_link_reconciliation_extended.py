@@ -556,6 +556,76 @@ class TestRunSameHostConvergence:
         assert result == {}
 
     @pytest.mark.asyncio
+    async def test_missing_mapping_backfilled_before_refresh(
+        self, test_db: Session, sample_lab: models.Lab, sample_host: models.Host,
+    ):
+        """Provider-agnostic backfill should avoid refresh/repair when port details resolve."""
+        from app.tasks.link_reconciliation import run_same_host_convergence
+
+        host_to_agent = {sample_host.id: sample_host}
+
+        link = _make_link_state(
+            test_db, sample_lab.id,
+            desired_state="up", actual_state="up",
+            is_cross_host=False,
+            source_host_id=sample_host.id,
+            target_host_id=sample_host.id,
+            vlan_tag=2053,
+            source_node="ceos_5",
+            target_node="cisco_n9kv_4",
+            link_name="ceos_5:eth4-cisco_n9kv_4:eth1",
+            source_interface="eth4",
+            target_interface="eth1",
+        )
+        source_node = _make_node(
+            test_db, sample_lab.id, display_name="ceos_5", container_name="ceos_5", host_id=sample_host.id
+        )
+        target_node = _make_node(
+            test_db, sample_lab.id, display_name="cisco_n9kv_4", container_name="cisco_n9kv_4", host_id=sample_host.id
+        )
+        _make_interface_mapping(
+            test_db, sample_lab.id, source_node.id, linux_interface="eth4", ovs_port="vh-ceos5-eth4", vlan_tag=2053
+        )
+
+        async def _backfill(session, link_state, agents):  # noqa: ARG001
+            test_db.add(models.InterfaceMapping(
+                id=str(uuid4()),
+                lab_id=sample_lab.id,
+                node_id=target_node.id,
+                ovs_port="vh-n9kv-eth1",
+                ovs_bridge="arch-ovs",
+                vlan_tag=2053,
+                linux_interface="eth1",
+            ))
+            test_db.flush()
+            return 1
+
+        with patch(
+            "app.tasks.link_reconciliation.ensure_link_interface_mappings",
+            new_callable=AsyncMock,
+            side_effect=_backfill,
+        ) as mock_backfill, patch(
+            "app.tasks.link_reconciliation.refresh_interface_mappings",
+            new_callable=AsyncMock,
+            return_value={"updated": 0, "created": 0},
+        ) as mock_refresh, patch(
+            "app.tasks.link_reconciliation.attempt_link_repair",
+            new_callable=AsyncMock,
+            return_value=False,
+        ) as mock_repair, patch(
+            "app.tasks.link_reconciliation.declare_port_state_on_agent",
+            new_callable=AsyncMock,
+            return_value={"results": [{"link_name": link.link_name, "status": "updated"}]},
+        ) as mock_declare:
+            result = await run_same_host_convergence(test_db, host_to_agent)
+
+        mock_backfill.assert_awaited()
+        mock_refresh.assert_not_awaited()
+        mock_repair.assert_not_awaited()
+        mock_declare.assert_awaited_once()
+        assert sample_host.id in result
+
+    @pytest.mark.asyncio
     async def test_agent_offline_link_skipped(
         self, test_db: Session, sample_lab: models.Lab, offline_host: models.Host,
     ):

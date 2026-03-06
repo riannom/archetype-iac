@@ -1258,6 +1258,68 @@ class TestDoReconcileLabExceptionPaths:
         assert result == 0
 
     @pytest.mark.asyncio
+    async def test_link_states_commit_before_normalize_failure(self, test_db, test_user):
+        """LinkState inserts should persist even if normalize later rolls back."""
+        from app.services.topology import TopologyService
+        from app.tasks.reconciliation_db import _do_reconcile_lab
+
+        host = _make_host(test_db, "host-normalize-fail")
+        lab = _make_lab(test_db, test_user, state="running", agent_id=host.id)
+        node1 = _make_node(test_db, lab.id, "R1", host_id=host.id)
+        node2 = _make_node(test_db, lab.id, "R2", host_id=host.id)
+        _make_link(
+            test_db,
+            lab.id,
+            node1.id,
+            "Ethernet1",
+            node2.id,
+            "Ethernet1",
+            link_name="R1:Ethernet1-R2:Ethernet1",
+        )
+
+        mock_lock = MagicMock()
+        mock_lock.__enter__ = MagicMock(return_value=False)
+        mock_lock.__exit__ = MagicMock(return_value=False)
+
+        with patch(
+            "app.tasks.reconciliation_db.broadcast_link_state_change",
+            new_callable=AsyncMock,
+        ), patch(
+            "app.tasks.reconciliation_db.broadcast_node_state_change",
+            new_callable=AsyncMock,
+        ), patch(
+            "app.tasks.reconciliation_db.cleanup_orphaned_node_states",
+            return_value=0,
+        ), patch(
+            "app.tasks.reconciliation_db.agent_client.get_lab_status_from_agent",
+            new_callable=AsyncMock,
+            return_value={"nodes": []},
+        ), patch(
+            "app.tasks.reconciliation_db.agent_client.is_agent_online",
+            return_value=True,
+        ), patch(
+            "app.utils.lab.get_lab_provider",
+            return_value="docker",
+        ), patch(
+            "app.tasks.reconciliation.link_ops_lock",
+            return_value=mock_lock,
+        ), patch.object(
+            TopologyService,
+            "normalize_links_for_lab",
+            side_effect=RuntimeError("normalize failure"),
+        ):
+            result = await _do_reconcile_lab(test_db, lab, lab.id)
+
+        assert result == 0
+        states = (
+            test_db.query(models.LinkState)
+            .filter(models.LinkState.lab_id == lab.id)
+            .all()
+        )
+        assert len(states) == 1
+        assert states[0].link_name == "R1:eth1-R2:eth1"
+
+    @pytest.mark.asyncio
     async def test_cleanup_orphaned_exception_is_caught(self, test_db, test_user):
         """Failure in cleanup_orphaned_node_states should be caught."""
         from app.tasks.reconciliation_db import _do_reconcile_lab

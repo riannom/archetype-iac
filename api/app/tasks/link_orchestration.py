@@ -21,7 +21,11 @@ from app import agent_client, models
 from app.agent_client import compute_vxlan_port_name
 from app.services.link_operational_state import recompute_link_oper_state
 from app.services.link_manager import LinkManager
-from app.services.link_validator import verify_link_connected, update_interface_mappings
+from app.services.link_validator import (
+    persist_link_interface_mappings,
+    verify_link_connected,
+    update_interface_mappings,
+)
 from app.services.topology import TopologyService
 from app.services.interface_naming import normalize_interface
 from app.state import NodeActualState
@@ -32,6 +36,52 @@ logger = logging.getLogger(__name__)
 
 def _sync_oper_state(session: Session, link_state: models.LinkState) -> None:
     recompute_link_oper_state(session, link_state)
+
+
+def _mapping_present_for_endpoint(
+    session: Session,
+    *,
+    lab_id: str,
+    node_name: str,
+    interface_name: str | None,
+) -> bool:
+    node = (
+        session.query(models.Node)
+        .filter(
+            models.Node.lab_id == lab_id,
+            models.Node.container_name == node_name,
+        )
+        .first()
+    )
+    if not node:
+        node = (
+            session.query(models.Node)
+            .filter(
+                models.Node.lab_id == lab_id,
+                models.Node.display_name == node_name,
+            )
+            .first()
+        )
+    if not node:
+        return False
+
+    normalized_iface = normalize_interface(
+        interface_name or "",
+        node.device if node else None,
+    ) if interface_name else ""
+    if not normalized_iface:
+        return False
+
+    mapping = (
+        session.query(models.InterfaceMapping)
+        .filter(
+            models.InterfaceMapping.lab_id == lab_id,
+            models.InterfaceMapping.node_id == node.id,
+            models.InterfaceMapping.linux_interface == normalized_iface,
+        )
+        .first()
+    )
+    return bool(mapping and mapping.ovs_port)
 
 
 async def create_deployment_links(
@@ -756,6 +806,15 @@ async def create_same_host_link(
         link_state.vlan_tag = reported_vlan
         link_state.source_vlan_tag = reported_vlan
         link_state.target_vlan_tag = reported_vlan
+        if isinstance(link_data, dict):
+            persist_link_interface_mappings(
+                session,
+                link_state,
+                source_ovs_port=link_data.get("source_ovs_port"),
+                target_ovs_port=link_data.get("target_ovs_port"),
+                source_vlan_tag=reported_vlan,
+                target_vlan_tag=reported_vlan,
+            )
 
         # Verify the link is actually connected (VLAN tags match)
         if verify:
@@ -769,6 +828,33 @@ async def create_same_host_link(
 
             # Update interface mappings after successful link creation
             await update_interface_mappings(session, link_state, host_to_agent)
+
+        missing_mappings: list[str] = []
+        if not _mapping_present_for_endpoint(
+            session,
+            lab_id=lab_id,
+            node_name=link_state.source_node,
+            interface_name=link_state.source_interface,
+        ):
+            missing_mappings.append(f"{link_state.source_node}:{link_state.source_interface}")
+        if not _mapping_present_for_endpoint(
+            session,
+            lab_id=lab_id,
+            node_name=link_state.target_node,
+            interface_name=link_state.target_interface,
+        ):
+            missing_mappings.append(f"{link_state.target_node}:{link_state.target_interface}")
+        if missing_mappings:
+            logger.warning(
+                "Same-host link %s created on agent %s (%s/%s) but InterfaceMapping is still "
+                "missing for endpoint(s): %s. Agent upgrade may be required for durable OVS "
+                "port backfill.",
+                link_state.link_name,
+                agent.id,
+                agent.version or "unknown-version",
+                agent.git_sha or "unknown-sha",
+                ", ".join(missing_mappings),
+            )
 
         # Only now mark as "up"
         link_state.actual_state = "up"

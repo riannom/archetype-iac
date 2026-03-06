@@ -272,6 +272,7 @@ async def get_interface_vlan(
                     container=container_name,
                     interface=interface,
                     vlan_tag=resolved[1],
+                    ovs_port_name=resolved[0],
                 )
 
         # Fast path: Docker plugin in-memory lookup (non-verification reads).
@@ -307,6 +308,7 @@ async def get_interface_vlan(
                 container=node,
                 interface=interface,
                 vlan_tag=vlan_tag,
+                ovs_port_name=port_info.port_name,
             )
 
         return PortVlanResponse(

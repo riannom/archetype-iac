@@ -454,6 +454,14 @@ async def _resolve_ovs_port(
         except Exception:
             libvirt_kind = None
     is_libvirt_node = libvirt_kind is not None
+    logger.debug(
+        "Resolving OVS port for %s:%s in lab %s (libvirt_node=%s, libvirt_kind=%s)",
+        node_name,
+        interface_name,
+        lab_id,
+        is_libvirt_node,
+        libvirt_kind,
+    )
 
     # --- Try Docker first, using ifindex verification to prevent port swap bugs ---
     docker_provider = get_provider("docker")
@@ -464,6 +472,12 @@ async def _resolve_ovs_port(
                 container_name, interface_name
             )
             if resolved:
+                logger.debug(
+                    "Resolved OVS port for %s:%s via docker ifindex lookup: %s",
+                    node_name,
+                    interface_name,
+                    resolved[0],
+                )
                 return OVSPortInfo(
                     port_name=resolved[0],
                     vlan_tag=resolved[1],
@@ -484,13 +498,25 @@ async def _resolve_ovs_port(
                         f"-- OVS port {ep.host_veth} missing"
                     )
                     return None
+                logger.debug(
+                    "Resolved OVS port for %s:%s via docker plugin state: %s",
+                    node_name,
+                    interface_name,
+                    ep.host_veth,
+                )
                 return OVSPortInfo(
                     port_name=ep.host_veth,
                     vlan_tag=ep.vlan_tag,
                     provider="docker",
                 )
-        except Exception:
-            pass  # Not a Docker node, fall through to libvirt
+        except Exception as e:
+            logger.debug(
+                "Docker OVS lookup failed for %s:%s in lab %s: %s",
+                node_name,
+                interface_name,
+                lab_id,
+                e,
+            )
 
     # --- Try libvirt (OVS/MAC introspection) ---
     if libvirt_provider is not None:
@@ -504,6 +530,12 @@ async def _resolve_ovs_port(
                 if vlan_tag is None:
                     vlans = libvirt_provider.get_node_vlans(lab_id, node_name)
                     vlan_tag = vlans[intf_index] if intf_index < len(vlans) else 0
+                logger.debug(
+                    "Resolved OVS port for %s:%s via libvirt lookup: %s",
+                    node_name,
+                    interface_name,
+                    port_name,
+                )
                 return OVSPortInfo(
                     port_name=port_name,
                     vlan_tag=vlan_tag,
@@ -512,6 +544,12 @@ async def _resolve_ovs_port(
         except Exception as e:
             logger.debug(f"Libvirt lookup failed for {node_name}:{interface_name}: {e}")
 
+    logger.debug(
+        "Failed to resolve OVS port for %s:%s in lab %s",
+        node_name,
+        interface_name,
+        lab_id,
+    )
     return None
 
 
