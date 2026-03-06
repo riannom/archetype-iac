@@ -10,8 +10,8 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from app.dependencies import require_operator_role, require_admin_role, require_super_admin_role
-from app.enums import GlobalRole
+from app.dependencies import require_operator_role, require_admin_role, require_super_admin_role  # noqa: E402
+from app.enums import GlobalRole  # noqa: E402
 
 
 def _make_user(role: GlobalRole) -> MagicMock:

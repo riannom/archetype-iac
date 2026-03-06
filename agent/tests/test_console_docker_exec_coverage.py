@@ -16,8 +16,7 @@ Covers:
 
 from __future__ import annotations
 
-import asyncio
-from unittest.mock import MagicMock, AsyncMock, patch, PropertyMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -168,8 +167,7 @@ class TestDockerConsoleReadBlocking:
     def test_read_blocking_with_data(self):
         console = _make_console_with_socket()
 
-        import select
-        with patch("agent.console.docker_exec.DockerConsole.read_blocking") as mock_rb:
+        with patch("agent.console.docker_exec.DockerConsole.read_blocking"):
             # Test the actual method instead
             pass
 

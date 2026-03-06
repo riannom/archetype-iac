@@ -6,15 +6,12 @@ get_lab_or_404 to bypass the known arg-order bug.
 from __future__ import annotations
 
 import json
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
 from app import models
-from app.config import settings
 from app.state import JobStatus
 
 

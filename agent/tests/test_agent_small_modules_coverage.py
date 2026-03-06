@@ -9,13 +9,11 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import socket
 import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-import pytest
 
 # ---------------------------------------------------------------------------
 # version.py
@@ -117,7 +115,7 @@ class TestGetCommit:
 # network/transport.py
 # ---------------------------------------------------------------------------
 
-from agent.network import transport as transport_mod
+from agent.network import transport as transport_mod  # noqa: E402
 
 
 class TestTransport:
@@ -168,7 +166,7 @@ class TestTransport:
 # network/vlan.py
 # ---------------------------------------------------------------------------
 
-from agent.network import vlan as vlan_mod
+from agent.network import vlan as vlan_mod  # noqa: E402
 
 
 class TestVlanManager:
@@ -330,7 +328,7 @@ class TestCleanupExternalNetworks:
 # network/ovs_vlan_tags.py
 # ---------------------------------------------------------------------------
 
-from agent.network.ovs_vlan_tags import (
+from agent.network.ovs_vlan_tags import (  # noqa: E402
     _parse_tag_field,
     parse_list_ports_output,
     used_vlan_tags_on_bridge_from_ovs_outputs,
@@ -427,7 +425,7 @@ class TestUsedVlanTags:
 # logging_config.py
 # ---------------------------------------------------------------------------
 
-from agent.logging_config import AgentJSONFormatter, AgentTextFormatter
+from agent.logging_config import AgentJSONFormatter, AgentTextFormatter  # noqa: E402
 
 
 class TestAgentJSONFormatter:
@@ -530,7 +528,7 @@ class TestAgentTextFormatter:
 # metrics.py
 # ---------------------------------------------------------------------------
 
-from agent.metrics import DummyMetric, get_metrics
+from agent.metrics import DummyMetric, get_metrics  # noqa: E402
 
 
 class TestDummyMetric:
@@ -561,7 +559,7 @@ class TestGetMetrics:
 # http_client.py
 # ---------------------------------------------------------------------------
 
-from agent import http_client
+from agent import http_client  # noqa: E402
 
 
 class TestHttpClient:

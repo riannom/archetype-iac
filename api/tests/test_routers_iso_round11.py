@@ -4,7 +4,6 @@ _import_single_image (round 11).
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -12,8 +11,6 @@ import pytest
 
 from app.routers.iso import (
     _execute_import,
-    _get_session,
-    _save_session,
     _sessions,
 )
 
@@ -30,7 +27,6 @@ def _run(coro):
 
 def _make_session(session_id, **overrides):
     """Create a minimal ISOSession-like object."""
-    from app.iso import ISOSession
 
     defaults = dict(
         id=session_id,
@@ -129,7 +125,7 @@ class TestExecuteImport:
         sess.manifest = manifest
 
         with patch("app.routers.iso._get_session", return_value=sess), \
-             patch("app.routers.iso._save_session") as mock_save, \
+             patch("app.routers.iso._save_session"), \
              patch("app.routers.iso.ISOExtractor") as mock_ext, \
              patch("app.routers.iso.ensure_image_store", return_value=Path("/tmp")), \
              patch("app.routers.iso.load_manifest", side_effect=RuntimeError("boom")):
@@ -152,7 +148,7 @@ class TestStreamImportProgress:
         assert resp.status_code == 404
 
     def test_completed_session_returns_complete(self, test_client, auth_headers):
-        from app.routers.iso import _sessions, _session_lock
+        from app.routers.iso import _session_lock
 
         sess = _make_session("done-sess", status="completed")
         with _session_lock:

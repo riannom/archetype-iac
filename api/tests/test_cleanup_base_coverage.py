@@ -2,9 +2,7 @@
 from __future__ import annotations
 
 import asyncio
-from unittest.mock import AsyncMock
 
-import pytest
 
 from app.tasks.cleanup_base import CleanupResult, CleanupRunner, get_valid_host_ids, get_valid_lab_ids, get_valid_user_ids
 

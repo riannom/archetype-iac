@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import hashlib
 from pathlib import Path
-from unittest.mock import MagicMock, patch
 
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session

@@ -1,7 +1,6 @@
 """Tests for agent/network/transport.py — VXLAN endpoint IP fallback chain."""
 from __future__ import annotations
 
-import socket
 from unittest.mock import MagicMock, patch
 
 from agent.network import transport

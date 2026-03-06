@@ -7,7 +7,7 @@ normalize_links_for_lab, and to_topology_yaml_for_host.
 from __future__ import annotations
 
 import json
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 from sqlalchemy.orm import Session
@@ -162,7 +162,7 @@ class TestMultihost:
 class TestGetNodeHost:
 
     def test_explicit_host_id(self, test_db: Session, sample_lab: models.Lab):
-        h = _make_host(test_db, "h1", "Agent 1")
+        _make_host(test_db, "h1", "Agent 1")
         _make_node(test_db, sample_lab.id, "n1", "R1", host_id="h1")
         test_db.commit()
 
@@ -179,8 +179,8 @@ class TestGetNodeHost:
         assert svc.get_node_host(sample_lab.id, "R1") is None
 
     def test_placement_fallback(self, test_db: Session, sample_lab: models.Lab):
-        h = _make_host(test_db, "h1", "Agent 1")
-        n = _make_node(test_db, sample_lab.id, "n1", "R1")
+        _make_host(test_db, "h1", "Agent 1")
+        _make_node(test_db, sample_lab.id, "n1", "R1")
         placement = models.NodePlacement(
             lab_id=sample_lab.id, node_name="R1", host_id="h1",
         )
@@ -372,7 +372,7 @@ class TestToTopologyYamlForHost:
         svc = TopologyService(test_db)
         with patch("app.topology.graph_to_topology_yaml") as mock_yaml:
             mock_yaml.return_value = "name: lab\n"
-            result = svc.to_topology_yaml_for_host(sample_lab.id, "h1")
+            svc.to_topology_yaml_for_host(sample_lab.id, "h1")
 
         # The graph passed to graph_to_topology_yaml should only have h1's node
         call_args = mock_yaml.call_args

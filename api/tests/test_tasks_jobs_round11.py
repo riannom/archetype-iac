@@ -8,7 +8,6 @@ from __future__ import annotations
 import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import pytest
 from sqlalchemy.orm import Session
 
 from app import models

@@ -1,16 +1,12 @@
 """Tests for app.routers.console — WebSocket console proxy coverage."""
 from __future__ import annotations
 
-import json
-from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
 from app import models
-from app.auth import create_access_token
 
 
 # ---------------------------------------------------------------------------
@@ -62,7 +58,7 @@ class TestConsoleWebSocket:
         from starlette.websockets import WebSocketDisconnect
 
         with pytest.raises(WebSocketDisconnect) as exc_info:
-            with test_client.websocket_connect("/labs/fake/nodes/r1/console") as ws:
+            with test_client.websocket_connect("/labs/fake/nodes/r1/console") as _ws:
                 pass
         assert exc_info.value.code == 4401
 
@@ -71,7 +67,7 @@ class TestConsoleWebSocket:
         try:
             with test_client.websocket_connect(
                 "/labs/fake/nodes/r1/console?token=invalid-jwt"
-            ) as ws:
+            ) as _ws:
                 pass
         except Exception:
             # Expected - invalid token causes close

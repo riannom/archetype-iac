@@ -7,7 +7,6 @@ import tarfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-import pytest
 
 from agent.providers.config_disk_inject import (
     _create_config_tarball,

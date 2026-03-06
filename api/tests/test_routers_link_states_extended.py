@@ -5,7 +5,7 @@ link reconcile, list/get/set link states, refresh, set-all, link detail.
 """
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 

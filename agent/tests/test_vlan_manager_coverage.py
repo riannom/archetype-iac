@@ -169,8 +169,6 @@ def test_cleanup_lab_partial_failure() -> None:
     manager = VlanManager()
     manager._interfaces_by_lab["lab-1"] = {"eth0.100", "eth0.200"}
 
-    call_count = 0
-
     def fake_exists(name: str) -> bool:
         return True
 

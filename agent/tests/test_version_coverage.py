@@ -1,7 +1,6 @@
 """Tests for agent/version.py — VERSION file, git tag, commit SHA resolution."""
 from __future__ import annotations
 
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from agent import version

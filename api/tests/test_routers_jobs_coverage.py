@@ -6,14 +6,11 @@ Covers:
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock, patch
 
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
 from app import models
-from app.config import settings
 
 
 # ===========================================================================
@@ -34,7 +31,6 @@ class TestLabStatus:
         test_db.commit()
 
         # Mock agent_client calls
-        import app.routers.jobs as jobs_mod
         import app.agent_client as ac_mod
 
         async def _fake_get_lab_status(agent, lab_id):

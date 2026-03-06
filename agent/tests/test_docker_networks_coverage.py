@@ -12,7 +12,6 @@ import pytest
 from docker.errors import APIError, NotFound
 
 from agent.providers.docker_networks import (
-    LABEL_LAB_ID,
     LABEL_NODE_INTERFACE_COUNT,
     LABEL_NODE_KIND,
     create_lab_networks,

@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from app import models
 from app.auth import hash_password
-from app.enums import GlobalRole, LabRole
+from app.enums import LabRole
 from app.services.permissions import PermissionService
 
 

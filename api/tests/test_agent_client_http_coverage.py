@@ -3,7 +3,7 @@
 import sys
 from pathlib import Path
 from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock, patch, PropertyMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -34,7 +34,6 @@ with patch.dict("sys.modules", {
     "app.config": MagicMock(settings=_fake_settings),
     "app.utils.timeouts": MagicMock(AGENT_HTTP_TIMEOUT=30.0, AGENT_VTEP_TIMEOUT=60.0),
 }):
-    import importlib
     # Force-reload to pick up mocked modules
     if "app.agent_client.http" in sys.modules:
         del sys.modules["app.agent_client.http"]
@@ -54,7 +53,7 @@ with patch.dict("sys.modules", {
         AgentError,
     )
 
-import httpx
+import httpx  # noqa: E402
 
 
 # ---------------------------------------------------------------------------

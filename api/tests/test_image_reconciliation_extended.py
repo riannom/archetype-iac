@@ -2,7 +2,7 @@
 from __future__ import annotations
 import sys
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch, PropertyMock
+from unittest.mock import AsyncMock, MagicMock, patch
 from contextlib import contextmanager
 import pytest
 
@@ -10,7 +10,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from app.tasks.image_reconciliation import (
+from app.tasks.image_reconciliation import (  # noqa: E402
     ImageReconciliationResult,
     reconcile_image_hosts,
     discover_unmanifested_images,
@@ -213,7 +213,7 @@ class TestDiscoverUnmanifested:
 
         with patch("app.tasks.image_reconciliation.get_session", return_value=_session_ctx(session)), \
              patch("app.tasks.image_reconciliation.load_manifest", return_value={}), \
-             patch("app.tasks.image_reconciliation.save_manifest") as save_mock, \
+             patch("app.tasks.image_reconciliation.save_manifest"), \
              patch("app.tasks.image_reconciliation.agent_client") as ac:
             ac.get_agent_images = AsyncMock(return_value=agent_images)
             ac.is_agent_online = AsyncMock(return_value=True)
@@ -233,7 +233,7 @@ class TestDiscoverUnmanifested:
 
         with patch("app.tasks.image_reconciliation.get_session", return_value=_session_ctx(session)), \
              patch("app.tasks.image_reconciliation.load_manifest", return_value={}), \
-             patch("app.tasks.image_reconciliation.save_manifest") as save_mock, \
+             patch("app.tasks.image_reconciliation.save_manifest"), \
              patch("app.tasks.image_reconciliation.agent_client") as ac:
             ac.get_agent_images = AsyncMock(return_value=agent_images)
             ac.is_agent_online = AsyncMock(return_value=True)
@@ -553,9 +553,9 @@ class TestFullReconciliation:
              patch("app.tasks.image_reconciliation.reconcile_image_hosts",
                     new_callable=AsyncMock, return_value=reconcile_result) as rec, \
              patch("app.tasks.image_reconciliation.verify_image_status_on_agents",
-                    new_callable=AsyncMock, return_value=verify_result) as ver, \
+                    new_callable=AsyncMock, return_value=verify_result), \
              patch("app.tasks.image_reconciliation._backfill_agent_metadata",
-                    new_callable=AsyncMock) as bf:
+                    new_callable=AsyncMock):
             result = await full_image_reconciliation()
 
         assert isinstance(result, ImageReconciliationResult)

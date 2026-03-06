@@ -12,10 +12,9 @@ Covers:
 
 from __future__ import annotations
 
-import asyncio
 import json
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 

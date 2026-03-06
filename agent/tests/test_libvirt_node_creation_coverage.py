@@ -12,7 +12,6 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import pytest
 
 # Ensure agent package is importable
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))

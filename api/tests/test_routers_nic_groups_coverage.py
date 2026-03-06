@@ -1,7 +1,6 @@
 """Tests for infrastructure NIC groups router (infrastructure_nic_groups.py)."""
 from __future__ import annotations
 
-import pytest
 from sqlalchemy.orm import Session
 
 from app import models
