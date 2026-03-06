@@ -22,8 +22,6 @@ from app.tasks.disk_cleanup import (
     cleanup_orphaned_lab_workspaces,
     cleanup_orphaned_qcow2_images,
     cleanup_orphaned_upload_files,
-    cleanup_stale_iso_sessions,
-    cleanup_stale_upload_sessions,
     disk_cleanup_monitor,
     get_disk_usage,
     run_disk_cleanup,

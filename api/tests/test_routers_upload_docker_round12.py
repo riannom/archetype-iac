@@ -7,13 +7,11 @@ in the existing test_routers_upload_docker_coverage.py.
 from __future__ import annotations
 
 import io
-import lzma
-import os
 import subprocess
 import tarfile
 from datetime import datetime, timezone
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -21,7 +19,6 @@ from app.routers.images._shared import (
     _chunk_upload_lock,
     _chunk_upload_sessions,
     _get_progress,
-    _update_progress,
 )
 from app.routers.images.upload_docker import (
     _load_image_background,

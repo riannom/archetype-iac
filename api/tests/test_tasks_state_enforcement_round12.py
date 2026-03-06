@@ -15,13 +15,13 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import contextmanager
-from datetime import datetime, timedelta, timezone
-from unittest.mock import AsyncMock, MagicMock, patch
+from datetime import datetime, timezone
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from app import models
-from app.state import JobStatus, NodeActualState, NodeDesiredState
+from app.state import JobStatus, NodeActualState
 import app.tasks.state_enforcement as se
 
 

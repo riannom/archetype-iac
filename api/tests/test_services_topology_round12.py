@@ -13,21 +13,18 @@ Targets methods and branches not covered by round 11:
 from __future__ import annotations
 
 import json
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
-import pytest
 from sqlalchemy.orm import Session
 
 from app import models
 from app.schemas import (
-    CrossHostLink,
     GraphEndpoint,
     GraphLink,
     GraphNode,
     TopologyGraph,
 )
 from app.services.topology import TopologyService
-from app.services.topology_resolution import NodePlacementInfo, TopologyAnalysisResult
 
 
 # ---------------------------------------------------------------------------

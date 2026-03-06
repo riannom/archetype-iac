@@ -8,7 +8,6 @@ Targets uncovered internal paths:
 """
 from __future__ import annotations
 
-import asyncio
 import hashlib
 import json
 import os
@@ -474,8 +473,6 @@ class TestBackfillImageChecksums:
         # Create a qcow2 file without sidecar
         content = b"test-qcow2-content"
         (image_dir / "router.qcow2").write_bytes(content)
-        expected_hash = hashlib.sha256(content).hexdigest()
-
         with patch("agent.routers.images.os.path.isdir", return_value=True):
             with patch(
                 "agent.routers.images.glob.glob" if hasattr(__builtins__, '__name__') else "glob.glob",
@@ -497,7 +494,6 @@ class TestBackfillImageChecksums:
         with patch("agent.routers.images.os.path.isdir", return_value=True):
             # Patch glob inside the function (it imports glob as globmod)
             import glob as globmod
-            original_glob = globmod.glob
 
             def fake_glob(pattern):
                 if "qcow2" in pattern:

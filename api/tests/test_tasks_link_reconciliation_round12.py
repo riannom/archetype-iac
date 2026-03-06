@@ -191,7 +191,7 @@ class TestRunSameHostConvergenceRound12:
             ("archetype-test-a1", "archetype-test-a2"),
             ("archetype-test-b1", "archetype-test-b2"),
         ]):
-            ls = _make_link_state(
+            _make_link_state(
                 test_db, sample_lab.id,
                 link_name=f"L{i}:eth1--L{i}:eth1",
                 source_node=sn, target_node=tn,
@@ -222,7 +222,7 @@ class TestRunSameHostConvergenceRound12:
                 ]
             },
         ) as mock_declare:
-            result = await run_same_host_convergence(test_db, host_to_agent)
+            await run_same_host_convergence(test_db, host_to_agent)
 
         # Should be called exactly once with both pairings batched
         mock_declare.assert_awaited_once()
@@ -510,7 +510,7 @@ class TestRunCrossHostPortConvergenceRound12:
         test_db.refresh(other_lab)
 
         # Link in sample_lab (should be converged)
-        ls1 = _make_link_state(
+        _make_link_state(
             test_db, sample_lab.id,
             link_name="A:eth1--B:eth1",
             source_node="archetype-test-a", target_node="archetype-test-b",
@@ -531,7 +531,7 @@ class TestRunCrossHostPortConvergenceRound12:
         )
 
         # Link in other_lab (should NOT be converged when filtering by sample_lab)
-        ls2 = _make_link_state(
+        _make_link_state(
             test_db, other_lab.id,
             link_name="C:eth1--D:eth1",
             source_node="archetype-other-c", target_node="archetype-other-d",
@@ -561,7 +561,7 @@ class TestRunCrossHostPortConvergenceRound12:
             "app.tasks.link_reconciliation.agent_client"
         ) as mock_ac:
             mock_ac.set_port_vlan_on_agent = AsyncMock(side_effect=_track_set_vlan)
-            result = await run_cross_host_port_convergence(
+            await run_cross_host_port_convergence(
                 test_db, host_to_agent, lab_id=sample_lab.id,
             )
 
@@ -671,7 +671,7 @@ class TestReconcileLabLinksRound12:
         ), patch(
             "app.tasks.link_reconciliation.attempt_vlan_repair",
             new_callable=AsyncMock, return_value=True,
-        ) as mock_vlan_repair, patch(
+        ), patch(
             "app.tasks.link_reconciliation.attempt_link_repair",
             new_callable=AsyncMock,
         ) as mock_full_repair:
