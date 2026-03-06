@@ -20,7 +20,7 @@ async def test_create_node_on_agent_includes_readiness_override_fields_when_set(
     agent.name = "agent1"
     agent.address = "http://localhost:8001"
 
-    with patch("app.agent_client._agent_request", new_callable=AsyncMock) as req:
+    with patch("app.agent_client.http._agent_request", new_callable=AsyncMock) as req:
         req.return_value = {"success": True}
         await create_node_on_agent(
             agent,
@@ -49,7 +49,7 @@ async def test_create_node_on_agent_omits_readiness_override_fields_when_unset()
     agent.name = "agent1"
     agent.address = "http://localhost:8001"
 
-    with patch("app.agent_client._agent_request", new_callable=AsyncMock) as req:
+    with patch("app.agent_client.http._agent_request", new_callable=AsyncMock) as req:
         req.return_value = {"success": True}
         await create_node_on_agent(
             agent,

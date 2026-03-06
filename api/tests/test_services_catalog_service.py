@@ -543,10 +543,10 @@ class TestEnsureCatalogIdentitySynced:
 
     def test_tables_unavailable_returns_early(self, test_db: Session, monkeypatch):
         """When catalog tables are missing, returns early without error."""
-        from app.services import catalog_service
+        from app.services import catalog_identity
 
         monkeypatch.setattr(
-            catalog_service, "_catalog_tables_available", lambda session: False
+            catalog_identity, "_catalog_tables_available", lambda session: False
         )
         result = ensure_catalog_identity_synced(test_db)
         assert result["applied"] is False

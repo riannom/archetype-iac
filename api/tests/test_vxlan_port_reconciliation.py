@@ -90,8 +90,8 @@ class TestReconcileVxlanPortsOnAgent:
 
         mock_request = AsyncMock(return_value=expected_response)
 
-        with patch.object(agent_client, "get_agent_url", return_value="http://10.0.0.1:8001"):
-            with patch.object(agent_client, "_agent_request", mock_request):
+        with patch("app.agent_client.overlay.get_agent_url", return_value="http://10.0.0.1:8001"):
+            with patch("app.agent_client.overlay._agent_request", mock_request):
                 result = await agent_client.reconcile_vxlan_ports_on_agent(
                     agent, ["vxlan-aabb1122", "vxlan-ccdd3344"]
                 )
@@ -119,8 +119,8 @@ class TestReconcileVxlanPortsOnAgent:
 
         mock_request = AsyncMock(side_effect=Exception("Connection refused"))
 
-        with patch.object(agent_client, "get_agent_url", return_value="http://10.0.0.1:8001"):
-            with patch.object(agent_client, "_agent_request", mock_request):
+        with patch("app.agent_client.overlay.get_agent_url", return_value="http://10.0.0.1:8001"):
+            with patch("app.agent_client.overlay._agent_request", mock_request):
                 result = await agent_client.reconcile_vxlan_ports_on_agent(agent, [])
 
         assert result["removed_ports"] == []
@@ -140,10 +140,10 @@ class TestVxlanReconciliationInCleanup:
         self, test_db, sample_lab, sample_vxlan_tunnel, multiple_hosts
     ):
         """Active tunnels generate correct port names sent to each agent."""
-        import app.tasks.reconciliation as recon_mod
+        import app.tasks.reconciliation_db as recon_db_mod
 
         # Force the orphan counter past the interval
-        recon_mod._lab_orphan_check_counter = recon_mod._LAB_ORPHAN_CHECK_INTERVAL - 1
+        recon_db_mod._lab_orphan_check_counter = recon_db_mod._LAB_ORPHAN_CHECK_INTERVAL - 1
 
         # Pre-compute expected port name for the sample tunnel
         link_state = test_db.get(models.LinkState, sample_vxlan_tunnel.link_state_id)
@@ -180,9 +180,9 @@ class TestVxlanReconciliationInCleanup:
         self, test_db, sample_lab, sample_vxlan_tunnel, multiple_hosts
     ):
         """Offline agents are skipped during VXLAN reconciliation."""
-        import app.tasks.reconciliation as recon_mod
+        import app.tasks.reconciliation_db as recon_db_mod
 
-        recon_mod._lab_orphan_check_counter = recon_mod._LAB_ORPHAN_CHECK_INTERVAL - 1
+        recon_db_mod._lab_orphan_check_counter = recon_db_mod._LAB_ORPHAN_CHECK_INTERVAL - 1
 
         reconcile_mock = AsyncMock(return_value={"removed_ports": []})
 
@@ -198,9 +198,9 @@ class TestVxlanReconciliationInCleanup:
         self, test_db, sample_lab, multiple_hosts
     ):
         """With no active tunnels, agents get empty valid port lists."""
-        import app.tasks.reconciliation as recon_mod
+        import app.tasks.reconciliation_db as recon_db_mod
 
-        recon_mod._lab_orphan_check_counter = recon_mod._LAB_ORPHAN_CHECK_INTERVAL - 1
+        recon_db_mod._lab_orphan_check_counter = recon_db_mod._LAB_ORPHAN_CHECK_INTERVAL - 1
 
         reconcile_mock = AsyncMock(return_value={"removed_ports": []})
 
@@ -220,9 +220,9 @@ class TestVxlanReconciliationInCleanup:
         self, test_db, sample_lab, sample_vxlan_tunnel, multiple_hosts
     ):
         """If one agent fails, the rest still get reconciled."""
-        import app.tasks.reconciliation as recon_mod
+        import app.tasks.reconciliation_db as recon_db_mod
 
-        recon_mod._lab_orphan_check_counter = recon_mod._LAB_ORPHAN_CHECK_INTERVAL - 1
+        recon_db_mod._lab_orphan_check_counter = recon_db_mod._LAB_ORPHAN_CHECK_INTERVAL - 1
 
         call_count = 0
 
@@ -280,9 +280,9 @@ class TestVxlanReconciliationInCleanup:
         test_db.add(tunnel)
         test_db.commit()
 
-        import app.tasks.reconciliation as recon_mod
+        import app.tasks.reconciliation_db as recon_db_mod
 
-        recon_mod._lab_orphan_check_counter = recon_mod._LAB_ORPHAN_CHECK_INTERVAL - 1
+        recon_db_mod._lab_orphan_check_counter = recon_db_mod._LAB_ORPHAN_CHECK_INTERVAL - 1
 
         reconcile_mock = AsyncMock(return_value={"removed_ports": []})
 

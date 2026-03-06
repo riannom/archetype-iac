@@ -13,8 +13,8 @@ class TestAgentOperationHistogram:
         mock_hist = MagicMock()
         mock_agent = MagicMock(id="agent-1", name="test-agent", address="10.0.0.1:8001")
 
-        with patch("app.agent_client.agent_operation_duration", mock_hist), \
-             patch("app.agent_client._agent_request", new_callable=AsyncMock) as mock_req:
+        with patch("app.agent_client.http.agent_operation_duration", mock_hist), \
+             patch("app.agent_client.http._agent_request", new_callable=AsyncMock) as mock_req:
             mock_req.return_value = {"success": True, "duration_ms": 500}
             from app.agent_client import start_node_on_agent
             result = await start_node_on_agent(mock_agent, "lab1", "node1")
@@ -33,8 +33,8 @@ class TestAgentOperationHistogram:
         mock_hist = MagicMock()
         mock_agent = MagicMock(id="agent-1", name="test-agent", address="10.0.0.1:8001")
 
-        with patch("app.agent_client.agent_operation_duration", mock_hist), \
-             patch("app.agent_client._agent_request", new_callable=AsyncMock) as mock_req:
+        with patch("app.agent_client.http.agent_operation_duration", mock_hist), \
+             patch("app.agent_client.http._agent_request", new_callable=AsyncMock) as mock_req:
             mock_req.side_effect = RuntimeError("connection refused")
             from app.agent_client import stop_node_on_agent
             result = await stop_node_on_agent(mock_agent, "lab1", "node1")
@@ -53,9 +53,9 @@ class TestAgentOperationHistogram:
         import logging
         mock_agent = MagicMock(id="agent-1", name="test-agent", address="10.0.0.1:8001")
 
-        with caplog.at_level(logging.INFO, logger="app.agent_client"), \
-             patch("app.agent_client.agent_operation_duration", MagicMock()), \
-             patch("app.agent_client._agent_request", new_callable=AsyncMock) as mock_req:
+        with caplog.at_level(logging.INFO, logger="app.agent_client.http"), \
+             patch("app.agent_client.http.agent_operation_duration", MagicMock()), \
+             patch("app.agent_client.http._agent_request", new_callable=AsyncMock) as mock_req:
             mock_req.return_value = {"success": True, "duration_ms": 123}
             from app.agent_client import create_node_on_agent
             await create_node_on_agent(mock_agent, "lab1", "node1", "ceos")
@@ -73,8 +73,8 @@ class TestAgentOperationHistogram:
         mock_hist = MagicMock()
         mock_agent = MagicMock(id="abc123", name="prod-agent", address="10.0.0.1:8001")
 
-        with patch("app.agent_client.agent_operation_duration", mock_hist), \
-             patch("app.agent_client._agent_request", new_callable=AsyncMock) as mock_req:
+        with patch("app.agent_client.http.agent_operation_duration", mock_hist), \
+             patch("app.agent_client.http._agent_request", new_callable=AsyncMock) as mock_req:
             mock_req.return_value = {"success": True}
             from app.agent_client import destroy_node_on_agent
             await destroy_node_on_agent(mock_agent, "lab1", "node1")
@@ -91,8 +91,8 @@ class TestAgentOperationHistogram:
         mock_hist = MagicMock()
         mock_agent = MagicMock(id="a1", name="agent", address="10.0.0.1:8001")
 
-        with patch("app.agent_client.agent_operation_duration", mock_hist), \
-             patch("app.agent_client._agent_request", new_callable=AsyncMock) as mock_req:
+        with patch("app.agent_client.http.agent_operation_duration", mock_hist), \
+             patch("app.agent_client.http._agent_request", new_callable=AsyncMock) as mock_req:
             mock_req.return_value = {"success": True}
             from app.agent_client import (
                 create_node_on_agent,

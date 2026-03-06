@@ -31,6 +31,8 @@ from app.image_store import (
 @pytest.fixture(autouse=True)
 def _mock_image_store_path(tmp_path, monkeypatch):
     """Redirect image store to a temp directory to avoid PermissionError on CI."""
+    monkeypatch.setattr("app.image_store.paths.ensure_image_store", lambda: tmp_path)
+    monkeypatch.setattr("app.image_store.paths.image_store_root", lambda: tmp_path)
     monkeypatch.setattr("app.image_store.ensure_image_store", lambda: tmp_path)
     monkeypatch.setattr("app.image_store.image_store_root", lambda: tmp_path)
 
@@ -194,7 +196,7 @@ class TestManifestOperations:
     def test_load_empty_manifest(self, tmp_path):
         """Loading nonexistent manifest returns empty structure."""
         manifest_path = tmp_path / "manifest.json"
-        with patch("app.image_store.manifest_path", return_value=manifest_path):
+        with patch("app.image_store.manifest.manifest_path", return_value=manifest_path):
             manifest = load_manifest()
             assert "images" in manifest
             assert manifest["images"] == []
@@ -202,7 +204,7 @@ class TestManifestOperations:
     def test_save_and_load_manifest(self, tmp_path):
         """Manifest round-trips correctly."""
         manifest_path = tmp_path / "manifest.json"
-        with patch("app.image_store.manifest_path", return_value=manifest_path):
+        with patch("app.image_store.manifest.manifest_path", return_value=manifest_path):
             manifest = {
                 "images": [
                     {
@@ -221,7 +223,7 @@ class TestManifestOperations:
     def test_manifest_json_formatting(self, tmp_path):
         """Manifest is saved with proper JSON formatting."""
         manifest_path = tmp_path / "manifest.json"
-        with patch("app.image_store.manifest_path", return_value=manifest_path):
+        with patch("app.image_store.manifest.manifest_path", return_value=manifest_path):
             manifest = {"images": [{"id": "test"}]}
             save_manifest(manifest)
 
@@ -234,7 +236,7 @@ class TestManifestOperations:
     def test_load_manifest_normalizes_legacy_iosv_device_ids(self, tmp_path):
         """Legacy iosv IDs are normalized to canonical cisco_iosv."""
         manifest_path = tmp_path / "manifest.json"
-        with patch("app.image_store.manifest_path", return_value=manifest_path):
+        with patch("app.image_store.manifest.manifest_path", return_value=manifest_path):
             manifest_path.write_text(
                 json.dumps({
                     "images": [
@@ -259,7 +261,7 @@ class TestManifestOperations:
     def test_load_manifest_sets_default_for_single_runnable_image(self, tmp_path):
         """Single runnable image per device is auto-marked as default."""
         manifest_path = tmp_path / "manifest.json"
-        with patch("app.image_store.manifest_path", return_value=manifest_path):
+        with patch("app.image_store.manifest.manifest_path", return_value=manifest_path):
             manifest_path.write_text(
                 json.dumps({
                     "images": [
@@ -285,7 +287,7 @@ class TestManifestOperations:
     def test_load_manifest_does_not_force_default_when_multiple_images(self, tmp_path):
         """Multiple runnable images keep explicit default selection behavior."""
         manifest_path = tmp_path / "manifest.json"
-        with patch("app.image_store.manifest_path", return_value=manifest_path):
+        with patch("app.image_store.manifest.manifest_path", return_value=manifest_path):
             manifest_path.write_text(
                 json.dumps({
                     "images": [
@@ -319,7 +321,7 @@ class TestManifestOperations:
     def test_save_manifest_backfills_default_for_single_runnable_image(self, tmp_path):
         """Saving manifest applies the same auto-default normalization."""
         manifest_path = tmp_path / "manifest.json"
-        with patch("app.image_store.manifest_path", return_value=manifest_path):
+        with patch("app.image_store.manifest.manifest_path", return_value=manifest_path):
             manifest = {
                 "images": [
                     {
@@ -344,7 +346,7 @@ class TestManifestOperations:
     def test_load_manifest_backfills_legacy_linux_frr_assignment(self, tmp_path):
         """Legacy linux+frr image entries are remapped to draggable frr device type."""
         manifest_path = tmp_path / "manifest.json"
-        with patch("app.image_store.manifest_path", return_value=manifest_path):
+        with patch("app.image_store.manifest.manifest_path", return_value=manifest_path):
             manifest_path.write_text(
                 json.dumps({
                     "images": [
@@ -370,7 +372,7 @@ class TestManifestOperations:
     def test_load_manifest_backfills_legacy_linux_alpine_assignment(self, tmp_path):
         """Legacy linux+alpine entries are remapped to draggable alpine device type."""
         manifest_path = tmp_path / "manifest.json"
-        with patch("app.image_store.manifest_path", return_value=manifest_path):
+        with patch("app.image_store.manifest.manifest_path", return_value=manifest_path):
             manifest_path.write_text(
                 json.dumps({
                     "images": [
@@ -396,7 +398,7 @@ class TestManifestOperations:
     def test_load_manifest_backfills_legacy_linux_tcl_assignment(self, tmp_path):
         """Legacy linux+tcl entries are remapped to draggable tcl device type."""
         manifest_path = tmp_path / "manifest.json"
-        with patch("app.image_store.manifest_path", return_value=manifest_path):
+        with patch("app.image_store.manifest.manifest_path", return_value=manifest_path):
             manifest_path.write_text(
                 json.dumps({
                     "images": [
@@ -435,7 +437,7 @@ class TestCustomDeviceShadowing:
             encoding="utf-8",
         )
 
-        with patch("app.image_store.custom_devices_path", return_value=custom_path):
+        with patch("app.image_store.custom_devices.custom_devices_path", return_value=custom_path):
             with patch("agent.vendors.VENDOR_CONFIGS", {"cat9000v-uadp": object(), "linux": object()}):
                 devices = load_custom_devices()
 
@@ -445,7 +447,7 @@ class TestCustomDeviceShadowing:
         custom_path = tmp_path / "custom_devices.json"
         custom_path.write_text(json.dumps({"devices": []}), encoding="utf-8")
 
-        with patch("app.image_store.custom_devices_path", return_value=custom_path):
+        with patch("app.image_store.custom_devices.custom_devices_path", return_value=custom_path):
             with patch("agent.vendors.VENDOR_CONFIGS", {"cat9000v-uadp": object()}):
                 with pytest.raises(ValueError, match="built-in vendor device"):
                     add_custom_device({"id": "cat9000v-uadp", "name": "Duplicate"})
@@ -462,7 +464,7 @@ class TestCustomDeviceShadowing:
             encoding="utf-8",
         )
 
-        with patch("app.image_store.custom_devices_path", return_value=custom_path):
+        with patch("app.image_store.custom_devices.custom_devices_path", return_value=custom_path):
             with patch("agent.vendors.VENDOR_CONFIGS", {"c8000v": object(), "linux": object()}):
                 with patch("agent.vendors.get_kind_for_device", lambda d: "cisco_c8000v" if d == "cat8000v" else d):
                     with patch("agent.vendors._get_config_by_kind", lambda k: object() if k == "cisco_c8000v" else None):
@@ -474,7 +476,7 @@ class TestCustomDeviceShadowing:
         custom_path = tmp_path / "custom_devices.json"
         custom_path.write_text(json.dumps({"devices": []}), encoding="utf-8")
 
-        with patch("app.image_store.custom_devices_path", return_value=custom_path):
+        with patch("app.image_store.custom_devices.custom_devices_path", return_value=custom_path):
             with patch("agent.vendors.VENDOR_CONFIGS", {"c8000v": object()}):
                 with patch("agent.vendors.get_kind_for_device", lambda d: "cisco_c8000v" if d == "cat8000v" else d):
                     with patch("agent.vendors._get_config_by_kind", lambda k: object() if k == "cisco_c8000v" else None):
@@ -769,7 +771,7 @@ class TestImageDefaultHandling:
     def test_find_image_reference_uses_device_scoped_defaults(self, tmp_path):
         """Runtime lookup selects default based on requested device type scope."""
         manifest_path = tmp_path / "manifest.json"
-        with patch("app.image_store.manifest_path", return_value=manifest_path):
+        with patch("app.image_store.manifest.manifest_path", return_value=manifest_path):
             save_manifest({
                 "images": [
                     {

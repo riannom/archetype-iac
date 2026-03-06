@@ -575,13 +575,17 @@ class TestManagedInterfaces:
         """Create managed interface succeeds with admin."""
         _make_online_host(test_db, "h1", "Host 1")
 
-        with patch("app.routers.infrastructure.agent_client") as mock_ac:
-            mock_ac.is_agent_online = MagicMock(return_value=True)
-            mock_ac.provision_interface_on_agent = AsyncMock(return_value={
-                "success": True,
-                "mtu": 9000,
-                "ip_address": "10.0.0.1/24",
-            })
+        with (
+            patch("app.routers.infrastructure.agent_client") as mock_ac,
+            patch("app.routers.infrastructure_interfaces.agent_client") as mock_ac2,
+        ):
+            for m in (mock_ac, mock_ac2):
+                m.is_agent_online = MagicMock(return_value=True)
+                m.provision_interface_on_agent = AsyncMock(return_value={
+                    "success": True,
+                    "mtu": 9000,
+                    "ip_address": "10.0.0.1/24",
+                })
 
             resp = test_client.post(
                 "/infrastructure/agents/h1/managed-interfaces",
@@ -652,15 +656,19 @@ class TestManagedInterfaces:
         """GET agent interfaces returns details from the agent."""
         _make_online_host(test_db, "h1", "Host 1")
 
-        with patch("app.routers.infrastructure.agent_client") as mock_ac:
-            mock_ac.is_agent_online = MagicMock(return_value=True)
-            mock_ac.get_agent_interface_details = AsyncMock(return_value={
-                "interfaces": [
-                    {"name": "eth0", "mtu": 1500, "mac": "00:11:22:33:44:55"},
-                ],
-                "default_route_interface": "eth0",
-                "network_manager": "systemd-networkd",
-            })
+        with (
+            patch("app.routers.infrastructure.agent_client") as mock_ac,
+            patch("app.routers.infrastructure_interfaces.agent_client") as mock_ac2,
+        ):
+            for m in (mock_ac, mock_ac2):
+                m.is_agent_online = MagicMock(return_value=True)
+                m.get_agent_interface_details = AsyncMock(return_value={
+                    "interfaces": [
+                        {"name": "eth0", "mtu": 1500, "mac": "00:11:22:33:44:55"},
+                    ],
+                    "default_route_interface": "eth0",
+                    "network_manager": "systemd-networkd",
+                })
 
             resp = test_client.get(
                 "/infrastructure/agents/h1/interfaces",

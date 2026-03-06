@@ -439,7 +439,7 @@ class TestRunMultihostDeploy:
         test_db.add_all([node1, node2])
         test_db.commit()
 
-        with patch("app.tasks.jobs.get_session", _mock_get_session(test_db)):
+        with patch("app.tasks.jobs_multihost.get_session", _mock_get_session(test_db)):
             await run_multihost_deploy(job.id, lab.id)
 
         test_db.refresh(job)
@@ -485,7 +485,7 @@ class TestRunMultihostDestroy:
         test_db.add(node1)
         test_db.commit()
 
-        with patch("app.tasks.jobs.get_session", _mock_get_session(test_db)):
+        with patch("app.tasks.jobs_multihost.get_session", _mock_get_session(test_db)):
             await run_multihost_destroy(job.id, lab.id)
 
         test_db.refresh(job)
@@ -560,9 +560,9 @@ class TestRunMultihostDestroy:
         test_db.add(link)
         test_db.commit()
 
-        with patch("app.tasks.jobs.get_session", _mock_get_session(test_db)):
+        with patch("app.tasks.jobs_multihost.get_session", _mock_get_session(test_db)):
             with patch(
-                "app.tasks.jobs.agent_client.is_agent_online",
+                "app.tasks.jobs_multihost.agent_client.is_agent_online",
                 side_effect=lambda host: host.id == online_host.id,
             ):
                 with patch(
@@ -571,12 +571,12 @@ class TestRunMultihostDestroy:
                 ) as mock_teardown:
                     mock_teardown.return_value = (1, 0)
                     with patch(
-                        "app.tasks.jobs.agent_client.destroy_on_agent",
+                        "app.tasks.jobs_multihost.agent_client.destroy_on_agent",
                         new_callable=AsyncMock,
                     ) as mock_destroy:
                         mock_destroy.return_value = {"status": "completed"}
-                        with patch("app.tasks.jobs._dispatch_webhook", new_callable=AsyncMock):
-                            with patch("app.tasks.jobs.emit_job_failed", new_callable=AsyncMock):
+                        with patch("app.tasks.jobs_multihost._dispatch_webhook", new_callable=AsyncMock):
+                            with patch("app.tasks.jobs_multihost.emit_job_failed", new_callable=AsyncMock):
                                 await run_multihost_destroy(job.id, lab.id)
 
         test_db.refresh(job)
@@ -663,9 +663,9 @@ class TestRunMultihostDestroy:
         )
         test_db.commit()
 
-        with patch("app.tasks.jobs.get_session", _mock_get_session(test_db)):
+        with patch("app.tasks.jobs_multihost.get_session", _mock_get_session(test_db)):
             with patch(
-                "app.tasks.jobs.agent_client.is_agent_online",
+                "app.tasks.jobs_multihost.agent_client.is_agent_online",
                 side_effect=lambda host: host.id in {host1.id, host2.id},
             ):
                 with patch(
@@ -674,15 +674,15 @@ class TestRunMultihostDestroy:
                 ) as mock_teardown:
                     mock_teardown.return_value = (1, 0)
                     with patch(
-                        "app.tasks.jobs.agent_client.destroy_on_agent",
+                        "app.tasks.jobs_multihost.agent_client.destroy_on_agent",
                         new_callable=AsyncMock,
                     ) as mock_destroy:
                         mock_destroy.side_effect = [
                             {"status": "completed"},
                             {"status": "completed"},
                         ]
-                        with patch("app.tasks.jobs._dispatch_webhook", new_callable=AsyncMock):
-                            with patch("app.tasks.jobs.emit_destroy_finished", new_callable=AsyncMock):
+                        with patch("app.tasks.jobs_multihost._dispatch_webhook", new_callable=AsyncMock):
+                            with patch("app.tasks.jobs_multihost.emit_destroy_finished", new_callable=AsyncMock):
                                 await run_multihost_destroy(job.id, lab.id)
 
         test_db.refresh(job)
@@ -724,7 +724,7 @@ class TestRunNodeReconcile:
         test_db.commit()
         test_db.refresh(job)
 
-        with patch("app.tasks.jobs.get_session", _mock_get_session(test_db)):
+        with patch("app.tasks.jobs_node_reconcile.get_session", _mock_get_session(test_db)):
             await run_node_reconcile(job.id, lab.id, ["nonexistent-node"])
 
         test_db.refresh(job)
@@ -778,12 +778,12 @@ class TestRunNodeReconcile:
         test_db.commit()
         test_db.refresh(job)
 
-        with patch("app.tasks.jobs.get_session", _mock_get_session(test_db)):
-            with patch("app.tasks.jobs.agent_client.get_agent_for_lab", new_callable=AsyncMock) as mock_get_agent:
+        with patch("app.tasks.jobs_node_reconcile.get_session", _mock_get_session(test_db)):
+            with patch("app.tasks.jobs_node_reconcile.agent_client.get_agent_for_lab", new_callable=AsyncMock) as mock_get_agent:
                 mock_get_agent.return_value = sample_host
-                with patch("app.tasks.jobs.agent_client.deploy_to_agent", new_callable=AsyncMock) as mock_deploy:
+                with patch("app.tasks.jobs_node_reconcile.agent_client.deploy_to_agent", new_callable=AsyncMock) as mock_deploy:
                     mock_deploy.return_value = {"status": "completed"}
-                    with patch("app.tasks.jobs.agent_client.is_agent_online", return_value=True):
+                    with patch("app.tasks.jobs_node_reconcile.agent_client.is_agent_online", return_value=True):
                         await run_node_reconcile(job.id, lab.id, ["node-1"])
 
         test_db.refresh(job)

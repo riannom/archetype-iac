@@ -11,6 +11,7 @@ import pytest
 
 from app import agent_client, models
 from app.agent_client import AgentError, AgentUnavailableError
+from app.agent_client import http as _ac_http
 
 
 def _agent(
@@ -39,15 +40,15 @@ async def test_resolve_agent_ip_paths():
     assert await agent_client.resolve_agent_ip("192.168.1.10:8001") == "192.168.1.10"
 
     fake_loop = SimpleNamespace(getaddrinfo=AsyncMock(return_value=[(None, None, None, None, ("10.2.3.4", 0))]))
-    with patch("app.agent_client.asyncio.get_running_loop", return_value=fake_loop):
+    with patch("app.agent_client.selection.asyncio.get_running_loop", return_value=fake_loop):
         assert await agent_client.resolve_agent_ip("http://my-agent.example:8001") == "10.2.3.4"
 
     fake_loop_empty = SimpleNamespace(getaddrinfo=AsyncMock(return_value=[]))
-    with patch("app.agent_client.asyncio.get_running_loop", return_value=fake_loop_empty):
+    with patch("app.agent_client.selection.asyncio.get_running_loop", return_value=fake_loop_empty):
         assert await agent_client.resolve_agent_ip("agent.local:8001") == "agent.local"
 
     fake_loop_err = SimpleNamespace(getaddrinfo=AsyncMock(side_effect=socket.gaierror("dns err")))
-    with patch("app.agent_client.asyncio.get_running_loop", return_value=fake_loop_err):
+    with patch("app.agent_client.selection.asyncio.get_running_loop", return_value=fake_loop_err):
         assert await agent_client.resolve_agent_ip("agent.local:8001") == "agent.local"
 
 
@@ -70,7 +71,7 @@ async def test_resolve_data_plane_ip_paths():
     host = _agent(data_plane_address=None)
     db.query.return_value.filter.return_value.first.return_value = iface
     db.commit.side_effect = RuntimeError("commit failed")
-    with patch("app.agent_client.resolve_agent_ip", new_callable=AsyncMock, return_value="192.0.2.1"):
+    with patch("app.agent_client.selection.resolve_agent_ip", new_callable=AsyncMock, return_value="192.0.2.1"):
         resolved_rollback = await agent_client.resolve_data_plane_ip(db, host)
     assert resolved_rollback == "10.10.10.20"
     db.rollback.assert_called_once()
@@ -78,7 +79,7 @@ async def test_resolve_data_plane_ip_paths():
     db = MagicMock()
     host = _agent(data_plane_address=None, address="agent.lab:8001")
     db.query.return_value.filter.return_value.first.return_value = None
-    with patch("app.agent_client.resolve_agent_ip", new_callable=AsyncMock, return_value="198.51.100.5"):
+    with patch("app.agent_client.selection.resolve_agent_ip", new_callable=AsyncMock, return_value="198.51.100.5"):
         fallback = await agent_client.resolve_data_plane_ip(db, host)
     assert fallback == "198.51.100.5"
 
@@ -96,10 +97,10 @@ def test_data_plane_mtu_ok():
 @pytest.mark.asyncio
 async def test_close_http_client_and_agent_request_paths(monkeypatch):
     fake_client = SimpleNamespace(aclose=AsyncMock())
-    monkeypatch.setattr(agent_client, "_http_client", fake_client)
+    monkeypatch.setattr(_ac_http, "_http_client", fake_client)
     await agent_client.close_http_client()
     fake_client.aclose.assert_awaited_once()
-    assert agent_client._http_client is None
+    assert _ac_http._http_client is None
 
     response = MagicMock()
     response.status_code = 204
@@ -110,9 +111,9 @@ async def test_close_http_client_and_agent_request_paths(monkeypatch):
     async def _run_once(func, max_retries=None):  # noqa: ARG001
         return await func()
 
-    with patch("app.agent_client.get_http_client", return_value=client), patch(
-        "app.agent_client.with_retry", side_effect=_run_once
-    ), patch("app.agent_client.agent_operation_duration.labels", return_value=labels):
+    with patch("app.agent_client.http.get_http_client", return_value=client), patch(
+        "app.agent_client.http.with_retry", side_effect=_run_once
+    ), patch("app.agent_client.http.agent_operation_duration.labels", return_value=labels):
         result = await agent_client._agent_request(
             "GET",
             "http://agent/health",
@@ -122,9 +123,9 @@ async def test_close_http_client_and_agent_request_paths(monkeypatch):
     assert result == {}
     labels.observe.assert_called_once()
 
-    with patch("app.agent_client.get_http_client", return_value=client), patch(
-        "app.agent_client.with_retry", side_effect=RuntimeError("boom")
-    ), patch("app.agent_client.agent_operation_duration.labels", side_effect=RuntimeError("metrics down")):
+    with patch("app.agent_client.http.get_http_client", return_value=client), patch(
+        "app.agent_client.http.with_retry", side_effect=RuntimeError("boom")
+    ), patch("app.agent_client.http.agent_operation_duration.labels", side_effect=RuntimeError("metrics down")):
         with pytest.raises(RuntimeError):
             await agent_client._agent_request(
                 "GET",
@@ -150,11 +151,11 @@ async def test_get_agent_for_node_priorities_and_mark_offline():
     db.query.side_effect = _query_side_effect
     db.get.side_effect = lambda model, key: host if model is models.Host and key == "h1" else None
 
-    with patch("app.agent_client.is_agent_online", return_value=True):
+    with patch("app.agent_client.selection.is_agent_online", return_value=True):
         selected = await agent_client.get_agent_for_node(db, "lab-1", "n1")
     assert selected == host
 
-    with patch("app.agent_client.is_agent_online", return_value=False):
+    with patch("app.agent_client.selection.is_agent_online", return_value=False):
         none_selected = await agent_client.get_agent_for_node(db, "lab-1", "n1")
     assert none_selected is None
 
@@ -165,15 +166,15 @@ async def test_get_agent_for_node_priorities_and_mark_offline():
     placement_q.filter.return_value.first.return_value = None
     db.query.side_effect = lambda model: node_q if model is models.Node else placement_q
     db.get.return_value = None
-    with patch("app.agent_client.get_healthy_agent", new_callable=AsyncMock, return_value=host):
+    with patch("app.agent_client.selection.get_healthy_agent", new_callable=AsyncMock, return_value=host):
         fallback = await agent_client.get_agent_for_node(db, "lab-1", "n1")
     assert fallback == host
 
     online = _agent("a1", status="online")
     db = MagicMock()
     db.get.return_value = online
-    with patch("app.agent_client.asyncio.create_task") as create_task, patch(
-        "app.agent_client.emit_agent_offline", new=Mock(return_value=None)
+    with patch("app.agent_client.selection.asyncio.create_task") as create_task, patch(
+        "app.agent_client.selection.emit_agent_offline", new=Mock(return_value=None)
     ):
         await agent_client.mark_agent_offline(db, "a1")
     assert online.status == "offline"
@@ -184,8 +185,8 @@ async def test_get_agent_for_node_priorities_and_mark_offline():
 @pytest.mark.asyncio
 async def test_deploy_destroy_status_and_reconcile_wrappers():
     host = _agent("h1", name="host-1")
-    with patch("app.agent_client.get_agent_url", return_value="http://agent"), patch(
-        "app.agent_client._agent_request", new_callable=AsyncMock, return_value={"status": "ok"}
+    with patch("app.agent_client.node_ops.get_agent_url", return_value="http://agent"), patch(
+        "app.agent_client.node_ops._agent_request", new_callable=AsyncMock, return_value={"status": "ok"}
     ):
         deploy = await agent_client.deploy_to_agent(host, "job-1", "lab-1", topology={"nodes": []})
         destroy = await agent_client.destroy_on_agent(host, "job-1", "lab-1")
@@ -200,8 +201,8 @@ async def test_deploy_destroy_status_and_reconcile_wrappers():
     with pytest.raises(ValueError):
         await agent_client.deploy_to_agent(host, "job-1", "lab-1", topology=None)
 
-    with patch("app.agent_client.get_agent_url", return_value="http://agent"), patch(
-        "app.agent_client._agent_request",
+    with patch("app.agent_client.node_ops.get_agent_url", return_value="http://agent"), patch(
+        "app.agent_client.node_ops._agent_request",
         new_callable=AsyncMock,
         side_effect=AgentError("deploy failed", agent_id=None),
     ) as req:
@@ -210,24 +211,24 @@ async def test_deploy_destroy_status_and_reconcile_wrappers():
     assert deploy_err.value.agent_id == host.id
     assert req.await_count == 1
 
-    with patch("app.agent_client.get_agent_url", return_value="http://agent"), patch(
-        "app.agent_client._agent_request",
+    with patch("app.agent_client.node_ops.get_agent_url", return_value="http://agent"), patch(
+        "app.agent_client.node_ops._agent_request",
         new_callable=AsyncMock,
         side_effect=AgentError("destroy failed", agent_id=None),
     ):
         with pytest.raises(AgentError):
             await agent_client.destroy_on_agent(host, "job-1", "lab-1")
 
-    with patch("app.agent_client.get_agent_url", return_value="http://agent"), patch(
-        "app.agent_client._agent_request",
+    with patch("app.agent_client.node_ops.get_agent_url", return_value="http://agent"), patch(
+        "app.agent_client.node_ops._agent_request",
         new_callable=AsyncMock,
         side_effect=AgentError("status failed", agent_id=None),
     ):
         with pytest.raises(AgentError):
             await agent_client.get_lab_status_from_agent(host, "lab-1")
 
-    with patch("app.agent_client.get_agent_url", return_value="http://agent"), patch(
-        "app.agent_client._agent_request",
+    with patch("app.agent_client.node_ops.get_agent_url", return_value="http://agent"), patch(
+        "app.agent_client.node_ops._agent_request",
         new_callable=AsyncMock,
         side_effect=AgentError("reconcile failed", agent_id="h1"),
     ):
@@ -238,8 +239,8 @@ async def test_deploy_destroy_status_and_reconcile_wrappers():
 @pytest.mark.asyncio
 async def test_readiness_runtime_and_agent_lookup_paths():
     host = _agent("h1")
-    with patch("app.agent_client.get_agent_url", return_value="http://agent"), patch(
-        "app.agent_client._agent_request",
+    with patch("app.agent_client.node_ops.get_agent_url", return_value="http://agent"), patch(
+        "app.agent_client.node_ops._agent_request",
         new_callable=AsyncMock,
         side_effect=[{"is_ready": True}, {"runtime": {"provider": "docker"}}],
     ):
@@ -251,8 +252,8 @@ async def test_readiness_runtime_and_agent_lookup_paths():
     assert readiness["is_ready"] is True
     assert runtime["runtime"]["provider"] == "docker"
 
-    with patch("app.agent_client.get_agent_url", return_value="http://agent"), patch(
-        "app.agent_client._agent_request",
+    with patch("app.agent_client.node_ops.get_agent_url", return_value="http://agent"), patch(
+        "app.agent_client.node_ops._agent_request",
         new_callable=AsyncMock,
         side_effect=RuntimeError("down"),
     ):
@@ -270,7 +271,7 @@ async def test_readiness_runtime_and_agent_lookup_paths():
 
     db = MagicMock()
     db.query.return_value.filter.return_value.first.return_value = host
-    with patch("app.agent_client.get_agent_providers", return_value=["docker"]):
+    with patch("app.agent_client.selection.get_agent_providers", return_value=["docker"]):
         assert await agent_client.get_agent_by_name(db, "h1", required_provider="libvirt") is None
         assert await agent_client.get_agent_by_name(db, "h1", required_provider="docker") == host
 
@@ -280,8 +281,8 @@ async def test_update_stale_and_agent_discovery_wrappers():
     stale = _agent("stale-1", name="stale", status="online")
     db = MagicMock()
     db.query.return_value.filter.return_value.all.return_value = [stale]
-    with patch("app.agent_client.asyncio.create_task") as create_task, patch(
-        "app.agent_client.emit_agent_offline", new=Mock(return_value=None)
+    with patch("app.agent_client.selection.asyncio.create_task") as create_task, patch(
+        "app.agent_client.selection.emit_agent_offline", new=Mock(return_value=None)
     ):
         marked = await agent_client.update_stale_agents(db)
     assert marked == ["stale-1"]
@@ -290,14 +291,15 @@ async def test_update_stale_and_agent_discovery_wrappers():
     create_task.assert_called_once()
 
     host = _agent("h1")
-    with patch("app.agent_client._safe_agent_request", new_callable=AsyncMock) as req:
-        req.side_effect = [
+    with patch("app.agent_client.node_ops._safe_agent_request", new_callable=AsyncMock) as node_ops_req, \
+         patch("app.agent_client.selection._safe_agent_request", new_callable=AsyncMock) as sel_req:
+        node_ops_req.side_effect = [
             {"locks": []},
             {"status": "cleared"},
-            {"capacity_ok": True},
             {"labs": [{"id": "lab-1"}]},
             {"removed_containers": []},
         ]
+        sel_req.return_value = {"capacity_ok": True}
         lock_status = await agent_client.get_agent_lock_status(host)
         lock_release = await agent_client.release_agent_lock(host, "lab-1")
         capacity = await agent_client.query_agent_capacity(host)
@@ -310,9 +312,9 @@ async def test_update_stale_and_agent_discovery_wrappers():
     assert discovered["labs"][0]["id"] == "lab-1"
     assert cleaned["removed_containers"] == []
 
-    with patch("app.agent_client._agent_request", new_callable=AsyncMock, return_value={"ok": True}):
+    with patch("app.agent_client.selection._agent_request", new_callable=AsyncMock, return_value={"ok": True}):
         assert await agent_client.ping_agent(host) is True
-    with patch("app.agent_client._agent_request", new_callable=AsyncMock, side_effect=RuntimeError("unreachable")):
+    with patch("app.agent_client.selection._agent_request", new_callable=AsyncMock, side_effect=RuntimeError("unreachable")):
         with pytest.raises(AgentUnavailableError):
             await agent_client.ping_agent(host)
 
@@ -321,39 +323,69 @@ async def test_update_stale_and_agent_discovery_wrappers():
 async def test_overlay_state_and_overlay_attach_detach_wrappers():
     host = _agent("h1", name="host-1")
 
-    with patch("app.agent_client.get_agent_url", return_value="http://agent"), patch(
-        "app.agent_client._agent_request",
+    with patch("app.agent_client.overlay.get_agent_url", return_value="http://agent"), patch(
+        "app.agent_client.overlay._agent_request",
         new_callable=AsyncMock,
         side_effect=[
+            # declare_overlay_state_on_agent #1 (success)
             {"results": [{"ok": True}]},
+            # declare_overlay_state_on_agent #2 (404 -> fallback to reconcile mock)
             RuntimeError("404 Not Found"),
+            # declare_overlay_state_on_agent #3 (generic error)
             RuntimeError("boom"),
+            # attach_container_on_agent #1 (success)
+            {"success": True},
+            # attach_container_on_agent #2 (failure)
+            {"success": False, "error": "failed"},
+            # attach_container_on_agent #3 (exception)
+            RuntimeError("attach down"),
+            # cleanup_overlay_on_agent #1 (success)
+            {"tunnels_deleted": 2, "bridges_deleted": 1},
+            # cleanup_overlay_on_agent #2 (exception)
+            RuntimeError("overlay down"),
+            # get_cleanup_audit_from_agent #1 (success)
+            {"network": {"containers": []}},
+            # get_cleanup_audit_from_agent #2 (exception)
+            RuntimeError("audit down"),
+            # attach_overlay_interface_on_agent #1 (success)
+            {"success": True, "local_vlan": 110},
+            # attach_overlay_interface_on_agent #2 (failure)
+            {"success": False, "error": "bad attach"},
+            # attach_overlay_interface_on_agent #3 (exception)
+            RuntimeError("attach-link down"),
+            # detach_overlay_interface_on_agent #1 (success)
+            {"success": True, "interface_isolated": True, "new_vlan": 200, "tunnel_deleted": True},
+            # detach_overlay_interface_on_agent #2 (failure)
+            {"success": False, "error": "bad detach"},
+            # detach_overlay_interface_on_agent #3 (exception)
+            RuntimeError("detach-link down"),
+        ],
+    ), patch(
+        "app.agent_client.overlay.reconcile_vxlan_ports_on_agent",
+        new_callable=AsyncMock,
+        return_value={"fallback": True},
+    ), patch(
+        "app.agent_client.links.get_agent_url", return_value="http://agent"
+    ), patch(
+        "app.agent_client.links._agent_request",
+        new_callable=AsyncMock,
+        side_effect=[
             {"ports": [{"name": "vh1"}]},
             RuntimeError("state down"),
             {"results": [{"link_name": "l1"}]},
             RuntimeError("declare down"),
+        ],
+    ), patch(
+        "app.agent_client.node_ops.get_agent_url", return_value="http://agent"
+    ), patch(
+        "app.agent_client.node_ops._agent_request",
+        new_callable=AsyncMock,
+        side_effect=[
             {"removed_containers": ["c1"], "kept_containers": []},
             RuntimeError("cleanup down"),
-            {"success": True},
-            {"success": False, "error": "failed"},
-            RuntimeError("attach down"),
-            {"tunnels_deleted": 2, "bridges_deleted": 1},
-            RuntimeError("overlay down"),
-            {"network": {"containers": []}},
-            RuntimeError("audit down"),
-            {"success": True, "local_vlan": 110},
-            {"success": False, "error": "bad attach"},
-            RuntimeError("attach-link down"),
-            {"success": True, "interface_isolated": True, "new_vlan": 200, "tunnel_deleted": True},
-            {"success": False, "error": "bad detach"},
-            RuntimeError("detach-link down"),
             {"status": "ok"},
             RuntimeError("destroy down"),
         ],
-    ) as req, patch(
-        "app.agent_client.reconcile_vxlan_ports_on_agent",
-        new_callable=AsyncMock,
-        return_value={"fallback": True},
     ):
         declared = await agent_client.declare_overlay_state_on_agent(host, [{"port_name": "vxlan-a"}], ["lab-1"])
         fallback = await agent_client.declare_overlay_state_on_agent(host, [{"port_name": "vxlan-b"}])
@@ -410,7 +442,6 @@ async def test_overlay_state_and_overlay_attach_detach_wrappers():
     assert detach_link_exc["success"] is False
     assert destroy_lab["status"] == "ok"
     assert destroy_lab_fail["status"] == "failed"
-    assert req.await_count >= 20
 
 
 @pytest.mark.asyncio
@@ -422,12 +453,12 @@ async def test_setup_cross_host_link_v2_success_and_partial_rollback():
     with patch("app.services.link_manager.allocate_vni", return_value=7010), patch(
         "app.routers.infrastructure.get_or_create_settings",
         return_value=SimpleNamespace(overlay_mtu=1500),
-    ), patch("app.agent_client._data_plane_mtu_ok", return_value=True), patch(
-        "app.agent_client.resolve_data_plane_ip",
+    ), patch("app.agent_client.overlay._data_plane_mtu_ok", return_value=True), patch(
+        "app.agent_client.overlay.resolve_data_plane_ip",
         new_callable=AsyncMock,
         side_effect=["10.0.0.1", "10.0.0.2"],
     ), patch(
-        "app.agent_client.attach_overlay_interface_on_agent",
+        "app.agent_client.overlay.attach_overlay_interface_on_agent",
         new_callable=AsyncMock,
         side_effect=[
             {"success": True, "local_vlan": 110},
@@ -455,19 +486,19 @@ async def test_setup_cross_host_link_v2_success_and_partial_rollback():
     with patch("app.services.link_manager.allocate_vni", return_value=7020), patch(
         "app.routers.infrastructure.get_or_create_settings",
         return_value=SimpleNamespace(overlay_mtu=1500),
-    ), patch("app.agent_client._data_plane_mtu_ok", return_value=False), patch(
-        "app.agent_client.resolve_agent_ip",
+    ), patch("app.agent_client.overlay._data_plane_mtu_ok", return_value=False), patch(
+        "app.agent_client.overlay.resolve_agent_ip",
         new_callable=AsyncMock,
         side_effect=["192.0.2.1", "192.0.2.2"],
     ), patch(
-        "app.agent_client.attach_overlay_interface_on_agent",
+        "app.agent_client.overlay.attach_overlay_interface_on_agent",
         new_callable=AsyncMock,
         side_effect=_attach_with_one_retry,
     ), patch(
-        "app.agent_client.detach_overlay_interface_on_agent",
+        "app.agent_client.overlay.detach_overlay_interface_on_agent",
         new_callable=AsyncMock,
         side_effect=RuntimeError("rollback failed"),
-    ), patch("app.agent_client.asyncio.sleep", new_callable=AsyncMock):
+    ), patch("app.agent_client.overlay.asyncio.sleep", new_callable=AsyncMock):
         partial = await agent_client.setup_cross_host_link_v2(
             db, "lab-1", "link-1", a, b, "n1", "eth1", "n2", "eth1"
         )

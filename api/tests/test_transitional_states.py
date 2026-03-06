@@ -105,13 +105,17 @@ class TestEarlyTransitionalStateAssignment:
             test_db.refresh(node_state)
             state_history.append(node_state.actual_state)
 
-        with patch("app.tasks.jobs.get_session", mock_get_session(test_db)):
-            # Mock agent lookup to fail
-            with patch("app.tasks.jobs.agent_client.get_healthy_agent", new_callable=AsyncMock) as mock_agent:
-                mock_agent.return_value = None
-                with patch("app.tasks.jobs.agent_client.is_agent_online", return_value=False):
-                    with patch.object(test_db, "commit", tracking_commit):
-                        await run_node_reconcile(job.id, lab.id, ["node-1"])
+        mock_ac = MagicMock()
+        mock_ac.get_healthy_agent = AsyncMock(return_value=None)
+        mock_ac.is_agent_online = MagicMock(return_value=False)
+
+        with patch("app.tasks.jobs_node_reconcile.get_session", mock_get_session(test_db)), \
+             patch("app.tasks.node_lifecycle.agent_client", mock_ac), \
+             patch("app.tasks.node_lifecycle_agents.agent_client", mock_ac), \
+             patch("app.tasks.node_lifecycle_deploy.agent_client", mock_ac), \
+             patch("app.tasks.node_lifecycle_stop.agent_client", mock_ac), \
+             patch.object(test_db, "commit", tracking_commit):
+            await run_node_reconcile(job.id, lab.id, ["node-1"])
 
         # Verify the node went through "stopping" before "error"
         test_db.refresh(node_state)
@@ -165,12 +169,17 @@ class TestEarlyTransitionalStateAssignment:
             test_db.refresh(node_state)
             state_history.append(node_state.actual_state)
 
-        with patch("app.tasks.jobs.get_session", mock_get_session(test_db)):
-            with patch("app.tasks.jobs.agent_client.get_healthy_agent", new_callable=AsyncMock) as mock_agent:
-                mock_agent.return_value = None
-                with patch("app.tasks.jobs.agent_client.is_agent_online", return_value=False):
-                    with patch.object(test_db, "commit", tracking_commit):
-                        await run_node_reconcile(job.id, lab.id, ["node-1"])
+        mock_ac = MagicMock()
+        mock_ac.get_healthy_agent = AsyncMock(return_value=None)
+        mock_ac.is_agent_online = MagicMock(return_value=False)
+
+        with patch("app.tasks.jobs_node_reconcile.get_session", mock_get_session(test_db)), \
+             patch("app.tasks.node_lifecycle.agent_client", mock_ac), \
+             patch("app.tasks.node_lifecycle_agents.agent_client", mock_ac), \
+             patch("app.tasks.node_lifecycle_deploy.agent_client", mock_ac), \
+             patch("app.tasks.node_lifecycle_stop.agent_client", mock_ac), \
+             patch.object(test_db, "commit", tracking_commit):
+            await run_node_reconcile(job.id, lab.id, ["node-1"])
 
         test_db.refresh(node_state)
 
@@ -221,12 +230,17 @@ class TestEarlyTransitionalStateAssignment:
             test_db.refresh(node_state)
             state_history.append(node_state.actual_state)
 
-        with patch("app.tasks.jobs.get_session", mock_get_session(test_db)):
-            with patch("app.tasks.jobs.agent_client.get_healthy_agent", new_callable=AsyncMock) as mock_agent:
-                mock_agent.return_value = None
-                with patch("app.tasks.jobs.agent_client.is_agent_online", return_value=False):
-                    with patch.object(test_db, "commit", tracking_commit):
-                        await run_node_reconcile(job.id, lab.id, ["node-1"])
+        mock_ac = MagicMock()
+        mock_ac.get_healthy_agent = AsyncMock(return_value=None)
+        mock_ac.is_agent_online = MagicMock(return_value=False)
+
+        with patch("app.tasks.jobs_node_reconcile.get_session", mock_get_session(test_db)), \
+             patch("app.tasks.node_lifecycle.agent_client", mock_ac), \
+             patch("app.tasks.node_lifecycle_agents.agent_client", mock_ac), \
+             patch("app.tasks.node_lifecycle_deploy.agent_client", mock_ac), \
+             patch("app.tasks.node_lifecycle_stop.agent_client", mock_ac), \
+             patch.object(test_db, "commit", tracking_commit):
+            await run_node_reconcile(job.id, lab.id, ["node-1"])
 
         test_db.refresh(node_state)
 
@@ -435,10 +449,11 @@ class TestCategorizationMatchesTransitionalStates:
         mock_settings.image_sync_pre_deploy_check = False
         mock_settings.per_node_lifecycle_enabled = False
 
-        with patch("app.tasks.jobs.get_session", mock_get_session(test_db)), \
+        with patch("app.tasks.jobs_node_reconcile.get_session", mock_get_session(test_db)), \
              patch("app.tasks.node_lifecycle.agent_client", mock_ac), \
              patch("app.tasks.node_lifecycle_agents.agent_client", mock_ac), \
              patch("app.tasks.node_lifecycle_deploy.agent_client", mock_ac), \
+             patch("app.tasks.node_lifecycle_stop.agent_client", mock_ac), \
              patch("app.tasks.node_lifecycle.settings", mock_settings), \
              patch("app.tasks.node_lifecycle_deploy.settings", mock_settings):
             await run_node_reconcile(job.id, lab.id, ["node-1"])
@@ -508,10 +523,11 @@ class TestCategorizationMatchesTransitionalStates:
         mock_settings.image_sync_pre_deploy_check = False
         mock_settings.per_node_lifecycle_enabled = False
 
-        with patch("app.tasks.jobs.get_session", mock_get_session(test_db)), \
+        with patch("app.tasks.jobs_node_reconcile.get_session", mock_get_session(test_db)), \
              patch("app.tasks.node_lifecycle.agent_client", mock_ac), \
              patch("app.tasks.node_lifecycle_agents.agent_client", mock_ac), \
              patch("app.tasks.node_lifecycle_deploy.agent_client", mock_ac), \
+             patch("app.tasks.node_lifecycle_stop.agent_client", mock_ac), \
              patch("app.tasks.node_lifecycle.settings", mock_settings), \
              patch("app.tasks.node_lifecycle_deploy.settings", mock_settings), \
              patch("app.tasks.node_lifecycle_agents.settings", mock_settings):
@@ -612,10 +628,17 @@ class TestExplicitPlacementFailure:
             test_db.refresh(node_state)
             state_history.append(node_state.actual_state)
 
-        with patch("app.tasks.jobs.get_session", mock_get_session(test_db)):
-            with patch("app.tasks.jobs.agent_client.is_agent_online", return_value=False):
-                with patch.object(test_db, "commit", tracking_commit):
-                    await run_node_reconcile(job.id, lab.id, ["node-1"])
+        mock_ac = MagicMock()
+        mock_ac.get_healthy_agent = AsyncMock(return_value=None)
+        mock_ac.is_agent_online = MagicMock(return_value=False)
+
+        with patch("app.tasks.jobs_node_reconcile.get_session", mock_get_session(test_db)), \
+             patch("app.tasks.node_lifecycle.agent_client", mock_ac), \
+             patch("app.tasks.node_lifecycle_agents.agent_client", mock_ac), \
+             patch("app.tasks.node_lifecycle_deploy.agent_client", mock_ac), \
+             patch("app.tasks.node_lifecycle_stop.agent_client", mock_ac), \
+             patch.object(test_db, "commit", tracking_commit):
+            await run_node_reconcile(job.id, lab.id, ["node-1"])
 
         test_db.refresh(node_state)
 
@@ -698,12 +721,17 @@ class TestErrorMessageClearing:
             if node_state.actual_state == "stopping" and node_state.error_message is None:
                 error_cleared_in_stopping = True
 
-        with patch("app.tasks.jobs.get_session", mock_get_session(test_db)):
-            with patch("app.tasks.jobs.agent_client.get_healthy_agent", new_callable=AsyncMock) as mock_agent:
-                mock_agent.return_value = None
-                with patch("app.tasks.jobs.agent_client.is_agent_online", return_value=False):
-                    with patch.object(test_db, "commit", tracking_commit):
-                        await run_node_reconcile(job.id, lab.id, ["node-1"])
+        mock_ac = MagicMock()
+        mock_ac.get_healthy_agent = AsyncMock(return_value=None)
+        mock_ac.is_agent_online = MagicMock(return_value=False)
+
+        with patch("app.tasks.jobs_node_reconcile.get_session", mock_get_session(test_db)), \
+             patch("app.tasks.node_lifecycle.agent_client", mock_ac), \
+             patch("app.tasks.node_lifecycle_agents.agent_client", mock_ac), \
+             patch("app.tasks.node_lifecycle_deploy.agent_client", mock_ac), \
+             patch("app.tasks.node_lifecycle_stop.agent_client", mock_ac), \
+             patch.object(test_db, "commit", tracking_commit):
+            await run_node_reconcile(job.id, lab.id, ["node-1"])
 
         # Error message should have been cleared when entering stopping state
         assert error_cleared_in_stopping, (
@@ -753,12 +781,17 @@ class TestErrorMessageClearing:
             if node_state.actual_state == "pending" and node_state.error_message is None:
                 error_cleared_in_pending = True
 
-        with patch("app.tasks.jobs.get_session", mock_get_session(test_db)):
-            with patch("app.tasks.jobs.agent_client.get_healthy_agent", new_callable=AsyncMock) as mock_agent:
-                mock_agent.return_value = None
-                with patch("app.tasks.jobs.agent_client.is_agent_online", return_value=False):
-                    with patch.object(test_db, "commit", tracking_commit):
-                        await run_node_reconcile(job.id, lab.id, ["node-1"])
+        mock_ac = MagicMock()
+        mock_ac.get_healthy_agent = AsyncMock(return_value=None)
+        mock_ac.is_agent_online = MagicMock(return_value=False)
+
+        with patch("app.tasks.jobs_node_reconcile.get_session", mock_get_session(test_db)), \
+             patch("app.tasks.node_lifecycle.agent_client", mock_ac), \
+             patch("app.tasks.node_lifecycle_agents.agent_client", mock_ac), \
+             patch("app.tasks.node_lifecycle_deploy.agent_client", mock_ac), \
+             patch("app.tasks.node_lifecycle_stop.agent_client", mock_ac), \
+             patch.object(test_db, "commit", tracking_commit):
+            await run_node_reconcile(job.id, lab.id, ["node-1"])
 
         assert error_cleared_in_pending, (
             "error_message should be cleared when entering 'pending' state"
@@ -966,10 +999,11 @@ class TestEarlyPlacementUpdate:
         mock_settings.per_node_lifecycle_enabled = False
         mock_settings.placement_scoring_enabled = False
 
-        with patch("app.tasks.jobs.get_session", mock_get_session(test_db)), \
+        with patch("app.tasks.jobs_node_reconcile.get_session", mock_get_session(test_db)), \
              patch("app.tasks.node_lifecycle.agent_client", mock_ac), \
              patch("app.tasks.node_lifecycle_agents.agent_client", mock_ac), \
              patch("app.tasks.node_lifecycle_deploy.agent_client", mock_ac), \
+             patch("app.tasks.node_lifecycle_stop.agent_client", mock_ac), \
              patch("app.tasks.node_lifecycle.settings", mock_settings), \
              patch("app.tasks.node_lifecycle_agents.settings", mock_settings), \
              patch("app.tasks.node_lifecycle_deploy.settings", mock_settings), \

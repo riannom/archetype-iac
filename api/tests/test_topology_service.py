@@ -9,7 +9,6 @@ These tests verify:
 import json
 
 from app import models
-import app.services.topology as topology_module
 from app.schemas import (
     GraphEndpoint,
     GraphLink,
@@ -169,7 +168,7 @@ class TestInterfaceCountMap:
                 return {"max_ports": 26}
 
         monkeypatch.setattr("app.services.device_service.get_device_service", lambda: _StubDeviceService())
-        monkeypatch.setattr(topology_module, "get_config_by_device", lambda *_args, **_kwargs: None)
+        monkeypatch.setattr("app.services.topology_resolution.get_config_by_device", lambda *_args, **_kwargs: None)
 
         iface_map = service.get_interface_count_map(sample_lab.id)
         assert iface_map["cat8k_1"] == 26
