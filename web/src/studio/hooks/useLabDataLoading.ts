@@ -115,13 +115,14 @@ export function useLabDataLoading({ studioRequest, activeLab }: UseLabDataLoadin
   useEffect(() => {
     const timer = setInterval(() => {
       loadSystemMetrics();
+      loadAgents();
       // Only poll lab statuses when on dashboard
       if (!activeLab && labs.length > 0) {
         loadLabStatuses(labs.map((lab) => lab.id));
       }
     }, 10000);
     return () => clearInterval(timer);
-  }, [activeLab, labs, loadSystemMetrics, loadLabStatuses]);
+  }, [activeLab, labs, loadSystemMetrics, loadAgents, loadLabStatuses]);
 
   return {
     labs,
