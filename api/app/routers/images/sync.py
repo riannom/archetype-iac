@@ -2,20 +2,21 @@
 from __future__ import annotations
 
 import asyncio
+import hmac
 import os
 from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app import db, models
-from app.auth import get_current_admin, get_current_user
+from app.auth import get_current_admin, get_current_user, get_current_user_optional
 from app.config import settings
 from app.image_store import (
     find_image_by_id,
@@ -62,6 +63,28 @@ class SyncJobOut(BaseModel):
     started_at: datetime | None = None
     completed_at: datetime | None = None
     created_at: datetime
+
+
+async def _authorize_library_stream(
+    request: Request,
+    database: Session = Depends(db.get_db),
+) -> models.User | None:
+    """Allow either a logged-in user or an authenticated agent."""
+    current_user = get_current_user_optional(request, database)
+    if current_user:
+        return current_user
+
+    auth = request.headers.get("authorization", "")
+    if settings.agent_secret and auth.startswith("Bearer "):
+        token = auth.split(" ", 1)[1]
+        if hmac.compare_digest(token, settings.agent_secret):
+            return None
+
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Could not validate credentials",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
 
 
 # --- Endpoints ---
@@ -472,7 +495,7 @@ async def _execute_sync_job(job_id: str, image_id: str, image: dict, host: model
 @router.get("/library/{image_id}/stream")
 async def stream_image(
     image_id: str,
-    current_user: models.User = Depends(get_current_user),
+    _principal: models.User | None = Depends(_authorize_library_stream),
 ) -> StreamingResponse:
     """Stream a syncable image for agents to pull."""
     from urllib.parse import unquote

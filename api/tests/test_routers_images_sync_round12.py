@@ -20,6 +20,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
 from app import models
+from app.config import settings
 
 
 # ---------------------------------------------------------------------------
@@ -556,6 +557,31 @@ class TestStreamImageDeep:
         assert resp.status_code == 200
         assert resp.headers["content-type"] == "application/octet-stream"
         assert resp.headers["content-length"] == str(len(b"qcow2-stream"))
+        assert resp.content == b"qcow2-stream"
+
+    def test_stream_allows_agent_secret_auth(self, test_client: TestClient, monkeypatch, tmp_path):
+        """Agents should be allowed to stream images using the shared agent secret."""
+        file_path = tmp_path / "sonic-vs.img"
+        file_path.write_bytes(b"qcow2-stream")
+        manifest = [
+            {
+                "id": "qcow2:sonic-vs.img",
+                "reference": str(file_path),
+                "kind": "qcow2",
+            }
+        ]
+        monkeypatch.setattr(settings, "agent_secret", "test-agent-secret")
+
+        with (
+            patch("app.routers.images.sync.load_manifest", return_value=manifest),
+            patch("app.routers.images.sync.find_image_by_id", side_effect=lambda _m, _i: manifest[0]),
+        ):
+            resp = test_client.get(
+                "/images/library/qcow2:sonic-vs.img/stream",
+                headers={"Authorization": "Bearer test-agent-secret"},
+            )
+
+        assert resp.status_code == 200
         assert resp.content == b"qcow2-stream"
 
     def test_stream_docker_save_error_still_returns_200(
