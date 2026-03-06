@@ -14,7 +14,6 @@ from pathlib import Path
 import docker
 import httpx
 from fastapi import APIRouter, File, Request, UploadFile
-from fastapi.responses import JSONResponse
 
 from agent.config import settings
 from agent.docker_client import get_docker_client
