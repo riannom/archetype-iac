@@ -218,6 +218,45 @@ class TestExecutePullFromController:
         assert progress.status == "completed"
         assert progress.bytes_transferred == 2 * 1024 * 1024
 
+    @pytest.mark.asyncio
+    async def test_file_based_pull_writes_image_and_checksum(self, monkeypatch, tmp_path):
+        """File-based pulls should store the image directly instead of docker loading it."""
+        monkeypatch.setattr(settings, "controller_url", "http://fake-controller:8000")
+        monkeypatch.setattr(settings, "workspace_path", str(tmp_path))
+
+        target = tmp_path / "sonic-vs.img"
+        content = b"qcow2-bytes"
+        expected_hash = hashlib.sha256(content).hexdigest()
+
+        mock_response = AsyncMock()
+        mock_response.status_code = 200
+        mock_response.headers = {"content-length": str(len(content))}
+
+        async def _aiter_bytes(chunk_size=1024 * 1024):
+            yield content
+
+        mock_response.aiter_bytes = _aiter_bytes
+        mock_response.__aenter__ = AsyncMock(return_value=mock_response)
+        mock_response.__aexit__ = AsyncMock(return_value=False)
+
+        mock_client = AsyncMock()
+        mock_client.stream = MagicMock(return_value=mock_response)
+
+        with patch("agent.routers.images.get_http_client", return_value=mock_client):
+            with patch("agent.routers.images.get_controller_auth_headers", return_value={}):
+                await _execute_pull_from_controller(
+                    job_id="pull-file",
+                    image_id="qcow2:sonic-vs.img",
+                    reference=str(target),
+                    sha256=expected_hash,
+                    device_id="sonic-vs",
+                )
+
+        progress = _image_pull_jobs["pull-file"]
+        assert progress.status == "completed"
+        assert target.read_bytes() == content
+        assert target.with_suffix(".img.sha256").read_text() == expected_hash
+
 
 # ---------------------------------------------------------------------------
 # receive_image — Docker tar edge cases

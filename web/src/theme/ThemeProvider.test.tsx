@@ -348,4 +348,45 @@ describe("ThemeProvider", () => {
       consoleSpy.mockRestore();
     });
   });
+
+  describe("server sync", () => {
+    it("does not persist unchanged hydrated theme settings back to the API", async () => {
+      vi.useFakeTimers();
+      localStorage.setItem("token", "test-token");
+      const fetchMock = vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          theme_settings: {
+            themeId: DEFAULT_THEME_ID,
+            mode: "system",
+            backgroundId: "minimal",
+            backgroundOpacity: 50,
+            taskLogOpacity: 92,
+            favoriteBackgrounds: [],
+            favoriteThemeIds: [],
+            customThemes: [],
+          },
+        }),
+      });
+      vi.stubGlobal("fetch", fetchMock);
+
+      render(
+        <ThemeProvider>
+          <TestConsumer />
+        </ThemeProvider>
+      );
+
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(500);
+      });
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      vi.useRealTimers();
+    });
+  });
 });

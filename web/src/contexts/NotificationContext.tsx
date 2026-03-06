@@ -13,6 +13,20 @@ import { DEFAULT_USER_PREFERENCES } from '../types/notifications';
 // Duration to suppress duplicate notifications (in milliseconds)
 const DEDUP_WINDOW_MS = 10000;
 
+function stableSerialize(value: unknown): string {
+  return JSON.stringify(value, (_key, currentValue) => {
+    if (currentValue && typeof currentValue === 'object' && !Array.isArray(currentValue)) {
+      return Object.keys(currentValue as Record<string, unknown>)
+        .sort()
+        .reduce<Record<string, unknown>>((acc, key) => {
+          acc[key] = (currentValue as Record<string, unknown>)[key];
+          return acc;
+        }, {});
+    }
+    return currentValue;
+  });
+}
+
 interface NotificationContextType {
   // Notifications
   notifications: Notification[];
@@ -224,6 +238,10 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
         metricsBarExpanded:
           settings.metricsBarExpanded ?? preferences.canvas_settings.metricsBarExpanded,
       };
+
+      if (stableSerialize(preferences.canvas_settings) === stableSerialize(newSettings)) {
+        return;
+      }
 
       // Optimistic update - apply immediately for responsive UI
       setPreferences({

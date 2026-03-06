@@ -46,6 +46,8 @@ class ImagePullRequest(BaseModel):
     """Agent -> Controller: Request to pull an image from controller."""
     image_id: str  # Library image ID
     reference: str  # Docker reference
+    sha256: str | None = None
+    device_id: str | None = None
 
 
 class ImagePullResponse(BaseModel):

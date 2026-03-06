@@ -41,6 +41,111 @@ _agent_start_time: float = time.time()
 _TRANSFER_STATE_FILE = Path(settings.workspace_path) / ".active_transfers.json"
 
 
+def _is_file_based_reference(reference: str) -> bool:
+    return reference.startswith("/") or reference.endswith((".qcow2", ".img", ".iol"))
+
+
+def _validate_file_destination(reference: str) -> Path | None:
+    if not reference.startswith("/"):
+        return None
+    destination = Path(reference)
+    allowed_bases = [
+        Path(settings.workspace_path).resolve(),
+        Path("/var/lib/archetype/images").resolve(),
+    ]
+    resolved = destination.resolve()
+    if not any(resolved.is_relative_to(base) for base in allowed_bases):
+        return None
+    return destination
+
+
+async def _store_file_based_image(
+    destination: Path,
+    sha256: str,
+    device_id: str,
+    total_bytes: int,
+    job_id: str | None,
+    chunk_iter,
+    transfer_started_at: float,
+) -> ImageReceiveResponse:
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temp_destination = destination.with_name(
+        f"{destination.name}.part-{uuid.uuid4().hex[:8]}"
+    )
+
+    bytes_written = 0
+    try:
+        with temp_destination.open("wb") as tmp_out:
+            async for chunk in chunk_iter:
+                if not chunk:
+                    continue
+                tmp_out.write(chunk)
+                bytes_written += len(chunk)
+
+                if job_id and total_bytes > 0:
+                    percent = min(95, int((bytes_written / total_bytes) * 95))
+                    _image_pull_jobs[job_id] = ImagePullProgress(
+                        job_id=job_id,
+                        status="transferring",
+                        progress_percent=percent,
+                        bytes_transferred=bytes_written,
+                        total_bytes=total_bytes,
+                        started_at=transfer_started_at,
+                    )
+
+        os.replace(temp_destination, destination)
+    except Exception:
+        if temp_destination.exists():
+            temp_destination.unlink(missing_ok=True)
+        raise
+
+    import hashlib
+
+    def _compute_file_sha256():
+        h = hashlib.sha256()
+        with open(destination, "rb") as hf:
+            while True:
+                block = hf.read(1024 * 1024)
+                if not block:
+                    break
+                h.update(block)
+        return h.hexdigest()
+
+    actual_hash = await asyncio.to_thread(_compute_file_sha256)
+    if sha256 and actual_hash != sha256:
+        destination.unlink(missing_ok=True)
+        return ImageReceiveResponse(
+            success=False,
+            error=f"Checksum mismatch: expected {sha256[:16]}..., got {actual_hash[:16]}...",
+        )
+
+    Path(str(destination) + ".sha256").write_text(actual_hash)
+
+    if job_id:
+        _image_pull_jobs[job_id] = ImagePullProgress(
+            job_id=job_id,
+            status="completed",
+            progress_percent=100,
+            bytes_transferred=bytes_written,
+            total_bytes=total_bytes,
+        )
+        _persist_transfer_state()
+
+    if device_id:
+        try:
+            from agent.image_metadata import set_file_image_metadata
+            set_file_image_metadata(
+                path=str(destination),
+                device_id=device_id,
+                source="api-sync",
+            )
+        except Exception as e:
+            logger.debug(f"Failed to persist file image metadata: {e}")
+
+    logger.info(f"Stored file image to {destination} ({bytes_written} bytes)")
+    return ImageReceiveResponse(success=True, loaded_images=[str(destination)])
+
+
 def _persist_transfer_state() -> None:
     """Write active (non-terminal) transfer jobs to disk for crash recovery."""
     active = {
@@ -193,7 +298,7 @@ async def receive_image(
                 total_bytes = 0
 
     logger.info(f"Receiving image: {reference} ({total_bytes} bytes)")
-    is_file_based = reference.startswith("/") or reference.endswith((".qcow2", ".img", ".iol"))
+    is_file_based = _is_file_based_reference(reference)
 
     # Update progress if job_id provided
     _transfer_started_at = time.time()
@@ -214,105 +319,34 @@ async def receive_image(
                 return ImageReceiveResponse(success=False, error="libvirt is not enabled on target agent")
             if reference.endswith(".iol") and not settings.enable_docker:
                 return ImageReceiveResponse(success=False, error="docker is not enabled on target agent")
-            if not reference.startswith("/"):
+            destination = _validate_file_destination(reference)
+            if not destination:
                 return ImageReceiveResponse(
                     success=False,
-                    error="file-based image sync requires an absolute destination path",
+                    error=(
+                        "file-based image sync requires an absolute destination path"
+                        if not reference.startswith("/")
+                        else "Invalid destination path"
+                    ),
                 )
-
-            destination = Path(reference)
-            allowed_bases = [
-                Path(settings.workspace_path).resolve(),
-                Path("/var/lib/archetype/images").resolve(),
-            ]
-            if not any(destination.resolve().is_relative_to(b) for b in allowed_bases):
-                return JSONResponse(
-                    status_code=400,
-                    content=ImageReceiveResponse(
-                        success=False,
-                        error="Invalid destination path",
-                    ).model_dump(),
-                )
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            temp_destination = destination.with_name(
-                f"{destination.name}.part-{uuid.uuid4().hex[:8]}"
-            )
-
-            bytes_written = 0
             chunk_size = 1024 * 1024  # 1MB chunks
-            try:
-                with temp_destination.open("wb") as tmp_out:
-                    while True:
-                        chunk = await file.read(chunk_size)
-                        if not chunk:
-                            break
-                        tmp_out.write(chunk)
-                        bytes_written += len(chunk)
 
-                        if job_id and total_bytes > 0:
-                            percent = min(95, int((bytes_written / total_bytes) * 95))
-                            _image_pull_jobs[job_id] = ImagePullProgress(
-                                job_id=job_id,
-                                status="transferring",
-                                progress_percent=percent,
-                                bytes_transferred=bytes_written,
-                                total_bytes=total_bytes,
-                                started_at=_transfer_started_at,
-                            )
+            async def _chunk_iter():
+                while True:
+                    chunk = await file.read(chunk_size)
+                    if not chunk:
+                        break
+                    yield chunk
 
-                os.replace(temp_destination, destination)
-            except Exception:
-                if temp_destination.exists():
-                    temp_destination.unlink(missing_ok=True)
-                raise
-
-            # Compute and verify checksum for file-based images
-            import hashlib
-
-            def _compute_file_sha256():
-                h = hashlib.sha256()
-                with open(destination, "rb") as hf:
-                    while True:
-                        block = hf.read(1024 * 1024)
-                        if not block:
-                            break
-                        h.update(block)
-                return h.hexdigest()
-
-            actual_hash = await asyncio.to_thread(_compute_file_sha256)
-            if sha256 and actual_hash != sha256:
-                destination.unlink(missing_ok=True)
-                return ImageReceiveResponse(
-                    success=False,
-                    error=f"Checksum mismatch: expected {sha256[:16]}..., got {actual_hash[:16]}...",
-                )
-            # Write sidecar checksum file for future checks
-            Path(str(destination) + ".sha256").write_text(actual_hash)
-
-            if job_id:
-                _image_pull_jobs[job_id] = ImagePullProgress(
-                    job_id=job_id,
-                    status="completed",
-                    progress_percent=100,
-                    bytes_transferred=bytes_written,
-                    total_bytes=total_bytes,
-                )
-                _persist_transfer_state()
-
-            # Persist device metadata for file-based images
-            if device_id:
-                try:
-                    from agent.image_metadata import set_file_image_metadata
-                    set_file_image_metadata(
-                        path=str(destination),
-                        device_id=device_id,
-                        source="api-sync",
-                    )
-                except Exception as e:
-                    logger.debug(f"Failed to persist file image metadata: {e}")
-
-            logger.info(f"Stored file image to {destination} ({bytes_written} bytes)")
-            return ImageReceiveResponse(success=True, loaded_images=[str(destination)])
+            return await _store_file_based_image(
+                destination=destination,
+                sha256=sha256,
+                device_id=device_id,
+                total_bytes=total_bytes,
+                job_id=job_id,
+                chunk_iter=_chunk_iter(),
+                transfer_started_at=_transfer_started_at,
+            )
 
         # Save uploaded file to temp
         tmp_path = None
@@ -477,12 +511,20 @@ async def pull_image(request: ImagePullRequest) -> ImagePullResponse:
         job_id=job_id,
         image_id=request.image_id,
         reference=request.reference,
+        sha256=request.sha256 or "",
+        device_id=request.device_id or "",
     ))
 
     return ImagePullResponse(job_id=job_id, status="pending")
 
 
-async def _execute_pull_from_controller(job_id: str, image_id: str, reference: str):
+async def _execute_pull_from_controller(
+    job_id: str,
+    image_id: str,
+    reference: str,
+    sha256: str = "",
+    device_id: str = "",
+):
     """Execute image pull from controller in background.
 
     Fetches the image stream from the controller and loads it locally.
@@ -529,6 +571,40 @@ async def _execute_pull_from_controller(job_id: str, image_id: str, reference: s
 
             # Get content length if available
             total_bytes = int(response.headers.get("content-length", 0))
+
+            if _is_file_based_reference(reference):
+                destination = _validate_file_destination(reference)
+                if not destination:
+                    error_msg = (
+                        "file-based image sync requires an absolute destination path"
+                        if not reference.startswith("/")
+                        else "Invalid destination path"
+                    )
+                    _image_pull_jobs[job_id] = ImagePullProgress(
+                        job_id=job_id,
+                        status="failed",
+                        error=error_msg,
+                    )
+                    _persist_transfer_state()
+                    return
+
+                result = await _store_file_based_image(
+                    destination=destination,
+                    sha256=sha256,
+                    device_id=device_id,
+                    total_bytes=total_bytes,
+                    job_id=job_id,
+                    chunk_iter=response.aiter_bytes(chunk_size=1024 * 1024),
+                    transfer_started_at=_pull_started_at,
+                )
+                if not result.success:
+                    _image_pull_jobs[job_id] = ImagePullProgress(
+                        job_id=job_id,
+                        status="failed",
+                        error=result.error,
+                    )
+                    _persist_transfer_state()
+                return
 
             # Save to temp file
             with tempfile.NamedTemporaryFile(delete=False, suffix=".tar") as tmp_file:

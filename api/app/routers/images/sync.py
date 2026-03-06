@@ -280,7 +280,50 @@ async def _execute_sync_job(job_id: str, image_id: str, image: dict, host: model
             _auth_headers = _get_agent_auth_headers()
             _docker_tmp_path = None
             async with httpx.AsyncClient(timeout=httpx.Timeout(settings.image_sync_timeout), headers=_auth_headers) as client:
-                if image_kind == "docker":
+                if is_file_based:
+                    source_path = Path(reference)
+                    if not source_path.exists() or not source_path.is_file():
+                        raise ValueError(f"Source image file not found: {reference}")
+
+                    size_bytes = source_path.stat().st_size
+                    job.total_bytes = size_bytes
+                    session.commit()
+
+                    pull_response = await client.post(
+                        f"http://{host.address}/images/pull",
+                        json={
+                            "image_id": image_id,
+                            "reference": reference,
+                            "sha256": image.get("sha256", ""),
+                            "device_id": image.get("device_id", ""),
+                        },
+                    )
+                    pull_response.raise_for_status()
+                    pull_job_id = pull_response.json().get("job_id")
+                    if not pull_job_id:
+                        raise ValueError("Agent did not return a pull job ID")
+
+                    progress_url = f"http://{host.address}/images/pull/{pull_job_id}/progress"
+                    deadline = datetime.now(timezone.utc).timestamp() + settings.image_sync_timeout
+                    while True:
+                        progress_response = await client.get(progress_url)
+                        progress_response.raise_for_status()
+                        progress = progress_response.json()
+                        job.progress_percent = progress.get("progress_percent", 0)
+                        job.bytes_transferred = progress.get("bytes_transferred", 0)
+                        if progress.get("total_bytes"):
+                            job.total_bytes = progress["total_bytes"]
+                        session.commit()
+
+                        status = progress.get("status")
+                        if status == "completed":
+                            break
+                        if status in {"failed", "unknown"}:
+                            raise ValueError(progress.get("error") or "Agent pull failed")
+                        if datetime.now(timezone.utc).timestamp() >= deadline:
+                            raise ValueError("Timed out waiting for agent pull to complete")
+                        await asyncio.sleep(2)
+                elif image_kind == "docker":
                     # Get image size from Docker
                     try:
                         proc = await asyncio.create_subprocess_exec(
@@ -342,69 +385,42 @@ async def _execute_sync_job(job_id: str, image_id: str, image: dict, host: model
                         "job_id": job_id,
                         "device_id": image.get("device_id", ""),
                     }
-                elif is_file_based:
-                    source_path = Path(reference)
-                    if not source_path.exists() or not source_path.is_file():
-                        raise ValueError(f"Source image file not found: {reference}")
-
-                    size_bytes = source_path.stat().st_size
-                    job.total_bytes = size_bytes
-                    session.commit()
-
-                    files = {
-                        "file": (
-                            source_path.name,
-                            source_path.open("rb"),
-                            "application/octet-stream",
-                        )
-                    }
-                    params = {
-                        "image_id": image_id,
-                        "reference": reference,
-                        "total_bytes": str(size_bytes),
-                        "job_id": job_id,
-                        "sha256": image.get("sha256", ""),
-                        "device_id": image.get("device_id", ""),
-                    }
                 else:
                     raise ValueError(f"Unsupported image kind for sync: {image_kind}")
 
-                try:
-                    response = await client.post(agent_url, files=files, params=params)
-                    response.raise_for_status()
-                    result = response.json()
-                    if not result.get("success"):
-                        raise ValueError(result.get("error", "Agent failed to receive image"))
-                except httpx.TimeoutException as e:
-                    structured_error = categorize_httpx_error(
-                        e, host_name=host.name, agent_id=host.id, job_id=job_id
-                    )
-                    raise ValueError(structured_error.to_error_message()) from e
-                except httpx.ConnectError as e:
-                    structured_error = categorize_httpx_error(
-                        e, host_name=host.name, agent_id=host.id, job_id=job_id
-                    )
-                    raise ValueError(structured_error.to_error_message()) from e
-                except httpx.HTTPStatusError as e:
-                    structured_error = categorize_httpx_error(
-                        e, host_name=host.name, agent_id=host.id, job_id=job_id
-                    )
-                    raise ValueError(structured_error.to_error_message()) from e
-                finally:
-                    # Close file descriptors and clean up temp files
-                    if image_kind == "docker" and _docker_tmp_path:
-                        try:
-                            tmp_file_obj.close()
-                        except Exception:
-                            pass
-                        try:
-                            os.unlink(_docker_tmp_path)
-                        except OSError:
-                            pass
-                    elif is_file_based:
-                        file_tuple = files.get("file")
-                        if file_tuple and hasattr(file_tuple[1], "close"):
-                            file_tuple[1].close()
+                if not is_file_based:
+                    try:
+                        response = await client.post(agent_url, files=files, params=params)
+                        response.raise_for_status()
+                        result = response.json()
+                        if not result.get("success"):
+                            raise ValueError(result.get("error", "Agent failed to receive image"))
+                    except httpx.TimeoutException as e:
+                        structured_error = categorize_httpx_error(
+                            e, host_name=host.name, agent_id=host.id, job_id=job_id
+                        )
+                        raise ValueError(structured_error.to_error_message()) from e
+                    except httpx.ConnectError as e:
+                        structured_error = categorize_httpx_error(
+                            e, host_name=host.name, agent_id=host.id, job_id=job_id
+                        )
+                        raise ValueError(structured_error.to_error_message()) from e
+                    except httpx.HTTPStatusError as e:
+                        structured_error = categorize_httpx_error(
+                            e, host_name=host.name, agent_id=host.id, job_id=job_id
+                        )
+                        raise ValueError(structured_error.to_error_message()) from e
+                    finally:
+                        # Close file descriptors and clean up temp files
+                        if image_kind == "docker" and _docker_tmp_path:
+                            try:
+                                tmp_file_obj.close()
+                            except Exception:
+                                pass
+                            try:
+                                os.unlink(_docker_tmp_path)
+                            except OSError:
+                                pass
 
             # Success
             job.status = "completed"
@@ -458,11 +474,7 @@ async def stream_image(
     image_id: str,
     current_user: models.User = Depends(get_current_user),
 ) -> StreamingResponse:
-    """Stream a Docker image tar for agents to pull.
-
-    This endpoint streams the output of `docker save` for the specified image.
-    Used by agents in pull mode to fetch images from the controller.
-    """
+    """Stream a syncable image for agents to pull."""
     from urllib.parse import unquote
     image_id = unquote(image_id)
 
@@ -472,12 +484,34 @@ async def stream_image(
     if not image:
         raise HTTPException(status_code=404, detail="Image not found in library")
 
-    if image.get("kind") != "docker":
-        raise HTTPException(status_code=400, detail="Only Docker images can be streamed")
-
     reference = image.get("reference", "")
     if not reference:
-        raise HTTPException(status_code=400, detail="Image has no Docker reference")
+        raise HTTPException(status_code=400, detail="Image has no reference")
+
+    if image.get("kind") != "docker" and not (reference.startswith("/") or reference.endswith((".qcow2", ".img", ".iol"))):
+        raise HTTPException(status_code=400, detail="Only Docker and file-based images can be streamed")
+
+    if reference.startswith("/") or reference.endswith((".qcow2", ".img", ".iol")):
+        source_path = Path(reference)
+        if not source_path.exists() or not source_path.is_file():
+            raise HTTPException(status_code=404, detail="Source image file not found")
+
+        def generate_file():
+            with source_path.open("rb") as f:
+                while True:
+                    chunk = f.read(settings.image_sync_chunk_size)
+                    if not chunk:
+                        break
+                    yield chunk
+
+        return StreamingResponse(
+            generate_file(),
+            media_type="application/octet-stream",
+            headers={
+                "Content-Type": "application/octet-stream",
+                "Content-Length": str(source_path.stat().st_size),
+            },
+        )
 
     # Get image size for Content-Length header (async subprocess to avoid blocking)
     content_length = None
