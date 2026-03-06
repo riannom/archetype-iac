@@ -14,6 +14,27 @@ import { rawApiRequest } from '../api';
 const PREFS_KEY = 'archetype_theme_prefs';
 const CUSTOM_THEMES_KEY = 'archetype_custom_themes';
 
+function stableSerialize(value: unknown): string {
+  return JSON.stringify(value, (_key, currentValue) => {
+    if (currentValue && typeof currentValue === 'object' && !Array.isArray(currentValue)) {
+      return Object.keys(currentValue as Record<string, unknown>)
+        .sort()
+        .reduce<Record<string, unknown>>((acc, key) => {
+          acc[key] = (currentValue as Record<string, unknown>)[key];
+          return acc;
+        }, {});
+    }
+    return currentValue;
+  });
+}
+
+function serializeThemeSettings(preferences: ThemePreferences, customThemes: Theme[]): string {
+  return stableSerialize({
+    ...preferences,
+    customThemes,
+  });
+}
+
 function resolvePreferenceMode(mode: unknown): 'light' | 'dark' {
   if (mode === 'light' || mode === 'dark') {
     return mode;
@@ -255,6 +276,7 @@ export function ThemeProvider({ children }: ThemeProviderProps) {
   const [serverSyncReady, setServerSyncReady] = useState(false);
   const [serverSyncEnabled, setServerSyncEnabled] = useState(false);
   const syncTimeoutRef = useRef<number | null>(null);
+  const lastSyncedThemeSettingsRef = useRef<string | null>(null);
 
   // All available themes (built-in + custom)
   const availableThemes = useMemo(() => {
@@ -309,6 +331,10 @@ export function ThemeProvider({ children }: ThemeProviderProps) {
         const data = await res.json();
         const normalized = normalizePreferences(data?.theme_settings);
         if (!cancelled) {
+          lastSyncedThemeSettingsRef.current = serializeThemeSettings(
+            normalized,
+            normalized.customThemes || []
+          );
           setPreferences((prev) => ({ ...prev, ...normalized }));
           setCustomThemes(normalized.customThemes || []);
         }
@@ -356,6 +382,15 @@ export function ThemeProvider({ children }: ThemeProviderProps) {
       return;
     }
 
+    const payload = {
+      ...preferences,
+      customThemes,
+    };
+    const serializedPayload = stableSerialize(payload);
+    if (lastSyncedThemeSettingsRef.current === serializedPayload) {
+      return;
+    }
+
     if (syncTimeoutRef.current) {
       window.clearTimeout(syncTimeoutRef.current);
     }
@@ -367,12 +402,10 @@ export function ThemeProvider({ children }: ThemeProviderProps) {
             'Content-Type': 'application/json',
           },
           body: JSON.stringify({
-            theme_settings: {
-              ...preferences,
-              customThemes,
-            },
+            theme_settings: payload,
           }),
         });
+        lastSyncedThemeSettingsRef.current = serializedPayload;
       } catch (error) {
         console.warn('Failed to persist theme settings to API:', error);
       }

@@ -84,10 +84,10 @@ const AgentDropdown: React.FC<{
             <button
               type="button"
               onClick={() => { onChange(''); setIsOpen(false); }}
-              className={`w-full px-3 py-2 text-sm text-left ${
+              className={`w-full px-3 py-2 text-sm text-left transition-colors focus:outline-none ${
                 !value
-                  ? 'bg-sage-50 dark:bg-sage-900/50 text-sage-700 dark:text-sage-400'
-                  : 'bg-stone-50 dark:bg-stone-900 text-stone-700 dark:text-stone-300 hover:bg-stone-100 dark:hover:bg-stone-800'
+                  ? 'bg-sage-100 text-sage-700 hover:bg-sage-100 focus:bg-sage-100 active:bg-sage-100 dark:bg-sage-950 dark:text-sage-300 dark:hover:bg-sage-950 dark:focus:bg-sage-950 dark:active:bg-sage-950'
+                  : 'bg-stone-50 text-stone-700 hover:bg-stone-100 focus:bg-stone-100 active:bg-stone-100 dark:bg-stone-900 dark:text-stone-300 dark:hover:bg-stone-800 dark:focus:bg-stone-800 dark:active:bg-stone-800'
               }`}
             >
               Auto (any available agent)
@@ -97,10 +97,10 @@ const AgentDropdown: React.FC<{
                 key={agent.id}
                 type="button"
                 onClick={() => { onChange(agent.id); setIsOpen(false); }}
-                className={`w-full px-3 py-2 text-sm text-left ${
+                className={`w-full px-3 py-2 text-sm text-left transition-colors focus:outline-none ${
                   value === agent.id
-                    ? 'bg-sage-50 dark:bg-sage-900/50 text-sage-700 dark:text-sage-400'
-                    : 'bg-stone-50 dark:bg-stone-900 text-stone-700 dark:text-stone-300 hover:bg-stone-100 dark:hover:bg-stone-800'
+                    ? 'bg-sage-100 text-sage-700 hover:bg-sage-100 focus:bg-sage-100 active:bg-sage-100 dark:bg-sage-950 dark:text-sage-300 dark:hover:bg-sage-950 dark:focus:bg-sage-950 dark:active:bg-sage-950'
+                    : 'bg-stone-50 text-stone-700 hover:bg-stone-100 focus:bg-stone-100 active:bg-stone-100 dark:bg-stone-900 dark:text-stone-300 dark:hover:bg-stone-800 dark:focus:bg-stone-800 dark:active:bg-stone-800'
                 }`}
               >
                 {agent.name}
@@ -112,6 +112,64 @@ const AgentDropdown: React.FC<{
       <p className="text-[9px] text-stone-400 dark:text-stone-500">
         {disabled ? 'Stop node to change agent placement' : 'Select which agent runs this node'}
       </p>
+    </div>
+  );
+};
+
+const ValueDropdown: React.FC<{
+  label: string;
+  value: string;
+  options: string[];
+  onChange: (value: string) => void;
+  disabled?: boolean;
+}> = ({ label, value, options, onChange, disabled = false }) => {
+  const [isOpen, setIsOpen] = useState(false);
+  const dropdownRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target as HTMLElement)) {
+        setIsOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  return (
+    <div className="space-y-2">
+      <label className="text-[10px] font-bold text-stone-500 uppercase tracking-widest">{label}</label>
+      <div ref={dropdownRef} className="relative">
+        <button
+          type="button"
+          onClick={() => !disabled && setIsOpen(!isOpen)}
+          disabled={disabled}
+          className={`w-full bg-stone-100 dark:bg-stone-800 border border-stone-300 dark:border-stone-700 rounded-lg px-3 py-2 text-sm text-left flex items-center justify-between ${
+            disabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer hover:border-stone-400 dark:hover:border-stone-600'
+          } ${isOpen ? 'border-sage-500 dark:border-sage-500' : ''}`}
+        >
+          <span className="text-stone-900 dark:text-stone-100">{value}</span>
+          <i className={`fa-solid fa-chevron-down text-[10px] text-stone-400 transition-transform ${isOpen ? 'rotate-180' : ''}`} />
+        </button>
+        {isOpen && (
+          <div className="absolute z-50 w-full mt-1 bg-stone-50 dark:bg-stone-900 border border-stone-200 dark:border-stone-700 rounded-lg shadow-lg overflow-hidden">
+            {options.map((option) => (
+              <button
+                key={option}
+                type="button"
+                onClick={() => { onChange(option); setIsOpen(false); }}
+                className={`w-full px-3 py-2 text-sm text-left transition-colors focus:outline-none ${
+                  value === option
+                    ? 'bg-sage-100 text-sage-700 hover:bg-sage-100 focus:bg-sage-100 active:bg-sage-100 dark:bg-sage-950 dark:text-sage-300 dark:hover:bg-sage-950 dark:focus:bg-sage-950 dark:active:bg-sage-950'
+                    : 'bg-stone-50 text-stone-700 hover:bg-stone-100 focus:bg-stone-100 active:bg-stone-100 dark:bg-stone-900 dark:text-stone-300 dark:hover:bg-stone-800 dark:focus:bg-stone-800 dark:active:bg-stone-800'
+                }`}
+              >
+                {option}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   );
 };
@@ -462,10 +520,12 @@ const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
               <input type="text" value={node.name} onChange={(e) => onUpdateNode(node.id, { name: e.target.value })} className="w-full bg-stone-100 dark:bg-stone-800 border border-stone-300 dark:border-stone-700 rounded-lg px-3 py-2 text-sm text-stone-900 dark:text-stone-100 focus:outline-none focus:border-sage-500" />
             </div>
             <div className="space-y-2">
-              <label className="text-[10px] font-bold text-stone-500 uppercase tracking-widest">Image Version</label>
-              <select value={node.version} onChange={(e) => onUpdateNode(node.id, { version: e.target.value })} className="w-full bg-stone-100 dark:bg-stone-800 border border-stone-300 dark:border-stone-700 rounded-lg px-3 py-2 text-sm text-stone-900 dark:text-stone-100 focus:outline-none focus:border-sage-500 appearance-none">
-                {(model?.versions?.length ? model.versions : [node.version]).map(v => <option key={v} value={v}>{v}</option>)}
-              </select>
+              <ValueDropdown
+                label="Image Version"
+                value={node.version}
+                options={model?.versions?.length ? model.versions : [node.version]}
+                onChange={(value) => onUpdateNode(node.id, { version: value })}
+              />
             </div>
             <div className="pt-4 space-y-3">
               <button onClick={() => onOpenConsole(node.id)} className="w-full flex items-center justify-between px-4 py-2.5 bg-sage-600 hover:bg-sage-500 rounded-lg text-xs text-white font-bold transition-all shadow-lg shadow-sage-900/20">

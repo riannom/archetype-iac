@@ -53,7 +53,7 @@ const InterfaceSelect: React.FC<InterfaceSelectProps> = ({
       value={value}
       onChange={(e) => onChange(e.target.value)}
       disabled={disabled}
-      className={`w-full bg-stone-50 dark:bg-stone-900 border border-stone-300 dark:border-stone-700 rounded px-2 py-1 text-[11px] text-sage-700 dark:text-sage-300 focus:outline-none focus:border-sage-500 appearance-none cursor-pointer ${
+      className={`w-full bg-stone-50 dark:bg-stone-900 border border-stone-300 dark:border-stone-700 rounded px-2 py-1 text-[11px] text-sage-700 dark:text-sage-300 focus:outline-none focus:border-sage-500 appearance-none cursor-pointer dark:[color-scheme:dark] ${
         disabled ? 'opacity-50 cursor-not-allowed' : ''
       } ${className}`}
       style={{
@@ -65,12 +65,16 @@ const InterfaceSelect: React.FC<InterfaceSelectProps> = ({
       }}
     >
       {!value && (
-        <option value="" disabled>
+        <option value="" disabled className="bg-stone-50 text-stone-500 dark:bg-stone-900 dark:text-stone-400">
           {placeholder}
         </option>
       )}
       {options.map((iface) => (
-        <option key={iface} value={iface}>
+        <option
+          key={iface}
+          value={iface}
+          className="bg-stone-50 text-sage-700 dark:bg-stone-900 dark:text-sage-300"
+        >
           {iface}
         </option>
       ))}

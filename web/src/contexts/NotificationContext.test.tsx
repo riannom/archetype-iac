@@ -1,11 +1,15 @@
 import React from 'react';
 import { act, render, screen, fireEvent, waitFor } from '@testing-library/react';
-import { vi } from 'vitest';
+import { beforeEach, vi } from 'vitest';
 import { NotificationProvider, useNotifications } from './NotificationContext';
 import { DEFAULT_USER_PREFERENCES } from '../types/notifications';
+import { DEFAULT_CANVAS_SETTINGS } from '../types/notifications';
+
+const mockUseUser = vi.fn(() => ({ user: null }));
+const mockUser = { id: 'user-1' };
 
 vi.mock('./UserContext', () => ({
-  useUser: () => ({ user: null }),
+  useUser: () => mockUseUser(),
 }));
 
 function Harness() {
@@ -24,6 +28,12 @@ function Harness() {
 }
 
 describe('NotificationProvider', () => {
+  beforeEach(() => {
+    mockUseUser.mockReturnValue({ user: null });
+    localStorage.clear();
+    vi.unstubAllGlobals();
+  });
+
   it('deduplicates notifications within the window and manages read state', () => {
     vi.useFakeTimers();
     render(
@@ -98,5 +108,61 @@ describe('NotificationProvider', () => {
     await waitFor(() => {
       expect(screen.getByTestId('toasts-enabled').textContent).toBe('no');
     });
+  });
+
+  it('skips no-op canvas preference writes', async () => {
+    mockUseUser.mockReturnValue({ user: mockUser });
+    localStorage.setItem('token', 'test-token');
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        ...DEFAULT_USER_PREFERENCES,
+        canvas_settings: DEFAULT_CANVAS_SETTINGS,
+      }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const CanvasHarness = () => {
+      const { updateCanvasSettings, preferences } = useNotifications();
+      if (!preferences) {
+        return <div data-testid="canvas-loading">loading</div>;
+      }
+      return (
+        <div>
+          <div data-testid="metrics-expanded">
+            {preferences.canvas_settings.metricsBarExpanded ? 'yes' : 'no'}
+          </div>
+          <button
+            onClick={() => updateCanvasSettings({ metricsBarExpanded: false })}
+          >
+            SaveCanvas
+          </button>
+        </div>
+      );
+    };
+
+    render(
+      <NotificationProvider>
+        <CanvasHarness />
+      </NotificationProvider>
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId('metrics-expanded').textContent).toBe('no');
+    });
+    const patchCallsBefore = fetchMock.mock.calls.filter(
+      ([, options]) => (options as RequestInit | undefined)?.method === 'PATCH'
+    ).length;
+
+    fireEvent.click(screen.getByText('SaveCanvas'));
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    const patchCallsAfter = fetchMock.mock.calls.filter(
+      ([, options]) => (options as RequestInit | undefined)?.method === 'PATCH'
+    ).length;
+    expect(patchCallsAfter).toBe(patchCallsBefore);
   });
 });

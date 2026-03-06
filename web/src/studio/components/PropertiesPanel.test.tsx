@@ -424,17 +424,18 @@ describe("PropertiesPanel", () => {
         render(<PropertiesPanel {...defaultProps} />);
 
         expect(screen.getByText("Image Version")).toBeInTheDocument();
-        expect(screen.getByDisplayValue("4.28.0F")).toBeInTheDocument();
+        expect(screen.getByRole("button", { name: /4\.28\.0F/i })).toBeInTheDocument();
       });
 
       it("shows version options from device model", async () => {
+        const user = userEvent.setup();
         render(<PropertiesPanel {...defaultProps} />);
 
-        const versionSelect = screen.getByDisplayValue("4.28.0F");
+        const versionSelect = screen.getByRole("button", { name: /4\.28\.0F/i });
+        await user.click(versionSelect);
 
-        // Check that version options are present
-        expect(versionSelect).toContainHTML("4.28.0F");
-        expect(versionSelect).toContainHTML("4.27.0F");
+        expect(screen.getAllByRole("button", { name: "4.28.0F" }).length).toBeGreaterThan(0);
+        expect(screen.getByRole("button", { name: "4.27.0F" })).toBeInTheDocument();
       });
 
       it("calls onOpenConsole when Open Console button is clicked", async () => {

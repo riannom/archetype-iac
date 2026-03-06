@@ -311,7 +311,7 @@ class TestExecuteSyncJobFileBased:
 
     @pytest.mark.asyncio
     async def test_agent_returns_failure(self, test_db: Session, sample_host, tmp_path):
-        """Agent returns success=False, job should be marked failed."""
+        """Agent pull progress failure should mark the sync job failed."""
         from app.routers.images.sync import _execute_sync_job
 
         job = _make_sync_job(
@@ -328,13 +328,25 @@ class TestExecuteSyncJobFileBased:
             "sha256": "abc123",
         }
 
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-        mock_response.raise_for_status = MagicMock()
-        mock_response.json.return_value = {"success": False, "error": "Agent disk full"}
+        mock_pull_response = MagicMock()
+        mock_pull_response.status_code = 200
+        mock_pull_response.raise_for_status = MagicMock()
+        mock_pull_response.json.return_value = {"job_id": "agent-pull-job"}
+
+        mock_progress_response = MagicMock()
+        mock_progress_response.status_code = 200
+        mock_progress_response.raise_for_status = MagicMock()
+        mock_progress_response.json.return_value = {
+            "status": "failed",
+            "error": "Agent disk full",
+            "progress_percent": 0,
+            "bytes_transferred": 0,
+            "total_bytes": fake_file.stat().st_size,
+        }
 
         mock_client = AsyncMock()
-        mock_client.post = AsyncMock(return_value=mock_response)
+        mock_client.post = AsyncMock(return_value=mock_pull_response)
+        mock_client.get = AsyncMock(return_value=mock_progress_response)
         mock_client.__aenter__ = AsyncMock(return_value=mock_client)
         mock_client.__aexit__ = AsyncMock(return_value=False)
 
@@ -518,8 +530,33 @@ class TestStreamImageDeep:
 
         assert resp.status_code == 200
         # Content-Length should NOT be present when inspect fails
-        assert "content-length" not in resp.headers
-        assert resp.content == b"data"
+
+    def test_stream_file_based_image(self, test_client: TestClient, auth_headers: dict, tmp_path):
+        """File-based images should stream raw bytes with content length."""
+        file_path = tmp_path / "sonic-vs.img"
+        file_path.write_bytes(b"qcow2-stream")
+
+        manifest = [
+            {
+                "id": "qcow2:sonic-vs.img",
+                "reference": str(file_path),
+                "kind": "qcow2",
+            }
+        ]
+
+        with (
+            patch("app.routers.images.sync.load_manifest", return_value=manifest),
+            patch("app.routers.images.sync.find_image_by_id", side_effect=lambda _m, _i: manifest[0]),
+        ):
+            resp = test_client.get(
+                "/images/library/qcow2:sonic-vs.img/stream",
+                headers=auth_headers,
+            )
+
+        assert resp.status_code == 200
+        assert resp.headers["content-type"] == "application/octet-stream"
+        assert resp.headers["content-length"] == str(len(b"qcow2-stream"))
+        assert resp.content == b"qcow2-stream"
 
     def test_stream_docker_save_error_still_returns_200(
         self, test_client: TestClient, auth_headers: dict
