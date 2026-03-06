@@ -95,6 +95,7 @@ from app.agent_client.links import (  # noqa: F401
     create_link_on_agent,
     declare_port_state_on_agent,
     delete_link_on_agent,
+    get_interface_port_details_from_agent,
     detach_external_on_agent,
     get_interface_vlan_from_agent,
     get_lab_port_state,

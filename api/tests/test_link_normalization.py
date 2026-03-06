@@ -74,3 +74,99 @@ def test_normalize_links_for_lab(test_db: Session, sample_lab: models.Lab, sampl
     assert link_state.source_interface == "eth1"
     assert link_state.target_interface == "eth1"
     assert link_state.link_name == link.link_name
+
+
+def test_normalize_links_for_lab_dedups_duplicate_link_rows(
+    test_db: Session,
+    sample_lab: models.Lab,
+    sample_host: models.Host,
+):
+    """Duplicate vendor/canonical Link rows should merge without uniqueness errors."""
+    node1 = models.Node(
+        id=str(uuid4()),
+        lab_id=sample_lab.id,
+        gui_id="n1",
+        display_name="R1",
+        container_name="r1",
+        device="linux",
+        host_id=sample_host.id,
+    )
+    node2 = models.Node(
+        id=str(uuid4()),
+        lab_id=sample_lab.id,
+        gui_id="n2",
+        display_name="R2",
+        container_name="r2",
+        device="linux",
+        host_id=sample_host.id,
+    )
+    test_db.add_all([node1, node2])
+    test_db.flush()
+
+    canonical_link = models.Link(
+        id=str(uuid4()),
+        lab_id=sample_lab.id,
+        link_name=generate_link_name("r1", "eth1", "r2", "eth1"),
+        source_node_id=node1.id,
+        source_interface="eth1",
+        target_node_id=node2.id,
+        target_interface="eth1",
+    )
+    vendor_link = models.Link(
+        id=str(uuid4()),
+        lab_id=sample_lab.id,
+        link_name="r1:Ethernet1-r2:Ethernet1",
+        source_node_id=node1.id,
+        source_interface="Ethernet1",
+        target_node_id=node2.id,
+        target_interface="Ethernet1",
+    )
+    test_db.add_all([canonical_link, vendor_link])
+    test_db.flush()
+
+    canonical_state = models.LinkState(
+        id=str(uuid4()),
+        lab_id=sample_lab.id,
+        link_definition_id=canonical_link.id,
+        link_name=canonical_link.link_name,
+        source_node="r1",
+        source_interface="eth1",
+        target_node="r2",
+        target_interface="eth1",
+        desired_state="up",
+        actual_state="up",
+    )
+    vendor_state = models.LinkState(
+        id=str(uuid4()),
+        lab_id=sample_lab.id,
+        link_definition_id=vendor_link.id,
+        link_name=vendor_link.link_name,
+        source_node="r1",
+        source_interface="Ethernet1",
+        target_node="r2",
+        target_interface="Ethernet1",
+        desired_state="deleted",
+        actual_state="down",
+    )
+    test_db.add_all([canonical_state, vendor_state])
+    test_db.commit()
+
+    topo_service = TopologyService(test_db)
+    updated = topo_service.normalize_links_for_lab(sample_lab.id)
+    test_db.commit()
+
+    assert updated > 0
+
+    links = test_db.query(models.Link).filter(models.Link.lab_id == sample_lab.id).all()
+    states = test_db.query(models.LinkState).filter(models.LinkState.lab_id == sample_lab.id).all()
+
+    assert len(links) == 1
+    assert len(states) == 1
+    assert links[0].link_name == generate_link_name("r1", "eth1", "r2", "eth1")
+    assert links[0].source_interface == "eth1"
+    assert links[0].target_interface == "eth1"
+    assert states[0].link_definition_id == links[0].id
+    assert states[0].link_name == links[0].link_name
+    assert states[0].desired_state == "up"
+
+    assert topo_service.normalize_links_for_lab(sample_lab.id) == 0

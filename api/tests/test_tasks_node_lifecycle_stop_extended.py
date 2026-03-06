@@ -16,6 +16,7 @@ Covers additional scenarios beyond the base test file:
 """
 from __future__ import annotations
 
+import asyncio
 import json
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -216,6 +217,52 @@ class TestAutoExtractAgentFallback:
 
         # Should use default agent since offline agent is not online
         assert extract_agents == [host_default.id]
+
+    @pytest.mark.asyncio
+    async def test_partial_timeout_keeps_successful_agent_results(self, test_db, test_user):
+        """One slow agent should not discard configs extracted from another."""
+        host_a = _make_host(test_db, "agent-ext-a", "Agent A")
+        host_b = _make_host(test_db, "agent-ext-b", "Agent B")
+        lab = _make_lab(test_db, test_user, agent_id=host_a.id)
+        job = _make_job(test_db, lab.id, test_user.id)
+
+        _make_node(test_db, lab.id, "R1")
+        _make_node(test_db, lab.id, "R2")
+        ns1 = _make_node_state(test_db, lab.id, "R1", actual="running")
+        ns2 = _make_node_state(test_db, lab.id, "R2", actual="running")
+
+        manager = _create_manager(test_db, lab, job, host_a, [ns1, ns2])
+        manager.placements_map = {
+            "R1": MagicMock(host_id=host_a.id),
+            "R2": MagicMock(host_id=host_b.id),
+        }
+
+        async def fake_extract(agent, lab_id):  # noqa: ARG001
+            if agent.id == host_b.id:
+                await asyncio.sleep(0.2)
+                node_name = "R2"
+            else:
+                node_name = "R1"
+            return {
+                "success": True,
+                "configs": [{"node_name": node_name, "content": f"hostname {node_name}\n"}],
+            }
+
+        with patch("app.tasks.node_lifecycle_stop.settings") as mock_settings:
+            mock_settings.feature_auto_extract_on_stop = True
+            mock_settings.auto_extract_on_stop_timeout_seconds = 0.01
+            with patch("app.tasks.node_lifecycle_stop.agent_client") as mock_ac:
+                mock_ac.is_agent_online.return_value = True
+                mock_ac.extract_configs_on_agent = AsyncMock(side_effect=fake_extract)
+                with patch("app.services.config_service.ConfigService") as mock_cs_cls:
+                    mock_cs = MagicMock()
+                    mock_cs.save_extracted_config.return_value = MagicMock()
+                    mock_cs_cls.return_value = mock_cs
+
+                    await manager._auto_extract_before_stop([ns1, ns2])
+
+        mock_cs.save_extracted_config.assert_called_once()
+        assert any("timed out on Agent B".lower() in p.lower() for p in manager.log_parts)
 
     @pytest.mark.asyncio
     async def test_no_placement_defaults_to_self_agent(self, test_db, test_user):

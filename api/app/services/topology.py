@@ -29,6 +29,7 @@ from app.schemas import (
     TopologyGraph,
 )
 from app.services.interface_naming import normalize_interface, denormalize_interface
+from app.services.link_reservations import release_link_endpoint_reservations
 from app.utils.link import generate_link_name
 
 # Re-export symbols that were moved to companion modules so that
@@ -1032,6 +1033,87 @@ class TopologyService:
                 return a if a_ts >= b_ts else b
             return a
 
+        def _link_reference_count(link_id: str) -> int:
+            return (
+                self.db.query(models.LinkState.id)
+                .filter(models.LinkState.link_definition_id == link_id)
+                .count()
+            )
+
+        def _choose_survivor(
+            left: models.Link,
+            right: models.Link,
+            canonical_name: str,
+        ) -> models.Link:
+            def _score(link: models.Link) -> tuple[int, int, str, str]:
+                return (
+                    1 if link.link_name == canonical_name else 0,
+                    _link_reference_count(link.id),
+                    link.created_at.isoformat() if link.created_at else "",
+                    link.id,
+                )
+
+            return left if _score(left) >= _score(right) else right
+
+        def _merge_link_states(
+            keep_link: models.Link,
+            remove_link: models.Link,
+            candidate_names: set[str],
+            final_source_name: str,
+            final_target_name: str,
+            final_source_iface: str,
+            final_target_iface: str,
+            canonical_name: str,
+        ) -> None:
+            candidates = (
+                self.db.query(models.LinkState)
+                .filter(
+                    models.LinkState.lab_id == lab_id,
+                    or_(
+                        models.LinkState.link_definition_id.in_([keep_link.id, remove_link.id]),
+                        models.LinkState.link_name.in_(sorted(candidate_names)),
+                    ),
+                )
+                .all()
+            )
+            if not candidates:
+                return
+
+            preferred = candidates[0]
+            for candidate in candidates[1:]:
+                preferred = _prefer_link_state(preferred, candidate)
+
+            old_source_node = preferred.source_node
+            old_target_node = preferred.target_node
+            for candidate in candidates:
+                if candidate.id == preferred.id:
+                    continue
+                release_link_endpoint_reservations(self.db, candidate.id)
+                try:
+                    self.db.query(models.VxlanTunnel).filter(
+                        models.VxlanTunnel.link_state_id == candidate.id
+                    ).delete(synchronize_session=False)
+                except Exception:
+                    pass
+                self.db.delete(candidate)
+
+            preferred.link_definition_id = keep_link.id
+            preferred.link_name = canonical_name
+            preferred.source_node = final_source_name
+            preferred.target_node = final_target_name
+            preferred.source_interface = final_source_iface
+            preferred.target_interface = final_target_iface
+            if (
+                preferred.source_host_id
+                and preferred.target_host_id
+                and old_source_node == final_target_name
+                and old_target_node == final_source_name
+            ):
+                preferred.source_host_id, preferred.target_host_id = (
+                    preferred.target_host_id,
+                    preferred.source_host_id,
+                )
+
         for link in links:
             source_node = node_by_id.get(link.source_node_id)
             target_node = node_by_id.get(link.target_node_id)
@@ -1054,6 +1136,68 @@ class TopologyService:
             expected_start = f"{source_name}:{src_iface_norm}"
             swapped = not new_link_name.startswith(expected_start)
 
+            final_source_node_id = link.target_node_id if swapped else link.source_node_id
+            final_target_node_id = link.source_node_id if swapped else link.target_node_id
+            final_source_iface = tgt_iface_norm if swapped else src_iface_norm
+            final_target_iface = src_iface_norm if swapped else tgt_iface_norm
+            final_source_name = target_name if swapped else source_name
+            final_target_name = source_name if swapped else target_name
+
+            conflict_link = None
+            if new_link_name != old_link_name:
+                conflict_link = (
+                    self.db.query(models.Link)
+                    .filter(
+                        models.Link.lab_id == lab_id,
+                        models.Link.link_name == new_link_name,
+                        models.Link.id != link.id,
+                    )
+                    .first()
+                )
+
+            if conflict_link:
+                keep_link = _choose_survivor(link, conflict_link, new_link_name)
+                remove_link = conflict_link if keep_link.id == link.id else link
+                candidate_names = {
+                    old_link_name,
+                    new_link_name,
+                    conflict_link.link_name,
+                }
+                keep_changed = (
+                    keep_link.link_name != new_link_name
+                    or keep_link.source_node_id != final_source_node_id
+                    or keep_link.target_node_id != final_target_node_id
+                    or keep_link.source_interface != final_source_iface
+                    or keep_link.target_interface != final_target_iface
+                )
+                keep_link.source_node_id = final_source_node_id
+                keep_link.target_node_id = final_target_node_id
+                keep_link.source_interface = final_source_iface
+                keep_link.target_interface = final_target_iface
+                keep_link.link_name = new_link_name
+                _merge_link_states(
+                    keep_link=keep_link,
+                    remove_link=remove_link,
+                    candidate_names=candidate_names,
+                    final_source_name=final_source_name,
+                    final_target_name=final_target_name,
+                    final_source_iface=final_source_iface,
+                    final_target_iface=final_target_iface,
+                    canonical_name=new_link_name,
+                )
+                self.db.delete(remove_link)
+                self.db.flush()
+                if keep_changed or keep_link.id != remove_link.id:
+                    updates += 1
+                continue
+
+            link_changed = (
+                new_link_name != old_link_name
+                or swapped
+                or src_iface_norm != old_source_iface
+                or tgt_iface_norm != old_target_iface
+            )
+
             if swapped:
                 link.source_node_id, link.target_node_id = link.target_node_id, link.source_node_id
                 link.source_interface, link.target_interface = tgt_iface_norm, src_iface_norm
@@ -1063,9 +1207,7 @@ class TopologyService:
 
             link.link_name = new_link_name
 
-            if link.link_name != old_link_name or swapped or \
-               link.source_interface != old_source_iface or \
-               link.target_interface != old_target_iface:
+            if link_changed:
                 updates += 1
 
             # Update LinkState to match normalized link
@@ -1082,6 +1224,7 @@ class TopologyService:
                 .first()
             )
             if link_state:
+                state_changed = False
                 # If another LinkState already exists with the normalized name,
                 # merge to prevent duplicate (lab_id, link_name) conflicts.
                 conflict = (
@@ -1107,6 +1250,13 @@ class TopologyService:
                     self.db.delete(remove)
                     link_state = keep
 
+                old_state_name = link_state.link_name
+                old_state_source_node = link_state.source_node
+                old_state_target_node = link_state.target_node
+                old_state_source_iface = link_state.source_interface
+                old_state_target_iface = link_state.target_interface
+                old_state_source_host_id = link_state.source_host_id
+                old_state_target_host_id = link_state.target_host_id
                 link_state.link_name = link.link_name
 
                 src_node = node_by_id.get(link.source_node_id)
@@ -1123,7 +1273,17 @@ class TopologyService:
                         link_state.source_host_id,
                     )
 
-                updates += 1
+                state_changed = (
+                    link_state.link_name != old_state_name
+                    or link_state.source_node != old_state_source_node
+                    or link_state.target_node != old_state_target_node
+                    or link_state.source_interface != old_state_source_iface
+                    or link_state.target_interface != old_state_target_iface
+                    or link_state.source_host_id != old_state_source_host_id
+                    or link_state.target_host_id != old_state_target_host_id
+                )
+                if state_changed:
+                    updates += 1
 
         if updates > 0:
             self.db.commit()

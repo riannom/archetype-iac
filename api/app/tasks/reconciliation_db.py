@@ -423,11 +423,12 @@ async def _do_reconcile_lab(session, lab, lab_id: str) -> int:
     # Ensure link states exist for this lab using database (source of truth)
     try:
         links_created = _ensure_link_states_for_lab(session, lab_id)
+        session.commit()
         if links_created > 0:
             logger.info(f"Created {links_created} link state(s) for lab {lab_id}")
     except Exception as e:
         session.rollback()
-        logger.debug(f"Failed to ensure link states for lab {lab_id}: {e}")
+        logger.warning(f"Failed to ensure link states for lab {lab_id}: {e}")
 
     # Normalize link interface names for existing labs
     try:
@@ -437,7 +438,7 @@ async def _do_reconcile_lab(session, lab, lab_id: str) -> int:
             logger.info(f"Normalized {normalized} link record(s) for lab {lab_id}")
     except Exception as e:
         session.rollback()
-        logger.debug(f"Failed to normalize link interfaces for lab {lab_id}: {e}")
+        logger.warning(f"Failed to normalize link interfaces for lab {lab_id}: {e}")
 
     # Clean up orphaned NodeState records (node_definition_id IS NULL)
     try:
@@ -446,7 +447,7 @@ async def _do_reconcile_lab(session, lab, lab_id: str) -> int:
             logger.info(f"Cleaned up {ns_deleted} orphaned NodeState record(s) for lab {lab_id}")
     except Exception as e:
         session.rollback()
-        logger.debug(f"Failed to clean up orphaned node states for lab {lab_id}: {e}")
+        logger.warning(f"Failed to clean up orphaned node states for lab {lab_id}: {e}")
 
     # Get ALL agents that have nodes for this lab (multi-host support)
     try:

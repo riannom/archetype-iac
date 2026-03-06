@@ -446,6 +446,39 @@ describe('useLabDataLoading', () => {
       expect(statusCalls.length).toBeGreaterThan(0);
     });
 
+    it('polls agents on interval to recover from initial auth failures', async () => {
+      const studioRequest = createMockStudioRequest();
+      // Simulate initial 401 failure on /agents, then success on retry
+      let agentCallCount = 0;
+      studioRequest.mockImplementation((path: string) => {
+        if (path === '/agents') {
+          agentCallCount++;
+          if (agentCallCount === 1) return Promise.reject(new Error('401 Unauthorized'));
+          return Promise.resolve([{ id: 'a1', name: 'Agent 1', address: '10.0.0.1:8001', status: 'online' }]);
+        }
+        if (path === '/labs') return Promise.resolve({ labs: [] });
+        return Promise.resolve(makeMetrics());
+      });
+
+      const { result } = renderHook(() =>
+        useLabDataLoading({ studioRequest, activeLab: null })
+      );
+
+      await flushEffects();
+
+      // Initial load failed — agents should be empty
+      expect(result.current.agents).toHaveLength(0);
+
+      // Advance past one polling interval — agents should recover
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10000);
+      });
+
+      expect(agentCallCount).toBeGreaterThanOrEqual(2);
+      expect(result.current.agents).toHaveLength(1);
+      expect(result.current.agents[0].name).toBe('Agent 1');
+    });
+
     it('does not poll lab statuses when activeLab is set', async () => {
       const studioRequest = createMockStudioRequest();
       const activeLab = makeLab({ id: 'lab-1' });

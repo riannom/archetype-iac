@@ -31,6 +31,139 @@ TUNNEL_MISSING = "TUNNEL_MISSING"
 PORT_UNREACHABLE = "PORT_UNREACHABLE"
 
 
+def _resolve_endpoint_node(
+    session: Session,
+    lab_id: str,
+    node_name: str,
+) -> models.Node | None:
+    node = (
+        session.query(models.Node)
+        .filter(
+            models.Node.lab_id == lab_id,
+            models.Node.container_name == node_name,
+        )
+        .first()
+    )
+    if node:
+        return node
+    return (
+        session.query(models.Node)
+        .filter(
+            models.Node.lab_id == lab_id,
+            models.Node.display_name == node_name,
+        )
+        .first()
+    )
+
+
+def _upsert_interface_mapping(
+    session: Session,
+    *,
+    lab_id: str,
+    node_name: str,
+    interface_name: str | None,
+    ovs_port_name: str | None,
+    vlan_tag: int | None,
+) -> int:
+    if not ovs_port_name:
+        return 0
+
+    normalized_iface = normalize_for_node(
+        session,
+        lab_id,
+        node_name,
+        interface_name or "",
+    )
+    if not normalized_iface:
+        return 0
+
+    node = _resolve_endpoint_node(session, lab_id, node_name)
+    if not node:
+        return 0
+
+    existing = (
+        session.query(models.InterfaceMapping)
+        .filter(
+            models.InterfaceMapping.lab_id == lab_id,
+            models.InterfaceMapping.node_id == node.id,
+            models.InterfaceMapping.linux_interface == normalized_iface,
+        )
+        .first()
+    )
+    vendor_interface = mapping_service.linux_to_vendor_interface(
+        normalized_iface,
+        node.device,
+    )
+
+    if existing:
+        changed = False
+        if existing.ovs_port != ovs_port_name:
+            existing.ovs_port = ovs_port_name
+            changed = True
+        if existing.ovs_bridge != "arch-ovs":
+            existing.ovs_bridge = "arch-ovs"
+            changed = True
+        if existing.vlan_tag != vlan_tag:
+            existing.vlan_tag = vlan_tag
+            changed = True
+        if existing.vendor_interface != vendor_interface:
+            existing.vendor_interface = vendor_interface
+            changed = True
+        if existing.device_type != node.device:
+            existing.device_type = node.device
+            changed = True
+        return 1 if changed else 0
+
+    from uuid import uuid4
+
+    session.add(
+        models.InterfaceMapping(
+            id=str(uuid4()),
+            lab_id=lab_id,
+            node_id=node.id,
+            ovs_port=ovs_port_name,
+            ovs_bridge="arch-ovs",
+            vlan_tag=vlan_tag,
+            linux_interface=normalized_iface,
+            vendor_interface=vendor_interface,
+            device_type=node.device,
+        )
+    )
+    return 1
+
+
+def persist_link_interface_mappings(
+    session: Session,
+    link_state: models.LinkState,
+    *,
+    source_ovs_port: str | None = None,
+    target_ovs_port: str | None = None,
+    source_vlan_tag: int | None = None,
+    target_vlan_tag: int | None = None,
+) -> int:
+    """Persist interface mappings from already-known endpoint OVS ports."""
+    changed = 0
+    changed += _upsert_interface_mapping(
+        session,
+        lab_id=link_state.lab_id,
+        node_name=link_state.source_node,
+        interface_name=link_state.source_interface,
+        ovs_port_name=source_ovs_port,
+        vlan_tag=source_vlan_tag,
+    )
+    changed += _upsert_interface_mapping(
+        session,
+        lab_id=link_state.lab_id,
+        node_name=link_state.target_node,
+        interface_name=link_state.target_interface,
+        ovs_port_name=target_ovs_port,
+        vlan_tag=target_vlan_tag,
+    )
+    if changed:
+        session.flush()
+    return changed
+
+
 def is_vlan_mismatch(error: str | None) -> bool:
     """Check if an error message indicates a VLAN mismatch (repairable)."""
     return error is not None and error.startswith(VLAN_MISMATCH)
@@ -265,3 +398,83 @@ async def update_interface_mappings(
                 )
             except Exception as e:
                 logger.warning(f"Failed to update interface mappings from {agent.name}: {e}")
+
+    await ensure_link_interface_mappings(session, link_state, host_to_agent)
+
+
+async def ensure_link_interface_mappings(
+    session: Session,
+    link_state: models.LinkState,
+    host_to_agent: dict[str, models.Host],
+) -> int:
+    """Best-effort endpoint mapping backfill via provider-agnostic agent lookup."""
+
+    async def _ensure_endpoint(
+        node_name: str,
+        interface_name: str | None,
+        host_id: str | None,
+    ) -> int:
+        if not host_id:
+            return 0
+        agent = host_to_agent.get(host_id)
+        if not agent:
+            return 0
+
+        normalized_iface = normalize_for_node(
+            session,
+            link_state.lab_id,
+            node_name,
+            interface_name or "",
+        )
+        if not normalized_iface:
+            return 0
+
+        node = _resolve_endpoint_node(session, link_state.lab_id, node_name)
+        if not node:
+            return 0
+
+        existing = (
+            session.query(models.InterfaceMapping)
+            .filter(
+                models.InterfaceMapping.lab_id == link_state.lab_id,
+                models.InterfaceMapping.node_id == node.id,
+                models.InterfaceMapping.linux_interface == normalized_iface,
+            )
+            .first()
+        )
+        if existing and existing.ovs_port:
+            return 0
+
+        details = await agent_client.get_interface_port_details_from_agent(
+            agent,
+            link_state.lab_id,
+            node_name,
+            normalized_iface,
+            read_from_ovs=True,
+        )
+        ovs_port_name = details.get("ovs_port_name")
+        if not ovs_port_name:
+            return 0
+
+        return _upsert_interface_mapping(
+            session,
+            lab_id=link_state.lab_id,
+            node_name=node_name,
+            interface_name=normalized_iface,
+            ovs_port_name=ovs_port_name,
+            vlan_tag=details.get("vlan_tag"),
+        )
+
+    created_or_updated = 0
+    created_or_updated += await _ensure_endpoint(
+        link_state.source_node,
+        link_state.source_interface,
+        link_state.source_host_id,
+    )
+    target_host_id = link_state.target_host_id or link_state.source_host_id
+    created_or_updated += await _ensure_endpoint(
+        link_state.target_node,
+        link_state.target_interface,
+        target_host_id,
+    )
+    return created_or_updated

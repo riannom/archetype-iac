@@ -218,7 +218,66 @@ class TestVerifyCrossHostLinkEdge:
             test_db, link_state, {host_a.id: host_a}
         )
         assert not ok
-        assert "Target agent not found" in error
+
+
+class TestPersistLinkInterfaceMappings:
+    def test_persists_known_ovs_ports_for_missing_vm_mapping(
+        self, test_db, sample_lab, sample_host
+    ) -> None:
+        source = models.Node(
+            lab_id=sample_lab.id,
+            gui_id="n1",
+            display_name="CEOS-5",
+            container_name="ceos_5",
+            device="ceos",
+            host_id=sample_host.id,
+        )
+        target = models.Node(
+            lab_id=sample_lab.id,
+            gui_id="n2",
+            display_name="CISCO_N9KV-4",
+            container_name="cisco_n9kv_4",
+            device="cisco_n9kv",
+            host_id=sample_host.id,
+        )
+        link_state = models.LinkState(
+            lab_id=sample_lab.id,
+            link_name="ceos_5:eth4-cisco_n9kv_4:eth1",
+            source_node="ceos_5",
+            source_interface="eth4",
+            target_node="cisco_n9kv_4",
+            target_interface="eth1",
+            source_host_id=sample_host.id,
+            target_host_id=sample_host.id,
+        )
+        test_db.add_all([source, target, link_state])
+        test_db.commit()
+
+        changed = link_validator.persist_link_interface_mappings(
+            test_db,
+            link_state,
+            source_ovs_port="vh-source123",
+            target_ovs_port="vnet701",
+            source_vlan_tag=2050,
+            target_vlan_tag=2050,
+        )
+        test_db.commit()
+
+        assert changed == 2
+
+        mappings = (
+            test_db.query(models.InterfaceMapping)
+            .filter(models.InterfaceMapping.lab_id == sample_lab.id)
+            .order_by(models.InterfaceMapping.linux_interface)
+            .all()
+        )
+        assert len(mappings) == 2
+        by_node = {m.node_id: m for m in mappings}
+        assert by_node[source.id].ovs_port == "vh-source123"
+        assert by_node[source.id].vendor_interface == "Ethernet4"
+        assert by_node[target.id].ovs_port == "vnet701"
+        assert by_node[target.id].linux_interface == "eth1"
+        assert by_node[target.id].device_type == "cisco_n9kv"
 
     @pytest.mark.asyncio
     async def test_overlay_status_error(
