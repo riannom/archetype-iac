@@ -538,6 +538,30 @@ class TestGetVendorsForUI:
                     f"Empty subcategory '{sub['name']}' in '{cat['name']}'"
                 )
 
+    def test_sonic_vs_reports_qcow2_support(self):
+        """SONiC should remain visible when the canvas filters for runnable images."""
+        result = get_vendors_for_ui()
+        sonic = None
+        for cat in result:
+            for model in cat.get("models", []):
+                if model["id"] == "sonic-vs":
+                    sonic = model
+                    break
+            if sonic:
+                break
+            for sub in cat.get("subCategories", []):
+                for model in sub.get("models", []):
+                    if model["id"] == "sonic-vs":
+                        sonic = model
+                        break
+                if sonic:
+                    break
+            if sonic:
+                break
+
+        assert sonic is not None
+        assert sonic["supportedImageKinds"] == ["qcow2"]
+
 
 class TestLinuxDeviceSupportedImageKinds:
     """Tests for linux device image kind configuration."""

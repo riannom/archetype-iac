@@ -329,17 +329,30 @@ async def verify_image_status_on_agents(run_sha256_check: bool = False) -> Image
                                         f"host={host.id}, synced -> missing"
                                     )
 
-                        # qcow2 images: mark as synced if agent has libvirt provider
-                        # On SHA256 check cycles, verify file integrity via agent
+                        # qcow2 images: verify file exists every cycle, and
+                        # only promote back to synced when the agent confirms it.
                         elif ih.image_id in qcow2_images:
                             if "libvirt" in host_providers:
-                                # SHA256 verification for synced images
-                                if run_sha256_check and ih.status == "synced":
+                                from app.tasks.image_sync import check_agent_has_image
+                                ref = qcow2_images[ih.image_id]
+                                exists = await check_agent_has_image(host, ref)
+                                if not exists:
+                                    if ih.status != "missing" or ih.error_message != "Image not found on agent":
+                                        ih.status = "missing"
+                                        ih.error_message = "Image not found on agent"
+                                        result.status_updates += 1
+                                        logger.debug(
+                                            f"Updated ImageHost status (qcow2): image={ih.image_id}, "
+                                            f"host={host.id}, {old_status} -> missing"
+                                        )
+                                    continue
+
+                                if run_sha256_check:
                                     expected_sha = file_image_sha256.get(ih.image_id)
                                     if expected_sha:
-                                        from app.tasks.image_sync import check_agent_has_image
-                                        ref = qcow2_images[ih.image_id]
-                                        intact = await check_agent_has_image(host, ref, expected_sha256=expected_sha)
+                                        intact = await check_agent_has_image(
+                                            host, ref, expected_sha256=expected_sha
+                                        )
                                         if not intact:
                                             ih.status = "failed"
                                             ih.error_message = "SHA256 mismatch — image may be corrupted"
@@ -369,17 +382,30 @@ async def verify_image_status_on_agents(run_sha256_check: bool = False) -> Image
                                         f"host={host.id}, {old_status} -> missing (no libvirt)"
                                     )
 
-                        # IOL images: mark as synced if agent has docker provider
-                        # On SHA256 check cycles, verify file integrity via agent
+                        # IOL images: verify file exists every cycle, and only
+                        # promote back to synced when the agent confirms it.
                         elif ih.image_id in iol_images:
                             if "docker" in host_providers:
-                                # SHA256 verification for synced images
-                                if run_sha256_check and ih.status == "synced":
+                                from app.tasks.image_sync import check_agent_has_image
+                                ref = iol_images[ih.image_id]
+                                exists = await check_agent_has_image(host, ref)
+                                if not exists:
+                                    if ih.status != "missing" or ih.error_message != "Image not found on agent":
+                                        ih.status = "missing"
+                                        ih.error_message = "Image not found on agent"
+                                        result.status_updates += 1
+                                        logger.debug(
+                                            f"Updated ImageHost status (IOL): image={ih.image_id}, "
+                                            f"host={host.id}, {old_status} -> missing"
+                                        )
+                                    continue
+
+                                if run_sha256_check:
                                     expected_sha = file_image_sha256.get(ih.image_id)
                                     if expected_sha:
-                                        from app.tasks.image_sync import check_agent_has_image
-                                        ref = iol_images[ih.image_id]
-                                        intact = await check_agent_has_image(host, ref, expected_sha256=expected_sha)
+                                        intact = await check_agent_has_image(
+                                            host, ref, expected_sha256=expected_sha
+                                        )
                                         if not intact:
                                             ih.status = "failed"
                                             ih.error_message = "SHA256 mismatch — image may be corrupted"
