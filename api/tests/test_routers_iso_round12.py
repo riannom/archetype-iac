@@ -8,10 +8,8 @@ from __future__ import annotations
 
 import asyncio
 import json
-from datetime import datetime, timezone
 from pathlib import Path
-from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch, PropertyMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -19,11 +17,9 @@ from app.iso.models import (
     ISOFormat,
     ISOManifest,
     ISOSession,
-    ImageImportProgress,
     ParsedImage,
     ParsedNodeDefinition,
 )
-from app.routers import iso as iso_mod
 from app.routers.iso import (
     _execute_import,
     _import_single_image,

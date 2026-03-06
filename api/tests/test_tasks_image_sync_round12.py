@@ -299,8 +299,6 @@ class TestRunSyncAndCallbackSyncJobFailed:
         test_db.add(sync_job)
         test_db.commit()
 
-        call_order = []
-
         @contextmanager
         def fake_session():
             yield test_db

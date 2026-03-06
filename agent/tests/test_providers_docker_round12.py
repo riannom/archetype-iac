@@ -17,18 +17,17 @@ from __future__ import annotations
 import asyncio
 import sys
 from pathlib import Path
-from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch, call
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from docker.errors import NotFound, APIError, ImageNotFound
+from docker.errors import NotFound, APIError
 
 # Ensure agent root is importable
 _AGENT_ROOT = str(Path(__file__).resolve().parents[1])
 if _AGENT_ROOT not in sys.path:
     sys.path.insert(0, _AGENT_ROOT)
 
-from agent.providers.docker import (
+from agent.providers.docker import (  # noqa: E402
     DockerProvider,
     TopologyNode,
     TopologyLink,
@@ -36,10 +35,8 @@ from agent.providers.docker import (
     LABEL_LAB_ID,
     LABEL_NODE_NAME,
     LABEL_NODE_KIND,
-    DOCKER_OP_MAX_RETRIES,
-    DOCKER_OP_RETRY_BASE_SECONDS,
 )
-from agent.providers.base import NodeStatus, DeployResult
+from agent.providers.base import NodeStatus  # noqa: E402
 
 
 # ---------------------------------------------------------------------------

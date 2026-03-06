@@ -6,18 +6,17 @@ and unexpected exception propagation.
 """
 from __future__ import annotations
 
-import asyncio
 import json
 from contextlib import contextmanager, ExitStack
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock, patch, call
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from sqlalchemy.orm import Session
 
 from app import models
-from app.state import JobStatus, LabState, LinkActualState
+from app.state import JobStatus, LinkActualState
 from app.tasks.jobs_multihost import run_multihost_deploy, run_multihost_destroy
 
 
@@ -656,7 +655,7 @@ class TestDestroyLinkStateCleanup:
         host = _make_host(test_db, "host-ls-clean")
         _make_node(test_db, lab, "r1", host_id=host.id)
         _make_node(test_db, lab, "r2", host_id=host.id)
-        ls = _make_link_state(test_db, lab)
+        _make_link_state(test_db, lab)
 
         analysis = _FakeAnalysis(
             placements={host.id: [{"node_name": "r1"}, {"node_name": "r2"}]},
