@@ -64,7 +64,7 @@ class TestCleanupRunner:
             return CleanupResult(task_name="good", deleted=7)
 
         runner = CleanupRunner()
-        result = asyncio.get_event_loop().run_until_complete(runner.run_task(_good_task))
+        result = asyncio.run(runner.run_task(_good_task))
         assert result.task_name == "good"
         assert result.deleted == 7
         assert result.success is True
@@ -77,7 +77,7 @@ class TestCleanupRunner:
             raise RuntimeError("kaboom")
 
         runner = CleanupRunner()
-        result = asyncio.get_event_loop().run_until_complete(runner.run_task(_bad_task))
+        result = asyncio.run(runner.run_task(_bad_task))
         assert result.success is False
         assert "kaboom" in result.errors[0]
         assert result.duration_ms > 0
@@ -95,9 +95,7 @@ class TestCleanupRunner:
             return CleanupResult(task_name="b", deleted=2)
 
         runner = CleanupRunner()
-        results = asyncio.get_event_loop().run_until_complete(
-            runner.run_tasks([_task_a, _task_b])
-        )
+        results = asyncio.run(runner.run_tasks([_task_a, _task_b]))
         assert len(results) == 2
         assert results[0].task_name == "a"
         assert results[1].task_name == "b"
@@ -114,9 +112,7 @@ class TestCleanupRunner:
             )
 
         runner = CleanupRunner()
-        result = asyncio.get_event_loop().run_until_complete(
-            runner.run_task(_task_with_args, 3, 4, extra="hello")
-        )
+        result = asyncio.run(runner.run_task(_task_with_args, 3, 4, extra="hello"))
         assert result.deleted == 7
         assert result.details["extra"] == "hello"
 

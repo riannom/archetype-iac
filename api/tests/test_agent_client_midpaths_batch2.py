@@ -98,7 +98,7 @@ def test_data_plane_mtu_ok():
 async def test_close_http_client_and_agent_request_paths(monkeypatch):
     fake_client = SimpleNamespace(aclose=AsyncMock())
     monkeypatch.setattr(_ac_http, "_http_client", fake_client)
-    await agent_client.close_http_client()
+    await _ac_http.close_http_client()
     fake_client.aclose.assert_awaited_once()
     assert _ac_http._http_client is None
 

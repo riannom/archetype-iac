@@ -1578,7 +1578,7 @@ class TestStreamImage:
         tmp_path,
         monkeypatch,
     ):
-        """Streaming a non-docker image should return 400."""
+        """Streaming a file-backed qcow2 image should return the image bytes."""
         from app.routers import images as img
 
         qcow2 = _qcow2_image(tmp_path)
@@ -1596,8 +1596,9 @@ class TestStreamImage:
             "/images/library/qcow2%3Aveos-4.29.qcow2/stream",
             headers=auth_headers,
         )
-        assert response.status_code == 400
-        assert "docker" in response.json()["detail"].lower()
+        assert response.status_code == 200
+        assert response.headers["content-type"] == "application/octet-stream"
+        assert response.content == b"\x00" * 64
 
     def test_no_reference(
         self,

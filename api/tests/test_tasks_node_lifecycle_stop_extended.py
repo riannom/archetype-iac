@@ -404,7 +404,7 @@ class TestAutoExtractExceptionHandling:
     """Tests for general exception handling in auto-extract."""
 
     @pytest.mark.asyncio
-    async def test_general_exception_caught_and_logged(self, test_db, test_user):
+    async def test_general_exception_caught_and_logged(self, test_db, test_user, caplog):
         """A general exception during auto-extract should be caught and not propagated."""
         host = _make_host(test_db, "agent-ext-exc")
         lab = _make_lab(test_db, test_user, agent_id=host.id)
@@ -417,13 +417,17 @@ class TestAutoExtractExceptionHandling:
         with patch("app.tasks.node_lifecycle_stop.settings") as mock_settings:
             mock_settings.feature_auto_extract_on_stop = True
             with patch("app.tasks.node_lifecycle_stop.agent_client") as mock_ac:
-                mock_ac.is_agent_online = MagicMock(side_effect=RuntimeError("unexpected"))
+                mock_ac.extract_configs_on_agent = AsyncMock(
+                    side_effect=RuntimeError("unexpected")
+                )
 
                 # Should NOT raise
                 await manager._auto_extract_before_stop([ns])
 
         log = " ".join(manager.log_parts)
-        assert "failed" in log.lower()
+        assert "no configs extracted" in log.lower()
+        assert "Auto-extract failed on agent" in caplog.text
+        assert "unexpected" in caplog.text
 
     @pytest.mark.asyncio
     async def test_gather_exception_from_one_agent_does_not_block(self, test_db, test_user):
