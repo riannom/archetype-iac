@@ -838,10 +838,6 @@ async def _do_reconcile_lab(session, lab, lab_id: str) -> int:
             for ns in node_states
             if ns.actual_state == NodeActualState.STARTING.value
         }
-        node_states_by_runtime_name = {
-            node_runtime_name_by_id.get(ns.node_definition_id, ns.node_name): ns
-            for ns in node_states
-        }
 
         running_count = 0
         stopped_count = 0
