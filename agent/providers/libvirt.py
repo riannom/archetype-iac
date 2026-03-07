@@ -2273,6 +2273,27 @@ class LibvirtProvider(Provider, VlanPersistenceMixin):
         expected_macs = {guest_mac.lower(), tap_mac.lower()}
 
         try:
+            domain_name = self._domain_name(lab_id, node_name)
+            try:
+                domain = self.conn.lookupByName(domain_name)
+                root = ET.fromstring(domain.XMLDesc(0))
+                for interface in root.findall(".//devices/interface"):
+                    mac_elem = interface.find("mac")
+                    target_elem = interface.find("target")
+                    if mac_elem is None or target_elem is None:
+                        continue
+                    xml_mac = (mac_elem.get("address") or "").lower()
+                    port_name = target_elem.get("dev")
+                    if xml_mac in expected_macs and port_name and self._ovs_port_exists(port_name):
+                        return port_name
+            except Exception:
+                logger.debug(
+                    "Domain XML target lookup failed for %s:%s",
+                    node_name,
+                    interface_index + 1,
+                    exc_info=True,
+                )
+
             result = subprocess.run(
                 ["ovs-vsctl", "--format=json", "list-ports", settings.ovs_bridge_name],
                 capture_output=True,
@@ -2293,6 +2314,15 @@ class LibvirtProvider(Provider, VlanPersistenceMixin):
                 if mac_result.returncode == 0:
                     port_mac = mac_result.stdout.strip().strip('"')
                     if port_mac.lower() in expected_macs:
+                        return port
+                ext_result = subprocess.run(
+                    ["ovs-vsctl", "get", "interface", port, "external_ids:attached-mac"],
+                    capture_output=True,
+                    text=True,
+                )
+                if ext_result.returncode == 0:
+                    attached_mac = ext_result.stdout.strip().strip('"')
+                    if attached_mac.lower() in expected_macs:
                         return port
             return None
         except Exception as e:
