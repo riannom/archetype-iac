@@ -180,10 +180,16 @@ class TestPopulateFromAgentEdgeCases:
     async def test_empty_ports_returns_zeros(self, test_db, sample_lab, sample_host, monkeypatch) -> None:
         async def fake_get_ports(agent, lab_id):
             return []
+        async def fake_get_port_state(agent, lab_id):
+            return []
 
         monkeypatch.setattr(
             "app.services.interface_mapping.agent_client.get_lab_ports_from_agent",
             fake_get_ports,
+        )
+        monkeypatch.setattr(
+            "app.services.interface_mapping.agent_client.get_lab_port_state",
+            fake_get_port_state,
         )
 
         result = await interface_mapping.populate_from_agent(test_db, sample_lab.id, sample_host)
@@ -194,10 +200,16 @@ class TestPopulateFromAgentEdgeCases:
     async def test_none_ports_returns_zeros(self, test_db, sample_lab, sample_host, monkeypatch) -> None:
         async def fake_get_ports(agent, lab_id):
             return None
+        async def fake_get_port_state(agent, lab_id):
+            return None
 
         monkeypatch.setattr(
             "app.services.interface_mapping.agent_client.get_lab_ports_from_agent",
             fake_get_ports,
+        )
+        monkeypatch.setattr(
+            "app.services.interface_mapping.agent_client.get_lab_port_state",
+            fake_get_port_state,
         )
 
         result = await interface_mapping.populate_from_agent(test_db, sample_lab.id, sample_host)
@@ -223,10 +235,16 @@ class TestPopulateFromAgentEdgeCases:
 
         async def fake_get_ports(agent, lab_id):
             return ports
+        async def fake_get_port_state(agent, lab_id):
+            return []
 
         monkeypatch.setattr(
             "app.services.interface_mapping.agent_client.get_lab_ports_from_agent",
             fake_get_ports,
+        )
+        monkeypatch.setattr(
+            "app.services.interface_mapping.agent_client.get_lab_port_state",
+            fake_get_port_state,
         )
 
         result = await interface_mapping.populate_from_agent(test_db, sample_lab.id, sample_host)
@@ -237,3 +255,112 @@ class TestPopulateFromAgentEdgeCases:
         ).first()
         assert mapping.ovs_port == "vh-new"
         assert mapping.vlan_tag == 200
+
+    @pytest.mark.asyncio
+    async def test_port_state_overrides_stale_docker_inventory(
+        self, test_db, sample_lab, sample_host, monkeypatch,
+    ) -> None:
+        node = models.Node(
+            lab_id=sample_lab.id,
+            gui_id="vm1", display_name="vm1",
+            container_name="vm1", node_type="device", device="cat9000v-q200",
+        )
+        test_db.add(node)
+        test_db.commit()
+
+        async def fake_get_ports(agent, lab_id):
+            return [
+                {
+                    "container": f"archetype-{sample_lab.id}-vm1",
+                    "interface": "eth1",
+                    "port_name": "vnet-old",
+                    "bridge_name": "arch-ovs",
+                    "vlan_tag": 999,
+                },
+            ]
+
+        async def fake_get_port_state(agent, lab_id):
+            return [
+                {
+                    "node_name": "vm1",
+                    "interface_name": "eth1",
+                    "ovs_port_name": "vnet-new",
+                    "vlan_tag": 256,
+                },
+            ]
+
+        monkeypatch.setattr(
+            "app.services.interface_mapping.agent_client.get_lab_ports_from_agent",
+            fake_get_ports,
+        )
+        monkeypatch.setattr(
+            "app.services.interface_mapping.agent_client.get_lab_port_state",
+            fake_get_port_state,
+        )
+
+        result = await interface_mapping.populate_from_agent(test_db, sample_lab.id, sample_host)
+
+        assert result["created"] == 1
+        mapping = test_db.query(models.InterfaceMapping).filter(
+            models.InterfaceMapping.lab_id == sample_lab.id,
+            models.InterfaceMapping.node_id == node.id,
+            models.InterfaceMapping.linux_interface == "eth1",
+        ).first()
+        assert mapping.ovs_port == "vnet-new"
+        assert mapping.vlan_tag == 256
+
+    @pytest.mark.asyncio
+    async def test_populate_node_from_agent_filters_to_target_node(
+        self, test_db, sample_lab, sample_host, monkeypatch,
+    ) -> None:
+        node1 = models.Node(
+            id="node-1",
+            lab_id=sample_lab.id,
+            gui_id="vm1",
+            display_name="vm1",
+            container_name="vm1",
+            node_type="device",
+            device="cat9000v-q200",
+        )
+        node2 = models.Node(
+            id="node-2",
+            lab_id=sample_lab.id,
+            gui_id="vm2",
+            display_name="vm2",
+            container_name="vm2",
+            node_type="device",
+            device="cat9000v-q200",
+        )
+        test_db.add_all([node1, node2])
+        test_db.commit()
+
+        async def fake_get_ports(agent, lab_id):
+            return []
+
+        async def fake_get_port_state(agent, lab_id):
+            return [
+                {"node_name": "vm1", "interface_name": "eth1", "ovs_port_name": "vnet-1", "vlan_tag": 201},
+                {"node_name": "vm2", "interface_name": "eth1", "ovs_port_name": "vnet-2", "vlan_tag": 202},
+            ]
+
+        monkeypatch.setattr(
+            "app.services.interface_mapping.agent_client.get_lab_ports_from_agent",
+            fake_get_ports,
+        )
+        monkeypatch.setattr(
+            "app.services.interface_mapping.agent_client.get_lab_port_state",
+            fake_get_port_state,
+        )
+
+        result = await interface_mapping.populate_node_from_agent(
+            test_db,
+            sample_lab.id,
+            node1,
+            sample_host,
+        )
+
+        assert result["created"] == 1
+        mappings = test_db.query(models.InterfaceMapping).order_by(models.InterfaceMapping.node_id).all()
+        assert len(mappings) == 1
+        assert mappings[0].node_id == node1.id
+        assert mappings[0].ovs_port == "vnet-1"

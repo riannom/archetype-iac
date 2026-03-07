@@ -266,6 +266,42 @@ class TestDeploySingleNode:
         assert "OOM killer terminated" in (ns.error_message or "")
 
     @pytest.mark.asyncio
+    async def test_start_success_requires_runtime_identity_status(self, test_db, test_user):
+        """Returns None when post-start agent status lacks required identity fields."""
+        host = _make_host(test_db)
+        lab = _make_lab(test_db, test_user, agent_id=host.id)
+        job = _make_job(test_db, lab, test_user)
+        ns = _make_node_state(test_db, lab, "n1", "R1")
+        node_def = _make_node_def(test_db, lab, "n1", "R1", "R1", host_id=host.id)
+
+        manager = _make_manager(test_db, lab, job, ["n1"], agent=host)
+        manager.db_nodes_map = {"R1": node_def}
+        manager.explicit_snapshots_map = {}
+        manager.latest_snapshots_map = {}
+        manager._manifest = None
+
+        with (
+            patch.object(manager.topo_service, "get_interface_count_map", return_value={"R1": 4}),
+            patch("app.tasks.node_lifecycle_deploy.resolve_node_image", return_value="linux:latest"),
+            patch("app.tasks.node_lifecycle_deploy.get_image_provider", return_value="docker"),
+            patch("app.tasks.node_lifecycle_deploy.lab_workspace", return_value=MagicMock()),
+            patch("app.tasks.node_lifecycle_deploy.get_device_service") as mock_ds,
+            patch("app.tasks.node_lifecycle_deploy.agent_client") as mock_ac,
+        ):
+            mock_ds.return_value.resolve_hardware_specs.return_value = {}
+            mock_ac.create_node_on_agent = AsyncMock(return_value={"success": True})
+            mock_ac.start_node_on_agent = AsyncMock(return_value={"success": True})
+            mock_ac.get_lab_status_from_agent = AsyncMock(
+                return_value={"nodes": [{"name": "R1", "node_definition_id": node_def.id}]}
+            )
+
+            result = await manager._deploy_single_node(ns)
+
+        assert result is None
+        assert ns.actual_state == NodeActualState.ERROR.value
+        assert "runtime_id" in (ns.error_message or "")
+
+    @pytest.mark.asyncio
     async def test_start_success_marks_running(self, test_db, test_user):
         """Returns node_name and marks RUNNING when create + start both succeed."""
         host = _make_host(test_db)

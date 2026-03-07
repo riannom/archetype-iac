@@ -228,10 +228,61 @@ class TestDeployNodesTopology:
             patch("app.tasks.node_lifecycle_deploy._cleanup_orphan_containers", new_callable=AsyncMock),
         ):
             mock_ac.deploy_to_agent = AsyncMock(return_value={"status": "completed"})
+            mock_ac.get_lab_status_from_agent = AsyncMock(
+                return_value={
+                    "nodes": [
+                        {
+                            "name": "R1",
+                            "node_definition_id": "n1",
+                            "runtime_id": "runtime-1",
+                        }
+                    ]
+                }
+            )
             await manager._deploy_nodes_topology([ns])
 
         assert ns.actual_state == NodeActualState.RUNNING.value
         assert ns.error_message is None
+
+    @pytest.mark.asyncio
+    async def test_success_missing_runtime_identity_marks_error(self, test_db, test_user):
+        """Topology deploy is not trusted until agent status exposes identity fields."""
+        host = _make_host(test_db)
+        lab = _make_lab(test_db, test_user, agent_id=host.id)
+        job = _make_job(test_db, lab, test_user)
+        ns = _make_node_state(test_db, lab, "n1", "R1", desired="running", actual="undeployed")
+
+        manager = _make_manager(test_db, lab, job, ["n1"], agent=host)
+        manager.node_states = [ns]
+        manager.old_agent_ids = set()
+
+        mock_graph_node = MagicMock()
+        mock_graph_node.container_name = "R1"
+        mock_graph_node.name = "R1"
+        mock_graph_node.id = "n1"
+        mock_graph = MagicMock()
+        mock_graph.nodes = [mock_graph_node]
+
+        with (
+            patch.object(manager.topo_service, "has_nodes", return_value=True),
+            patch.object(manager, "_filter_topology_for_agent", return_value=(mock_graph, {"R1"})),
+            patch.object(manager, "_validate_topology_placement", return_value=[]),
+            patch("app.tasks.node_lifecycle_deploy.graph_to_deploy_topology", return_value="{}"),
+            patch("app.tasks.node_lifecycle_deploy.agent_client") as mock_ac,
+            patch("app.tasks.node_lifecycle_deploy.acquire_deploy_lock", return_value=(True, [])),
+            patch("app.tasks.node_lifecycle_deploy.release_deploy_lock"),
+            patch("app.tasks.node_lifecycle_deploy._update_node_placements", new_callable=AsyncMock),
+            patch("app.tasks.node_lifecycle_deploy._capture_node_ips", new_callable=AsyncMock),
+            patch("app.tasks.node_lifecycle_deploy._cleanup_orphan_containers", new_callable=AsyncMock),
+        ):
+            mock_ac.deploy_to_agent = AsyncMock(return_value={"status": "completed"})
+            mock_ac.get_lab_status_from_agent = AsyncMock(
+                return_value={"nodes": [{"name": "R1", "node_definition_id": "n1"}]}
+            )
+            await manager._deploy_nodes_topology([ns])
+
+        assert ns.actual_state == NodeActualState.ERROR.value
+        assert "runtime_id" in (ns.error_message or "")
 
     @pytest.mark.asyncio
     async def test_no_topology_sets_error(self, test_db, test_user):
@@ -392,6 +443,17 @@ class TestStartNodesPerNode:
             mock_ds.return_value.resolve_hardware_specs.return_value = {}
             mock_ac.create_node_on_agent = AsyncMock(return_value={"success": True})
             mock_ac.start_node_on_agent = AsyncMock(return_value={"success": True})
+            mock_ac.get_lab_status_from_agent = AsyncMock(
+                return_value={
+                    "nodes": [
+                        {
+                            "name": "R1",
+                            "node_definition_id": node_def.id,
+                            "runtime_id": "runtime-1",
+                        }
+                    ]
+                }
+            )
             mock_ac.create_link_on_agent = AsyncMock(return_value={"success": True})
             await manager._start_nodes([ns])
 

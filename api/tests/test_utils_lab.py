@@ -15,7 +15,13 @@ from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from app import models
-from app.utils.lab import get_lab_or_404, get_lab_provider, update_lab_state, update_lab_provider_from_nodes
+from app.utils.lab import (
+    get_lab_or_404,
+    get_lab_provider,
+    recompute_lab_state,
+    update_lab_state,
+    update_lab_provider_from_nodes,
+)
 
 
 class TestGetLabProvider:
@@ -493,6 +499,29 @@ class TestUpdateLabStateEdgeCases:
         assert sample_lab.agent_id == sample_host.id
         assert sample_lab.state_error == "Complete failure with all params"
         assert sample_lab.state_updated_at is not None
+
+
+class TestRecomputeLabState:
+    def test_clears_stale_lab_error_when_nodes_are_running(self, test_db: Session, sample_lab: models.Lab):
+        sample_lab.state = "error"
+        sample_lab.state_error = "Job sync failed"
+        node_state = models.NodeState(
+            lab_id=sample_lab.id,
+            node_id="node-1",
+            node_name="R1",
+            desired_state="running",
+            actual_state="running",
+            is_ready=True,
+        )
+        test_db.add(node_state)
+        test_db.commit()
+
+        result = recompute_lab_state(test_db, sample_lab.id)
+
+        test_db.refresh(sample_lab)
+        assert result == "running"
+        assert sample_lab.state == "running"
+        assert sample_lab.state_error is None
 
 
 class TestUpdateLabStateWithMultipleLabs:

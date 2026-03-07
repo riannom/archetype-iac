@@ -69,6 +69,7 @@ class TestCreateNodePreSync:
         provider._node_precheck_sync = MagicMock(
             return_value=(True, "abc123", NodeStatus.RUNNING),
         )
+        provider._running_domain_identity_visible = MagicMock(return_value=True)
         provider._disks_dir = MagicMock(return_value=Path("/tmp/disks"))
 
         result = provider._create_node_pre_sync(
@@ -81,6 +82,23 @@ class TestCreateNodePreSync:
         assert result.node_name == "r1"
         assert result.new_status == NodeStatus.RUNNING
         assert "already running" in result.stdout
+
+    def test_already_running_without_metadata_visibility_returns_error(self):
+        provider = _make_provider()
+        provider._node_precheck_sync = MagicMock(
+            return_value=(True, "abc123", NodeStatus.RUNNING),
+        )
+        provider._running_domain_identity_visible = MagicMock(return_value=False)
+        provider._disks_dir = MagicMock(return_value=Path("/tmp/disks"))
+
+        result = provider._create_node_pre_sync(
+            "lab1", "r1", "arch-lab1-r1", Path("/tmp/ws"),
+            node_definition_id="node-def-1",
+        )
+
+        assert result is not None
+        assert result.success is False
+        assert "metadata-backed status" in (result.error or "")
 
     def test_not_running_returns_none(self):
         provider = _make_provider()

@@ -30,6 +30,35 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["links"])
 
 
+async def _resolve_ovs_port_live(
+    lab_id: str,
+    node_name: str,
+    interface_name: str,
+) -> OVSPortInfo | None:
+    """Try the live interface details path before giving up on an endpoint.
+
+    This reuses the same provider-aware `read_from_ovs=true` probe exposed to
+    the controller. It helps when cached/container-specific lookup paths are
+    stale but the live interface endpoint can still resolve the current OVS
+    port from the running runtime.
+    """
+    from agent.routers.interfaces import get_interface_vlan
+
+    details = await get_interface_vlan(
+        lab_id=lab_id,
+        node=node_name,
+        interface=interface_name,
+        read_from_ovs=True,
+    )
+    if not details.ovs_port_name:
+        return None
+    return OVSPortInfo(
+        port_name=details.ovs_port_name,
+        vlan_tag=details.vlan_tag or 0,
+        provider="live",
+    )
+
+
 def _split_link_id_candidates(link_id: str) -> list[tuple[str, str, str, str]]:
     """Parse link_id into endpoint candidates.
 
@@ -134,6 +163,15 @@ async def create_link(lab_id: str, link: LinkCreate) -> LinkCreateResponse:
         # Resolve OVS ports for both endpoints (provider-agnostic)
         port_a = await _resolve_ovs_port(lab_id, link.source_node, link.source_interface)
         port_b = await _resolve_ovs_port(lab_id, link.target_node, link.target_interface)
+
+        if not port_a:
+            port_a = await _resolve_ovs_port_live(
+                lab_id, link.source_node, link.source_interface,
+            )
+        if not port_b:
+            port_b = await _resolve_ovs_port_live(
+                lab_id, link.target_node, link.target_interface,
+            )
 
         if not port_a:
             return LinkCreateResponse(

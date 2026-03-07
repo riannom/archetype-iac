@@ -33,9 +33,16 @@ async def test_populate_from_agent_creates_and_updates(test_db, sample_lab, samp
     async def fake_get_ports(agent, lab_id):
         return ports
 
+    async def fake_get_port_state(agent, lab_id):
+        return []
+
     monkeypatch.setattr(
         "app.services.interface_mapping.agent_client.get_lab_ports_from_agent",
         fake_get_ports,
+    )
+    monkeypatch.setattr(
+        "app.services.interface_mapping.agent_client.get_lab_port_state",
+        fake_get_port_state,
     )
 
     result = await interface_mapping.populate_from_agent(test_db, sample_lab.id, sample_host)
@@ -110,3 +117,58 @@ def test_update_vlan_tag(test_db, sample_lab) -> None:
         .first()
     )
     assert updated.vlan_tag == 200
+
+
+@pytest.mark.asyncio
+async def test_populate_from_agent_uses_port_state_for_libvirt_nodes(
+    test_db, sample_lab, sample_host, monkeypatch,
+) -> None:
+    node = models.Node(
+        lab_id=sample_lab.id,
+        gui_id="vm1",
+        display_name="vm1",
+        container_name="vm1",
+        node_type="device",
+        device="cat9000v-q200",
+    )
+    test_db.add(node)
+    test_db.commit()
+
+    async def fake_get_ports(agent, lab_id):
+        return []
+
+    async def fake_get_port_state(agent, lab_id):
+        return [
+            {
+                "node_name": "vm1",
+                "interface_name": "eth1",
+                "ovs_port_name": "vnet306",
+                "vlan_tag": 256,
+            },
+        ]
+
+    monkeypatch.setattr(
+        "app.services.interface_mapping.agent_client.get_lab_ports_from_agent",
+        fake_get_ports,
+    )
+    monkeypatch.setattr(
+        "app.services.interface_mapping.agent_client.get_lab_port_state",
+        fake_get_port_state,
+    )
+
+    result = await interface_mapping.populate_from_agent(test_db, sample_lab.id, sample_host)
+
+    assert result["created"] == 1
+    mapping = (
+        test_db.query(models.InterfaceMapping)
+        .filter(
+            models.InterfaceMapping.lab_id == sample_lab.id,
+            models.InterfaceMapping.node_id == node.id,
+            models.InterfaceMapping.linux_interface == "eth1",
+        )
+        .first()
+    )
+    assert mapping is not None
+    assert mapping.ovs_port == "vnet306"
+    assert mapping.vlan_tag == 256
+    assert mapping.last_verified_at is not None

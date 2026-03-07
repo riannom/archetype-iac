@@ -1010,6 +1010,131 @@ def get_node_interfaces(
     )
 
 
+@router.get("/labs/{lab_id}/nodes/{node_id}/interface-diagnostics")
+async def get_node_interface_diagnostics(
+    lab_id: str,
+    node_id: str,
+    database: Session = Depends(db.get_db),
+    current_user: models.User = Depends(get_current_user),
+) -> schemas.NodeInterfaceDiagnosticResponse:
+    """Return controller + agent diagnostics for a node's runtime and interfaces."""
+    get_lab_or_404(lab_id, database, current_user)
+
+    node = (
+        database.query(models.Node)
+        .filter(models.Node.lab_id == lab_id, models.Node.gui_id == node_id)
+        .first()
+    )
+    if not node:
+        raise_not_found("Node not found")
+
+    node_state = (
+        database.query(models.NodeState)
+        .filter(models.NodeState.lab_id == lab_id, models.NodeState.node_definition_id == node.id)
+        .first()
+    )
+    placement = (
+        database.query(models.NodePlacement)
+        .filter(models.NodePlacement.lab_id == lab_id, models.NodePlacement.node_definition_id == node.id)
+        .first()
+    )
+    host = (
+        database.query(models.Host)
+        .filter(models.Host.id == placement.host_id)
+        .first()
+        if placement
+        else None
+    )
+
+    mappings = (
+        database.query(models.InterfaceMapping)
+        .filter(
+            models.InterfaceMapping.lab_id == lab_id,
+            models.InterfaceMapping.node_id == node.id,
+        )
+        .all()
+    )
+
+    links: list[schemas.NodeLinkDiagnosticOut] = []
+    link_rows = (
+        database.query(models.LinkState)
+        .filter(models.LinkState.lab_id == lab_id)
+        .all()
+    )
+    for ls in link_rows:
+        if ls.source_node == node.container_name:
+            links.append(
+                schemas.NodeLinkDiagnosticOut(
+                    link_name=ls.link_name,
+                    local_interface=ls.source_interface,
+                    peer_node=ls.target_node,
+                    peer_interface=ls.target_interface,
+                    desired_state=ls.desired_state,
+                    actual_state=ls.actual_state,
+                    error_message=ls.error_message,
+                )
+            )
+        elif ls.target_node == node.container_name:
+            links.append(
+                schemas.NodeLinkDiagnosticOut(
+                    link_name=ls.link_name,
+                    local_interface=ls.target_interface,
+                    peer_node=ls.source_node,
+                    peer_interface=ls.source_interface,
+                    desired_state=ls.desired_state,
+                    actual_state=ls.actual_state,
+                    error_message=ls.error_message,
+                )
+            )
+
+    agent_status = None
+    live_ports: list[schemas.LivePortStateOut] = []
+    agent_error = None
+    if host and host.status == HostStatus.ONLINE.value:
+        try:
+            status_result = await _pkg().agent_client.get_lab_status_from_agent(host, lab_id)
+            for runtime_node in status_result.get("nodes", []) or []:
+                if runtime_node.get("name") == node.container_name:
+                    agent_status = schemas.NodeRuntimeIdentityOut(
+                        name=runtime_node.get("name"),
+                        provider=runtime_node.get("provider"),
+                        actual_state=runtime_node.get("state"),
+                        node_definition_id=runtime_node.get("node_definition_id"),
+                        runtime_id=runtime_node.get("runtime_id"),
+                    )
+                    break
+
+            port_state = await _pkg().agent_client.get_lab_port_state(host, lab_id)
+            for port in port_state or []:
+                if port.get("node_name") == node.container_name:
+                    live_ports.append(
+                        schemas.LivePortStateOut(
+                            interface_name=port.get("interface_name"),
+                            ovs_port_name=port.get("ovs_port_name"),
+                            vlan_tag=port.get("vlan_tag"),
+                        )
+                    )
+        except Exception as exc:
+            agent_error = str(exc)
+
+    return schemas.NodeInterfaceDiagnosticResponse(
+        lab_id=lab_id,
+        node_id=node.gui_id,
+        node_name=node.container_name,
+        host_id=host.id if host else None,
+        host_name=host.name if host else None,
+        placement_status=placement.status if placement else None,
+        controller_actual_state=node_state.actual_state if node_state else None,
+        controller_is_ready=node_state.is_ready if node_state else None,
+        controller_runtime_id=placement.runtime_id if placement else None,
+        agent_status=agent_status,
+        live_ports=live_ports,
+        interface_mappings=[schemas.InterfaceMappingOut.model_validate(m) for m in mappings],
+        links=links,
+        agent_error=agent_error,
+    )
+
+
 @router.post("/labs/{lab_id}/interface-mappings/sync")
 async def sync_interface_mappings(
     lab_id: str,
@@ -1030,6 +1155,58 @@ async def sync_interface_mappings(
         updated=result["updated"],
         errors=result["errors"],
         agents_queried=result["agents_queried"],
+    )
+
+
+@router.post("/labs/{lab_id}/nodes/{node_id}/interface-mappings/sync")
+async def sync_node_interface_mappings(
+    lab_id: str,
+    node_id: str,
+    database: Session = Depends(db.get_db),
+    current_user: models.User = Depends(get_current_user),
+) -> schemas.InterfaceMappingSyncResponse:
+    """Refresh interface mappings for one node from its current host's live data."""
+    get_lab_or_404(lab_id, database, current_user)
+
+    node = (
+        database.query(models.Node)
+        .filter(models.Node.lab_id == lab_id, models.Node.gui_id == node_id)
+        .first()
+    )
+    if not node:
+        raise_not_found("Node not found")
+
+    placement = (
+        database.query(models.NodePlacement)
+        .filter(
+            models.NodePlacement.lab_id == lab_id,
+            models.NodePlacement.node_definition_id == node.id,
+        )
+        .first()
+    )
+    if not placement:
+        raise HTTPException(status_code=409, detail="Node has no placement to refresh")
+
+    agent = (
+        database.query(models.Host)
+        .filter(models.Host.id == placement.host_id)
+        .first()
+    )
+    if not agent or agent.status != HostStatus.ONLINE.value:
+        raise HTTPException(status_code=409, detail="Node host is offline or unavailable")
+
+    result = await _pkg().interface_mapping_service.populate_node_from_agent(
+        database,
+        lab_id,
+        node,
+        agent,
+    )
+
+    return schemas.InterfaceMappingSyncResponse(
+        created=result["created"],
+        updated=result["updated"],
+        errors=result["errors"],
+        agents_queried=1,
     )
 
 

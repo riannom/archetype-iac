@@ -45,10 +45,13 @@ from app.schemas.lab import (
     LinkStateUpdate,
     NodeEventPayload,
     NodeEventResponse,
+    NodeInterfaceDiagnosticResponse,
     NodeInventoryEntry,
+    NodeLinkDiagnosticOut,
     NodeLayout,
     NodePlacement,
     NodeReadinessOut,
+    NodeRuntimeIdentityOut,
     NodeStateOut,
     NodeStatesResponse,
     NodeStateUpdate,
@@ -57,6 +60,7 @@ from app.schemas.lab import (
     TopologyAnalysis,
     TopologyGraph,
     VxlanTunnelDetail,
+    LivePortStateOut,
 )
 
 from app.schemas.users import (
@@ -190,10 +194,13 @@ __all__ = [
     "LinkStateUpdate",
     "NodeEventPayload",
     "NodeEventResponse",
+    "NodeInterfaceDiagnosticResponse",
     "NodeInventoryEntry",
+    "NodeLinkDiagnosticOut",
     "NodeLayout",
     "NodePlacement",
     "NodeReadinessOut",
+    "NodeRuntimeIdentityOut",
     "NodeStateOut",
     "NodeStatesResponse",
     "NodeStateUpdate",
@@ -202,6 +209,7 @@ __all__ = [
     "TopologyAnalysis",
     "TopologyGraph",
     "VxlanTunnelDetail",
+    "LivePortStateOut",
     # users.py
     "AuditLogOut",
     "AuditLogsResponse",

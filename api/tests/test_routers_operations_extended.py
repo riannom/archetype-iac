@@ -529,6 +529,131 @@ class TestSyncInterfaceMappings:
         )
         assert resp.status_code == 404
 
+    def test_sync_node_success(
+        self, test_client, auth_headers, sample_lab, test_db, sample_host, monkeypatch
+    ):
+        """Node-scoped sync uses the placement host and returns counts."""
+        node = _make_node(test_db, sample_lab.id, "nd1", "n1", "R1", "R1")
+        placement = models.NodePlacement(
+            lab_id=sample_lab.id,
+            node_name=node.display_name,
+            node_definition_id=node.id,
+            host_id=sample_host.id,
+            status="deployed",
+        )
+        test_db.add(placement)
+        test_db.commit()
+
+        mock_svc = MagicMock()
+        mock_svc.populate_node_from_agent = AsyncMock(
+            return_value={"created": 1, "updated": 0, "errors": 0, "skipped": 0}
+        )
+        monkeypatch.setattr("app.routers.labs.interface_mapping_service", mock_svc)
+
+        resp = test_client.post(
+            f"/labs/{sample_lab.id}/nodes/{node.gui_id}/interface-mappings/sync",
+            headers=auth_headers,
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["created"] == 1
+        assert data["updated"] == 0
+        assert data["agents_queried"] == 1
+
+    def test_sync_node_requires_placement(
+        self, test_client, auth_headers, sample_lab, test_db, monkeypatch
+    ):
+        """Node-scoped sync returns conflict when no placement exists."""
+        node = _make_node(test_db, sample_lab.id, "nd1", "n1", "R1", "R1")
+        mock_svc = MagicMock()
+        monkeypatch.setattr("app.routers.labs.interface_mapping_service", mock_svc)
+
+        resp = test_client.post(
+            f"/labs/{sample_lab.id}/nodes/{node.gui_id}/interface-mappings/sync",
+            headers=auth_headers,
+        )
+        assert resp.status_code == 409
+
+
+class TestNodeInterfaceDiagnostics:
+    def test_returns_controller_and_agent_diagnostics(
+        self, test_client, auth_headers, sample_lab, test_db, sample_host, monkeypatch
+    ):
+        node = _make_node(test_db, sample_lab.id, "nd1", "n1", "R1", "R1")
+        node_state = models.NodeState(
+            lab_id=sample_lab.id,
+            node_id=node.gui_id,
+            node_name=node.container_name,
+            node_definition_id=node.id,
+            desired_state="running",
+            actual_state="running",
+            is_ready=True,
+        )
+        placement = models.NodePlacement(
+            lab_id=sample_lab.id,
+            node_name=node.container_name,
+            node_definition_id=node.id,
+            host_id=sample_host.id,
+            runtime_id="runtime-1",
+            status="deployed",
+        )
+        mapping = models.InterfaceMapping(
+            id="map-1",
+            lab_id=sample_lab.id,
+            node_id=node.id,
+            linux_interface="eth1",
+            ovs_port="vnet1",
+            ovs_bridge="arch-ovs",
+            vlan_tag=2051,
+        )
+        link = models.LinkState(
+            id="ls-1",
+            lab_id=sample_lab.id,
+            link_name="R1:eth1-R2:eth1",
+            source_node="R1",
+            source_interface="eth1",
+            target_node="R2",
+            target_interface="eth1",
+            desired_state="up",
+            actual_state="error",
+            error_message="Endpoint not found",
+        )
+        test_db.add_all([node_state, placement, mapping, link])
+        test_db.commit()
+
+        mock_agent_client = MagicMock()
+        mock_agent_client.get_lab_status_from_agent = AsyncMock(
+            return_value={
+                "nodes": [
+                    {
+                        "name": "R1",
+                        "provider": "libvirt",
+                        "state": "running",
+                        "node_definition_id": node.id,
+                        "runtime_id": "runtime-1",
+                    }
+                ]
+            }
+        )
+        mock_agent_client.get_lab_port_state = AsyncMock(
+            return_value=[
+                {"node_name": "R1", "interface_name": "eth1", "ovs_port_name": "vnet1", "vlan_tag": 2051}
+            ]
+        )
+        monkeypatch.setattr("app.routers.labs.agent_client", mock_agent_client)
+
+        resp = test_client.get(
+            f"/labs/{sample_lab.id}/nodes/{node.gui_id}/interface-diagnostics",
+            headers=auth_headers,
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["controller_actual_state"] == "running"
+        assert data["controller_runtime_id"] == "runtime-1"
+        assert data["agent_status"]["node_definition_id"] == node.id
+        assert data["live_ports"][0]["ovs_port_name"] == "vnet1"
+        assert data["links"][0]["actual_state"] == "error"
+
 
 # ============================================================================
 # GET /labs/{lab_id}/infra/notifications

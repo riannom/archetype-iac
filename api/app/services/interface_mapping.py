@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import logging
 import re
+from datetime import datetime, timezone
 from uuid import uuid4
 
 from sqlalchemy.orm import Session
@@ -22,6 +23,124 @@ from app import agent_client, models
 from app.services.interface_naming import normalize_interface, denormalize_interface
 
 logger = logging.getLogger(__name__)
+
+
+def _merge_agent_ports(
+    docker_ports: list[dict] | None,
+    port_state: list[dict] | None,
+    result: dict[str, int],
+    *,
+    allowed_node_names: set[str] | None = None,
+) -> dict[tuple[str, str], dict]:
+    """Merge Docker inventory and live port-state into a per-interface view."""
+    merged_ports: dict[tuple[str, str], dict] = {}
+
+    # Deduplicate ports by (container, interface) — agent may return
+    # duplicate entries for the same interface with different OVS ports
+    for port in docker_ports or []:
+        container_name = port.get("container")
+        linux_interface = port.get("interface")
+        if not container_name or not linux_interface:
+            result["skipped"] += 1
+            continue
+        runtime_name = container_name
+        match = re.match(r'archetype-[a-f0-9-]+-(.+)$', runtime_name)
+        node_name = match.group(1) if match else runtime_name
+        if allowed_node_names is not None and node_name not in allowed_node_names:
+            continue
+        merged_ports[(node_name, linux_interface)] = {
+            "node_name": node_name,
+            "runtime_name": runtime_name,
+            "linux_interface": linux_interface,
+            "ovs_port": port.get("port_name"),
+            "ovs_bridge": port.get("bridge_name"),
+            "vlan_tag": port.get("vlan_tag"),
+        }
+
+    # Port-state uses topology node names and includes libvirt VM ports.
+    # Prefer it over Docker plugin inventory whenever both exist.
+    for port in port_state or []:
+        node_name = port.get("node_name")
+        linux_interface = port.get("interface_name")
+        if not node_name or not linux_interface:
+            result["skipped"] += 1
+            continue
+        if allowed_node_names is not None and node_name not in allowed_node_names:
+            continue
+        merged_ports[(node_name, linux_interface)] = {
+            "node_name": node_name,
+            "runtime_name": node_name,
+            "linux_interface": linux_interface,
+            "ovs_port": port.get("ovs_port_name"),
+            "ovs_bridge": "arch-ovs",
+            "vlan_tag": port.get("vlan_tag"),
+        }
+
+    return merged_ports
+
+
+def _upsert_interface_mappings(
+    database: Session,
+    lab_id: str,
+    nodes: list[models.Node],
+    merged_ports: dict[tuple[str, str], dict],
+    result: dict[str, int],
+) -> None:
+    """Upsert InterfaceMapping rows from merged live agent port data."""
+    node_by_container = {n.container_name: n for n in nodes}
+    node_by_display = {n.display_name: n for n in nodes}
+    now = datetime.now(timezone.utc)
+
+    for (_key_name, linux_interface), port in merged_ports.items():
+        runtime_name = port.get("runtime_name") or port.get("node_name") or ""
+        node_name = port.get("node_name") or runtime_name
+
+        node = (
+            node_by_container.get(node_name)
+            or node_by_display.get(node_name)
+            or node_by_container.get(runtime_name)
+        )
+        if not node:
+            logger.debug(f"No node found for runtime {runtime_name} (tried: {node_name})")
+            result["skipped"] += 1
+            continue
+
+        device_type = node.device
+        vendor_interface = linux_to_vendor_interface(linux_interface, device_type)
+
+        existing = (
+            database.query(models.InterfaceMapping)
+            .filter(
+                models.InterfaceMapping.lab_id == lab_id,
+                models.InterfaceMapping.node_id == node.id,
+                models.InterfaceMapping.linux_interface == linux_interface,
+            )
+            .first()
+        )
+
+        if existing:
+            existing.ovs_port = port.get("ovs_port")
+            existing.ovs_bridge = port.get("ovs_bridge")
+            existing.vlan_tag = port.get("vlan_tag")
+            existing.vendor_interface = vendor_interface
+            existing.device_type = device_type
+            existing.last_verified_at = now
+            result["updated"] += 1
+        else:
+            mapping = models.InterfaceMapping(
+                id=str(uuid4()),
+                lab_id=lab_id,
+                node_id=node.id,
+                ovs_port=port.get("ovs_port"),
+                ovs_bridge=port.get("ovs_bridge"),
+                vlan_tag=port.get("vlan_tag"),
+                linux_interface=linux_interface,
+                vendor_interface=vendor_interface,
+                device_type=device_type,
+                last_verified_at=now,
+            )
+            database.add(mapping)
+            result["created"] += 1
 
 
 def linux_to_vendor_interface(linux_if: str, device_type: str | None) -> str | None:
@@ -72,6 +191,8 @@ async def populate_from_agent(
     database: Session,
     lab_id: str,
     agent: models.Host,
+    *,
+    target_node: models.Node | None = None,
 ) -> dict:
     """Fetch port info from agent and populate interface_mappings.
 
@@ -85,85 +206,38 @@ async def populate_from_agent(
     """
     result = {"created": 0, "updated": 0, "errors": 0, "skipped": 0}
 
-    # Get port info from agent
-    ports = await agent_client.get_lab_ports_from_agent(agent, lab_id)
-    if not ports:
+    nodes_q = database.query(models.Node).filter(models.Node.lab_id == lab_id)
+    if target_node is not None:
+        nodes_q = nodes_q.filter(models.Node.id == target_node.id)
+    nodes = nodes_q.all()
+    if not nodes:
+        logger.debug(f"No nodes found for interface mapping sync in lab {lab_id}")
+        return result
+
+    allowed_node_names: set[str] | None = None
+    if target_node is not None:
+        allowed_node_names = {
+            value for value in (target_node.display_name, target_node.container_name)
+            if value
+        }
+
+    # Merge provider-specific and provider-agnostic feeds.
+    # Docker OVS plugin inventory is useful for bridge/container naming, but
+    # agent port-state is the authoritative source for live VM endpoint data.
+    docker_ports = await agent_client.get_lab_ports_from_agent(agent, lab_id) or []
+    port_state = await agent_client.get_lab_port_state(agent, lab_id) or []
+
+    if not docker_ports and not port_state:
         logger.debug(f"No ports returned from agent {agent.name} for lab {lab_id}")
         return result
 
-    # Get node definitions for this lab to map container -> node_id
-    nodes = (
-        database.query(models.Node)
-        .filter(models.Node.lab_id == lab_id)
-        .all()
+    merged_ports = _merge_agent_ports(
+        docker_ports,
+        port_state,
+        result,
+        allowed_node_names=allowed_node_names,
     )
-    node_by_container = {n.container_name: n for n in nodes}
-
-    # Deduplicate ports by (container, interface) — agent may return
-    # duplicate entries for the same interface with different OVS ports
-    deduped_ports: dict[tuple[str, str], dict] = {}
-    for port in ports:
-        container_name = port.get("container")
-        linux_interface = port.get("interface")
-        if not container_name or not linux_interface:
-            result["skipped"] += 1
-            continue
-        deduped_ports[(container_name, linux_interface)] = port
-
-    for (container_name, linux_interface), port in deduped_ports.items():
-        # Strip container name prefix (archetype-{lab_id}-{node_name})
-        # The prefix format uses first 20 chars of lab_id (what fits in container naming limits)
-        # Use regex to extract node name more reliably
-        node_name = container_name
-        match = re.match(r'archetype-[a-f0-9-]+-(.+)$', container_name)
-        if match:
-            node_name = match.group(1)
-
-        # Find node definition
-        node = node_by_container.get(node_name)
-        if not node:
-            logger.debug(f"No node found for container {container_name} (tried: {node_name})")
-            result["skipped"] += 1
-            continue
-
-        # Compute vendor interface name
-        device_type = node.device
-        vendor_interface = linux_to_vendor_interface(linux_interface, device_type)
-
-        # Check if mapping exists
-        existing = (
-            database.query(models.InterfaceMapping)
-            .filter(
-                models.InterfaceMapping.lab_id == lab_id,
-                models.InterfaceMapping.node_id == node.id,
-                models.InterfaceMapping.linux_interface == linux_interface,
-            )
-            .first()
-        )
-
-        if existing:
-            # Update existing mapping
-            existing.ovs_port = port.get("port_name")
-            existing.ovs_bridge = port.get("bridge_name")
-            existing.vlan_tag = port.get("vlan_tag")
-            existing.vendor_interface = vendor_interface
-            existing.device_type = device_type
-            result["updated"] += 1
-        else:
-            # Create new mapping
-            mapping = models.InterfaceMapping(
-                id=str(uuid4()),
-                lab_id=lab_id,
-                node_id=node.id,
-                ovs_port=port.get("port_name"),
-                ovs_bridge=port.get("bridge_name"),
-                vlan_tag=port.get("vlan_tag"),
-                linux_interface=linux_interface,
-                vendor_interface=vendor_interface,
-                device_type=device_type,
-            )
-            database.add(mapping)
-            result["created"] += 1
+    _upsert_interface_mappings(database, lab_id, nodes, merged_ports, result)
 
     database.commit()
     logger.info(
@@ -172,6 +246,21 @@ async def populate_from_agent(
         f"skipped={result['skipped']}"
     )
     return result
+
+
+async def populate_node_from_agent(
+    database: Session,
+    lab_id: str,
+    node: models.Node,
+    agent: models.Host,
+) -> dict:
+    """Refresh interface mappings for a single node from live agent data."""
+    return await populate_from_agent(
+        database,
+        lab_id,
+        agent,
+        target_node=node,
+    )
 
 
 async def populate_all_agents(

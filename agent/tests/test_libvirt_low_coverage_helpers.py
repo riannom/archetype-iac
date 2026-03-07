@@ -1419,7 +1419,7 @@ def test_start_node_sync_branches(monkeypatch):
 @pytest.mark.asyncio
 async def test_start_node_wrapper_paths():
     provider = _make_provider()
-    provider._run_libvirt = AsyncMock(return_value=("already_running", None, None))
+    provider._run_libvirt = AsyncMock(side_effect=[("already_running", None, None), True])
     res1 = await provider.start_node("lab1", "r1", Path("/tmp/ws"))
     assert res1.success is True
     assert "already running" in (res1.stdout or "")
@@ -1434,6 +1434,17 @@ async def test_start_node_wrapper_paths():
     res3 = await provider.start_node("lab1", "r1", Path("/tmp/ws"))
     assert res3.success is True
     provider._set_vm_tap_mtu.assert_awaited_once_with("lab1", "r1")
+
+
+@pytest.mark.asyncio
+async def test_start_node_already_running_but_not_metadata_visible():
+    provider = _make_provider()
+    provider._run_libvirt = AsyncMock(side_effect=[("already_running", None, None), False])
+
+    result = await provider.start_node("lab1", "r1", Path("/tmp/ws"))
+
+    assert result.success is False
+    assert "metadata-backed status" in (result.error or "")
 
 
 def test_remove_vm_sync_cleans_resources(monkeypatch, tmp_path):
@@ -1515,6 +1526,11 @@ async def test_stop_node_wrapper_paths(monkeypatch):
 
 def test_create_node_pre_and_define_sync(monkeypatch, tmp_path):
     provider = _make_provider()
+    monkeypatch.setattr(
+        provider,
+        "_running_domain_identity_visible",
+        lambda *_args, **_kwargs: True,
+    )
     monkeypatch.setattr(
         provider,
         "_node_precheck_sync",
