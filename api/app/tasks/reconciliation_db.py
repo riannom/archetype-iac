@@ -77,6 +77,7 @@ def _apply_runtime_identity_decision(
     node_name: str,
     node_definition_id: str,
     observed_runtime_id: str | None,
+    replacement_expected: bool = False,
 ) -> bool:
     """Apply the runtime identity decision table to a placement.
 
@@ -119,7 +120,7 @@ def _apply_runtime_identity_decision(
             placement.status = "deployed"
         return False
 
-    if placement.status == "starting":
+    if placement.status == "starting" or replacement_expected:
         _record_runtime_identity_observation(
             "runtime_replaced",
             lab_id=lab_id,
@@ -832,6 +833,15 @@ async def _do_reconcile_lab(session, lab, lab_id: str) -> int:
             .filter(models.NodeState.lab_id == lab_id)
             .all()
         )
+        starting_node_names = {
+            node_runtime_name_by_id.get(ns.node_definition_id, ns.node_name)
+            for ns in node_states
+            if ns.actual_state == NodeActualState.STARTING.value
+        }
+        node_states_by_runtime_name = {
+            node_runtime_name_by_id.get(ns.node_definition_id, ns.node_name): ns
+            for ns in node_states
+        }
 
         running_count = 0
         stopped_count = 0
@@ -1167,6 +1177,7 @@ async def _do_reconcile_lab(session, lab, lab_id: str) -> int:
                     node_name=node_name,
                     node_definition_id=node_def.id,
                     observed_runtime_id=observed_runtime_id,
+                    replacement_expected=node_name in starting_node_names,
                 )
                 if (
                     not placement_is_drifted

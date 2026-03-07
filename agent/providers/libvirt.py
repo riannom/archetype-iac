@@ -948,6 +948,26 @@ class LibvirtProvider(Provider, VlanPersistenceMixin):
             node_definition_id=metadata.get("node_definition_id"),
         )
 
+    def _running_domain_identity_visible(
+        self,
+        domain_name: str,
+        lab_id: str,
+        node_name: str,
+        node_definition_id: str | None = None,
+    ) -> bool:
+        """Verify a running domain is visible through metadata-backed status."""
+        try:
+            domain = self.conn.lookupByName(domain_name)
+        except libvirt.libvirtError:
+            return False
+
+        node = self._node_from_domain(domain, self._lab_prefix(lab_id))
+        if node is None or node.name != node_name:
+            return False
+        if node_definition_id and node.node_definition_id != node_definition_id:
+            return False
+        return True
+
     async def deploy(
         self,
         lab_id: str,
@@ -1436,6 +1456,22 @@ class LibvirtProvider(Provider, VlanPersistenceMixin):
         status, _kind, error = await self._run_libvirt(self._start_node_sync, domain_name)
 
         if status == "already_running":
+            visible = await self._run_libvirt(
+                self._running_domain_identity_visible,
+                domain_name,
+                lab_id,
+                node_name,
+                None,
+            )
+            if not visible:
+                return NodeActionResult(
+                    success=False,
+                    node_name=node_name,
+                    error=(
+                        f"Domain {domain_name} is running but not visible through "
+                        "metadata-backed status"
+                    ),
+                )
             return NodeActionResult(
                 success=True,
                 node_name=node_name,
@@ -1685,6 +1721,7 @@ class LibvirtProvider(Provider, VlanPersistenceMixin):
         node_name: str,
         domain_name: str,
         workspace: Path,
+        node_definition_id: str | None = None,
     ) -> NodeActionResult | None:
         """Pre-create: recover state, check existing domain — libvirt thread.
 
@@ -1695,6 +1732,20 @@ class LibvirtProvider(Provider, VlanPersistenceMixin):
             lab_id, node_name, domain_name, workspace, disks_dir,
         )
         if already_running:
+            if not self._running_domain_identity_visible(
+                domain_name,
+                lab_id,
+                node_name,
+                node_definition_id,
+            ):
+                return NodeActionResult(
+                    success=False,
+                    node_name=node_name,
+                    error=(
+                        f"Domain {domain_name} is running but not visible through "
+                        "metadata-backed status"
+                    ),
+                )
             return NodeActionResult(
                 success=True,
                 node_name=node_name,
@@ -1746,7 +1797,12 @@ class LibvirtProvider(Provider, VlanPersistenceMixin):
         try:
             # Phase 1: recovery + existing check (libvirt thread)
             early = await self._run_libvirt(
-                self._create_node_pre_sync, lab_id, node_name, domain_name, workspace,
+                self._create_node_pre_sync,
+                lab_id,
+                node_name,
+                domain_name,
+                workspace,
+                node_definition_id,
             )
             if early is not None:
                 return early
@@ -2595,7 +2651,7 @@ class LibvirtProvider(Provider, VlanPersistenceMixin):
     ) -> ReadinessResult:
         """Check if a VM has finished booting and is ready."""
         domain_name = self._domain_name(lab_id, node_name)
-        return await _check_readiness(
+        result = await _check_readiness(
             lab_id, node_name, kind,
             domain_name=domain_name,
             uri=self._uri,
@@ -2617,6 +2673,18 @@ class LibvirtProvider(Provider, VlanPersistenceMixin):
             admin_password_completed=self._n9kv_admin_password_completed,
             conn=self.conn,
         )
+        if result.is_ready:
+            node_vlans = self.get_node_vlans(lab_id, node_name)
+            if node_vlans:
+                ovs_port = await self.get_vm_interface_port(lab_id, node_name, 0)
+                if not ovs_port:
+                    return ReadinessResult(
+                        is_ready=False,
+                        message="Waiting for data interface attachment",
+                        progress_percent=95,
+                        details="eth1 OVS port not yet resolvable",
+                    )
+        return result
 
     @staticmethod
     def _check_tcp_port(host: str, port: int, timeout: float) -> bool:

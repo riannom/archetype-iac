@@ -468,12 +468,11 @@ async def refresh_interface_mappings(
 
     result = {"updated": 0, "created": 0}
 
-    # Find all labs with active links that need verification
-    # Include both same-host and cross-host links so InterfaceMapping
-    # stays fresh for cross-host port convergence.
+    # Find all desired-up links, not only healthy ones.
+    # Broken links still need fresh InterfaceMapping data so VM OVS port
+    # changes can be detected and repaired after restart/recovery.
     links_q = session.query(models.LinkState).filter(
         models.LinkState.desired_state == "up",
-        models.LinkState.actual_state.in_(["up", "creating", "connecting"]),
     )
     if lab_id is not None:
         links_q = links_q.filter(models.LinkState.lab_id == lab_id)

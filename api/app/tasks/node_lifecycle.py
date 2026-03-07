@@ -35,6 +35,7 @@ from app.state import (
 )
 from app.utils.async_tasks import safe_create_task
 from app.utils.job import broadcast_job_progress
+from app.utils.lab import recompute_lab_state
 from app.utils.time import utcnow
 
 logger = logging.getLogger(__name__)
@@ -144,6 +145,7 @@ class NodeLifecycleManager(AgentResolutionMixin, DeploymentMixin, StopMixin):
 
         # Topology graph — loaded once in _filter_topology_for_agent, reused
         self.graph = None
+        self.post_operation_cleanup_failed = False
 
     # Known device types for bounded Prometheus labels.
     # Loaded dynamically from agent vendor registry; hardcoded fallback for
@@ -1240,6 +1242,7 @@ class NodeLifecycleManager(AgentResolutionMixin, DeploymentMixin, StopMixin):
                 self.session.rollback()
             except Exception:
                 pass
+            self.post_operation_cleanup_failed = True
             logger.warning(f"Post-op link reconciliation failed for lab {self.lab.id}: {e}")
             self.log_parts.append(f"WARNING: Post-op link reconciliation failed: {e}")
 
@@ -1264,6 +1267,7 @@ class NodeLifecycleManager(AgentResolutionMixin, DeploymentMixin, StopMixin):
                     self.session, host_to_agent, lab_id=self.lab.id,
                 )
         except Exception as e:
+            self.post_operation_cleanup_failed = True
             logger.warning(
                 "Post-op convergence failed for lab %s: %s", self.lab.id, e,
             )
@@ -1320,14 +1324,24 @@ class NodeLifecycleManager(AgentResolutionMixin, DeploymentMixin, StopMixin):
             for ns in self.node_states
             if ns.actual_state == NodeActualState.ERROR.value
         )
+        if self.post_operation_cleanup_failed:
+            error_count += 1
 
         if error_count > 0:
             self.job.status = JobStatus.FAILED.value
             self.log_parts.append(f"\nCompleted with {error_count} error(s)")
+            if self.post_operation_cleanup_failed:
+                self.log_parts.append(
+                    "Post-operation state settlement failed; node/link state may be stale"
+                )
             await broadcast_job_progress(
                 self.lab.id, self.job.id, self.job.action,
                 "failed",
-                error_message=f"Node sync failed: {error_count} error(s)",
+                error_message=(
+                    "Post-operation state settlement failed"
+                    if self.post_operation_cleanup_failed and error_count == 1
+                    else f"Node sync failed: {error_count} error(s)"
+                ),
             )
         else:
             self.job.status = JobStatus.COMPLETED.value
@@ -1345,6 +1359,7 @@ class NodeLifecycleManager(AgentResolutionMixin, DeploymentMixin, StopMixin):
 
         self.job.completed_at = utcnow()
         self.job.log_path = "\n".join(self.log_parts)
+        recompute_lab_state(self.session, self.lab.id, commit=False)
         self.session.commit()
         duration = (
             (self.job.completed_at - self.job.started_at).total_seconds()

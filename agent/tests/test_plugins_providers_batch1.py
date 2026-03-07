@@ -530,17 +530,6 @@ def test_libvirt_generate_domain_xml(monkeypatch, tmp_path: Path) -> None:
     overlay.touch()
     data_volume.touch()
 
-    class _FixedUUID:
-        def __init__(self) -> None:
-            self.calls = 0
-
-        def __call__(self):
-            self.calls += 1
-            return "00000000-0000-0000-0000-000000000000"
-
-    fixed_uuid = _FixedUUID()
-    monkeypatch.setattr(libvirt_provider.uuid, "uuid4", fixed_uuid)
-
     xml = provider._generate_domain_xml(
         "arch-lab-node1",
         {
@@ -562,6 +551,7 @@ def test_libvirt_generate_domain_xml(monkeypatch, tmp_path: Path) -> None:
     assert "<name>arch-lab-node1</name>" in xml
     assert "<domain type='kvm'>" in xml
     assert "<memory unit='MiB'>1024</memory>" in xml
+    assert "<uuid>" in xml
     assert "arch-ovs-test" in xml
     assert "<tag id='100'/>" in xml
     assert "<archetype:kind>ceos</archetype:kind>" in xml
@@ -642,7 +632,7 @@ def test_libvirt_generate_domain_xml_efi_stateless(monkeypatch, tmp_path: Path) 
     assert "<loader " not in xml
     assert "<nvram " not in xml
     assert "<qemu:commandline>" in xml
-    assert "if=pflash,format=raw,readonly=on,file=/usr/share/OVMF/OVMF_CODE.fd" in xml
+    assert "if=pflash,format=raw,readonly=on,file=/usr/share/OVMF/OVMF_CODE" in xml
     assert "xmlns:qemu='http://libvirt.org/schemas/domain/qemu/1.0'" in xml
 
 
@@ -907,6 +897,17 @@ async def test_libvirt_check_readiness_ssh_console_waits_for_management_ip(monke
     class DummyCfg:
         readiness_probe = "ssh"
     monkeypatch.setattr(libvirt_provider, "get_libvirt_config", lambda _kind: DummyCfg())
+    monkeypatch.setattr(
+        libvirt_provider,
+        "_check_readiness",
+        AsyncMock(
+            return_value=libvirt_provider.ReadinessResult(
+                is_ready=False,
+                message="Waiting for management IP",
+                progress_percent=30,
+            )
+        ),
+    )
 
     result = await provider.check_readiness("lab", "node1", "cisco_n9kv")
 
@@ -961,6 +962,17 @@ async def test_libvirt_check_readiness_ssh_console_marks_ready_when_ssh_open(mon
     class DummyCfg:
         readiness_probe = "ssh"
     monkeypatch.setattr(libvirt_provider, "get_libvirt_config", lambda _kind: DummyCfg())
+    monkeypatch.setattr(
+        libvirt_provider,
+        "_check_readiness",
+        AsyncMock(
+            return_value=libvirt_provider.ReadinessResult(
+                is_ready=True,
+                message="SSH ready on 192.0.2.10:22",
+                progress_percent=100,
+            )
+        ),
+    )
 
     result = await provider.check_readiness("lab", "node1", "cisco_n9kv")
 
@@ -1012,16 +1024,17 @@ async def test_libvirt_check_readiness_ssh_console_uses_probe_when_not_ssh_readi
         "_get_vm_management_ip",
         AsyncMock(return_value=None),
     )
-
-    class DummyProbe:
-        async def check(self, _node_name):
-            return libvirt_provider.ReadinessResult(
+    monkeypatch.setattr(
+        libvirt_provider,
+        "_check_readiness",
+        AsyncMock(
+            return_value=libvirt_provider.ReadinessResult(
                 is_ready=True,
                 message="Boot complete",
                 progress_percent=100,
             )
-
-    monkeypatch.setattr(libvirt_provider, "get_libvirt_probe", lambda *args, **kwargs: DummyProbe())
+        ),
+    )
 
     result = await provider.check_readiness("lab", "node1", "cat9000v-q200")
 
@@ -1030,9 +1043,83 @@ async def test_libvirt_check_readiness_ssh_console_uses_probe_when_not_ssh_readi
 
 
 @pytest.mark.asyncio
+async def test_libvirt_check_readiness_waits_for_data_interface_attachment(monkeypatch) -> None:
+    provider = _make_libvirt_provider()
+
+    class DummyLibvirt:
+        VIR_DOMAIN_RUNNING = 1
+
+        class libvirtError(Exception):
+            pass
+
+    class DummyDomain:
+        def state(self):
+            return (DummyLibvirt.VIR_DOMAIN_RUNNING, 0)
+
+        def XMLDesc(self):
+            return "<domain/>"
+
+    class DummyConn:
+        def lookupByName(self, _name):
+            return DummyDomain()
+
+    monkeypatch.setattr(libvirt_provider, "libvirt", DummyLibvirt)
+    monkeypatch.setattr(
+        libvirt_provider.LibvirtProvider,
+        "conn",
+        property(lambda self: DummyConn()),
+    )
+    monkeypatch.setattr(
+        libvirt_provider.LibvirtProvider,
+        "_domain_name",
+        lambda self, _lab_id, _node_name: "arch-lab-node1",
+    )
+    monkeypatch.setattr(libvirt_provider, "get_console_method", lambda _kind: "ssh")
+
+    class DummyCfg:
+        readiness_probe = "log_pattern"
+
+    monkeypatch.setattr(libvirt_provider, "get_libvirt_config", lambda _kind: DummyCfg())
+    monkeypatch.setattr(
+        libvirt_provider.LibvirtProvider,
+        "_get_vm_management_ip",
+        AsyncMock(return_value=None),
+    )
+    monkeypatch.setattr(
+        libvirt_provider.LibvirtProvider,
+        "get_node_vlans",
+        lambda self, _lab_id, _node_name: [2051],
+    )
+    monkeypatch.setattr(
+        libvirt_provider.LibvirtProvider,
+        "get_vm_interface_port",
+        AsyncMock(return_value=None),
+    )
+    monkeypatch.setattr(
+        libvirt_provider,
+        "_check_readiness",
+        AsyncMock(
+            return_value=libvirt_provider.ReadinessResult(
+                is_ready=True,
+                message="Boot complete",
+                progress_percent=100,
+            )
+        ),
+    )
+
+    result = await provider.check_readiness("lab", "node1", "cat9000v-q200")
+
+    assert result.is_ready is False
+    assert result.progress_percent == 95
+    assert result.message == "Waiting for data interface attachment"
+    assert result.details == "eth1 OVS port not yet resolvable"
+
+
+@pytest.mark.asyncio
 async def test_libvirt_check_readiness_n9kv_loader_recovery_respects_cooldown(monkeypatch) -> None:
     provider = _make_libvirt_provider()
     monkeypatch.setattr(libvirt_provider.settings, "n9kv_boot_modifications_enabled", True, raising=False)
+    import agent.providers.libvirt_readiness as libvirt_readiness
 
     class DummyLibvirt:
         VIR_DOMAIN_RUNNING = 1
@@ -1063,11 +1150,14 @@ async def test_libvirt_check_readiness_n9kv_loader_recovery_respects_cooldown(mo
         lambda self, _lab_id, _node_name: "arch-lab-node1",
     )
     monkeypatch.setattr(libvirt_provider, "get_console_method", lambda _kind: "virsh")
+    monkeypatch.setitem(sys.modules, "libvirt", DummyLibvirt)
+    monkeypatch.setattr(libvirt_readiness, "get_console_method", lambda _kind: "virsh")
 
     class DummyCfg:
         readiness_probe = "log_pattern"
 
     monkeypatch.setattr(libvirt_provider, "get_libvirt_config", lambda _kind: DummyCfg())
+    monkeypatch.setattr(libvirt_readiness, "get_libvirt_config", lambda _kind: DummyCfg())
 
     class DummyProbe:
         async def check(self, _node_name):
@@ -1078,7 +1168,11 @@ async def test_libvirt_check_readiness_n9kv_loader_recovery_respects_cooldown(mo
                 details="console_reason=pexpect_output; markers=loader_prompt; tail=loader >",
             )
 
-    monkeypatch.setattr(libvirt_provider, "get_libvirt_probe", lambda *args, **kwargs: DummyProbe())
+    monkeypatch.setattr(
+        libvirt_readiness,
+        "get_libvirt_probe",
+        lambda *args, **kwargs: DummyProbe(),
+    )
 
     import agent.console_extractor as console_extractor
 
@@ -1111,6 +1205,7 @@ async def test_libvirt_check_readiness_n9kv_loader_recovery_respects_cooldown(mo
 async def test_libvirt_check_readiness_n9kv_loader_recovery_skipped_when_boot_mods_disabled(monkeypatch) -> None:
     provider = _make_libvirt_provider()
     monkeypatch.setattr(libvirt_provider.settings, "n9kv_boot_modifications_enabled", False, raising=False)
+    import agent.providers.libvirt_readiness as libvirt_readiness
 
     class DummyLibvirt:
         VIR_DOMAIN_RUNNING = 1
@@ -1141,11 +1236,14 @@ async def test_libvirt_check_readiness_n9kv_loader_recovery_skipped_when_boot_mo
         lambda self, _lab_id, _node_name: "arch-lab-node1",
     )
     monkeypatch.setattr(libvirt_provider, "get_console_method", lambda _kind: "virsh")
+    monkeypatch.setitem(sys.modules, "libvirt", DummyLibvirt)
+    monkeypatch.setattr(libvirt_readiness, "get_console_method", lambda _kind: "virsh")
 
     class DummyCfg:
         readiness_probe = "log_pattern"
 
     monkeypatch.setattr(libvirt_provider, "get_libvirt_config", lambda _kind: DummyCfg())
+    monkeypatch.setattr(libvirt_readiness, "get_libvirt_config", lambda _kind: DummyCfg())
 
     class DummyProbe:
         async def check(self, _node_name):
@@ -1156,7 +1254,11 @@ async def test_libvirt_check_readiness_n9kv_loader_recovery_skipped_when_boot_mo
                 details="console_reason=pexpect_output; markers=loader_prompt; tail=loader >",
             )
 
-    monkeypatch.setattr(libvirt_provider, "get_libvirt_probe", lambda *args, **kwargs: DummyProbe())
+    monkeypatch.setattr(
+        libvirt_readiness,
+        "get_libvirt_probe",
+        lambda *args, **kwargs: DummyProbe(),
+    )
 
     calls = {"count": 0}
 
@@ -1164,7 +1266,7 @@ async def test_libvirt_check_readiness_n9kv_loader_recovery_skipped_when_boot_mo
         calls["count"] += 1
         return "sent"
 
-    monkeypatch.setattr(provider, "_run_n9kv_loader_recovery", _fake_recovery)
+    monkeypatch.setattr(libvirt_readiness, "run_n9kv_loader_recovery", _fake_recovery)
 
     result = await provider.check_readiness("lab", "node1", "cisco_n9kv")
 

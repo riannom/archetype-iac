@@ -77,6 +77,47 @@ def get_device_service():
 class DeploymentMixin:
     """Mixin providing deploy/start/stop methods for NodeLifecycleManager."""
 
+    async def _verify_runtime_identity_status(
+        self,
+        node_names: list[str] | set[str],
+    ) -> dict[str, str]:
+        """Verify newly started nodes are visible via agent status with identity fields."""
+        requested_names = list(node_names)
+        if not requested_names:
+            return {}
+
+        try:
+            status_result = await agent_client.get_lab_status_from_agent(self.agent, self.lab.id)
+        except Exception as exc:
+            return {
+                node_name: f"Status verification failed after start: {exc}"
+                for node_name in requested_names
+            }
+
+        status_nodes = status_result.get("nodes", []) or []
+        status_by_name = {
+            node.get("name"): node
+            for node in status_nodes
+            if node.get("name")
+        }
+
+        failures: dict[str, str] = {}
+        for node_name in requested_names:
+            db_node = self.db_nodes_map.get(node_name)
+            expected_runtime_name = (
+                db_node.container_name if db_node and db_node.container_name else node_name
+            )
+            status_node = status_by_name.get(expected_runtime_name) or status_by_name.get(node_name)
+            if not status_node:
+                failures[node_name] = "Agent status missing node after start"
+                continue
+            if db_node and status_node.get("node_definition_id") != db_node.id:
+                failures[node_name] = "Agent status missing expected node_definition_id after start"
+                continue
+            if not status_node.get("runtime_id"):
+                failures[node_name] = "Agent status missing runtime_id after start"
+        return failures
+
     async def _deploy_nodes(self, nodes_need_deploy: list[models.NodeState]):
         """Deploy nodes — dispatches to per-node or topology path."""
         if settings.per_node_lifecycle_enabled:
@@ -179,6 +220,9 @@ class DeploymentMixin:
 
             if result.get("status") == "completed":
                 self.log_parts.append("Deploy completed successfully")
+                identity_failures = await self._verify_runtime_identity_status(
+                    list(deployed_node_names)
+                )
                 await _capture_node_ips(
                     self.session, self.lab.id, self.agent
                 )
@@ -217,11 +261,18 @@ class DeploymentMixin:
                     for ns in all_states
                     if ns.desired_state == NodeDesiredState.STOPPED.value
                     and ns.node_name in deployed_node_names
+                    and ns.node_name not in identity_failures
                 ]
 
                 # Mark deployed nodes as running
                 for ns in all_states:
-                    if ns.node_name in deployed_node_names:
+                    if ns.node_name in identity_failures:
+                        ns.actual_state = NodeActualState.ERROR.value
+                        ns.error_message = identity_failures[ns.node_name]
+                        self.log_parts.append(
+                            f"  {ns.node_name}: STATUS VERIFY FAILED - {ns.error_message}"
+                        )
+                    elif ns.node_name in deployed_node_names:
                         ns.actual_state = NodeActualState.RUNNING.value
                         ns.error_message = None
                         if not ns.boot_started_at:
@@ -660,6 +711,13 @@ class DeploymentMixin:
             )
 
             if start_result.get("success"):
+                identity_failures = await self._verify_runtime_identity_status([ns.node_name])
+                if identity_failures:
+                    error_msg = identity_failures[ns.node_name]
+                    ns.actual_state = NodeActualState.ERROR.value
+                    ns.error_message = error_msg
+                    self.log_parts.append(f"  {ns.node_name}: STATUS VERIFY FAILED - {error_msg}")
+                    return None
                 ns.actual_state = NodeActualState.RUNNING.value
                 ns.error_message = None
                 ns.boot_started_at = utcnow()

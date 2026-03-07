@@ -5,10 +5,13 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
 from fastapi import HTTPException
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app import models
 from app.enums import LabRole
+from app.services.state_machine import LabStateMachine
+from app.state import LabState, NodeActualState
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -212,3 +215,49 @@ def update_lab_state(
         elif state not in ("error", "unknown"):
             lab.state_error = None  # Clear error on success
         session.commit()
+
+
+def recompute_lab_state(
+    session: Session,
+    lab_id: str,
+    *,
+    commit: bool = True,
+) -> str | None:
+    """Recompute lab state from current NodeState rows."""
+    lab = session.get(models.Lab, lab_id)
+    if not lab:
+        return None
+
+    state_counts = (
+        session.query(
+            models.NodeState.actual_state,
+            func.count(models.NodeState.id).label("count"),
+        )
+        .filter(models.NodeState.lab_id == lab_id)
+        .group_by(models.NodeState.actual_state)
+        .all()
+    )
+    counts = {state: count for state, count in state_counts}
+
+    new_state = LabStateMachine.compute_lab_state(
+        running_count=counts.get(NodeActualState.RUNNING.value, 0),
+        stopped_count=counts.get(NodeActualState.STOPPED.value, 0)
+        + counts.get(NodeActualState.EXITED.value, 0),
+        undeployed_count=counts.get(NodeActualState.UNDEPLOYED.value, 0),
+        error_count=counts.get(NodeActualState.ERROR.value, 0),
+        pending_count=counts.get(NodeActualState.PENDING.value, 0),
+        starting_count=counts.get(NodeActualState.STARTING.value, 0),
+        stopping_count=counts.get(NodeActualState.STOPPING.value, 0),
+    )
+
+    lab.state = new_state.value
+    lab.state_updated_at = datetime.now(timezone.utc)
+    if new_state == LabState.ERROR:
+        error_count = counts.get(NodeActualState.ERROR.value, 0)
+        lab.state_error = f"{error_count} node(s) in error state"
+    else:
+        lab.state_error = None
+
+    if commit:
+        session.commit()
+    return lab.state

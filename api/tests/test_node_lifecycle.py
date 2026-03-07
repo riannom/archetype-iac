@@ -1132,6 +1132,9 @@ class TestDeployNodes:
              patch("app.tasks.node_lifecycle_deploy.settings") as mock_settings:
             mock_settings.per_node_lifecycle_enabled = False
             mock_ac.deploy_to_agent = AsyncMock(return_value={"status": "completed"})
+            mock_ac.get_lab_status_from_agent = AsyncMock(return_value={
+                "nodes": [{"name": "R1", "node_definition_id": node_def.id, "runtime_id": "runtime-r1"}]
+            })
             await manager._deploy_nodes([ns])
 
         assert ns.actual_state == NodeActualState.RUNNING.value
@@ -1358,6 +1361,27 @@ class TestFinalize:
         assert ns.error_message is None
         assert ns.enforcement_attempts == 0
 
+    @pytest.mark.asyncio
+    async def test_finalize_recomputes_lab_state_from_current_nodes(self, test_db, test_user):
+        """Successful finalize clears stale lab-level error residue."""
+        host = _make_host(test_db)
+        lab = _make_lab(test_db, test_user, agent_id=host.id)
+        lab.state = "error"
+        lab.state_error = "Old job failed"
+        job = _make_job(test_db, lab, test_user)
+        ns = _make_node_state(test_db, lab, "n1", "R1", desired="running", actual="running")
+        test_db.commit()
+
+        manager = _make_manager(test_db, lab, job, [ns.node_id], agent=host)
+        manager.node_states = [ns]
+
+        result = await manager._finalize()
+        test_db.refresh(lab)
+
+        assert result.success is True
+        assert lab.state == "running"
+        assert lab.state_error is None
+
 
 # ---------------------------------------------------------------------------
 # Full execute() orchestration
@@ -1406,6 +1430,9 @@ class TestExecuteOrchestration:
         mock_ac.ping_agent = AsyncMock(return_value=True)
         mock_ac.get_healthy_agent = AsyncMock(return_value=None)
         mock_ac.deploy_to_agent = AsyncMock(return_value={"status": "completed"})
+        mock_ac.get_lab_status_from_agent = AsyncMock(return_value={
+            "nodes": [{"name": "R1", "node_definition_id": node_def.id, "runtime_id": "runtime-r1"}]
+        })
         mock_ac.check_node_readiness = AsyncMock(return_value={"is_ready": True})
         mock_settings = MagicMock()
         mock_settings.resource_validation_enabled = False
@@ -1512,6 +1539,9 @@ class TestExecuteOrchestration:
         mock_ac.ping_agent = AsyncMock(return_value=True)
         mock_ac.get_healthy_agent = AsyncMock(return_value=None)
         mock_ac.deploy_to_agent = AsyncMock(return_value={"status": "completed"})
+        mock_ac.get_lab_status_from_agent = AsyncMock(return_value={
+            "nodes": [{"name": "R1", "node_definition_id": node_def1.id, "runtime_id": "runtime-r1"}]
+        })
         mock_ac.check_node_readiness = AsyncMock(return_value={"is_ready": True})
         mock_ac.reconcile_nodes_on_agent = AsyncMock(return_value={
             "results": [{"container_name": container_name_r2, "success": True}]
@@ -1697,6 +1727,9 @@ class TestDeployNodesPerNode:
              patch.object(manager, "_connect_same_host_links", new_callable=AsyncMock):
             mock_ac.create_node_on_agent = AsyncMock(return_value={"success": True})
             mock_ac.start_node_on_agent = AsyncMock(return_value={"success": True})
+            mock_ac.get_lab_status_from_agent = AsyncMock(return_value={
+                "nodes": [{"name": "R1", "node_definition_id": node_def.id, "runtime_id": "runtime-r1"}]
+            })
             await manager._deploy_nodes_per_node([ns])
 
         assert ns.actual_state == NodeActualState.RUNNING.value
@@ -1808,6 +1841,9 @@ class TestDeployNodesPerNode:
              patch.object(manager, "_connect_same_host_links", new_callable=AsyncMock) as mock_links:
             mock_ac.create_node_on_agent = AsyncMock(return_value={"success": True})
             mock_ac.start_node_on_agent = AsyncMock(return_value={"success": True})
+            mock_ac.get_lab_status_from_agent = AsyncMock(return_value={
+                "nodes": [{"name": "R1", "node_definition_id": node_def.id, "runtime_id": "runtime-r1"}]
+            })
             await manager._deploy_nodes_per_node([ns])
 
         # Links connected incrementally during deploy and at the end
@@ -1842,6 +1878,9 @@ class TestStartNodesPerNode:
              patch.object(manager, "_connect_same_host_links", new_callable=AsyncMock):
             mock_ac.start_node_on_agent = AsyncMock(return_value={"success": True})
             mock_ac.create_node_on_agent = AsyncMock(return_value={"success": True})
+            mock_ac.get_lab_status_from_agent = AsyncMock(return_value={
+                "nodes": [{"name": "R1", "node_definition_id": node_def.id, "runtime_id": "runtime-r1"}]
+            })
             # deploy_to_agent should NOT be called
             mock_ac.deploy_to_agent = AsyncMock()
             await manager._start_nodes_per_node([ns])
@@ -1904,6 +1943,9 @@ class TestStartNodesPerNode:
              patch.object(manager, "_connect_same_host_links", new_callable=AsyncMock) as mock_links:
             mock_ac.start_node_on_agent = AsyncMock(return_value={"success": True})
             mock_ac.create_node_on_agent = AsyncMock(return_value={"success": True})
+            mock_ac.get_lab_status_from_agent = AsyncMock(return_value={
+                "nodes": [{"name": "R1", "node_definition_id": node_def.id, "runtime_id": "runtime-r1"}]
+            })
             await manager._start_nodes_per_node([ns])
 
         # Links connected incrementally during deploy and at the end
@@ -2466,10 +2508,13 @@ class TestAgentOfflineDuringDeploy:
              patch("app.tasks.jobs._update_node_placements", new_callable=AsyncMock), \
              patch("app.tasks.jobs._capture_node_ips", new_callable=AsyncMock), \
              patch.object(manager.topo_service, "get_interface_count_map", return_value={}), \
-             patch.object(manager, "_connect_same_host_links", new_callable=AsyncMock), \
-             patch("app.tasks.node_lifecycle_deploy.asyncio.sleep", new_callable=AsyncMock):
+            patch.object(manager, "_connect_same_host_links", new_callable=AsyncMock), \
+            patch("app.tasks.node_lifecycle_deploy.asyncio.sleep", new_callable=AsyncMock):
             mock_ac.create_node_on_agent = mock_create
             mock_ac.start_node_on_agent = AsyncMock(return_value={"success": True})
+            mock_ac.get_lab_status_from_agent = AsyncMock(return_value={
+                "nodes": [{"name": "R1", "node_definition_id": node_def1.id, "runtime_id": "runtime-r1"}]
+            })
             await manager._deploy_nodes_per_node([ns1, ns2])
 
         # First node deployed successfully, second failed
@@ -2568,6 +2613,9 @@ class TestDeployRetry:
              patch("app.tasks.node_lifecycle_deploy.asyncio.sleep", new_callable=AsyncMock):
             mock_ac.create_node_on_agent = mock_create
             mock_ac.start_node_on_agent = AsyncMock(return_value={"success": True})
+            mock_ac.get_lab_status_from_agent = AsyncMock(return_value={
+                "nodes": [{"name": "R1", "node_definition_id": node_def.id, "runtime_id": "runtime-r1"}]
+            })
             result = await manager._deploy_single_node_with_retry(ns)
 
         assert result == "R1"
@@ -3024,3 +3072,24 @@ class TestPostOperationCleanup:
             "Post-op link reconciliation failed" in line
             for line in manager.log_parts
         )
+        assert manager.post_operation_cleanup_failed is True
+
+
+class TestFinalizePostOperationFailure:
+    @pytest.mark.asyncio
+    async def test_finalize_fails_when_post_operation_cleanup_failed(self, test_db, test_user):
+        host = _make_host(test_db)
+        lab = _make_lab(test_db, test_user, agent_id=host.id)
+        job = _make_job(test_db, lab, test_user)
+        ns = _make_node_state(test_db, lab, "n1", "R1", desired="running", actual="running")
+
+        manager = _make_manager(test_db, lab, job, [ns.node_id], agent=host)
+        manager.node_states = [ns]
+        manager.post_operation_cleanup_failed = True
+
+        result = await manager._finalize()
+
+        assert result.success is False
+        assert result.error_count == 1
+        assert job.status == JobStatus.FAILED.value
+        assert any("state settlement failed" in line.lower() for line in manager.log_parts)

@@ -232,6 +232,35 @@ class TestCreateLink:
         assert data["success"] is False
         assert "r2" in data["error"]
 
+    def test_live_interface_fallback_resolves_missing_source(self, client: TestClient, monkeypatch):
+        """If cached resolution fails, live interface probe can still create the link."""
+        port_b = OVSPortInfo(port_name="vh2", vlan_tag=200, provider="docker")
+
+        async def fake_resolve(lab_id, node, iface):
+            return None if node == "r1" else port_b
+
+        async def fake_live(lab_id, node_name, interface_name):
+            if node_name == "r1":
+                return OVSPortInfo(port_name="vh-live", vlan_tag=111, provider="live")
+            return None
+
+        async def fake_alloc(bridge):
+            return 2050
+
+        async def fake_set_vlan(port_name, vlan_tag):
+            return True
+
+        monkeypatch.setattr("agent.routers.links._resolve_ovs_port", fake_resolve)
+        monkeypatch.setattr("agent.routers.links._resolve_ovs_port_live", fake_live)
+        monkeypatch.setattr("agent.routers.links._ovs_allocate_link_vlan", fake_alloc)
+        monkeypatch.setattr("agent.routers.links._ovs_set_port_vlan", fake_set_vlan)
+
+        resp = client.post("/labs/lab-1/links", json=self._link_body())
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["success"] is True
+        assert data["link"]["source_ovs_port"] == "vh-live"
+
     def test_no_free_vlan(self, client: TestClient, monkeypatch):
         """No available VLAN should return error."""
         port_a = OVSPortInfo(port_name="vh1", vlan_tag=100, provider="docker")

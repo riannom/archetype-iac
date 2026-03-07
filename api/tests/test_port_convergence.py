@@ -13,6 +13,7 @@ import pytest
 
 from app import models
 import app.tasks.link_reconciliation as link_reconciliation
+from app.tasks.reconciliation_db import _apply_runtime_identity_decision
 
 
 # ─── Helpers ──────────────────────────────────────────────────────────────
@@ -219,6 +220,46 @@ async def test_refresh_updates_existing_mappings(test_db, sample_lab, sample_hos
     assert mapping.ovs_port == "vh-new456"
     assert mapping.vlan_tag == 200
     assert mapping.last_verified_at is not None
+
+
+@pytest.mark.asyncio
+async def test_refresh_updates_mappings_for_error_links(test_db, sample_lab, sample_host):
+    """Broken desired-up links still refresh InterfaceMapping records."""
+    node = _make_node(test_db, sample_lab.id, "R1", host_id=sample_host.id)
+    mapping = _make_interface_mapping(
+        test_db, sample_lab.id, node.id, "eth1", "vh-stale", vlan_tag=50,
+    )
+    _make_same_host_link(
+        test_db, sample_lab.id, "R1:eth1-R2:eth1",
+        host_id=sample_host.id,
+        actual_state="error",
+    )
+    test_db.commit()
+
+    host_to_agent = {sample_host.id: sample_host}
+    mock_ports = [
+        {
+            "node_name": "R1",
+            "interface_name": "eth1",
+            "ovs_port_name": "vh-live",
+            "vlan_tag": 200,
+        },
+    ]
+
+    with patch.object(
+        link_reconciliation.agent_client,
+        "get_lab_port_state",
+        new_callable=AsyncMock,
+        return_value=mock_ports,
+    ):
+        result = await link_reconciliation.refresh_interface_mappings(
+            test_db, host_to_agent
+        )
+
+    assert result["updated"] == 1
+    test_db.refresh(mapping)
+    assert mapping.ovs_port == "vh-live"
+    assert mapping.vlan_tag == 200
 
 
 @pytest.mark.asyncio
@@ -730,3 +771,156 @@ async def test_cross_host_convergence_skips_when_mappings_still_missing(
     mock_repair.assert_not_awaited()
     mock_set_vlan.assert_not_awaited()
     assert result == {"updated": 0, "errors": 0}
+
+
+@pytest.mark.asyncio
+async def test_libvirt_restart_recovery_flow_repairs_same_and_cross_host_links(
+    test_db, sample_lab, multiple_hosts,
+):
+    """Controller recovery flow adopts new runtime ID and converges repaired VM ports."""
+    host_a, host_b = multiple_hosts[0], multiple_hosts[1]
+    node_vm = _make_node(
+        test_db, sample_lab.id, "vm1", host_id=host_a.id, container_name="vm1"
+    )
+    node_r2 = _make_node(
+        test_db, sample_lab.id, "r2", host_id=host_a.id, container_name="r2"
+    )
+    node_r3 = _make_node(
+        test_db, sample_lab.id, "r3", host_id=host_b.id, container_name="r3"
+    )
+
+    placement = models.NodePlacement(
+        lab_id=sample_lab.id,
+        node_name="vm1",
+        node_definition_id=node_vm.id,
+        host_id=host_a.id,
+        status="deployed",
+        runtime_id="runtime-old",
+    )
+    test_db.add(placement)
+
+    _make_interface_mapping(
+        test_db, sample_lab.id, node_vm.id, "eth1", "vnet-old1", vlan_tag=999,
+    )
+    _make_interface_mapping(
+        test_db, sample_lab.id, node_vm.id, "eth2", "vnet-old2", vlan_tag=998,
+    )
+    _make_interface_mapping(
+        test_db, sample_lab.id, node_r2.id, "eth1", "vh-r2", vlan_tag=2051,
+    )
+    _make_interface_mapping(
+        test_db, sample_lab.id, node_r3.id, "eth1", "vh-r3", vlan_tag=998,
+    )
+
+    _make_same_host_link(
+        test_db,
+        sample_lab.id,
+        "vm1:eth1-r2:eth1",
+        host_id=host_a.id,
+        source_node="vm1",
+        target_node="r2",
+        vlan_tag=2051,
+        actual_state="up",
+    )
+    _make_cross_host_link(
+        test_db,
+        sample_lab.id,
+        "vm1:eth2-r3:eth1",
+        source_host_id=host_a.id,
+        target_host_id=host_b.id,
+        source_node="vm1",
+        source_interface="eth2",
+        target_node="r3",
+        target_interface="eth1",
+        source_vlan_tag=2052,
+        target_vlan_tag=2052,
+        actual_state="up",
+    )
+    test_db.commit()
+
+    drifted = _apply_runtime_identity_decision(
+        placement,
+        lab_id=sample_lab.id,
+        agent_id=host_a.id,
+        node_name="vm1",
+        node_definition_id=node_vm.id,
+        observed_runtime_id="runtime-new",
+        replacement_expected=True,
+    )
+    test_db.commit()
+    assert drifted is False
+    assert placement.runtime_id == "runtime-new"
+
+    host_to_agent = {host_a.id: host_a, host_b.id: host_b}
+
+    async def _ports_for_agent(agent, _lab_id):
+        if agent.id == host_a.id:
+            return [
+                {"node_name": "vm1", "interface_name": "eth1", "ovs_port_name": "vnet-new1", "vlan_tag": 2051},
+                {"node_name": "vm1", "interface_name": "eth2", "ovs_port_name": "vnet-new2", "vlan_tag": 2052},
+                {"node_name": "r2", "interface_name": "eth1", "ovs_port_name": "vh-r2", "vlan_tag": 2051},
+            ]
+        return []
+
+    captured_same_host = {}
+
+    async def _capture_pairings(agent, pairings):
+        captured_same_host[agent.id] = pairings
+        return {"results": [{"status": "converged", "link_name": p["link_name"]} for p in pairings]}
+
+    with patch.object(
+        link_reconciliation.agent_client,
+        "get_lab_port_state",
+        new_callable=AsyncMock,
+        side_effect=_ports_for_agent,
+    ):
+        refresh_result = await link_reconciliation.refresh_interface_mappings(
+            test_db, host_to_agent
+        )
+
+    assert refresh_result["updated"] >= 3
+
+    vm_eth1 = (
+        test_db.query(models.InterfaceMapping)
+        .filter(
+            models.InterfaceMapping.lab_id == sample_lab.id,
+            models.InterfaceMapping.node_id == node_vm.id,
+            models.InterfaceMapping.linux_interface == "eth1",
+        )
+        .first()
+    )
+    vm_eth2 = (
+        test_db.query(models.InterfaceMapping)
+        .filter(
+            models.InterfaceMapping.lab_id == sample_lab.id,
+            models.InterfaceMapping.node_id == node_vm.id,
+            models.InterfaceMapping.linux_interface == "eth2",
+        )
+        .first()
+    )
+    assert vm_eth1.ovs_port == "vnet-new1"
+    assert vm_eth2.ovs_port == "vnet-new2"
+
+    with patch.object(
+        link_reconciliation,
+        "declare_port_state_on_agent",
+        side_effect=_capture_pairings,
+    ) as mock_same_host, patch.object(
+        link_reconciliation.agent_client,
+        "set_port_vlan_on_agent",
+        new_callable=AsyncMock,
+        return_value=True,
+    ) as mock_set_vlan:
+        same_result = await link_reconciliation.run_same_host_convergence(
+            test_db, host_to_agent
+        )
+        cross_result = await link_reconciliation.run_cross_host_port_convergence(
+            test_db, host_to_agent
+        )
+
+    assert mock_same_host.await_count == 1
+    assert captured_same_host[host_a.id][0]["port_a"] == "vnet-new1"
+    assert captured_same_host[host_a.id][0]["port_b"] == "vh-r2"
+    assert same_result[host_a.id]["converged"] == 1
+    assert mock_set_vlan.await_count == 1
+    assert cross_result == {"updated": 1, "errors": 0}

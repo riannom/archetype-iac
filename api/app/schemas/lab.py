@@ -5,6 +5,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, ConfigDict, model_validator
 
+from app.schemas.agents import InterfaceMappingOut
+
 
 class LabCreate(BaseModel):
     name: str
@@ -450,6 +452,55 @@ class LabReadinessResponse(BaseModel):
     total_count: int
     running_count: int
     nodes: list[NodeReadinessOut]
+
+
+class NodeRuntimeIdentityOut(BaseModel):
+    """Agent-reported runtime identity for a node."""
+
+    name: str
+    provider: str | None = None
+    actual_state: str | None = None
+    node_definition_id: str | None = None
+    runtime_id: str | None = None
+
+
+class LivePortStateOut(BaseModel):
+    """Live port-state view from the agent."""
+
+    interface_name: str
+    ovs_port_name: str | None = None
+    vlan_tag: int | None = None
+
+
+class NodeLinkDiagnosticOut(BaseModel):
+    """Link-state detail scoped to a specific node."""
+
+    link_name: str
+    local_interface: str
+    peer_node: str
+    peer_interface: str
+    desired_state: str
+    actual_state: str
+    error_message: str | None = None
+
+
+class NodeInterfaceDiagnosticResponse(BaseModel):
+    """Controller + agent diagnostic bundle for one node's interfaces/runtime."""
+
+    lab_id: str
+    node_id: str
+    node_name: str
+    host_id: str | None = None
+    host_name: str | None = None
+    placement_status: str | None = None
+    controller_actual_state: str | None = None
+    controller_is_ready: bool | None = None
+    controller_runtime_id: str | None = None
+    agent_status: NodeRuntimeIdentityOut | None = None
+    live_ports: list[LivePortStateOut] = []
+    interface_mappings: list[InterfaceMappingOut] = []
+    links: list[NodeLinkDiagnosticOut] = []
+    agent_error: str | None = None
 
 
 # =============================================================================

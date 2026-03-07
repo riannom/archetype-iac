@@ -712,6 +712,45 @@ class TestDoReconcileLabRuntimeIdentity:
         assert placement.runtime_id == "runtime-new"
 
     @pytest.mark.asyncio
+    async def test_runtime_id_mismatch_with_deployed_placement_but_starting_node_state_is_adopted(
+        self, test_db, test_user,
+    ):
+        from app.tasks.reconciliation_db import _do_reconcile_lab
+
+        host = _make_host(test_db, "host-runtime-replace-state")
+        lab = _make_lab(test_db, test_user, state="running", agent_id=host.id)
+        node_def = _make_node(test_db, lab.id, "R1", host_id=host.id)
+        _make_node_state(
+            test_db,
+            lab.id,
+            "R1",
+            actual="starting",
+            desired="running",
+            node_definition_id=node_def.id,
+        )
+        placement = _make_placement(
+            test_db,
+            lab.id,
+            "R1",
+            host.id,
+            node_definition_id=node_def.id,
+            status="deployed",
+            runtime_id="runtime-old",
+        )
+
+        with _ReconcileContext(agent_status_nodes=[{
+            "name": "R1",
+            "status": "running",
+            "node_definition_id": node_def.id,
+            "runtime_id": "runtime-new",
+        }]):
+            await _do_reconcile_lab(test_db, lab, lab.id)
+
+        test_db.refresh(placement)
+        assert placement.status == "deployed"
+        assert placement.runtime_id == "runtime-new"
+
+    @pytest.mark.asyncio
     async def test_metadata_node_definition_id_canonicalizes_reported_name(self, test_db, test_user):
         from app.tasks.reconciliation_db import _do_reconcile_lab
 
