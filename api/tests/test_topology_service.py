@@ -173,6 +173,82 @@ class TestInterfaceCountMap:
         iface_map = service.get_interface_count_map(sample_lab.id)
         assert iface_map["cat8k_1"] == 26
 
+
+class TestNodeHardwareOverridePersistence:
+    """Persist only explicit per-node hardware overrides."""
+
+    def test_matching_device_defaults_are_not_persisted(self, test_db, sample_lab, monkeypatch):
+        graph = TopologyGraph(
+            nodes=[
+                GraphNode(
+                    id="node-sonic",
+                    name="SONIC-VS-11",
+                    container_name="sonic_vs_11",
+                    device="sonic-vs",
+                    memory=4096,
+                    cpu=2,
+                )
+            ],
+            links=[],
+        )
+
+        class _StubDeviceService:
+            def resolve_hardware_specs(
+                self,
+                device_id,
+                node_config_json=None,
+                image_reference=None,
+                version=None,
+            ):
+                assert device_id == "sonic-vs"
+                assert node_config_json is None
+                return {"memory": 4096, "cpu": 2}
+
+        monkeypatch.setattr("app.services.device_service.get_device_service", lambda: _StubDeviceService())
+
+        service = TopologyService(test_db)
+        service.update_from_graph(sample_lab.id, graph)
+        test_db.commit()
+
+        node = service.get_node_by_gui_id(sample_lab.id, "node-sonic")
+        assert node is not None
+        assert node.config_json is None
+
+    def test_explicit_hardware_override_is_persisted(self, test_db, sample_lab, monkeypatch):
+        graph = TopologyGraph(
+            nodes=[
+                GraphNode(
+                    id="node-sonic",
+                    name="SONIC-VS-11",
+                    container_name="sonic_vs_11",
+                    device="sonic-vs",
+                    memory=6144,
+                    cpu=4,
+                )
+            ],
+            links=[],
+        )
+
+        class _StubDeviceService:
+            def resolve_hardware_specs(
+                self,
+                device_id,
+                node_config_json=None,
+                image_reference=None,
+                version=None,
+            ):
+                return {"memory": 4096, "cpu": 2}
+
+        monkeypatch.setattr("app.services.device_service.get_device_service", lambda: _StubDeviceService())
+
+        service = TopologyService(test_db)
+        service.update_from_graph(sample_lab.id, graph)
+        test_db.commit()
+
+        node = service.get_node_by_gui_id(sample_lab.id, "node-sonic")
+        assert node is not None
+        assert json.loads(node.config_json) == {"memory": 6144, "cpu": 4}
+
     def test_link_endpoints_swapped_when_reverse_alphabetical(
         self, test_db, sample_lab, multiple_hosts
     ):
