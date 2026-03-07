@@ -301,6 +301,123 @@ class TestCreateExternalNetworkLinksExtended:
         assert link_state.actual_state == "error"
         assert "OVS port not found" in (link_state.error_message or "")
 
+    @pytest.mark.asyncio
+    async def test_cross_host_external_link_creates_vxlan_tunnel(
+        self, test_db: Session, sample_lab: models.Lab, multiple_hosts: list[models.Host]
+    ):
+        """A remote device connected to an external NIC should persist VXLAN state."""
+        from app.tasks.link_orchestration import create_external_network_links
+
+        host_a, host_b = multiple_hosts[:2]
+        managed_iface = models.AgentManagedInterface(
+            id=str(uuid4()),
+            host_id=host_a.id,
+            name="eth99",
+            interface_type="external",
+            sync_status="synced",
+            is_up=True,
+        )
+        ext_node = _make_node(
+            test_db, sample_lab, host_a,
+            gui_id="ext1", display_name="External", container_name="ext1",
+            node_type="external", managed_interface_id=managed_iface.id,
+        )
+        device_node = _make_node(
+            test_db, sample_lab, host_b,
+            gui_id="n1", display_name="R1", container_name="r1",
+        )
+        link_def = _make_link(test_db, sample_lab, device_node, "eth1", ext_node, "_external")
+        link_state = _make_link_state(
+            test_db, sample_lab,
+            link_name="r1:eth1-_ext:eth99:_external",
+            source_node="r1", source_interface="eth1",
+            target_node="_ext:eth99", target_interface="_external",
+            source_host_id=host_b.id, target_host_id=host_a.id,
+            is_cross_host=True,
+            link_definition_id=link_def.id,
+        )
+        test_db.add(managed_iface)
+        test_db.commit()
+
+        with patch("app.tasks.link_orchestration.agent_client.setup_cross_host_link_v2", new_callable=AsyncMock) as mock_setup, \
+             patch("app.tasks.link_orchestration.agent_client.resolve_agent_ip", new_callable=AsyncMock) as mock_resolve:
+            mock_setup.return_value = {"success": True, "vni": 9001}
+            mock_resolve.side_effect = lambda addr: addr.split(":")[0]
+
+            ok, failed = await create_external_network_links(
+                test_db,
+                sample_lab.id,
+                ext_node.id,
+                [(link_def, link_state, device_node, ext_node, "eth1")],
+                host_to_agent={host_a.id: host_a, host_b.id: host_b},
+                log_parts=[],
+            )
+
+        assert ok == 1
+        assert failed == 0
+        assert link_state.actual_state == "up"
+        assert link_state.vni == 9001
+        assert link_state.source_vxlan_attached is True
+        assert link_state.target_vxlan_attached is True
+        mock_setup.assert_awaited_once()
+        _, kwargs = mock_setup.await_args
+        assert kwargs["agent_a"].id == host_a.id
+        assert kwargs["agent_b"].id == host_b.id
+        assert kwargs["node_a"] == "_ext:eth99"
+        assert kwargs["node_b"] == "r1"
+
+    @pytest.mark.asyncio
+    async def test_cross_host_external_link_remote_agent_missing_marks_error(
+        self, test_db: Session, sample_lab: models.Lab, multiple_hosts: list[models.Host]
+    ):
+        """Cross-host external links should fail cleanly when the remote agent is unavailable."""
+        from app.tasks.link_orchestration import create_external_network_links
+
+        host_a, host_b = multiple_hosts[:2]
+        managed_iface = models.AgentManagedInterface(
+            id=str(uuid4()),
+            host_id=host_a.id,
+            name="eth99",
+            interface_type="external",
+            sync_status="synced",
+            is_up=True,
+        )
+        ext_node = _make_node(
+            test_db, sample_lab, host_a,
+            gui_id="ext1", display_name="External", container_name="ext1",
+            node_type="external", managed_interface_id=managed_iface.id,
+        )
+        device_node = _make_node(
+            test_db, sample_lab, host_b,
+            gui_id="n1", display_name="R1", container_name="r1",
+        )
+        link_def = _make_link(test_db, sample_lab, device_node, "eth1", ext_node, "_external")
+        link_state = _make_link_state(
+            test_db, sample_lab,
+            link_name="r1:eth1-_ext:eth99:_external",
+            source_node="r1", source_interface="eth1",
+            target_node="_ext:eth99", target_interface="_external",
+            source_host_id=host_b.id, target_host_id=host_a.id,
+            is_cross_host=True,
+            link_definition_id=link_def.id,
+        )
+        test_db.add(managed_iface)
+        test_db.commit()
+
+        ok, failed = await create_external_network_links(
+            test_db,
+            sample_lab.id,
+            ext_node.id,
+            [(link_def, link_state, device_node, ext_node, "eth1")],
+            host_to_agent={host_a.id: host_a},
+            log_parts=[],
+        )
+
+        assert ok == 0
+        assert failed == 1
+        assert link_state.actual_state == "error"
+        assert "remote agent not available" in (link_state.error_message or "").lower()
+
 
 # ---------------------------------------------------------------------------
 # 2. create_deployment_links — extended gaps
