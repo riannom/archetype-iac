@@ -16,7 +16,7 @@ export type ExternalConnectionType = 'vlan' | 'bridge';
 
 export type AnnotationType = 'text' | 'rect' | 'circle' | 'arrow';
 
-export type CanvasTool = 'pointer' | 'text' | 'rect' | 'circle' | 'arrow';
+export type CanvasTool = 'pointer' | 'hand' | 'text' | 'rect' | 'circle' | 'arrow';
 
 export interface Annotation {
   id: string;

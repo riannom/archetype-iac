@@ -385,6 +385,7 @@ const Sidebar: React.FC<SidebarProps> = ({
 
   const canvasTools: { tool: CanvasTool, icon: string, label: string }[] = [
     { tool: 'pointer', icon: 'fa-arrow-pointer', label: 'Select' },
+    { tool: 'hand', icon: 'fa-hand', label: 'Hand' },
     { tool: 'text', icon: 'fa-font', label: 'Label' },
     { tool: 'rect', icon: 'fa-square', label: 'Box' },
     { tool: 'circle', icon: 'fa-circle', label: 'Zone' },
