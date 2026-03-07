@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
+from fastapi import BackgroundTasks
 
 import pytest
 from fastapi import HTTPException
@@ -258,6 +259,7 @@ def test_delete_image_catalog_paths(monkeypatch, tmp_path):
 
     result = img.delete_image(
         "qcow2:device.qcow2",
+        background_tasks=BackgroundTasks(),
         database=db,
         current_user=_user(),
     )
@@ -287,6 +289,7 @@ def test_delete_image_catalog_paths(monkeypatch, tmp_path):
     with pytest.raises(HTTPException) as exc_info:
         img.delete_image(
             "qcow2:device2.qcow2",
+            background_tasks=BackgroundTasks(),
             database=db_unlink,
             current_user=_user(),
         )
@@ -313,6 +316,7 @@ def test_delete_image_catalog_paths(monkeypatch, tmp_path):
     with pytest.raises(HTTPException) as exc_info:
         img.delete_image(
             "docker:ceos:4.29.0",
+            background_tasks=BackgroundTasks(),
             database=db_nf,
             current_user=_user(),
         )

@@ -3,10 +3,12 @@ import { DeviceModel, ImageLibraryEntry } from '../../types';
 import ImageCard from '../ImageCard';
 import ImageFilterBar, { ImageAssignmentFilter, ImageSortOption } from '../ImageFilterBar';
 import { PendingQcow2Upload } from './deviceManagerTypes';
+import type { AgentStaleImageSummaryResponse } from '../../../types/agentImages';
 
 interface ImageLibraryViewProps {
   runnableImageLibrary: ImageLibraryEntry[];
   deviceModels: DeviceModel[];
+  staleAgentSummary: AgentStaleImageSummaryResponse | null;
   filteredImages: ImageLibraryEntry[];
   unassignedImages: ImageLibraryEntry[];
   assignedImagesByDevice: Map<string, ImageLibraryEntry[]>;
@@ -32,6 +34,7 @@ interface ImageLibraryViewProps {
 const ImageLibraryView: React.FC<ImageLibraryViewProps> = ({
   runnableImageLibrary,
   deviceModels,
+  staleAgentSummary,
   filteredImages,
   unassignedImages,
   assignedImagesByDevice,
@@ -53,6 +56,8 @@ const ImageLibraryView: React.FC<ImageLibraryViewProps> = ({
   onRefresh,
   showSyncStatus,
 }) => {
+  const staleHosts = staleAgentSummary?.hosts.filter((host) => host.stale_image_count > 0) || [];
+
   return (
     <div className="flex-1 flex flex-col overflow-hidden min-h-0">
       {/* Image filter bar */}
@@ -74,6 +79,25 @@ const ImageLibraryView: React.FC<ImageLibraryViewProps> = ({
 
       {/* Image grid */}
       <div className="flex-1 overflow-y-auto p-4 custom-scrollbar">
+        {staleAgentSummary && staleAgentSummary.total_stale_images > 0 && (
+          <div className="mb-4 rounded-xl border border-amber-300/70 bg-amber-50/80 px-4 py-3 text-sm text-amber-900 dark:border-amber-700/70 dark:bg-amber-900/20 dark:text-amber-100">
+            <div className="flex items-start gap-3">
+              <i className="fa-solid fa-triangle-exclamation mt-0.5 text-amber-600 dark:text-amber-400" />
+              <div className="min-w-0">
+                <div className="font-semibold">
+                  {staleAgentSummary.total_stale_images} stale agent image artifact{staleAgentSummary.total_stale_images !== 1 ? 's' : ''} detected
+                </div>
+                <div className="mt-1 text-xs text-amber-800/90 dark:text-amber-200/90">
+                  {staleAgentSummary.affected_agents} host{staleAgentSummary.affected_agents !== 1 ? 's' : ''} currently report unreferenced Docker or libvirt image artifacts.
+                </div>
+                <div className="mt-2 text-xs text-amber-800/90 dark:text-amber-200/90">
+                  {staleHosts.map((host) => `${host.agent_name}: ${host.stale_image_count}`).join(', ')}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Unassigned images section */}
         {(unassignedImages.length > 0 || filteredPendingQcow2Uploads.length > 0) && (
           <div className="mb-6">

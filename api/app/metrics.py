@@ -130,6 +130,18 @@ if PROMETHEUS_AVAILABLE:
         ["host_id", "host_name"],
     )
 
+    agent_stale_images = Gauge(
+        "archetype_agent_stale_images",
+        "Number of stale image artifacts detected on an agent",
+        ["host_id", "host_name"],
+    )
+
+    agent_stale_image_cleanup_total = Counter(
+        "archetype_agent_stale_image_cleanup_total",
+        "Total stale-image cleanup results by agent",
+        ["host_id", "host_name", "result"],
+    )
+
     # --- Enforcement Metrics ---
 
     enforcement_actions = Counter(
@@ -314,6 +326,8 @@ else:
     agent_memory_percent = DummyMetric()
     agent_containers_running = DummyMetric()
     agent_vms_running = DummyMetric()
+    agent_stale_images = DummyMetric()
+    agent_stale_image_cleanup_total = DummyMetric()
     enforcement_actions = DummyMetric()
     enforcement_failures = DummyMetric()
     enforcement_pending = DummyMetric()
@@ -858,6 +872,29 @@ def record_broadcast(message_type: str, success: bool) -> None:
         broadcast_messages.labels(message_type=message_type).inc()
     else:
         broadcast_failures.labels(message_type=message_type).inc()
+
+
+def set_agent_stale_image_count(host_id: str, host_name: str, count: int) -> None:
+    """Set the current stale-image count for an agent."""
+    if not PROMETHEUS_AVAILABLE:
+        return
+    agent_stale_images.labels(host_id=host_id, host_name=host_name).set(max(0, count))
+
+
+def record_agent_stale_image_cleanup(
+    host_id: str,
+    host_name: str,
+    result: str,
+    count: int = 1,
+) -> None:
+    """Record stale-image cleanup outcomes for an agent."""
+    if not PROMETHEUS_AVAILABLE or count <= 0:
+        return
+    agent_stale_image_cleanup_total.labels(
+        host_id=host_id,
+        host_name=host_name,
+        result=_normalize_reason_label(result),
+    ).inc(count)
 
 
 def record_enforcement_duration(duration: float) -> None:

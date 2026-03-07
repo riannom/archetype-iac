@@ -62,7 +62,8 @@ class TestListImages:
             DockerImageInfo(id="sha256:aaa", tags=["ceos:4.28"], size_bytes=1024),
             DockerImageInfo(id="sha256:bbb", tags=["srlinux:latest"], size_bytes=2048),
         ]
-        with patch("agent.routers.images._get_docker_images", return_value=fake_images):
+        with patch("agent.routers.images._get_docker_images", return_value=fake_images), \
+             patch("agent.routers.images._get_file_images", return_value=[]):
             resp = client.get("/images")
 
         body = resp.json()
@@ -71,7 +72,8 @@ class TestListImages:
 
     def test_empty_inventory(self, client):
         """Empty image list returns successfully."""
-        with patch("agent.routers.images._get_docker_images", return_value=[]):
+        with patch("agent.routers.images._get_docker_images", return_value=[]), \
+             patch("agent.routers.images._get_file_images", return_value=[]):
             resp = client.get("/images")
 
         body = resp.json()
@@ -82,12 +84,32 @@ class TestListImages:
         fake_images = [
             DockerImageInfo(id="sha256:ccc", tags=["alpine:3.18", "alpine:latest"], size_bytes=512),
         ]
-        with patch("agent.routers.images._get_docker_images", return_value=fake_images):
+        with patch("agent.routers.images._get_docker_images", return_value=fake_images), \
+             patch("agent.routers.images._get_file_images", return_value=[]):
             resp = client.get("/images")
 
         body = resp.json()
         assert "alpine:3.18" in body["images"][0]["tags"]
         assert "alpine:latest" in body["images"][0]["tags"]
+
+    def test_includes_file_images(self, client):
+        fake_docker = [DockerImageInfo(id="sha256:aaa", tags=["ceos:4.28"], size_bytes=1024)]
+        fake_file = [
+            DockerImageInfo(
+                id="/var/lib/archetype/images/router.qcow2",
+                kind="qcow2",
+                reference="/var/lib/archetype/images/router.qcow2",
+                size_bytes=4096,
+            )
+        ]
+        with patch("agent.routers.images._get_docker_images", return_value=fake_docker), \
+             patch("agent.routers.images._get_file_images", return_value=fake_file):
+            resp = client.get("/images")
+
+        body = resp.json()
+        assert len(body["images"]) == 2
+        file_entry = next(img for img in body["images"] if img["kind"] == "qcow2")
+        assert file_entry["reference"] == "/var/lib/archetype/images/router.qcow2"
 
 
 # ---------------------------------------------------------------------------
@@ -272,6 +294,43 @@ class TestReceiveFileBasedImage:
         body = resp.json()
         assert body["success"] is False
         assert "libvirt" in body["error"].lower()
+
+
+class TestDeleteImage:
+    """Tests for DELETE /images/{reference:path}."""
+
+    def test_delete_docker_image(self, client):
+        docker_client = MagicMock()
+        docker_image = MagicMock()
+        docker_image.id = "sha256:abc"
+        docker_client.images.get.return_value = docker_image
+
+        with patch("agent.routers.images.get_docker_client", return_value=docker_client), \
+             patch("agent.routers.images.remove_docker_image_metadata", return_value=1) as remove_meta:
+            resp = client.delete("/images/ceos:4.28.0F")
+
+        assert resp.status_code == 200
+        assert resp.json()["success"] is True
+        assert resp.json()["deleted"] is True
+        docker_client.images.remove.assert_called_once_with("ceos:4.28.0F", force=False, noprune=False)
+        remove_meta.assert_called_once_with(image_id="sha256:abc", reference="ceos:4.28.0F")
+
+    def test_delete_file_image(self, client, tmp_path, monkeypatch):
+        monkeypatch.setattr(settings, "workspace_path", str(tmp_path / "workspace"))
+        image_path = tmp_path / "workspace" / "images" / "router.qcow2"
+        image_path.parent.mkdir(parents=True, exist_ok=True)
+        image_path.write_bytes(b"fake")
+        sidecar = image_path.with_name(image_path.name + ".sha256")
+        sidecar.write_text("abc")
+
+        with patch("agent.routers.images.remove_file_image_metadata", return_value=True):
+            resp = client.delete(f"/images/{image_path}")
+
+        assert resp.status_code == 200
+        assert resp.json()["success"] is True
+        assert resp.json()["deleted"] is True
+        assert not image_path.exists()
+        assert not sidecar.exists()
 
     def test_non_absolute_path_rejected(self, client, monkeypatch):
         """Non-absolute path for file-based image is rejected."""

@@ -36,6 +36,7 @@ class ImageReconciliationResult:
         self.missing_hosts_created = 0
         self.status_updates = 0
         self.images_discovered = 0
+        self.remote_deletions = 0
         self.errors: list[str] = []
 
     def to_dict(self) -> dict:
@@ -44,8 +45,148 @@ class ImageReconciliationResult:
             "missing_hosts_created": self.missing_hosts_created,
             "status_updates": self.status_updates,
             "images_discovered": self.images_discovered,
+            "remote_deletions": self.remote_deletions,
             "errors": self.errors,
         }
+
+
+def _active_image_references_by_host(session) -> dict[str, set[str]]:
+    """Build the set of image references still needed per host."""
+    refs_by_host: dict[str, set[str]] = {}
+
+    placements = (
+        session.query(models.NodePlacement.host_id, models.Node.image)
+        .join(models.Node, models.Node.id == models.NodePlacement.node_definition_id)
+        .filter(
+            models.NodePlacement.host_id.isnot(None),
+            models.Node.image.isnot(None),
+        )
+        .all()
+    )
+    for host_id, image_ref in placements:
+        if host_id and image_ref:
+            refs_by_host.setdefault(host_id, set()).add(image_ref)
+
+    planned_nodes = (
+        session.query(models.Node.host_id, models.Node.image)
+        .filter(
+            models.Node.host_id.isnot(None),
+            models.Node.image.isnot(None),
+        )
+        .all()
+    )
+    for host_id, image_ref in planned_nodes:
+        if host_id and image_ref:
+            refs_by_host.setdefault(host_id, set()).add(image_ref)
+
+    return refs_by_host
+
+
+async def cleanup_deleted_image_from_agents(
+    image_id: str,
+    reference: str,
+    host_ids: list[str] | None = None,
+) -> ImageReconciliationResult:
+    """Best-effort cleanup of a deleted/orphaned image from online agents."""
+    result = ImageReconciliationResult()
+
+    with get_session() as session:
+        active_refs_by_host = _active_image_references_by_host(session)
+        image_hosts_query = session.query(models.ImageHost).filter(
+            models.ImageHost.image_id == image_id
+        )
+        if host_ids:
+            image_hosts_query = image_hosts_query.filter(models.ImageHost.host_id.in_(host_ids))
+        image_hosts = image_hosts_query.all()
+
+        for image_host in image_hosts:
+            host = session.get(models.Host, image_host.host_id)
+            if not host:
+                session.delete(image_host)
+                result.orphaned_hosts_removed += 1
+                continue
+            if reference in active_refs_by_host.get(image_host.host_id, set()):
+                logger.info(
+                    "Deferring remote image cleanup for %s on host %s because it is still referenced by nodes",
+                    reference,
+                    host.name,
+                )
+                continue
+            if host.status != "online" or not agent_client.is_agent_online(host):
+                result.errors.append(
+                    f"Host {host.name} is offline; deferred cleanup for {reference}"
+                )
+                continue
+
+            delete_result = await agent_client.delete_image_on_agent(host, reference)
+            if delete_result.get("success"):
+                session.delete(image_host)
+                result.orphaned_hosts_removed += 1
+                if delete_result.get("deleted"):
+                    result.remote_deletions += 1
+            else:
+                image_host.status = "failed"
+                image_host.error_message = delete_result.get("error") or "Remote delete failed"
+                result.errors.append(
+                    f"Host {host.name}: {image_host.error_message}"
+                )
+
+        session.commit()
+
+    return result
+
+
+async def cleanup_unused_agent_images() -> ImageReconciliationResult:
+    """Remove agent images no longer referenced by the controller."""
+    result = ImageReconciliationResult()
+    manifest = load_manifest()
+    catalog_refs = {
+        img.get("reference")
+        for img in manifest.get("images", [])
+        if img.get("reference")
+    }
+
+    with get_session() as session:
+        online_hosts = (
+            session.query(models.Host)
+            .filter(models.Host.status == "online")
+            .all()
+        )
+        active_refs_by_host = _active_image_references_by_host(session)
+
+        for host in online_hosts:
+            if not agent_client.is_agent_online(host):
+                continue
+            keep_refs = set(catalog_refs)
+            keep_refs.update(active_refs_by_host.get(host.id, set()))
+            try:
+                images_response = await agent_client.get_agent_images(host)
+            except Exception as e:
+                result.errors.append(f"Host {host.name}: {e}")
+                continue
+
+            for img_info in images_response.get("images", []):
+                candidate_refs: list[str] = []
+                reference = img_info.get("reference")
+                if reference:
+                    candidate_refs.append(reference)
+                for tag in img_info.get("tags", []):
+                    if tag:
+                        candidate_refs.append(tag)
+
+                for candidate in candidate_refs:
+                    if candidate in keep_refs or "<none>" in candidate:
+                        continue
+                    delete_result = await agent_client.delete_image_on_agent(host, candidate)
+                    if delete_result.get("success"):
+                        result.remote_deletions += 1 if delete_result.get("deleted") else 0
+                    else:
+                        result.errors.append(
+                            f"Host {host.name}: failed to delete stale image {candidate}: "
+                            f"{delete_result.get('error') or 'unknown error'}"
+                        )
+
+    return result
 
 
 async def reconcile_image_hosts() -> ImageReconciliationResult:
@@ -78,12 +219,27 @@ async def reconcile_image_hosts() -> ImageReconciliationResult:
             # 1. Remove orphaned ImageHost records (image no longer in manifest)
             orphaned_image_ids = set(image_host_map.keys()) - manifest_image_ids
             for orphan_id in orphaned_image_ids:
-                for ih in image_host_map[orphan_id]:
-                    logger.info(
-                        f"Removing orphaned ImageHost record: image={orphan_id}, host={ih.host_id}"
+                orphan_records = image_host_map[orphan_id]
+                orphan_reference = next(
+                    (ih.reference for ih in orphan_records if ih.reference),
+                    "",
+                )
+                if orphan_reference:
+                    cleanup_result = await cleanup_deleted_image_from_agents(
+                        orphan_id,
+                        orphan_reference,
+                        host_ids=[ih.host_id for ih in orphan_records],
                     )
-                    session.delete(ih)
-                    result.orphaned_hosts_removed += 1
+                    result.orphaned_hosts_removed += cleanup_result.orphaned_hosts_removed
+                    result.remote_deletions += cleanup_result.remote_deletions
+                    result.errors.extend(cleanup_result.errors)
+                else:
+                    for ih in orphan_records:
+                        logger.info(
+                            f"Removing orphaned ImageHost record without reference: image={orphan_id}, host={ih.host_id}"
+                        )
+                        session.delete(ih)
+                        result.orphaned_hosts_removed += 1
 
             # 2. Get all online hosts for creating missing records
             online_hosts = (
@@ -485,6 +641,13 @@ async def full_image_reconciliation() -> ImageReconciliationResult:
     except Exception as e:
         logger.warning(f"Metadata backfill error: {e}")
 
+    try:
+        cleanup_result = await cleanup_unused_agent_images()
+        result.remote_deletions += cleanup_result.remote_deletions
+        result.errors.extend(cleanup_result.errors)
+    except Exception as e:
+        logger.warning(f"Unused-image cleanup error: {e}")
+
     return result
 
 
@@ -587,6 +750,21 @@ async def image_reconciliation_monitor():
                 await _backfill_agent_metadata()
             except Exception as e:
                 logger.warning(f"Metadata backfill error: {e}")
+
+            try:
+                cleanup_result = await cleanup_unused_agent_images()
+                if cleanup_result.remote_deletions > 0:
+                    logger.info(
+                        "Unused image cleanup: deleted %s image(s) from agents",
+                        cleanup_result.remote_deletions,
+                    )
+                if cleanup_result.errors:
+                    logger.warning(
+                        "Unused image cleanup encountered %s error(s)",
+                        len(cleanup_result.errors),
+                    )
+            except Exception as e:
+                logger.warning(f"Unused image cleanup error: {e}")
 
         except asyncio.CancelledError:
             logger.info("Image reconciliation monitor stopped")

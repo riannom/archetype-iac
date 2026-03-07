@@ -24,6 +24,7 @@ import UploadLogsModal from './UploadLogsModal';
 const DeviceManagerInner: React.FC<DeviceManagerProps> = ({
   deviceModels,
   imageLibrary,
+  staleAgentSummary,
   onUploadImage,
   onUploadQcow2,
   onRefresh,
@@ -256,6 +257,7 @@ const DeviceManagerInner: React.FC<DeviceManagerProps> = ({
           <ImageLibraryView
             runnableImageLibrary={runnableImageLibrary}
             deviceModels={deviceModels}
+            staleAgentSummary={staleAgentSummary || null}
             filteredImages={imageFilters.filteredImages}
             unassignedImages={unassignedImages}
             assignedImagesByDevice={assignedImagesByDevice}

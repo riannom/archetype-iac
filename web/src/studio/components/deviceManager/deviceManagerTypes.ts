@@ -1,9 +1,10 @@
 export interface DeviceManagerProps {
   deviceModels: import('../../types').DeviceModel[];
   imageLibrary: import('../../types').ImageLibraryEntry[];
-  onUploadImage: () => void;
-  onUploadQcow2: () => void;
-  onRefresh: () => void;
+  staleAgentSummary?: import('../../../types/agentImages').AgentStaleImageSummaryResponse | null;
+  onUploadImage: () => void | Promise<void>;
+  onUploadQcow2: () => void | Promise<void>;
+  onRefresh: () => void | Promise<void>;
   showSyncStatus?: boolean;
   mode?: 'images' | 'build-jobs';
 }

@@ -1,6 +1,6 @@
 import React from 'react';
 import HostCard from './HostCard';
-import type { HostDetailed, SyncStrategy, UpdateStatus } from './infrastructureTypes';
+import type { AgentImagesDetailResponse, HostDetailed, SyncStrategy, UpdateStatus } from './infrastructureTypes';
 
 interface HostsTabProps {
   hosts: HostDetailed[];
@@ -12,6 +12,9 @@ interface HostsTabProps {
   expandedContainers: Set<string>;
   expandedVMs: Set<string>;
   expandedImages: Set<string>;
+  agentImageDetails: Record<string, AgentImagesDetailResponse>;
+  agentImagesLoading: Set<string>;
+  agentImagesCleaning: Set<string>;
   updatingAgents: Set<string>;
   updateStatuses: Map<string, UpdateStatus>;
   isUpdateAvailable: (host: HostDetailed) => boolean;
@@ -19,6 +22,7 @@ interface HostsTabProps {
   onToggleContainers: (hostId: string) => void;
   onToggleVMs: (hostId: string) => void;
   onToggleImages: (hostId: string) => void;
+  onCleanupStaleImages: (hostId: string) => void;
   onUpdateSyncStrategy: (hostId: string, strategy: SyncStrategy) => void;
   onTriggerUpdate: (hostId: string) => void;
   onTriggerRebuild: (hostId: string) => void;
@@ -37,6 +41,9 @@ const HostsTab: React.FC<HostsTabProps> = ({
   expandedContainers,
   expandedVMs,
   expandedImages,
+  agentImageDetails,
+  agentImagesLoading,
+  agentImagesCleaning,
   updatingAgents,
   updateStatuses,
   isUpdateAvailable,
@@ -44,6 +51,7 @@ const HostsTab: React.FC<HostsTabProps> = ({
   onToggleContainers,
   onToggleVMs,
   onToggleImages,
+  onCleanupStaleImages,
   onUpdateSyncStrategy,
   onTriggerUpdate,
   onTriggerRebuild,
@@ -110,12 +118,16 @@ const HostsTab: React.FC<HostsTabProps> = ({
               expandedContainers={expandedContainers}
               expandedVMs={expandedVMs}
               expandedImages={expandedImages}
+              agentImageDetails={agentImageDetails}
+              agentImagesLoading={agentImagesLoading}
+              agentImagesCleaning={agentImagesCleaning}
               updatingAgents={updatingAgents}
               updateStatuses={updateStatuses}
               onToggleLabs={onToggleLabs}
               onToggleContainers={onToggleContainers}
               onToggleVMs={onToggleVMs}
               onToggleImages={onToggleImages}
+              onCleanupStaleImages={onCleanupStaleImages}
               onUpdateSyncStrategy={onUpdateSyncStrategy}
               onTriggerUpdate={onTriggerUpdate}
               onTriggerRebuild={onTriggerRebuild}

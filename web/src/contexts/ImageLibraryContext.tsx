@@ -1,12 +1,15 @@
 import React, { createContext, useContext, useEffect, useState, useCallback, useMemo } from 'react';
 import { apiRequest } from '../api';
 import { ImageLibraryEntry } from '../studio/types';
+import type { AgentStaleImageSummaryResponse } from '../types/agentImages';
 
 export interface ImageLibraryContextType {
   imageLibrary: ImageLibraryEntry[];
+  staleAgentSummary: AgentStaleImageSummaryResponse | null;
   loading: boolean;
   error: string | null;
   refreshImageLibrary: () => Promise<void>;
+  refreshStaleAgentSummary: () => Promise<void>;
 }
 
 const ImageLibraryContext = createContext<ImageLibraryContextType | null>(null);
@@ -17,6 +20,7 @@ interface ImageLibraryProviderProps {
 
 export function ImageLibraryProvider({ children }: ImageLibraryProviderProps) {
   const [imageLibrary, setImageLibrary] = useState<ImageLibraryEntry[]>([]);
+  const [staleAgentSummary, setStaleAgentSummary] = useState<AgentStaleImageSummaryResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -33,32 +37,49 @@ export function ImageLibraryProvider({ children }: ImageLibraryProviderProps) {
     }
   }, []);
 
+  const fetchStaleAgentSummary = useCallback(async () => {
+    try {
+      const data = await apiRequest<AgentStaleImageSummaryResponse>('/agents/images/stale-summary');
+      setStaleAgentSummary(data);
+    } catch (err) {
+      console.error('Failed to fetch stale agent image summary:', err);
+    }
+  }, []);
+
   const refreshImageLibrary = useCallback(async () => {
     await fetchImageLibrary();
   }, [fetchImageLibrary]);
 
+  const refreshStaleAgentSummary = useCallback(async () => {
+    await fetchStaleAgentSummary();
+  }, [fetchStaleAgentSummary]);
+
   // Fetch on mount
   useEffect(() => {
     fetchImageLibrary();
-  }, [fetchImageLibrary]);
+    fetchStaleAgentSummary();
+  }, [fetchImageLibrary, fetchStaleAgentSummary]);
 
   // Refetch when auth token changes (e.g., after login)
   useEffect(() => {
     const handleStorageChange = (e: StorageEvent) => {
       if (e.key === 'token' && e.newValue) {
         fetchImageLibrary();
+        fetchStaleAgentSummary();
       }
     };
     window.addEventListener('storage', handleStorageChange);
     return () => window.removeEventListener('storage', handleStorageChange);
-  }, [fetchImageLibrary]);
+  }, [fetchImageLibrary, fetchStaleAgentSummary]);
 
   const contextValue: ImageLibraryContextType = useMemo(() => ({
     imageLibrary,
+    staleAgentSummary,
     loading,
     error,
     refreshImageLibrary,
-  }), [imageLibrary, loading, error, refreshImageLibrary]);
+    refreshStaleAgentSummary,
+  }), [imageLibrary, staleAgentSummary, loading, error, refreshImageLibrary, refreshStaleAgentSummary]);
 
   return (
     <ImageLibraryContext.Provider value={contextValue}>

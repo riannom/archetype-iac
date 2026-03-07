@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useState } from 'react';
 import { apiRequest } from '../../api';
 import type {
+  AgentImagesDetailResponse,
+  AgentStaleCleanupResponse,
   AgentMeshResponse,
   HostDetailed,
   AgentNetworkConfig,
@@ -25,6 +27,9 @@ export function useInfrastructureData() {
   const [hostsLoading, setHostsLoading] = useState(true);
   const [hostsError, setHostsError] = useState<string | null>(null);
   const [latestVersion, setLatestVersion] = useState<string>('');
+  const [agentImageDetails, setAgentImageDetails] = useState<Record<string, AgentImagesDetailResponse>>({});
+  const [agentImagesLoading, setAgentImagesLoading] = useState<Set<string>>(new Set());
+  const [agentImagesCleaning, setAgentImagesCleaning] = useState<Set<string>>(new Set());
 
   // Host network config state
   const [networkConfigs, setNetworkConfigs] = useState<AgentNetworkConfig[]>([]);
@@ -66,6 +71,49 @@ export function useInfrastructureData() {
       setHostsLoading(false);
     }
   }, []);
+
+  const loadAgentImageDetails = useCallback(async (hostId: string, force = false) => {
+    if (!force && agentImageDetails[hostId]) {
+      return agentImageDetails[hostId];
+    }
+    setAgentImagesLoading(prev => {
+      const next = new Set(prev);
+      next.add(hostId);
+      return next;
+    });
+    try {
+      const data = await apiRequest<AgentImagesDetailResponse>(`/agents/${hostId}/images`);
+      setAgentImageDetails(prev => ({ ...prev, [hostId]: data }));
+      return data;
+    } finally {
+      setAgentImagesLoading(prev => {
+        const next = new Set(prev);
+        next.delete(hostId);
+        return next;
+      });
+    }
+  }, [agentImageDetails]);
+
+  const cleanupStaleAgentImages = useCallback(async (hostId: string) => {
+    setAgentImagesCleaning(prev => {
+      const next = new Set(prev);
+      next.add(hostId);
+      return next;
+    });
+    try {
+      const response = await apiRequest<AgentStaleCleanupResponse>(`/agents/${hostId}/images/cleanup-stale`, {
+        method: 'POST',
+      });
+      await loadAgentImageDetails(hostId, true);
+      return response;
+    } finally {
+      setAgentImagesCleaning(prev => {
+        const next = new Set(prev);
+        next.delete(hostId);
+        return next;
+      });
+    }
+  }, [loadAgentImageDetails]);
 
   const loadLatestVersion = useCallback(async () => {
     try {
@@ -147,6 +195,11 @@ export function useInfrastructureData() {
     hostsLoading,
     hostsError,
     latestVersion,
+    agentImageDetails,
+    agentImagesLoading,
+    agentImagesCleaning,
+    loadAgentImageDetails,
+    cleanupStaleAgentImages,
     loadHosts,
     // Network configs
     networkConfigs,

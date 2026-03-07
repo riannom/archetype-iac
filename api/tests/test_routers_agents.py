@@ -10,7 +10,7 @@ This module tests:
 from __future__ import annotations
 
 import json
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
@@ -257,6 +257,7 @@ class TestAgentImages:
         data = response.json()
         assert data["agent_id"] == sample_host.id
         assert data["images"] == []
+        assert "inventory_refreshed_at" in data
 
     def test_list_agent_images(self, test_client: TestClient, test_db: Session, sample_host: models.Host, auth_headers: dict):
         """List images returns synced images."""
@@ -271,11 +272,82 @@ class TestAgentImages:
         test_db.add(image_host)
         test_db.commit()
 
-        response = test_client.get(f"/agents/{sample_host.id}/images", headers=auth_headers)
+        with patch("app.agent_client.is_agent_online", return_value=True), \
+             patch("app.agent_client.get_agent_images", new_callable=AsyncMock, return_value={"images": []}):
+            response = test_client.get(f"/agents/{sample_host.id}/images", headers=auth_headers)
         assert response.status_code == 200
         data = response.json()
         assert len(data["images"]) == 1
         assert data["images"][0]["image_id"] == "docker:ceos:4.28.0F"
+        assert "inventory_refreshed_at" in data
+
+    def test_list_agent_images_reports_stale_inventory(
+        self, test_client: TestClient, test_db: Session, sample_host: models.Host, auth_headers: dict
+    ):
+        with patch("app.agent_client.is_agent_online", return_value=True), \
+             patch(
+                 "app.agent_client.get_agent_images",
+                 new_callable=AsyncMock,
+                 return_value={
+                     "images": [
+                         {"reference": "/var/lib/archetype/images/stale.qcow2", "kind": "qcow2", "tags": []}
+                     ]
+                 },
+             ), \
+             patch("app.image_store.load_manifest", return_value={"images": []}):
+            response = test_client.get(f"/agents/{sample_host.id}/images", headers=auth_headers)
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["stale_images"][0]["reference"] == "/var/lib/archetype/images/stale.qcow2"
+        assert data["inventory_refreshed_at"] is not None
+
+    def test_cleanup_agent_stale_images(
+        self, test_client: TestClient, test_db: Session, sample_host: models.Host, admin_auth_headers: dict
+    ):
+        with patch("app.agent_client.is_agent_online", return_value=True), \
+             patch(
+                 "app.agent_client.get_agent_images",
+                 new_callable=AsyncMock,
+                 side_effect=[
+                     {"images": [{"reference": "/var/lib/archetype/images/stale.qcow2", "kind": "qcow2", "tags": []}]},
+                     {"images": []},
+                 ],
+             ), \
+             patch("app.agent_client.delete_image_on_agent", new_callable=AsyncMock, return_value={"success": True, "deleted": True}), \
+             patch("app.image_store.load_manifest", return_value={"images": []}):
+            response = test_client.post(f"/agents/{sample_host.id}/images/cleanup-stale", headers=admin_auth_headers)
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["requested"] == 1
+        assert data["deleted"] == ["/var/lib/archetype/images/stale.qcow2"]
+        assert data["failed"] == []
+        assert data["stale_images_remaining"] == 0
+        assert data["inventory_refreshed_at"] is not None
+
+    def test_list_stale_agent_images_summary(
+        self, test_client: TestClient, test_db: Session, sample_host: models.Host, auth_headers: dict
+    ):
+        with patch("app.agent_client.is_agent_online", return_value=True), \
+             patch(
+                 "app.agent_client.get_agent_images",
+                 new_callable=AsyncMock,
+                 return_value={
+                     "images": [
+                         {"reference": "/var/lib/archetype/images/stale.qcow2", "kind": "qcow2", "tags": []}
+                     ]
+                 },
+             ), \
+             patch("app.image_store.load_manifest", return_value={"images": []}):
+            response = test_client.get("/agents/images/stale-summary", headers=auth_headers)
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total_stale_images"] == 1
+        assert data["affected_agents"] == 1
+        assert data["hosts"][0]["agent_id"] == sample_host.id
+        assert data["hosts"][0]["stale_image_count"] == 1
 
 
 class TestAgentUpdates:

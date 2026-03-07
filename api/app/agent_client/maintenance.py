@@ -127,6 +127,22 @@ async def cleanup_workspaces_on_agent(agent: models.Host, valid_lab_ids: list[st
     )
 
 
+async def delete_image_on_agent(agent: models.Host, reference: str) -> dict:
+    """Tell an agent to remove a specific image artifact."""
+    from urllib.parse import quote
+
+    encoded_reference = quote(reference, safe="")
+    return await _safe_agent_request(
+        agent,
+        "DELETE",
+        f"/images/{encoded_reference}",
+        fallback={"success": False, "deleted": False, "error": "agent unavailable"},
+        timeout=60.0,
+        description=f"Delete image {reference}",
+        log_level="error",
+    )
+
+
 # --- MTU Testing Functions ---
 
 

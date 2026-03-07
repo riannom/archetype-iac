@@ -57,6 +57,16 @@ async def test_reconcile_image_hosts_creates_and_removes(test_db, sample_lab, mo
 
     monkeypatch.setattr(image_reconciliation, "load_manifest", lambda: manifest)
     monkeypatch.setattr(image_reconciliation, "get_session", lambda: _session_ctx(test_db))
+    monkeypatch.setattr(image_reconciliation.agent_client, "is_agent_online", lambda h: True)
+
+    async def fake_delete_image_on_agent(host, reference):
+        return {"success": True, "deleted": True}
+
+    monkeypatch.setattr(
+        image_reconciliation.agent_client,
+        "delete_image_on_agent",
+        fake_delete_image_on_agent,
+    )
 
     result = await image_reconciliation.reconcile_image_hosts()
 
@@ -199,3 +209,203 @@ async def test_verify_image_status_on_agents_does_not_flap_missing_qcow2_to_sync
     refreshed = test_db.query(models.ImageHost).filter(models.ImageHost.host_id == host.id).one()
     assert refreshed.status == "missing"
     assert refreshed.error_message == "Image not found on agent"
+
+
+@pytest.mark.asyncio
+async def test_cleanup_deleted_image_from_agents_removes_row_after_remote_delete(
+    test_db, monkeypatch
+) -> None:
+    host = models.Host(
+        id="host-1",
+        name="Host 1",
+        address="localhost:3",
+        status="online",
+        capabilities=json.dumps({"providers": ["docker"]}),
+        version="1.0.0",
+    )
+    image_host = models.ImageHost(
+        image_id="docker:ceos:4.28.0F",
+        host_id=host.id,
+        reference="ceos:4.28.0F",
+        status="synced",
+    )
+    test_db.add_all([host, image_host])
+    test_db.commit()
+
+    monkeypatch.setattr(image_reconciliation, "get_session", lambda: _session_ctx(test_db))
+    monkeypatch.setattr(image_reconciliation.agent_client, "is_agent_online", lambda h: True)
+
+    async def fake_delete_image_on_agent(host, reference):
+        return {"success": True, "deleted": True}
+
+    monkeypatch.setattr(
+        image_reconciliation.agent_client,
+        "delete_image_on_agent",
+        fake_delete_image_on_agent,
+    )
+
+    result = await image_reconciliation.cleanup_deleted_image_from_agents(
+        "docker:ceos:4.28.0F",
+        "ceos:4.28.0F",
+    )
+
+    assert result.orphaned_hosts_removed == 1
+    assert result.remote_deletions == 1
+    assert test_db.query(models.ImageHost).count() == 0
+
+
+@pytest.mark.asyncio
+async def test_cleanup_unused_agent_images_deletes_stale_docker_tags(test_db, monkeypatch) -> None:
+    host = models.Host(
+        id="host-1",
+        name="Host 1",
+        address="localhost:3",
+        status="online",
+        capabilities=json.dumps({"providers": ["docker"]}),
+        version="1.0.0",
+    )
+    test_db.add(host)
+    test_db.commit()
+
+    manifest = {
+        "images": [
+            {"id": "docker:kept", "reference": "kept:1", "kind": "docker"},
+        ]
+    }
+
+    monkeypatch.setattr(image_reconciliation, "load_manifest", lambda: manifest)
+    monkeypatch.setattr(image_reconciliation, "get_session", lambda: _session_ctx(test_db))
+    monkeypatch.setattr(image_reconciliation.agent_client, "is_agent_online", lambda h: True)
+
+    async def fake_get_agent_images(host):
+        return {"images": [{"tags": ["stale:1", "kept:1"]}]}
+
+    async def fake_delete_image_on_agent(host, reference):
+        return {"success": True, "deleted": reference == "stale:1"}
+
+    monkeypatch.setattr(
+        image_reconciliation.agent_client,
+        "get_agent_images",
+        fake_get_agent_images,
+    )
+    monkeypatch.setattr(
+        image_reconciliation.agent_client,
+        "delete_image_on_agent",
+        fake_delete_image_on_agent,
+    )
+
+    result = await image_reconciliation.cleanup_unused_agent_images()
+
+    assert result.remote_deletions == 1
+
+
+@pytest.mark.asyncio
+async def test_cleanup_unused_agent_images_deletes_stale_file_reference(test_db, monkeypatch) -> None:
+    host = models.Host(
+        id="host-1",
+        name="Host 1",
+        address="localhost:3",
+        status="online",
+        capabilities=json.dumps({"providers": ["docker", "libvirt"]}),
+        version="1.0.0",
+    )
+    test_db.add(host)
+    test_db.commit()
+
+    manifest = {
+        "images": [
+            {"id": "qcow2:kept", "reference": "/var/lib/archetype/images/kept.qcow2", "kind": "qcow2"},
+        ]
+    }
+
+    monkeypatch.setattr(image_reconciliation, "load_manifest", lambda: manifest)
+    monkeypatch.setattr(image_reconciliation, "get_session", lambda: _session_ctx(test_db))
+    monkeypatch.setattr(image_reconciliation.agent_client, "is_agent_online", lambda h: True)
+
+    async def fake_get_agent_images(host):
+        return {
+            "images": [
+                {"reference": "/var/lib/archetype/images/stale.qcow2", "kind": "qcow2", "tags": []},
+                {"reference": "/var/lib/archetype/images/kept.qcow2", "kind": "qcow2", "tags": []},
+            ]
+        }
+
+    async def fake_delete_image_on_agent(host, reference):
+        return {"success": True, "deleted": reference.endswith("stale.qcow2")}
+
+    monkeypatch.setattr(
+        image_reconciliation.agent_client,
+        "get_agent_images",
+        fake_get_agent_images,
+    )
+    monkeypatch.setattr(
+        image_reconciliation.agent_client,
+        "delete_image_on_agent",
+        fake_delete_image_on_agent,
+    )
+
+    result = await image_reconciliation.cleanup_unused_agent_images()
+
+    assert result.remote_deletions == 1
+
+
+@pytest.mark.asyncio
+async def test_cleanup_deleted_image_from_agents_skips_host_when_reference_still_active(
+    test_db, monkeypatch
+) -> None:
+    host = models.Host(
+        id="host-1",
+        name="Host 1",
+        address="localhost:3",
+        status="online",
+        capabilities=json.dumps({"providers": ["docker"]}),
+        version="1.0.0",
+    )
+    lab = models.Lab(id="lab-1", name="Lab 1", provider="docker", state="running")
+    node = models.Node(
+        id="node-1",
+        lab_id=lab.id,
+        gui_id="gui-1",
+        display_name="Node 1",
+        container_name="node-1",
+        node_type="device",
+        device="ceos",
+        image="ceos:4.28.0F",
+        host_id=host.id,
+    )
+    placement = models.NodePlacement(
+        id="placement-1",
+        lab_id=lab.id,
+        node_name="node-1",
+        node_definition_id=node.id,
+        host_id=host.id,
+        status="running",
+    )
+    image_host = models.ImageHost(
+        image_id="docker:ceos:4.28.0F",
+        host_id=host.id,
+        reference="ceos:4.28.0F",
+        status="synced",
+    )
+    test_db.add_all([host, lab, node, placement, image_host])
+    test_db.commit()
+
+    monkeypatch.setattr(image_reconciliation, "get_session", lambda: _session_ctx(test_db))
+    monkeypatch.setattr(image_reconciliation.agent_client, "is_agent_online", lambda h: True)
+
+    async def fake_delete_image_on_agent(host, reference):
+        raise AssertionError("delete_image_on_agent should not be called while image is active")
+
+    monkeypatch.setattr(
+        image_reconciliation.agent_client,
+        "delete_image_on_agent",
+        fake_delete_image_on_agent,
+    )
+
+    result = await image_reconciliation.cleanup_deleted_image_from_agents(
+        "docker:ceos:4.28.0F",
+        "ceos:4.28.0F",
+    )
+
+    assert result.orphaned_hosts_removed == 0
+    assert test_db.query(models.ImageHost).count() == 1

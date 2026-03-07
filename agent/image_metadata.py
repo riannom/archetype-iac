@@ -142,6 +142,47 @@ def set_file_image_metadata(path: str, device_id: str, source: str) -> None:
             fcntl.flock(lock_fd, fcntl.LOCK_UN)
 
 
+def remove_docker_image_metadata(image_id: str | None = None, reference: str | None = None) -> int:
+    """Remove Docker image metadata by immutable ID and/or tag reference."""
+    if not image_id and not reference:
+        return 0
+
+    lock = _lock_path()
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    with open(lock, "w") as lock_fd:
+        fcntl.flock(lock_fd, fcntl.LOCK_EX)
+        try:
+            data = _read_metadata()
+            removed = 0
+            image_entries = data.get("images", {})
+            for key, entry in list(image_entries.items()):
+                tags = entry.get("tags", [])
+                if key == image_id or (reference and reference in tags):
+                    image_entries.pop(key, None)
+                    removed += 1
+            if removed:
+                _write_metadata(data)
+            return removed
+        finally:
+            fcntl.flock(lock_fd, fcntl.LOCK_UN)
+
+
+def remove_file_image_metadata(path: str) -> bool:
+    """Remove file-based image metadata for a path."""
+    lock = _lock_path()
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    with open(lock, "w") as lock_fd:
+        fcntl.flock(lock_fd, fcntl.LOCK_EX)
+        try:
+            data = _read_metadata()
+            removed = data.get("files", {}).pop(path, None) is not None
+            if removed:
+                _write_metadata(data)
+            return removed
+        finally:
+            fcntl.flock(lock_fd, fcntl.LOCK_UN)
+
+
 def lookup_device_id_by_image_id(image_id: str) -> str | None:
     """Direct lookup by immutable Docker image ID."""
     data = _read_metadata()

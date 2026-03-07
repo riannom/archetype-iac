@@ -179,6 +179,42 @@ export interface ImageDetail {
   error_message: string | null;
 }
 
+export interface AgentInventoryImage {
+  reference: string;
+  display_reference: string;
+  kind: string;
+  size_bytes: number | null;
+  created: string | null;
+  device_id: string | null;
+  tracked_image_id: string | null;
+  tracked_status: string | null;
+  is_needed: boolean;
+  is_stale: boolean;
+  reason: string | null;
+}
+
+export interface AgentImagesDetailResponse {
+  agent_id: string;
+  agent_name: string;
+  images: ImageDetail[];
+  inventory: AgentInventoryImage[];
+  stale_images: AgentInventoryImage[];
+  inventory_refreshed_at: string | null;
+}
+
+export interface AgentStaleCleanupResponse {
+  agent_id: string;
+  agent_name: string;
+  requested: number;
+  deleted: string[];
+  failed: Array<{
+    reference: string;
+    error: string;
+  }>;
+  stale_images_remaining: number;
+  inventory_refreshed_at: string | null;
+}
+
 export interface HostDetailed {
   id: string;
   name: string;

@@ -17,8 +17,9 @@ from fastapi import APIRouter, File, Request, UploadFile
 
 from agent.config import settings
 from agent.docker_client import get_docker_client
-from agent.helpers import _get_docker_images
+from agent.helpers import _get_docker_images, _get_file_images
 from agent.http_client import get_controller_auth_headers, get_http_client
+from agent.image_metadata import remove_docker_image_metadata, remove_file_image_metadata
 from agent.schemas import (
     DockerImageInfo,
     ImageExistsResponse,
@@ -204,8 +205,47 @@ def list_images() -> ImageInventoryResponse:
     Returns a list of images with their tags, sizes, and IDs.
     Used by controller to check image availability before deployment.
     """
-    images = _get_docker_images()
+    images = _get_docker_images() + _get_file_images()
     return ImageInventoryResponse(images=images)
+
+
+@router.delete("/images/{reference:path}")
+def delete_image(reference: str) -> dict[str, object]:
+    """Delete a Docker or file-based image from this agent."""
+    try:
+        if _is_file_based_reference(reference):
+            destination = _validate_file_destination(reference)
+            if not destination:
+                return {"success": False, "error": "Invalid destination path"}
+            if not destination.exists():
+                remove_file_image_metadata(str(destination))
+                return {"success": True, "deleted": False}
+            destination.unlink(missing_ok=True)
+            Path(str(destination) + ".sha256").unlink(missing_ok=True)
+            remove_file_image_metadata(str(destination))
+            logger.info("Deleted file-based image from agent: %s", destination)
+            return {"success": True, "deleted": True}
+
+        client = get_docker_client()
+        try:
+            image = client.images.get(reference)
+        except docker.errors.ImageNotFound:
+            remove_docker_image_metadata(reference=reference)
+            return {"success": True, "deleted": False}
+
+        client.images.remove(reference, force=False, noprune=False)
+        remove_docker_image_metadata(image_id=image.id, reference=reference)
+        logger.info("Deleted Docker image from agent: %s", reference)
+        return {"success": True, "deleted": True}
+    except docker.errors.APIError as e:
+        logger.warning("Failed to delete image %s: %s", reference, e)
+        return {"success": False, "error": str(e)}
+    except OSError as e:
+        logger.warning("Failed to delete file image %s: %s", reference, e)
+        return {"success": False, "error": str(e)}
+    except Exception as e:
+        logger.error("Error deleting image %s: %s", reference, e, exc_info=True)
+        return {"success": False, "error": str(e)}
 
 
 @router.post("/images/backfill-checksums")

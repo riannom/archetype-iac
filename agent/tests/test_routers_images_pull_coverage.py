@@ -356,7 +356,8 @@ class TestListImages:
         fake = [
             DockerImageInfo(id="sha256:aaa", tags=["img1:latest"], size_bytes=100),
         ]
-        with patch("agent.routers.images._get_docker_images", return_value=fake):
+        with patch("agent.routers.images._get_docker_images", return_value=fake), \
+             patch("agent.routers.images._get_file_images", return_value=[]):
             result = list_images()
 
         assert len(result.images) == 1
@@ -365,7 +366,8 @@ class TestListImages:
     def test_returns_empty_list(self):
         from agent.routers.images import list_images
 
-        with patch("agent.routers.images._get_docker_images", return_value=[]):
+        with patch("agent.routers.images._get_docker_images", return_value=[]), \
+             patch("agent.routers.images._get_file_images", return_value=[]):
             result = list_images()
 
         assert result.images == []

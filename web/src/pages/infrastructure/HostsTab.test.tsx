@@ -4,7 +4,7 @@ import userEvent from '@testing-library/user-event';
 import { BrowserRouter } from 'react-router-dom';
 import React from 'react';
 import HostsTab from './HostsTab';
-import type { HostDetailed, UpdateStatus, SyncStrategy } from './infrastructureTypes';
+import type { AgentImagesDetailResponse, HostDetailed, UpdateStatus, SyncStrategy } from './infrastructureTypes';
 
 // Mock HostCard
 vi.mock('./HostCard', () => ({
@@ -76,6 +76,9 @@ function defaultProps() {
     expandedContainers: new Set<string>(),
     expandedVMs: new Set<string>(),
     expandedImages: new Set<string>(),
+    agentImageDetails: {} as Record<string, AgentImagesDetailResponse>,
+    agentImagesLoading: new Set<string>(),
+    agentImagesCleaning: new Set<string>(),
     updatingAgents: new Set<string>(),
     updateStatuses: new Map<string, UpdateStatus>(),
     isUpdateAvailable: vi.fn(() => false),
@@ -83,6 +86,7 @@ function defaultProps() {
     onToggleContainers: vi.fn(),
     onToggleVMs: vi.fn(),
     onToggleImages: vi.fn(),
+    onCleanupStaleImages: vi.fn(),
     onUpdateSyncStrategy: vi.fn(),
     onTriggerUpdate: vi.fn(),
     onTriggerRebuild: vi.fn(),

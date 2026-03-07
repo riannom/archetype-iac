@@ -3,7 +3,7 @@ import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { BrowserRouter } from 'react-router-dom';
 import HostCard from './HostCard';
-import type { HostDetailed, UpdateStatus, SyncStrategy } from './infrastructureTypes';
+import type { AgentImagesDetailResponse, HostDetailed, UpdateStatus, SyncStrategy } from './infrastructureTypes';
 
 function makeHost(overrides: Partial<HostDetailed> = {}): HostDetailed {
   return {
@@ -52,12 +52,16 @@ const defaultProps = () => ({
   expandedContainers: new Set<string>(),
   expandedVMs: new Set<string>(),
   expandedImages: new Set<string>(),
+  agentImageDetails: {} as Record<string, AgentImagesDetailResponse>,
+  agentImagesLoading: new Set<string>(),
+  agentImagesCleaning: new Set<string>(),
   updatingAgents: new Set<string>(),
   updateStatuses: new Map<string, UpdateStatus>(),
   onToggleLabs: vi.fn(),
   onToggleContainers: vi.fn(),
   onToggleVMs: vi.fn(),
   onToggleImages: vi.fn(),
+  onCleanupStaleImages: vi.fn(),
   onUpdateSyncStrategy: vi.fn(),
   onTriggerUpdate: vi.fn(),
   onTriggerRebuild: vi.fn(),
@@ -248,6 +252,74 @@ describe('HostCard', () => {
     renderWithRouter(<HostCard {...props} />);
     await user.click(screen.getByText('Show all 5'));
     expect(props.onToggleLabs).toHaveBeenCalledWith('host-1');
+  });
+
+  it('shows stale image details when provided for an expanded host', () => {
+    const props = defaultProps();
+    props.host = makeHost({ images: [] });
+    props.expandedImages = new Set(['host-1']);
+    props.agentImageDetails = {
+      'host-1': {
+        agent_id: 'host-1',
+        agent_name: 'Agent-01',
+        images: props.host.images,
+        inventory: [],
+        inventory_refreshed_at: '2026-01-01T00:00:00Z',
+        stale_images: [{
+          reference: '/var/lib/archetype/images/stale.qcow2',
+          display_reference: '/var/lib/archetype/images/stale.qcow2',
+          kind: 'qcow2',
+          size_bytes: 4096,
+          created: null,
+          device_id: null,
+          tracked_image_id: null,
+          tracked_status: null,
+          is_needed: false,
+          is_stale: true,
+          reason: 'Not referenced by catalog or active nodes',
+        }],
+      },
+    };
+
+    renderWithRouter(<HostCard {...props} />);
+    expect(screen.getByText(/1 stale/)).toBeInTheDocument();
+    expect(screen.getByText('Stale On Agent')).toBeInTheDocument();
+    expect(screen.getByText('stale.qcow2')).toBeInTheDocument();
+    expect(screen.getByText(/Inventory refreshed/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /clean stale/i })).toBeInTheDocument();
+  });
+
+  it('calls onCleanupStaleImages when clean stale is clicked', async () => {
+    const user = userEvent.setup();
+    const props = defaultProps();
+    props.host = makeHost({ images: [] });
+    props.expandedImages = new Set(['host-1']);
+    props.agentImageDetails = {
+      'host-1': {
+        agent_id: 'host-1',
+        agent_name: 'Agent-01',
+        images: [],
+        inventory: [],
+        inventory_refreshed_at: '2026-01-01T00:00:00Z',
+        stale_images: [{
+          reference: '/var/lib/archetype/images/stale.qcow2',
+          display_reference: '/var/lib/archetype/images/stale.qcow2',
+          kind: 'qcow2',
+          size_bytes: 4096,
+          created: null,
+          device_id: null,
+          tracked_image_id: null,
+          tracked_status: null,
+          is_needed: false,
+          is_stale: true,
+          reason: 'Not referenced by catalog or active nodes',
+        }],
+      },
+    };
+
+    renderWithRouter(<HostCard {...props} />);
+    await user.click(screen.getByRole('button', { name: /clean stale/i }));
+    expect(props.onCleanupStaleImages).toHaveBeenCalledWith('host-1');
   });
 
   // ── Update Button ──

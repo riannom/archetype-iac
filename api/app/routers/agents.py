@@ -18,6 +18,7 @@ from app import db, models
 from app.agent_auth import verify_agent_secret
 from app.auth import get_current_admin, get_current_user
 from app.config import settings
+from app.metrics import record_agent_stale_image_cleanup, set_agent_stale_image_count
 from app.routers.system import get_commit
 from app.state import HostStatus, JobStatus, LabState, LinkActualState
 from app.utils.http import require_admin
@@ -920,7 +921,7 @@ def update_sync_strategy(
 
 
 @router.get("/{agent_id}/images")
-def list_agent_images(
+async def list_agent_images(
     agent_id: str,
     database: Session = Depends(db.get_db),
     current_user: models.User = Depends(get_current_user),
@@ -934,9 +935,14 @@ def list_agent_images(
     if not host:
         raise HTTPException(status_code=404, detail="Agent not found")
 
+    return await _build_agent_image_details(host, database)
+
+
+async def _build_agent_image_details(host: models.Host, database: Session) -> dict:
+    """Build tracked and live inventory state for a single agent."""
     # Get all ImageHost records for this agent
     image_hosts = database.query(models.ImageHost).filter(
-        models.ImageHost.host_id == agent_id
+        models.ImageHost.host_id == host.id
     ).all()
 
     result = []
@@ -950,10 +956,176 @@ def list_agent_images(
             "error_message": ih.error_message,
         })
 
+    from app import agent_client
+    from app.image_store import load_manifest
+    from app.tasks.image_reconciliation import _active_image_references_by_host
+
+    manifest = load_manifest()
+    catalog_refs = {
+        img.get("reference")
+        for img in manifest.get("images", [])
+        if img.get("reference")
+    }
+    active_refs_by_host = _active_image_references_by_host(database)
+    keep_refs = set(catalog_refs)
+    keep_refs.update(active_refs_by_host.get(host.id, set()))
+    tracked_by_reference = {ih.reference: ih for ih in image_hosts if ih.reference}
+
+    inventory: list[dict[str, object]] = []
+    stale_images: list[dict[str, object]] = []
+    inventory_refreshed_at: str | None = None
+    if host.status == HostStatus.ONLINE and agent_client.is_agent_online(host):
+        try:
+            images_response = await agent_client.get_agent_images(host)
+            inventory_refreshed_at = datetime.now(timezone.utc).isoformat()
+            for img_info in images_response.get("images", []):
+                candidates: list[str] = []
+                reference = img_info.get("reference")
+                if isinstance(reference, str) and reference:
+                    candidates.append(reference)
+                for tag in img_info.get("tags", []):
+                    if isinstance(tag, str) and tag:
+                        candidates.append(tag)
+
+                kind = img_info.get("kind") or ("docker" if img_info.get("tags") else "file")
+                for candidate in candidates:
+                    if "<none>" in candidate:
+                        continue
+                    tracked = tracked_by_reference.get(candidate)
+                    is_needed = candidate in keep_refs
+                    entry = {
+                        "reference": candidate,
+                        "display_reference": candidate,
+                        "kind": kind,
+                        "size_bytes": img_info.get("size_bytes"),
+                        "created": img_info.get("created"),
+                        "device_id": img_info.get("device_id"),
+                        "tracked_image_id": tracked.image_id if tracked else None,
+                        "tracked_status": tracked.status if tracked else None,
+                        "is_needed": is_needed,
+                        "is_stale": not is_needed,
+                        "reason": None if is_needed else "Not referenced by catalog or active nodes",
+                    }
+                    inventory.append(entry)
+                    if not is_needed:
+                        stale_images.append(entry)
+        except Exception as e:
+            inventory_refreshed_at = datetime.now(timezone.utc).isoformat()
+            stale_images = [{
+                "reference": "",
+                "display_reference": "",
+                "kind": "unknown",
+                "size_bytes": None,
+                "created": None,
+                "device_id": None,
+                "tracked_image_id": None,
+                "tracked_status": None,
+                "is_needed": False,
+                "is_stale": False,
+                "reason": f"Failed to query agent inventory: {e}",
+            }]
+
+    stale_count = sum(1 for entry in stale_images if entry.get("is_stale"))
+    set_agent_stale_image_count(host.id, host.name or host.id, stale_count)
     return {
-        "agent_id": agent_id,
+        "agent_id": host.id,
         "agent_name": host.name,
         "images": result,
+        "inventory": inventory,
+        "stale_images": stale_images,
+        "inventory_refreshed_at": inventory_refreshed_at,
+    }
+
+
+@router.post("/{agent_id}/images/cleanup-stale")
+async def cleanup_agent_stale_images(
+    agent_id: str,
+    database: Session = Depends(db.get_db),
+    current_user: models.User = Depends(get_current_user),
+) -> dict:
+    """Delete stale image artifacts from an agent immediately."""
+    require_admin(current_user)
+
+    host = database.get(models.Host, agent_id)
+    if not host:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    if host.status != HostStatus.ONLINE:
+        raise HTTPException(status_code=503, detail="Agent is offline")
+
+    from app import agent_client
+
+    details = await _build_agent_image_details(host, database)
+    stale_images = [
+        entry for entry in details["stale_images"]
+        if entry.get("is_stale") and isinstance(entry.get("reference"), str) and entry.get("reference")
+    ]
+    stale_references = sorted({str(entry["reference"]) for entry in stale_images})
+
+    deleted: list[str] = []
+    failed: list[dict[str, str]] = []
+    for reference in stale_references:
+        response = await agent_client.delete_image_on_agent(host, reference)
+        if response.get("success") and response.get("deleted"):
+            deleted.append(reference)
+        else:
+            failed.append({
+                "reference": reference,
+                "error": str(response.get("error") or "delete failed"),
+            })
+
+    if deleted:
+        record_agent_stale_image_cleanup(host.id, host.name or host.id, "deleted", len(deleted))
+    if failed:
+        record_agent_stale_image_cleanup(host.id, host.name or host.id, "failed", len(failed))
+
+    refreshed = await _build_agent_image_details(host, database)
+    return {
+        "agent_id": host.id,
+        "agent_name": host.name,
+        "requested": len(stale_references),
+        "deleted": deleted,
+        "failed": failed,
+        "stale_images_remaining": sum(1 for entry in refreshed["stale_images"] if entry.get("is_stale")),
+        "inventory_refreshed_at": refreshed.get("inventory_refreshed_at"),
+    }
+
+
+@router.get("/images/stale-summary")
+async def list_stale_agent_images_summary(
+    database: Session = Depends(db.get_db),
+    current_user: models.User = Depends(get_current_user),
+) -> dict:
+    """Summarize stale image artifacts across all agents."""
+    hosts = database.query(models.Host).all()
+    host_summaries: list[dict[str, object]] = []
+    total_stale_images = 0
+
+    for host in hosts:
+        details = await _build_agent_image_details(host, database)
+        stale_count = sum(1 for entry in details["stale_images"] if entry.get("is_stale"))
+        total_stale_images += stale_count
+        inventory_error = next(
+            (
+                str(entry.get("reason"))
+                for entry in details["stale_images"]
+                if entry.get("reference") == "" and entry.get("reason")
+            ),
+            None,
+        )
+        host_summaries.append({
+            "agent_id": host.id,
+            "agent_name": host.name,
+            "status": host.status,
+            "stale_image_count": stale_count,
+            "inventory_refreshed_at": details.get("inventory_refreshed_at"),
+            "inventory_error": inventory_error,
+        })
+
+    affected_agents = sum(1 for summary in host_summaries if summary["stale_image_count"])
+    return {
+        "hosts": host_summaries,
+        "total_stale_images": total_stale_images,
+        "affected_agents": affected_agents,
     }
 
 
