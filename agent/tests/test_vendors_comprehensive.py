@@ -430,6 +430,14 @@ class TestGetConfigExtractionSettings:
         assert s.user == "admin"
         assert s.password == "cisco"
 
+    def test_sonic_vs_serial_method(self):
+        s = get_config_extraction_settings("sonic-vs")
+        assert s.method == "serial"
+        assert s.command == "sudo vtysh -c 'show running-config'"
+        assert s.user == "admin"
+        assert s.password == "YourPaSsWoRd"
+        assert s.prompt_pattern == r"[\w@.\-:/~]+[$#]\s*$"
+
     def test_unknown_returns_none_method(self):
         s = get_config_extraction_settings("completely_unknown_xyz")
         assert s.method == "none"
@@ -562,6 +570,15 @@ class TestGetVendorsForUI:
         assert sonic is not None
         assert sonic["supportedImageKinds"] == ["qcow2"]
         assert sonic["defaultCredentials"] == "admin / YourPaSsWoRd"
+
+    def test_sonic_vs_reports_vm_defaults(self):
+        cfg = get_vendor_config("sonic-vs")
+        assert cfg is not None
+        assert cfg.memory == 4096
+        assert cfg.cpu == 2
+        assert cfg.readiness_probe == "log_pattern"
+        assert cfg.readiness_pattern == r"login:"
+        assert cfg.readiness_timeout == 300
 
 
 class TestLinuxDeviceSupportedImageKinds:

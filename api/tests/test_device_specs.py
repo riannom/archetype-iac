@@ -116,6 +116,16 @@ class TestResolveHardwareSpecs:
         specs = self.service.resolve_hardware_specs("totally_unknown_device")
         assert specs == {}
 
+    def test_sonic_vs_uses_registry_vm_defaults(self):
+        """SONiC VS should resolve to the vendor's VM sizing and readiness defaults."""
+        specs = self.service.resolve_hardware_specs("sonic-vs")
+        assert specs["memory"] == 4096
+        assert specs["cpu"] == 2
+        assert specs["readiness_probe"] == "log_pattern"
+        assert specs["readiness_pattern"] == r"login:"
+        assert specs["readiness_timeout"] == 300
+        assert specs["libvirt_driver"] == "kvm"
+
     @patch("app.services.device_service.get_device_override", return_value=None)
     @patch("app.services.device_service.find_custom_device", return_value=None)
     @patch("app.services.device_service.get_kind_for_device", return_value="unknown")
