@@ -133,6 +133,7 @@ const Canvas: React.FC<CanvasProps> = ({
   }, []);
 
   const handleNodeContextMenu = (e: React.MouseEvent, id: string) => {
+    if (activeTool === 'hand') return;
     e.preventDefault();
     e.stopPropagation();
     onSelect(id);
@@ -140,6 +141,7 @@ const Canvas: React.FC<CanvasProps> = ({
   };
 
   const handleLinkContextMenu = (e: React.MouseEvent, id: string) => {
+    if (activeTool === 'hand') return;
     e.preventDefault();
     e.stopPropagation();
     onSelect(id);
@@ -172,7 +174,7 @@ const Canvas: React.FC<CanvasProps> = ({
       ref={containerRef}
       className={`flex-1 relative overflow-hidden canvas-grid ${
         effectiveMode === 'dark' ? 'bg-stone-950' : 'bg-stone-50'
-      } ${interaction.isPanning ? 'cursor-grabbing' : activeTool === 'text' ? 'cursor-text' : activeTool !== 'pointer' ? 'cursor-crosshair' : 'cursor-default'}`}
+      } ${interaction.isPanning ? 'cursor-grabbing' : activeTool === 'hand' ? 'cursor-grab' : activeTool === 'text' ? 'cursor-text' : activeTool !== 'pointer' ? 'cursor-crosshair' : 'cursor-default'}`}
       onMouseMove={interaction.handleMouseMove}
       onMouseUp={interaction.handleMouseUp}
       onMouseDown={handleCanvasMouseDown}

@@ -125,6 +125,7 @@ describe('useCanvasInteraction', () => {
       expect(result.current.draggingNode).toBeNull();
       expect(result.current.linkingNode).toBeNull();
       expect(result.current.isPanning).toBe(false);
+      expect(result.current.isZooming).toBe(false);
       expect(result.current.resizing).toBeNull();
       expect(result.current.drawStart).toBeNull();
       expect(result.current.drawEnd).toBeNull();
@@ -285,6 +286,19 @@ describe('useCanvasInteraction', () => {
       expect(defaultArgs.onSelect).toHaveBeenCalledWith('ann-1');
       expect(event.stopPropagation).toHaveBeenCalled();
     });
+
+    it('uses annotation drag to pan in hand mode instead of selecting', () => {
+      const args = { ...defaultArgs, activeTool: 'hand' as const };
+      const { result } = renderHook(() => useCanvasInteraction(args));
+      const event = createMouseEvent({ button: 0, clientX: 120, clientY: 140 });
+
+      act(() => {
+        result.current.handleAnnotationMouseDown(event, 'ann-1');
+      });
+
+      expect(result.current.isPanning).toBe(true);
+      expect(defaultArgs.onSelect).not.toHaveBeenCalled();
+    });
   });
 
   // -- Canvas Mouse Down --
@@ -332,6 +346,32 @@ describe('useCanvasInteraction', () => {
 
       expect(defaultArgs.onToolCreate).toHaveBeenCalledWith('text', expect.any(Number), expect.any(Number));
     });
+
+    it('starts panning on left-click in hand mode', () => {
+      const args = { ...defaultArgs, activeTool: 'hand' as const };
+      const { result } = renderHook(() => useCanvasInteraction(args));
+
+      act(() => {
+        result.current.handleMouseDown(createMouseEvent({ button: 0, clientX: 200, clientY: 200 }));
+      });
+
+      expect(result.current.isPanning).toBe(true);
+      expect(result.current.marqueeStart).toBeNull();
+    });
+
+    it('starts drag zoom on right-click in hand mode', () => {
+      const args = { ...defaultArgs, activeTool: 'hand' as const };
+      const { result } = renderHook(() => useCanvasInteraction(args));
+      const event = createMouseEvent({ button: 2, clientX: 200, clientY: 200 });
+
+      act(() => {
+        result.current.handleMouseDown(event);
+      });
+
+      expect(event.preventDefault).toHaveBeenCalled();
+      expect(result.current.isZooming).toBe(true);
+      expect(result.current.isPanning).toBe(false);
+    });
   });
 
   // -- Mouse Up --
@@ -370,6 +410,7 @@ describe('useCanvasInteraction', () => {
       // But the general mouse up does clear it via marquee fallback.
       // The important thing: isPanning, linkingNode, resizing are cleared.
       expect(result.current.isPanning).toBe(false);
+      expect(result.current.isZooming).toBe(false);
       expect(result.current.linkingNode).toBeNull();
       expect(result.current.resizing).toBeNull();
     });
@@ -415,6 +456,22 @@ describe('useCanvasInteraction', () => {
 
       expect(event.preventDefault).toHaveBeenCalled();
       expect(defaultArgs.setZoom).toHaveBeenCalled();
+    });
+
+    it('updates zoom during right-drag zoom in hand mode', () => {
+      const args = { ...defaultArgs, activeTool: 'hand' as const };
+      const { result } = renderHook(() => useCanvasInteraction(args));
+
+      act(() => {
+        result.current.handleMouseDown(createMouseEvent({ button: 2, clientX: 300, clientY: 300 }));
+      });
+
+      act(() => {
+        result.current.handleMouseMove(createMouseEvent({ button: 2, clientX: 300, clientY: 320, movementY: 20 }));
+      });
+
+      expect(defaultArgs.setZoom).toHaveBeenCalled();
+      expect(defaultArgs.setOffset).toHaveBeenCalled();
     });
   });
 

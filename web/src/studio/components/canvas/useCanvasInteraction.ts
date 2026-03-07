@@ -46,6 +46,7 @@ export function useCanvasInteraction({
   const [linkingNode, setLinkingNode] = useState<string | null>(null);
   const [mousePos, setMousePos] = useState({ x: 0, y: 0 });
   const [isPanning, setIsPanning] = useState(false);
+  const [isZooming, setIsZooming] = useState(false);
   const [resizing, setResizing] = useState<ResizeState | null>(null);
   const [drawStart, setDrawStart] = useState<{ x: number; y: number } | null>(null);
   const [drawEnd, setDrawEnd] = useState<{ x: number; y: number } | null>(null);
@@ -60,6 +61,20 @@ export function useCanvasInteraction({
   const [marqueeEnd, setMarqueeEnd] = useState<{ x: number; y: number } | null>(null);
   const marqueeRef = useRef<{ x: number; y: number } | null>(null);
 
+  const startPan = useCallback((clientX: number, clientY: number) => {
+    setIsPanning(true);
+    setIsZooming(false);
+    panStartRef.current = { x: clientX, y: clientY };
+    didPanRef.current = false;
+  }, []);
+
+  const startZoomDrag = useCallback((clientX: number, clientY: number) => {
+    setIsZooming(true);
+    setIsPanning(false);
+    panStartRef.current = { x: clientX, y: clientY };
+    didPanRef.current = false;
+  }, []);
+
   const handleMouseMove = useCallback((e: React.MouseEvent) => {
     if (!containerRef.current) return;
     const rect = containerRef.current.getBoundingClientRect();
@@ -69,6 +84,27 @@ export function useCanvasInteraction({
 
     if (isPanning) {
       setOffset(prev => ({ x: prev.x + e.movementX, y: prev.y + e.movementY }));
+      if (!didPanRef.current && panStartRef.current) {
+        const dx = e.clientX - panStartRef.current.x;
+        const dy = e.clientY - panStartRef.current.y;
+        if (Math.abs(dx) > 3 || Math.abs(dy) > 3) {
+          didPanRef.current = true;
+        }
+      }
+      return;
+    }
+
+    if (isZooming) {
+      const factor = Math.pow(1.01, e.movementY);
+      const newZoom = Math.min(Math.max(0.1, zoom * factor), 5);
+      const mouseX = e.clientX - rect.left;
+      const mouseY = e.clientY - rect.top;
+      const scale = newZoom / zoom;
+      setZoom(newZoom);
+      setOffset({
+        x: mouseX - (mouseX - offset.x) * scale,
+        y: mouseY - (mouseY - offset.y) * scale,
+      });
       if (!didPanRef.current && panStartRef.current) {
         const dx = e.clientX - panStartRef.current.x;
         const dy = e.clientY - panStartRef.current.y;
@@ -142,7 +178,7 @@ export function useCanvasInteraction({
       return;
     }
 
-    if (drawStartRef.current && activeTool !== 'pointer' && activeTool !== 'text') {
+    if (drawStartRef.current && activeTool !== 'pointer' && activeTool !== 'hand' && activeTool !== 'text') {
       setDrawEnd({ x, y });
       return;
     }
@@ -152,7 +188,7 @@ export function useCanvasInteraction({
     } else if (draggingAnnotation) {
       onAnnotationMove(draggingAnnotation, x, y);
     }
-  }, [offset, zoom, isPanning, draggingNode, draggingAnnotation, resizing, annotations, activeTool, onNodeMove, onAnnotationMove, onUpdateAnnotation]);
+  }, [offset, zoom, isPanning, isZooming, draggingNode, draggingAnnotation, resizing, annotations, activeTool, onNodeMove, onAnnotationMove, onUpdateAnnotation, setZoom, setOffset]);
 
   const handleWheel = useCallback((e: React.WheelEvent) => {
     if (e.ctrlKey || e.metaKey) {
@@ -174,12 +210,19 @@ export function useCanvasInteraction({
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
     // Middle-button pan always works regardless of tool
     if (e.button === 1) {
-      setIsPanning(true);
-      panStartRef.current = { x: e.clientX, y: e.clientY };
-      didPanRef.current = false;
+      startPan(e.clientX, e.clientY);
+      return;
+    }
+    if (e.button === 2 && activeTool === 'hand') {
+      startZoomDrag(e.clientX, e.clientY);
+      e.preventDefault();
       return;
     }
     if (e.button === 0) {
+      if (activeTool === 'hand') {
+        startPan(e.clientX, e.clientY);
+        return;
+      }
       // Tool mode: left-click starts tool gesture
       if (activeTool !== 'pointer' && onToolCreate && containerRef.current) {
         const rect = containerRef.current.getBoundingClientRect();
@@ -212,12 +255,12 @@ export function useCanvasInteraction({
       didPanRef.current = false;
       return;
     }
-  }, [activeTool, onToolCreate, offset, zoom]);
+  }, [activeTool, onToolCreate, offset, zoom, containerRef, startPan, startZoomDrag]);
 
   const handleMouseUp = useCallback(() => {
     // Complete draw gesture for tool mode
     const start = drawStartRef.current;
-    if (start && drawEnd && activeTool !== 'pointer' && activeTool !== 'text' && onToolCreate) {
+    if (start && drawEnd && activeTool !== 'pointer' && activeTool !== 'hand' && activeTool !== 'text' && onToolCreate) {
       const dx = drawEnd.x - start.x;
       const dy = drawEnd.y - start.y;
       const dist = Math.sqrt(dx * dx + dy * dy);
@@ -321,18 +364,29 @@ export function useCanvasInteraction({
       return;
     }
 
-    if (isPanning && !didPanRef.current) {
+    if (isPanning && !didPanRef.current && activeTool !== 'hand') {
       onSelect(null);
     }
     setDraggingNode(null);
     setDraggingAnnotation(null);
     setIsPanning(false);
+    setIsZooming(false);
     panStartRef.current = null;
     setLinkingNode(null);
     setResizing(null);
   }, [isPanning, onSelect, drawEnd, activeTool, onToolCreate, marqueeEnd, onSelectMultiple, nodes, annotations]);
 
   const handleNodeMouseDown = (e: React.MouseEvent, id: string) => {
+    if (activeTool === 'hand') {
+      e.stopPropagation();
+      if (e.button === 0) {
+        startPan(e.clientX, e.clientY);
+      } else if (e.button === 2) {
+        startZoomDrag(e.clientX, e.clientY);
+        e.preventDefault();
+      }
+      return;
+    }
     if (e.button === 2) return;
     e.stopPropagation();
     if (e.shiftKey) {
@@ -344,6 +398,16 @@ export function useCanvasInteraction({
   };
 
   const handleAnnotationMouseDown = (e: React.MouseEvent, id: string) => {
+    if (activeTool === 'hand') {
+      e.stopPropagation();
+      if (e.button === 0) {
+        startPan(e.clientX, e.clientY);
+      } else if (e.button === 2) {
+        startZoomDrag(e.clientX, e.clientY);
+        e.preventDefault();
+      }
+      return;
+    }
     e.stopPropagation();
     setDraggingAnnotation(id);
     onSelect(id);
@@ -391,6 +455,16 @@ export function useCanvasInteraction({
   };
 
   const handleLinkMouseDown = (e: React.MouseEvent, id: string) => {
+    if (activeTool === 'hand') {
+      e.stopPropagation();
+      if (e.button === 0) {
+        startPan(e.clientX, e.clientY);
+      } else if (e.button === 2) {
+        startZoomDrag(e.clientX, e.clientY);
+        e.preventDefault();
+      }
+      return;
+    }
     if (e.button === 2) return;
     e.stopPropagation();
     onSelect(id);
@@ -431,6 +505,7 @@ export function useCanvasInteraction({
     linkingNode,
     mousePos,
     isPanning,
+    isZooming,
     resizing,
     drawStart,
     drawEnd,
