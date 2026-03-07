@@ -459,6 +459,40 @@ def test_audit_runtime_identity_sync_counts_metadata_and_name_only(monkeypatch):
 
 def test_backfill_runtime_identity_sync_updates_domain_metadata():
     provider = _make_provider()
+    metadata_calls: list[tuple[object, str, str, str, int]] = []
+    domain = SimpleNamespace(
+        XMLDesc=lambda _flags=0: "<domain><name>arch-lab1-r1</name></domain>",
+        setMetadata=lambda metadata_type, xml, key, uri, flags: metadata_calls.append(
+            (metadata_type, xml, key, uri, flags)
+        )
+    )
+    provider._conn = SimpleNamespace(isAlive=lambda: True, lookupByName=lambda _name: domain)
+    libvirt_mod.libvirt = SimpleNamespace(
+        VIR_DOMAIN_METADATA_ELEMENT=1,
+        VIR_DOMAIN_AFFECT_LIVE=2,
+        VIR_DOMAIN_AFFECT_CONFIG=4,
+    )
+
+    result = provider._backfill_runtime_identity_sync([{
+        "lab_id": "lab1",
+        "node_name": "r1",
+        "node_definition_id": "node-def-r1",
+        "provider": "libvirt",
+    }], dry_run=False)
+
+    assert result["updated"] == 1
+    assert len(metadata_calls) == 1
+    metadata_type, xml, key, uri, flags = metadata_calls[0]
+    assert metadata_type == 1
+    assert key == "node"
+    assert uri == "http://archetype.io/libvirt/1"
+    assert flags == 6
+    assert "node-def-r1" in xml
+    assert "<archetype:lab_id>lab1</archetype:lab_id>" in xml
+
+
+def test_backfill_runtime_identity_sync_falls_back_to_define_xml_when_set_metadata_missing():
+    provider = _make_provider()
     xml = "<domain><name>arch-lab1-r1</name><metadata><archetype:node xmlns:archetype='http://archetype.io/libvirt/1'><archetype:kind>iosv</archetype:kind></archetype:node></metadata></domain>"
     domain = SimpleNamespace(XMLDesc=lambda _flags=0: xml)
     defined_xml: list[str] = []
@@ -467,6 +501,7 @@ def test_backfill_runtime_identity_sync_updates_domain_metadata():
         lookupByName=lambda _name: domain,
         defineXML=lambda new_xml: defined_xml.append(new_xml) or object(),
     )
+    libvirt_mod.libvirt = SimpleNamespace()
 
     result = provider._backfill_runtime_identity_sync([{
         "lab_id": "lab1",
