@@ -147,6 +147,29 @@ def _update_domain_identity_metadata_xml(
     return ET.tostring(root, encoding="unicode")
 
 
+def _build_domain_identity_metadata_fragment(
+    *,
+    lab_id: str,
+    node_name: str,
+    node_definition_id: str,
+    provider: str,
+) -> str:
+    """Build libvirt metadata XML fragment for runtime identity fields."""
+    ET.register_namespace("archetype", ARCHETYPE_LIBVIRT_NS)
+    node_elem = ET.Element(f"{{{ARCHETYPE_LIBVIRT_NS}}}node")
+
+    for local_tag, value in (
+        ("lab_id", lab_id),
+        ("node_name", node_name),
+        ("node_definition_id", node_definition_id),
+        ("provider", provider),
+    ):
+        elem = ET.SubElement(node_elem, f"{{{ARCHETYPE_LIBVIRT_NS}}}{local_tag}")
+        elem.text = value
+
+    return ET.tostring(node_elem, encoding="unicode")
+
+
 # Try to import libvirt - it's optional
 try:
     import libvirt
@@ -3088,17 +3111,40 @@ class LibvirtProvider(Provider, VlanPersistenceMixin):
 
             try:
                 if not dry_run:
-                    xml = domain.XMLDesc(0)
-                    updated_xml = _update_domain_identity_metadata_xml(
-                        xml,
+                    metadata_xml = _build_domain_identity_metadata_fragment(
                         lab_id=lab_id,
                         node_name=node_name,
                         node_definition_id=node_definition_id,
                         provider=provider_name,
                     )
-                    updated = self.conn.defineXML(updated_xml)
-                    if not updated:
-                        raise RuntimeError(f"Failed to redefine domain {runtime_name}")
+                    metadata_written = False
+
+                    set_metadata = getattr(domain, "setMetadata", None)
+                    metadata_type = getattr(libvirt, "VIR_DOMAIN_METADATA_ELEMENT", None)
+                    affect_live = getattr(libvirt, "VIR_DOMAIN_AFFECT_LIVE", 0)
+                    affect_config = getattr(libvirt, "VIR_DOMAIN_AFFECT_CONFIG", 0)
+                    if callable(set_metadata) and metadata_type is not None:
+                        set_metadata(
+                            metadata_type,
+                            metadata_xml,
+                            "node",
+                            ARCHETYPE_LIBVIRT_NS,
+                            affect_live | affect_config,
+                        )
+                        metadata_written = True
+
+                    if not metadata_written:
+                        xml = domain.XMLDesc(0)
+                        updated_xml = _update_domain_identity_metadata_xml(
+                            xml,
+                            lab_id=lab_id,
+                            node_name=node_name,
+                            node_definition_id=node_definition_id,
+                            provider=provider_name,
+                        )
+                        updated = self.conn.defineXML(updated_xml)
+                        if not updated:
+                            raise RuntimeError(f"Failed to redefine domain {runtime_name}")
                 result["updated"] += 1
                 result["nodes"].append({
                     "lab_id": lab_id,
