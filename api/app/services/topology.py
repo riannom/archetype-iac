@@ -57,6 +57,53 @@ class TopologyService:
     def __init__(self, db: Session):
         self.db = db
 
+    def _build_node_config_json(self, graph_node: GraphNode) -> str | None:
+        """Persist only explicit per-node overrides, not resolved defaults."""
+        config: dict[str, Any] = {}
+        if graph_node.role:
+            config["role"] = graph_node.role
+        if graph_node.mgmt:
+            config["mgmt"] = graph_node.mgmt
+        if graph_node.vars:
+            config["vars"] = graph_node.vars
+
+        base_hw_specs: dict[str, Any] = {}
+        if graph_node.device:
+            from app.services.device_service import get_device_service
+
+            try:
+                base_hw_specs = get_device_service().resolve_hardware_specs(
+                    graph_node.device,
+                    None,
+                    graph_node.image,
+                    version=graph_node.version,
+                )
+            except Exception:
+                logger.debug(
+                    "Failed to resolve base hardware specs for %s; preserving incoming node config",
+                    graph_node.device,
+                    exc_info=True,
+                )
+
+        for field in (
+            "memory",
+            "cpu",
+            "disk_driver",
+            "nic_driver",
+            "machine_type",
+            "libvirt_driver",
+            "efi_boot",
+            "efi_vars",
+        ):
+            value = getattr(graph_node, field)
+            if value is None:
+                continue
+            if base_hw_specs.get(field) == value:
+                continue
+            config[field] = value
+
+        return json.dumps(config) if config else None
+
     # =========================================================================
     # Query Methods
     # =========================================================================
@@ -408,32 +455,7 @@ class TopologyService:
                 container_name = _safe_node_name(graph_node.name, used_names)
             used_names.add(container_name)
 
-            # Build config_json for extra fields
-            config: dict[str, Any] = {}
-            if graph_node.role:
-                config["role"] = graph_node.role
-            if graph_node.mgmt:
-                config["mgmt"] = graph_node.mgmt
-            if graph_node.vars:
-                config["vars"] = graph_node.vars
-            # Hardware spec overrides (per-node)
-            if graph_node.memory:
-                config["memory"] = graph_node.memory
-            if graph_node.cpu:
-                config["cpu"] = graph_node.cpu
-            if graph_node.disk_driver:
-                config["disk_driver"] = graph_node.disk_driver
-            if graph_node.nic_driver:
-                config["nic_driver"] = graph_node.nic_driver
-            if graph_node.machine_type:
-                config["machine_type"] = graph_node.machine_type
-            if graph_node.libvirt_driver:
-                config["libvirt_driver"] = graph_node.libvirt_driver
-            if graph_node.efi_boot is not None:
-                config["efi_boot"] = graph_node.efi_boot
-            if graph_node.efi_vars:
-                config["efi_vars"] = graph_node.efi_vars
-            config_json = json.dumps(config) if config else None
+            config_json = self._build_node_config_json(graph_node)
 
             # Resolve host name to host_id
             host_id = None
