@@ -40,9 +40,11 @@ let mockImageLibraryData: unknown[] = [];
 vi.mock("../contexts/ImageLibraryContext", () => ({
   useImageLibrary: () => ({
     imageLibrary: mockImageLibraryData,
+    staleAgentSummary: null,
     loading: false,
     error: null,
     refreshImageLibrary: vi.fn(),
+    refreshStaleAgentSummary: vi.fn(),
   }),
   ImageLibraryProvider: ({ children }: { children: React.ReactNode }) => children,
 }));

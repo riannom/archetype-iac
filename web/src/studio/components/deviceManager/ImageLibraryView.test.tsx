@@ -6,6 +6,7 @@ import type { DeviceModel, ImageLibraryEntry } from '../../types';
 import { DeviceType } from '../../types';
 import type { ImageAssignmentFilter, ImageSortOption } from '../ImageFilterBar';
 import type { PendingQcow2Upload } from './deviceManagerTypes';
+import type { AgentStaleImageSummaryResponse } from '../../../types/agentImages';
 
 // Mock ImageCard
 vi.mock('../ImageCard', () => ({
@@ -93,6 +94,7 @@ function defaultProps() {
   return {
     runnableImageLibrary: [] as ImageLibraryEntry[],
     deviceModels: [] as DeviceModel[],
+    staleAgentSummary: null as AgentStaleImageSummaryResponse | null,
     filteredImages: [] as ImageLibraryEntry[],
     unassignedImages: [] as ImageLibraryEntry[],
     assignedImagesByDevice: new Map<string, ImageLibraryEntry[]>(),
@@ -136,6 +138,40 @@ describe('ImageLibraryView', () => {
     props.unassignedImages = [img];
     render(<ImageLibraryView {...props} />);
     expect(screen.queryByText('No images found')).not.toBeInTheDocument();
+  });
+
+  it('renders stale agent summary banner when stale artifacts exist', () => {
+    const props = defaultProps();
+    props.staleAgentSummary = {
+      total_stale_images: 3,
+      affected_agents: 2,
+      hosts: [
+        {
+          agent_id: 'agent-1',
+          agent_name: 'Agent 1',
+          status: 'online',
+          stale_image_count: 2,
+          inventory_refreshed_at: '2026-01-01T00:00:00Z',
+          inventory_error: null,
+        },
+        {
+          agent_id: 'agent-2',
+          agent_name: 'Agent 2',
+          status: 'online',
+          stale_image_count: 1,
+          inventory_refreshed_at: '2026-01-01T00:00:00Z',
+          inventory_error: null,
+        },
+      ],
+    };
+    props.filteredImages = [makeImage()];
+    props.unassignedImages = [makeImage()];
+
+    render(<ImageLibraryView {...props} />);
+
+    expect(screen.getByText(/3 stale agent image artifacts detected/i)).toBeInTheDocument();
+    expect(screen.getByText(/Agent 1: 2/)).toBeInTheDocument();
+    expect(screen.getByText(/Agent 2: 1/)).toBeInTheDocument();
   });
 
   // ── Unassigned images section ──

@@ -11,11 +11,11 @@ vi.mock('../api', () => ({
 }));
 
 function Consumer() {
-  const { loading, imageLibrary } = useImageLibrary();
+  const { loading, imageLibrary, staleAgentSummary } = useImageLibrary();
   if (loading) {
     return <div>loading</div>;
   }
-  return <div>count:{imageLibrary.length}</div>;
+  return <div>count:{imageLibrary.length};stale:{staleAgentSummary?.total_stale_images ?? 0}</div>;
 }
 
 describe('ImageLibraryContext', () => {
@@ -24,8 +24,14 @@ describe('ImageLibraryContext', () => {
   });
 
   it('loads image library data', async () => {
-    apiRequest.mockResolvedValue({
-      images: [{ id: 'img1', kind: 'docker', reference: 'ref1' }],
+    apiRequest.mockImplementation(async (path: string) => {
+      if (path === '/images/library') {
+        return { images: [{ id: 'img1', kind: 'docker', reference: 'ref1' }] };
+      }
+      if (path === '/agents/images/stale-summary') {
+        return { hosts: [], total_stale_images: 2, affected_agents: 1 };
+      }
+      throw new Error(`unexpected path: ${path}`);
     });
 
     render(
@@ -34,7 +40,7 @@ describe('ImageLibraryContext', () => {
       </ImageLibraryProvider>
     );
 
-    await waitFor(() => expect(screen.getByText('count:1')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('count:1;stale:2')).toBeInTheDocument());
   });
 
   it('handles fetch errors', async () => {
@@ -46,6 +52,6 @@ describe('ImageLibraryContext', () => {
       </ImageLibraryProvider>
     );
 
-    await waitFor(() => expect(screen.getByText('count:0')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('count:0;stale:0')).toBeInTheDocument());
   });
 });

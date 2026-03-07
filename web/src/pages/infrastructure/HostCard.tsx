@@ -11,7 +11,7 @@ import {
   type ConnectionStatus,
   type RoleBadgeType,
 } from '../../utils/status';
-import type { ContainerDetail, HostDetailed, SyncStrategy, UpdateStatus, VmDetail } from './infrastructureTypes';
+import type { AgentImagesDetailResponse, ContainerDetail, HostDetailed, SyncStrategy, UpdateStatus, VmDetail } from './infrastructureTypes';
 import { SYNC_STRATEGY_OPTIONS } from './infrastructureTypes';
 
 interface HostCardProps {
@@ -22,12 +22,16 @@ interface HostCardProps {
   expandedContainers: Set<string>;
   expandedVMs: Set<string>;
   expandedImages: Set<string>;
+  agentImageDetails: Record<string, AgentImagesDetailResponse>;
+  agentImagesLoading: Set<string>;
+  agentImagesCleaning: Set<string>;
   updatingAgents: Set<string>;
   updateStatuses: Map<string, UpdateStatus>;
   onToggleLabs: (hostId: string) => void;
   onToggleContainers: (hostId: string) => void;
   onToggleVMs: (hostId: string) => void;
   onToggleImages: (hostId: string) => void;
+  onCleanupStaleImages: (hostId: string) => void;
   onUpdateSyncStrategy: (hostId: string, strategy: SyncStrategy) => void;
   onTriggerUpdate: (hostId: string) => void;
   onTriggerRebuild: (hostId: string) => void;
@@ -43,12 +47,16 @@ const HostCard: React.FC<HostCardProps> = ({
   expandedContainers,
   expandedVMs,
   expandedImages,
+  agentImageDetails,
+  agentImagesLoading,
+  agentImagesCleaning,
   updatingAgents,
   updateStatuses,
   onToggleLabs,
   onToggleContainers,
   onToggleVMs,
   onToggleImages,
+  onCleanupStaleImages,
   onUpdateSyncStrategy,
   onTriggerUpdate,
   onTriggerRebuild,
@@ -57,6 +65,10 @@ const HostCard: React.FC<HostCardProps> = ({
 }) => {
   const isExpanded = expandedLabs.has(host.id);
   const hasMultipleLabs = host.labs.length > 3;
+  const imageDetails = agentImageDetails[host.id];
+  const staleImages = imageDetails?.stale_images || [];
+  const staleArtifactImages = staleImages.filter((img) => img.is_stale);
+  const inventoryRefreshedAt = imageDetails?.inventory_refreshed_at;
 
   return (
     <div
@@ -396,7 +408,7 @@ const HostCard: React.FC<HostCardProps> = ({
       </div>
 
       {/* Images */}
-      {host.images && host.images.length > 0 && (() => {
+      {(host.images.length > 0 || staleImages.length > 0 || agentImagesLoading.has(host.id)) && (() => {
         const isImagesOpen = expandedImages.has(host.id);
         const syncedCount = host.images.filter(img => img.status === 'synced').length;
         const syncingCount = host.images.filter(img => img.status === 'syncing').length;
@@ -416,11 +428,20 @@ const HostCard: React.FC<HostCardProps> = ({
                 {failedCount > 0 && (
                   <span className="text-red-500 dark:text-red-400 ml-1">{failedCount} failed</span>
                 )}
+                {staleArtifactImages.length > 0 && (
+                  <span className="text-amber-600 dark:text-amber-400 ml-1">{staleArtifactImages.length} stale</span>
+                )}
               </span>
               <i className={`fa-solid fa-chevron-${isImagesOpen ? 'up' : 'down'} text-[10px] text-stone-400`}></i>
             </button>
             {isImagesOpen && (
               <div className="mt-2 space-y-0.5">
+                {agentImagesLoading.has(host.id) && (
+                  <div className="text-[11px] text-stone-400 px-2 py-1">
+                    <i className="fa-solid fa-spinner fa-spin mr-1.5"></i>
+                    Loading live inventory...
+                  </div>
+                )}
                 {host.images.map((img, i) => (
                   <div
                     key={i}
@@ -441,6 +462,54 @@ const HostCard: React.FC<HostCardProps> = ({
                     </span>
                   </div>
                 ))}
+                {staleImages.length > 0 && (
+                  <div className="mt-2 pt-2 border-t border-amber-200/60 dark:border-amber-800/60">
+                    <div className="flex items-center justify-between gap-2 px-2 py-1">
+                      <div className="text-[10px] font-semibold uppercase tracking-wide text-amber-700 dark:text-amber-400">
+                        Stale On Agent
+                      </div>
+                      {staleArtifactImages.length > 0 && (
+                        <button
+                          onClick={() => onCleanupStaleImages(host.id)}
+                          disabled={agentImagesCleaning.has(host.id) || agentImagesLoading.has(host.id)}
+                          className="inline-flex items-center gap-1 rounded border border-amber-300/80 px-2 py-1 text-[10px] font-semibold text-amber-700 transition-colors hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-amber-700/80 dark:text-amber-300 dark:hover:bg-amber-900/30"
+                        >
+                          <i className={`fa-solid ${agentImagesCleaning.has(host.id) ? 'fa-spinner fa-spin' : 'fa-broom'}`}></i>
+                          Clean stale
+                        </button>
+                      )}
+                    </div>
+                    {inventoryRefreshedAt && (
+                      <div className="px-2 pb-1 text-[10px] text-amber-700/80 dark:text-amber-400/80">
+                        Inventory refreshed {formatTimestamp(inventoryRefreshedAt)}
+                      </div>
+                    )}
+                    {staleArtifactImages.map((img, i) => (
+                      <div
+                        key={`${img.reference}-${i}`}
+                        className="flex items-center justify-between text-xs py-1 px-2 bg-amber-50 dark:bg-amber-900/10 rounded"
+                      >
+                        <span className="font-mono text-amber-900 dark:text-amber-200 truncate max-w-[140px]" title={img.reference}>
+                          {img.display_reference.includes('/') ? img.display_reference.split('/').pop() : img.display_reference}
+                        </span>
+                        <span className="flex items-center gap-1.5">
+                          <span className="text-[10px] text-amber-600 dark:text-amber-400 uppercase">{img.kind}</span>
+                          {img.size_bytes != null && (
+                            <span className="text-[10px] text-stone-400">{formatSize(img.size_bytes)}</span>
+                          )}
+                        </span>
+                      </div>
+                    ))}
+                    {staleImages.some((img) => !img.is_stale && img.reason) && (
+                      <div className="text-[10px] text-amber-700/80 dark:text-amber-400/80 px-2 py-1">
+                        {staleImages.find((img) => !img.is_stale && img.reason)?.reason}
+                      </div>
+                    )}
+                    <div className="text-[10px] text-amber-700/80 dark:text-amber-400/80 px-2 py-1">
+                      These artifacts are present on the host but not referenced by the catalog or active nodes.
+                    </div>
+                  </div>
+                )}
               </div>
             )}
           </div>

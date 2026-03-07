@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi import BackgroundTasks
 from sqlalchemy.orm import Session
 
 from app import db, models
@@ -357,6 +358,7 @@ def unassign_image_from_device(
 @router.delete("/library/{image_id}")
 def delete_image(
     image_id: str,
+    background_tasks: BackgroundTasks,
     database: Session = Depends(db.get_db),
     current_user: models.User = Depends(get_current_admin),
 ) -> dict[str, str]:
@@ -366,6 +368,15 @@ def delete_image(
     For Docker images, only removes from manifest (does not remove from Docker).
     Requires admin access.
     """
+
+    cleanup_hosts: list[str] = []
+    if hasattr(database, "query"):
+        cleanup_hosts = [
+            row.host_id
+            for row in database.query(models.ImageHost).filter(
+                models.ImageHost.image_id == image_id
+            ).all()
+        ]
 
     if catalog_is_seeded(database):
         image = get_catalog_library_image(database, image_id, force_refresh=True)
@@ -394,6 +405,16 @@ def delete_image(
             database.rollback()
             raise
 
+        reference = image.get("reference", "")
+        if reference and cleanup_hosts and background_tasks is not None:
+            from app.tasks.image_reconciliation import cleanup_deleted_image_from_agents
+
+            background_tasks.add_task(
+                cleanup_deleted_image_from_agents,
+                image_id,
+                reference,
+                cleanup_hosts,
+            )
         return {"message": f"Image '{image_id}' deleted successfully"}
 
     manifest = load_manifest()
@@ -421,6 +442,16 @@ def delete_image(
         raise HTTPException(status_code=404, detail="Image not found")
 
     save_manifest(manifest)
+    reference = image.get("reference", "")
+    if reference and cleanup_hosts and background_tasks is not None:
+        from app.tasks.image_reconciliation import cleanup_deleted_image_from_agents
+
+        background_tasks.add_task(
+            cleanup_deleted_image_from_agents,
+            image_id,
+            reference,
+            cleanup_hosts,
+        )
     return {"message": f"Image '{image_id}' deleted successfully"}
 
 

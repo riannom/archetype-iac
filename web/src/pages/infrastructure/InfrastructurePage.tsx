@@ -139,6 +139,22 @@ const InfrastructurePage: React.FC = () => {
     });
   };
 
+  const toggleImages = async (hostId: string) => {
+    const opening = !expandedImages.has(hostId);
+    setExpandedImages(prev => {
+      const next = new Set(prev);
+      if (next.has(hostId)) next.delete(hostId); else next.add(hostId);
+      return next;
+    });
+    if (opening) {
+      try {
+        await data.loadAgentImageDetails(hostId);
+      } catch (err) {
+        notifyError('Failed to load agent image inventory', err);
+      }
+    }
+  };
+
   const updateSyncStrategy = async (hostId: string, strategy: SyncStrategy) => {
     try {
       await apiRequest(`/agents/${hostId}/sync-strategy`, {
@@ -299,13 +315,30 @@ const InfrastructurePage: React.FC = () => {
               expandedContainers={expandedContainers}
               expandedVMs={expandedVMs}
               expandedImages={expandedImages}
+              agentImageDetails={data.agentImageDetails}
+              agentImagesLoading={data.agentImagesLoading}
+              agentImagesCleaning={data.agentImagesCleaning}
               updatingAgents={updates.updatingAgents}
               updateStatuses={updates.updateStatuses}
               isUpdateAvailable={(host) => updates.isUpdateAvailable(host, data.latestVersion)}
               onToggleLabs={toggleSet(setExpandedLabs)}
               onToggleContainers={toggleSet(setExpandedContainers)}
               onToggleVMs={toggleSet(setExpandedVMs)}
-              onToggleImages={toggleSet(setExpandedImages)}
+              onToggleImages={toggleImages}
+              onCleanupStaleImages={async (hostId) => {
+                try {
+                  const result = await data.cleanupStaleAgentImages(hostId);
+                  if (result.deleted.length > 0) {
+                    addNotification('success', 'Removed stale agent images', `${result.deleted.length} artifact${result.deleted.length !== 1 ? 's' : ''} removed.`);
+                  } else if (result.failed.length > 0) {
+                    addNotification('warning', 'Stale cleanup incomplete', result.failed[0].error);
+                  } else {
+                    addNotification('info', 'No stale images removed');
+                  }
+                } catch (err) {
+                  notifyError('Failed to clean stale agent images', err);
+                }
+              }}
               onUpdateSyncStrategy={updateSyncStrategy}
               onTriggerUpdate={(hostId) => updates.triggerUpdate(hostId)}
               onTriggerRebuild={updates.triggerRebuild}

@@ -7,6 +7,7 @@ depend on the FastAPI ``app`` object.
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timezone
 import logging
 import re
 from dataclasses import dataclass
@@ -702,11 +703,64 @@ def _get_docker_images() -> list[DockerImageInfo]:
                 size_bytes=size_bytes,
                 created=created,
                 device_id=device_id,
+                kind="docker",
             ))
 
         return images
     except Exception as e:
         logger.error(f"Error listing Docker images: {e}")
+        return []
+
+
+def _get_file_images() -> list[DockerImageInfo]:
+    """Get list of file-based images on this agent."""
+    try:
+        from agent.image_metadata import lookup_device_id_by_path
+
+        roots: list[Path] = []
+        for raw_path in [settings.image_store_path, settings.qcow2_store_path]:
+            if not raw_path:
+                continue
+            path = Path(raw_path)
+            if path not in roots:
+                roots.append(path)
+
+        images: list[DockerImageInfo] = []
+        seen_paths: set[Path] = set()
+        valid_suffixes = {".qcow2", ".img", ".iol"}
+
+        for root in roots:
+            if not root.exists():
+                continue
+            for path in root.rglob("*"):
+                if not path.is_file():
+                    continue
+                if path.suffix.lower() not in valid_suffixes:
+                    continue
+                resolved = path.resolve()
+                if resolved in seen_paths:
+                    continue
+                seen_paths.add(resolved)
+                stat = path.stat()
+                created = datetime.fromtimestamp(
+                    stat.st_mtime,
+                    tz=timezone.utc,
+                ).isoformat()
+                images.append(
+                    DockerImageInfo(
+                        id=str(resolved),
+                        tags=[],
+                        size_bytes=stat.st_size,
+                        created=created,
+                        device_id=lookup_device_id_by_path(str(resolved)),
+                        kind=path.suffix.lower().lstrip("."),
+                        reference=str(resolved),
+                    )
+                )
+
+        return images
+    except Exception as e:
+        logger.error(f"Error listing file-based images: {e}")
         return []
 
 

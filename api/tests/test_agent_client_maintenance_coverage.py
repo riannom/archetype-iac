@@ -138,6 +138,24 @@ class TestCleanupWorkspacesOnAgent:
         assert len(result["errors"]) == 1
 
 
+class TestDeleteImageOnAgent:
+    @pytest.mark.asyncio
+    async def test_success(self):
+        from app.agent_client.maintenance import delete_image_on_agent
+
+        agent = _make_agent()
+        with patch(
+            "app.agent_client.maintenance._safe_agent_request",
+            new_callable=AsyncMock,
+            return_value={"success": True, "deleted": True},
+        ) as req:
+            result = await delete_image_on_agent(agent, "ceos:4.28.0F")
+
+        assert result["success"] is True
+        assert result["deleted"] is True
+        assert "/images/ceos%3A4.28.0F" in req.await_args.args[2]
+
+
 # ---------------------------------------------------------------------------
 # test_mtu_on_agent
 # ---------------------------------------------------------------------------

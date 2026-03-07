@@ -14,6 +14,8 @@ class DockerImageInfo(BaseModel):
     size_bytes: int = 0
     created: str | None = None  # ISO timestamp
     device_id: str | None = None  # From persistent metadata store
+    kind: str = "docker"  # docker, qcow2, img, iol
+    reference: str | None = None  # Absolute path for file-based images
 
 
 class ImageInventoryResponse(BaseModel):

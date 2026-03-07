@@ -16,7 +16,7 @@ type TabType = 'devices' | 'images' | 'build-jobs' | 'sync';
 const NodesPage: React.FC = () => {
   const { effectiveMode, toggleMode } = useTheme();
   const { user, loading: userLoading } = useUser();
-  const { imageLibrary, refreshImageLibrary } = useImageLibrary();
+  const { imageLibrary, staleAgentSummary, refreshImageLibrary, refreshStaleAgentSummary } = useImageLibrary();
   const {
     deviceModels,
     addCustomDevice,
@@ -208,17 +208,25 @@ const NodesPage: React.FC = () => {
             <DeviceManager
               deviceModels={deviceModels}
               imageLibrary={imageLibrary}
+              staleAgentSummary={staleAgentSummary}
               onUploadImage={refreshCatalog}
               onUploadQcow2={refreshCatalog}
-              onRefresh={refreshCatalog}
+              onRefresh={async () => {
+                await refreshCatalog();
+                await refreshStaleAgentSummary();
+              }}
             />
           ) : activeTab === 'build-jobs' ? (
             <DeviceManager
               deviceModels={deviceModels}
               imageLibrary={imageLibrary}
+              staleAgentSummary={staleAgentSummary}
               onUploadImage={refreshImageLibrary}
               onUploadQcow2={refreshImageLibrary}
-              onRefresh={refreshImageLibrary}
+              onRefresh={async () => {
+                await refreshImageLibrary();
+                await refreshStaleAgentSummary();
+              }}
               mode="build-jobs"
             />
           ) : (
@@ -233,7 +241,10 @@ const NodesPage: React.FC = () => {
                 <ImageSyncProgress
                   showCompleted={true}
                   maxJobs={20}
-                  onJobComplete={refreshCatalog}
+                  onJobComplete={async () => {
+                    await refreshCatalog();
+                    await refreshStaleAgentSummary();
+                  }}
                 />
               </div>
             </div>
