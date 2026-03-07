@@ -801,6 +801,7 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         max_ports=12,
         requires_image=True,
         supported_image_kinds=["qcow2"],
+        default_credentials="admin / YourPaSsWoRd",
         documentation_url="https://github.com/sonic-net/SONiC/wiki",
         tags=["switching", "linux", "bgp", "datacenter", "open-source"],
     ),

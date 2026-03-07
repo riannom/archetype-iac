@@ -79,6 +79,7 @@ function defaultProps() {
     agentImageDetails: {} as Record<string, AgentImagesDetailResponse>,
     agentImagesLoading: new Set<string>(),
     agentImagesCleaning: new Set<string>(),
+    agentImagesBulkCleaning: false,
     updatingAgents: new Set<string>(),
     updateStatuses: new Map<string, UpdateStatus>(),
     isUpdateAvailable: vi.fn(() => false),
@@ -87,6 +88,7 @@ function defaultProps() {
     onToggleVMs: vi.fn(),
     onToggleImages: vi.fn(),
     onCleanupStaleImages: vi.fn(),
+    onCleanupAllStaleImages: vi.fn(),
     onUpdateSyncStrategy: vi.fn(),
     onTriggerUpdate: vi.fn(),
     onTriggerRebuild: vi.fn(),
@@ -111,6 +113,16 @@ describe('HostsTab', () => {
   it('displays latest version', () => {
     render(<HostsTab {...defaultProps()} />);
     expect(screen.getByText(/Latest: v1\.1\.0/)).toBeInTheDocument();
+  });
+
+  it('calls bulk stale cleanup action when clicked', async () => {
+    const user = userEvent.setup();
+    const props = defaultProps();
+    props.hosts = [makeHost()];
+    render(<HostsTab {...props} />);
+
+    await user.click(screen.getByRole('button', { name: /clean stale images/i }));
+    expect(props.onCleanupAllStaleImages).toHaveBeenCalled();
   });
 
   // ── Empty state ──

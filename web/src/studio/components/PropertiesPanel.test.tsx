@@ -575,6 +575,29 @@ describe("PropertiesPanel", () => {
       });
     });
 
+    describe("Default credentials", () => {
+      it("shows vendor default credentials when provided by the device model", () => {
+        const sonicNode = createDeviceNode({ model: "sonic-vs", name: "sonic-vs-11" });
+        const sonicModel = {
+          ...mockDeviceModels[0],
+          id: "sonic-vs",
+          name: "SONiC",
+          defaultCredentials: "admin / YourPaSsWoRd",
+        };
+
+        render(
+          <PropertiesPanel
+            {...defaultProps}
+            selectedItem={sonicNode}
+            deviceModels={[sonicModel]}
+          />
+        );
+
+        expect(screen.getByText("Default Credentials")).toBeInTheDocument();
+        expect(screen.getByText("admin / YourPaSsWoRd")).toBeInTheDocument();
+      });
+    });
+
     describe("Image sync status", () => {
       it("shows syncing status indicator", () => {
         const runtimeStates: Record<string, RuntimeStatus> = {

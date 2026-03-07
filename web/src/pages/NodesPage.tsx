@@ -44,6 +44,12 @@ const NodesPage: React.FC = () => {
     setActiveTab(getActiveTab());
   }, [location.pathname]);
 
+  useEffect(() => {
+    if (activeTab === 'images') {
+      refreshStaleAgentSummary();
+    }
+  }, [activeTab, refreshStaleAgentSummary]);
+
   const handleTabChange = (tab: TabType) => {
     setActiveTab(tab);
     navigate(`/nodes/${tab}`);
