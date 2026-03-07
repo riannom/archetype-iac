@@ -416,8 +416,8 @@ class TestStreamImage:
     ):
         mock_find.return_value = {"id": "qcow2:test", "kind": "qcow2", "reference": "/path"}
         resp = test_client.get("/images/library/qcow2%3Atest/stream", headers=auth_headers)
-        assert resp.status_code == 400
-        assert "Docker" in resp.json()["detail"]
+        assert resp.status_code == 404
+        assert "not found" in resp.json()["detail"].lower()
 
     @patch("app.routers.images.find_image_by_id")
     @patch("app.routers.images.load_manifest", return_value={"images": []})

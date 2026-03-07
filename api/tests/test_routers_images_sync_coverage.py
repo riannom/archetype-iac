@@ -171,8 +171,8 @@ class TestStreamImage:
                 "/images/library/qcow2:iosv/stream",
                 headers=auth_headers,
             )
-        assert resp.status_code == 400
-        assert "Docker" in resp.json()["detail"]
+        assert resp.status_code == 404
+        assert "not found" in resp.json()["detail"].lower()
 
     def test_no_reference_rejected(
         self, test_client: TestClient, auth_headers: dict
