@@ -610,6 +610,29 @@ def test_resolve_data_interface_mac_sync_accounts_for_mgmt_and_reserved(monkeypa
 def test_get_vm_interface_port_sync_paths(monkeypatch):
     provider = _make_provider()
     monkeypatch.setattr(provider, "_resolve_data_interface_mac_sync", lambda *_args: "52:54:00:aa:bb:cc")
+    provider._domain_name = lambda _lab_id, _node_name: "arch-lab1-r1"
+    provider._ovs_port_exists = lambda port_name: port_name == "vnet-direct"
+
+    domain = SimpleNamespace(
+        XMLDesc=lambda *_args: """
+<domain>
+  <devices>
+    <interface type='bridge'>
+      <mac address='52:54:00:aa:bb:cc'/>
+      <target dev='vnet-direct'/>
+    </interface>
+  </devices>
+</domain>
+"""
+    )
+    provider._conn = SimpleNamespace(isAlive=lambda: True, lookupByName=lambda _name: domain)
+
+    monkeypatch.setattr(
+        libvirt_mod.subprocess,
+        "run",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("fallback should not run")),
+    )
+    assert provider._get_vm_interface_port_sync("lab1", "r1", 0) == "vnet-direct"
 
     def _run_success(args, **_kwargs):
         if args[:4] == ["ovs-vsctl", "--format=json", "list-ports", libvirt_mod.settings.ovs_bridge_name]:
@@ -620,6 +643,11 @@ def test_get_vm_interface_port_sync_paths(monkeypatch):
             return SimpleNamespace(returncode=0, stdout='"fe:54:00:aa:bb:cc"\n', stderr="")
         raise AssertionError(f"unexpected args: {args!r}")
 
+    provider._conn = SimpleNamespace(
+        isAlive=lambda: True,
+        lookupByName=lambda _name: (_ for _ in ()).throw(RuntimeError("lookup failed")),
+    )
+    provider._ovs_port_exists = lambda _port_name: False
     monkeypatch.setattr(libvirt_mod.subprocess, "run", _run_success)
     assert provider._get_vm_interface_port_sync("lab1", "r1", 0) == "vnet2"
 
