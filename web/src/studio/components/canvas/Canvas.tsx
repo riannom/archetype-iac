@@ -179,9 +179,14 @@ const Canvas: React.FC<CanvasProps> = ({
       onMouseUp={interaction.handleMouseUp}
       onMouseDown={handleCanvasMouseDown}
       onWheel={interaction.handleWheel}
+      onTouchStart={interaction.handleTouchStart}
+      onTouchMove={interaction.handleTouchMove}
+      onTouchEnd={interaction.handleTouchEnd}
+      onTouchCancel={interaction.handleTouchEnd}
       onDragOver={interaction.handleDragOver}
       onDrop={interaction.handleDrop}
       onContextMenu={(e) => e.preventDefault()}
+      style={{ touchAction: 'none' }}
     >
       <div
         className="absolute inset-0 origin-top-left"

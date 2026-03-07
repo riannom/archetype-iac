@@ -60,6 +60,12 @@ export function useCanvasInteraction({
   const [marqueeStart, setMarqueeStart] = useState<{ x: number; y: number } | null>(null);
   const [marqueeEnd, setMarqueeEnd] = useState<{ x: number; y: number } | null>(null);
   const marqueeRef = useRef<{ x: number; y: number } | null>(null);
+  const touchPanRef = useRef<{ x: number; y: number } | null>(null);
+  const pinchRef = useRef<{
+    distance: number;
+    zoom: number;
+    offset: { x: number; y: number };
+  } | null>(null);
 
   const startPan = useCallback((clientX: number, clientY: number) => {
     setIsPanning(true);
@@ -74,6 +80,23 @@ export function useCanvasInteraction({
     panStartRef.current = { x: clientX, y: clientY };
     didPanRef.current = false;
   }, []);
+
+  const clampZoom = useCallback((value: number) => Math.min(Math.max(0.1, value), 5), []);
+
+  const applyZoomAtPoint = useCallback((newZoom: number, clientX: number, clientY: number, baseZoom: number, baseOffset: { x: number; y: number }) => {
+    if (!containerRef.current) return baseOffset;
+    const rect = containerRef.current.getBoundingClientRect();
+    const mouseX = clientX - rect.left;
+    const mouseY = clientY - rect.top;
+    const scale = newZoom / baseZoom;
+    const newOffset = {
+      x: mouseX - (mouseX - baseOffset.x) * scale,
+      y: mouseY - (mouseY - baseOffset.y) * scale,
+    };
+    setZoom(newZoom);
+    setOffset(newOffset);
+    return newOffset;
+  }, [containerRef, setOffset, setZoom]);
 
   const handleMouseMove = useCallback((e: React.MouseEvent) => {
     if (!containerRef.current) return;
@@ -96,15 +119,8 @@ export function useCanvasInteraction({
 
     if (isZooming) {
       const factor = Math.pow(1.01, e.movementY);
-      const newZoom = Math.min(Math.max(0.1, zoom * factor), 5);
-      const mouseX = e.clientX - rect.left;
-      const mouseY = e.clientY - rect.top;
-      const scale = newZoom / zoom;
-      setZoom(newZoom);
-      setOffset({
-        x: mouseX - (mouseX - offset.x) * scale,
-        y: mouseY - (mouseY - offset.y) * scale,
-      });
+      const newZoom = clampZoom(zoom * factor);
+      applyZoomAtPoint(newZoom, e.clientX, e.clientY, zoom, offset);
       if (!didPanRef.current && panStartRef.current) {
         const dx = e.clientX - panStartRef.current.x;
         const dy = e.clientY - panStartRef.current.y;
@@ -188,24 +204,18 @@ export function useCanvasInteraction({
     } else if (draggingAnnotation) {
       onAnnotationMove(draggingAnnotation, x, y);
     }
-  }, [offset, zoom, isPanning, isZooming, draggingNode, draggingAnnotation, resizing, annotations, activeTool, onNodeMove, onAnnotationMove, onUpdateAnnotation, setZoom, setOffset]);
+  }, [offset, zoom, isPanning, isZooming, draggingNode, draggingAnnotation, resizing, annotations, activeTool, onNodeMove, onAnnotationMove, onUpdateAnnotation, clampZoom, applyZoomAtPoint]);
 
   const handleWheel = useCallback((e: React.WheelEvent) => {
     if (e.ctrlKey || e.metaKey) {
       e.preventDefault();
       const factor = Math.pow(1.1, -e.deltaY / 100);
-      const newZoom = Math.min(Math.max(0.1, zoom * factor), 5);
-      const rect = containerRef.current!.getBoundingClientRect();
-      const mouseX = e.clientX - rect.left;
-      const mouseY = e.clientY - rect.top;
-      const newOffsetX = mouseX - (mouseX - offset.x) * (newZoom / zoom);
-      const newOffsetY = mouseY - (mouseY - offset.y) * (newZoom / zoom);
-      setZoom(newZoom);
-      setOffset({ x: newOffsetX, y: newOffsetY });
+      const newZoom = clampZoom(zoom * factor);
+      applyZoomAtPoint(newZoom, e.clientX, e.clientY, zoom, offset);
     } else {
       setOffset(prev => ({ x: prev.x - e.deltaX, y: prev.y - e.deltaY }));
     }
-  }, [zoom, offset]);
+  }, [zoom, offset, clampZoom, applyZoomAtPoint]);
 
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
     // Middle-button pan always works regardless of tool
@@ -500,6 +510,87 @@ export function useCanvasInteraction({
     }
   }, [offset, zoom, onDropDevice, onDropExternalNetwork]);
 
+  const handleTouchStart = useCallback((e: React.TouchEvent) => {
+    if (!containerRef.current) return;
+    if (e.touches.length >= 2) {
+      const [first, second] = [e.touches[0], e.touches[1]];
+      const distance = Math.hypot(second.clientX - first.clientX, second.clientY - first.clientY);
+      pinchRef.current = {
+        distance,
+        zoom,
+        offset,
+      };
+      touchPanRef.current = null;
+      setIsPanning(false);
+      e.preventDefault();
+      return;
+    }
+
+    if (editingText) return;
+
+    if (e.touches.length === 1) {
+      const touch = e.touches[0];
+      touchPanRef.current = { x: touch.clientX, y: touch.clientY };
+      pinchRef.current = null;
+      setIsPanning(true);
+      e.preventDefault();
+    }
+  }, [containerRef, zoom, offset, editingText]);
+
+  const handleTouchMove = useCallback((e: React.TouchEvent) => {
+    if (e.touches.length >= 2) {
+      const [first, second] = [e.touches[0], e.touches[1]];
+      const distance = Math.hypot(second.clientX - first.clientX, second.clientY - first.clientY);
+      const midpointX = (first.clientX + second.clientX) / 2;
+      const midpointY = (first.clientY + second.clientY) / 2;
+      const pinch = pinchRef.current ?? { distance, zoom, offset };
+      const newZoom = clampZoom(pinch.zoom * (distance / Math.max(pinch.distance, 1)));
+      const newOffset = applyZoomAtPoint(newZoom, midpointX, midpointY, pinch.zoom, pinch.offset);
+      pinchRef.current = {
+        distance,
+        zoom: newZoom,
+        offset: newOffset,
+      };
+      setIsPanning(false);
+      e.preventDefault();
+      return;
+    }
+
+    if (e.touches.length === 1 && touchPanRef.current) {
+      const touch = e.touches[0];
+      const dx = touch.clientX - touchPanRef.current.x;
+      const dy = touch.clientY - touchPanRef.current.y;
+      setOffset(prev => ({ x: prev.x + dx, y: prev.y + dy }));
+      touchPanRef.current = { x: touch.clientX, y: touch.clientY };
+      setIsPanning(true);
+      e.preventDefault();
+    }
+  }, [zoom, offset, clampZoom, applyZoomAtPoint, setOffset]);
+
+  const handleTouchEnd = useCallback((e: React.TouchEvent) => {
+    if (e.touches.length >= 2) {
+      const [first, second] = [e.touches[0], e.touches[1]];
+      pinchRef.current = {
+        distance: Math.hypot(second.clientX - first.clientX, second.clientY - first.clientY),
+        zoom,
+        offset,
+      };
+      return;
+    }
+
+    if (e.touches.length === 1) {
+      const touch = e.touches[0];
+      touchPanRef.current = { x: touch.clientX, y: touch.clientY };
+      pinchRef.current = null;
+      setIsPanning(true);
+      return;
+    }
+
+    touchPanRef.current = null;
+    pinchRef.current = null;
+    setIsPanning(false);
+  }, [zoom, offset]);
+
   return {
     draggingNode,
     linkingNode,
@@ -528,5 +619,8 @@ export function useCanvasInteraction({
     handleLinkMouseDown,
     handleDragOver,
     handleDrop,
+    handleTouchStart,
+    handleTouchMove,
+    handleTouchEnd,
   };
 }

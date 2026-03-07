@@ -85,6 +85,18 @@ function createDragEvent(type: string, data: Record<string, string> = {}): React
   } as unknown as React.DragEvent;
 }
 
+function createTouchEvent(points: Array<{ clientX: number; clientY: number }>): React.TouchEvent {
+  const touches = points.map((point, index) => ({
+    identifier: index,
+    clientX: point.clientX,
+    clientY: point.clientY,
+  }));
+  return {
+    touches,
+    preventDefault: vi.fn(),
+  } as unknown as React.TouchEvent;
+}
+
 describe('useCanvasInteraction', () => {
   const mockContainerRef = {
     current: {
@@ -472,6 +484,79 @@ describe('useCanvasInteraction', () => {
 
       expect(defaultArgs.setZoom).toHaveBeenCalled();
       expect(defaultArgs.setOffset).toHaveBeenCalled();
+    });
+  });
+
+  // -- Touch support --
+
+  describe('Touch Navigation', () => {
+    it('starts one-finger pan in pointer mode for touchscreen laptops', () => {
+      const args = { ...defaultArgs, activeTool: 'pointer' as const };
+      const { result } = renderHook(() => useCanvasInteraction(args));
+      const event = createTouchEvent([{ clientX: 100, clientY: 120 }]);
+
+      act(() => {
+        result.current.handleTouchStart(event);
+      });
+
+      expect(event.preventDefault).toHaveBeenCalled();
+      expect(result.current.isPanning).toBe(true);
+    });
+
+    it('updates offset during one-finger pan regardless of active tool', () => {
+      const args = { ...defaultArgs, activeTool: 'rect' as const };
+      const { result } = renderHook(() => useCanvasInteraction(args));
+
+      act(() => {
+        result.current.handleTouchStart(createTouchEvent([{ clientX: 100, clientY: 120 }]));
+      });
+
+      act(() => {
+        result.current.handleTouchMove(createTouchEvent([{ clientX: 130, clientY: 150 }]));
+      });
+
+      expect(defaultArgs.setOffset).toHaveBeenCalledWith(expect.any(Function));
+      const updater = defaultArgs.setOffset.mock.calls.at(-1)?.[0];
+      expect(updater({ x: 10, y: 15 })).toEqual({ x: 40, y: 45 });
+    });
+
+    it('updates zoom during two-finger pinch regardless of tool', () => {
+      const args = { ...defaultArgs, activeTool: 'pointer' as const };
+      const { result } = renderHook(() => useCanvasInteraction(args));
+
+      act(() => {
+        result.current.handleTouchStart(createTouchEvent([
+          { clientX: 100, clientY: 100 },
+          { clientX: 200, clientY: 100 },
+        ]));
+      });
+
+      act(() => {
+        result.current.handleTouchMove(createTouchEvent([
+          { clientX: 80, clientY: 100 },
+          { clientX: 220, clientY: 100 },
+        ]));
+      });
+
+      expect(defaultArgs.setZoom).toHaveBeenCalled();
+      expect(defaultArgs.setOffset).toHaveBeenCalled();
+    });
+
+    it('does not start touch panning while inline text editing is active', () => {
+      const args = { ...defaultArgs, activeTool: 'pointer' as const };
+      const { result } = renderHook(() => useCanvasInteraction(args));
+      const event = createTouchEvent([{ clientX: 100, clientY: 120 }]);
+
+      act(() => {
+        result.current.setEditingText({ id: 'ann-text', x: 10, y: 20 });
+      });
+
+      act(() => {
+        result.current.handleTouchStart(event);
+      });
+
+      expect(result.current.isPanning).toBe(false);
+      expect(event.preventDefault).not.toHaveBeenCalled();
     });
   });
 
