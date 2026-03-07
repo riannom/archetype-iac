@@ -9,6 +9,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
+from typing import Any
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -34,6 +35,8 @@ class NodeInfo:
     name: str
     status: NodeStatus
     container_id: str | None = None
+    runtime_id: str | None = None
+    node_definition_id: str | None = None
     image: str | None = None
     ip_addresses: list[str] = field(default_factory=list)
     interfaces: dict[str, str] = field(default_factory=dict)  # iface -> ip
@@ -204,6 +207,7 @@ class Provider(ABC):
         kind: str,
         workspace: Path,
         *,
+        node_definition_id: str | None = None,
         image: str | None = None,
         display_name: str | None = None,
         interface_count: int | None = None,
@@ -271,6 +275,47 @@ class Provider(ABC):
         Default implementation returns empty dict.
         """
         return {}
+
+    async def audit_runtime_identity(self) -> dict[str, Any]:
+        """Audit runtime identity coverage for all managed runtimes.
+
+        Optional method for providers that can enumerate their managed runtime
+        objects and report metadata coverage for fallback-removal gates.
+
+        Returns a dict with provider-specific summary and node/object details.
+        Default implementation returns an empty audit result.
+        """
+        return {
+            "provider": self.name,
+            "managed_runtimes": 0,
+            "resolved_by_metadata": 0,
+            "name_only": 0,
+            "missing_node_definition_id": 0,
+            "missing_runtime_id": 0,
+            "inconsistent_metadata": 0,
+            "nodes": [],
+        }
+
+    async def backfill_runtime_identity(
+        self,
+        entries: list[dict[str, str]],
+        *,
+        dry_run: bool = True,
+    ) -> dict[str, Any]:
+        """Backfill runtime identity metadata for existing managed runtimes.
+
+        Providers that cannot mutate runtime metadata in place should report
+        recreate-required results rather than pretending to update identity.
+        """
+        return {
+            "provider": self.name,
+            "updated": 0,
+            "recreate_required": 0,
+            "missing": 0,
+            "skipped": 0,
+            "nodes": [],
+            "errors": [f"provider {self.name} does not support runtime identity backfill"],
+        }
 
     async def cleanup_orphan_resources(
         self,

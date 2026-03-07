@@ -614,6 +614,7 @@ class DeploymentMixin:
                 self.lab.id,
                 ns.node_name,
                 kind,
+                node_definition_id=db_node.id,
                 image=image,
                 display_name=db_node.display_name,
                 interface_count=iface_count,
@@ -1075,4 +1076,3 @@ class DeploymentMixin:
 
         if links_connected:
             self.log_parts.append(f"  Connected {links_connected} same-host link(s)")
-

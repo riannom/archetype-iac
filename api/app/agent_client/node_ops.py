@@ -333,6 +333,7 @@ async def create_node_on_agent(
     node_name: str,
     kind: str,
     *,
+    node_definition_id: str | None = None,
     image: str | None = None,
     display_name: str | None = None,
     interface_count: int | None = None,
@@ -359,6 +360,8 @@ async def create_node_on_agent(
     url = f"{get_agent_url(agent)}/labs/{lab_id}/nodes/{node_name}/create?provider={provider}"
 
     payload: dict = {"node_name": node_name, "kind": kind}
+    if node_definition_id:
+        payload["node_definition_id"] = node_definition_id
     if image:
         payload["image"] = image
     if display_name:
@@ -538,6 +541,36 @@ async def discover_labs_on_agent(agent: models.Host) -> dict:
         agent, "GET", "/discover-labs",
         fallback={"labs": []}, timeout=30.0,
         description="Discover labs", log_level="error",
+    )
+
+
+async def get_runtime_identity_audit(agent: models.Host) -> dict:
+    """Query runtime identity audit coverage from an agent."""
+    return await _safe_agent_request(
+        agent, "GET", "/runtime-identity-audit",
+        fallback={"providers": [], "errors": []},
+        timeout=30.0,
+        description="Runtime identity audit",
+        log_level="error",
+    )
+
+
+async def backfill_runtime_identity(
+    agent: models.Host,
+    entries: list[dict[str, str]],
+    *,
+    dry_run: bool = True,
+) -> dict:
+    """Request runtime identity backfill on an agent."""
+    return await _safe_agent_request(
+        agent,
+        "POST",
+        "/runtime-identity/backfill",
+        json_body={"entries": entries, "dry_run": dry_run},
+        fallback={"providers": [], "errors": []},
+        timeout=60.0,
+        description="Runtime identity backfill",
+        log_level="warning",
     )
 
 

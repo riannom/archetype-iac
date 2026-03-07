@@ -24,6 +24,9 @@ from agent.schemas import (
     ExtractConfigsResponse, ExtractNodeConfigResponse, ExtractedConfig,
     LabStatusResponse,
     NodeInfo, NodeReconcileRequest, NodeReconcileResponse, NodeReconcileResult, NodeStatus,
+    RuntimeIdentityAuditNode, RuntimeIdentityAuditProvider, RuntimeIdentityAuditResponse,
+    RuntimeIdentityBackfillNodeResult, RuntimeIdentityBackfillProviderResult,
+    RuntimeIdentityBackfillRequest, RuntimeIdentityBackfillResponse,
     UpdateConfigRequest, UpdateConfigResponse,
 )
 
@@ -57,6 +60,8 @@ async def lab_status(lab_id: str) -> LabStatusResponse:
                     name=node.name,
                     status=provider_status_to_schema(node.status),
                     container_id=node.container_id,
+                    runtime_id=node.runtime_id,
+                    node_definition_id=node.node_definition_id,
                     image=node.image,
                     ip_addresses=node.ip_addresses,
                 ))
@@ -78,6 +83,8 @@ async def lab_status(lab_id: str) -> LabStatusResponse:
                     name=node.name,
                     status=provider_status_to_schema(node.status),
                     container_id=node.container_id,
+                    runtime_id=node.runtime_id,
+                    node_definition_id=node.node_definition_id,
                     image=node.image,
                     ip_addresses=node.ip_addresses,
                 ))
@@ -177,7 +184,10 @@ async def _reconcile_single_node(
     libvirt_provider = get_provider("libvirt")
     if libvirt_provider:
         try:
-            # Extract node name from container_name
+            # Recovery/direct-action path only: extract node name from the
+            # generated runtime name so explicit per-node operations can still
+            # target legacy runtimes. Managed status/discovery no longer treats
+            # names as runtime identity.
             # NLM truncates lab_id to 20 chars: archetype-{lab_id[:20]}-{node}
             # Libvirt domains also truncate: arch-{lab_id[:20]}-{node}
             # Must use same sanitization as NLM's _get_container_name()
@@ -406,6 +416,9 @@ async def extract_node_config(
                     domain_name = libvirt_provider._domain_name(lab_id, node_name)
 
                     def _sync_lookup_kind():
+                        # Direct-action helper: generated domain name is used as
+                        # a convenience handle for targeted extraction, not as a
+                        # managed runtime identity source.
                         domain = libvirt_provider.conn.lookupByName(domain_name)
                         return libvirt_provider._get_domain_kind(domain)
 
@@ -661,6 +674,8 @@ async def discover_labs() -> DiscoverLabsResponse:
                     name=node.name,
                     status=provider_status_to_schema(node.status),
                     container_id=node.container_id,
+                    runtime_id=node.runtime_id,
+                    node_definition_id=node.node_definition_id,
                     image=node.image,
                     ip_addresses=node.ip_addresses,
                 )
@@ -671,6 +686,85 @@ async def discover_labs() -> DiscoverLabsResponse:
     ]
 
     return DiscoverLabsResponse(labs=labs)
+
+
+@router.get("/runtime-identity-audit")
+async def runtime_identity_audit() -> RuntimeIdentityAuditResponse:
+    """Audit runtime identity coverage across all available providers."""
+    provider_reports: list[RuntimeIdentityAuditProvider] = []
+    errors: list[str] = []
+
+    for provider_name in list_providers():
+        provider = get_provider(provider_name)
+        if provider is None:
+            continue
+        try:
+            report = await provider.audit_runtime_identity()
+            provider_reports.append(RuntimeIdentityAuditProvider(
+                provider=report.get("provider", provider_name),
+                managed_runtimes=report.get("managed_runtimes", 0),
+                resolved_by_metadata=report.get("resolved_by_metadata", 0),
+                name_only=report.get("name_only", 0),
+                missing_node_definition_id=report.get("missing_node_definition_id", 0),
+                missing_runtime_id=report.get("missing_runtime_id", 0),
+                inconsistent_metadata=report.get("inconsistent_metadata", 0),
+                error=report.get("error"),
+                nodes=[
+                    RuntimeIdentityAuditNode(**node)
+                    for node in report.get("nodes", [])
+                ],
+            ))
+        except Exception as e:
+            msg = f"runtime_identity_audit failed for provider {provider_name}: {e}"
+            logger.warning(msg)
+            errors.append(msg)
+
+    return RuntimeIdentityAuditResponse(
+        providers=provider_reports,
+        errors=errors,
+    )
+
+
+@router.post("/runtime-identity/backfill")
+async def backfill_runtime_identity(
+    request: RuntimeIdentityBackfillRequest,
+) -> RuntimeIdentityBackfillResponse:
+    """Backfill runtime identity metadata on existing runtimes where safe."""
+    provider_reports: list[RuntimeIdentityBackfillProviderResult] = []
+    errors: list[str] = []
+
+    entries_by_provider: dict[str, list[dict[str, str]]] = {}
+    for entry in request.entries:
+        entries_by_provider.setdefault(entry.provider, []).append(entry.model_dump())
+
+    for provider_name, entries in entries_by_provider.items():
+        provider = get_provider(provider_name)
+        if provider is None:
+            errors.append(f"provider unavailable: {provider_name}")
+            continue
+        try:
+            report = await provider.backfill_runtime_identity(entries, dry_run=request.dry_run)
+            provider_reports.append(RuntimeIdentityBackfillProviderResult(
+                provider=report.get("provider", provider_name),
+                updated=report.get("updated", 0),
+                recreate_required=report.get("recreate_required", 0),
+                missing=report.get("missing", 0),
+                skipped=report.get("skipped", 0),
+                nodes=[
+                    RuntimeIdentityBackfillNodeResult(**node)
+                    for node in report.get("nodes", [])
+                ],
+                errors=report.get("errors", []),
+            ))
+        except Exception as e:
+            msg = f"runtime_identity_backfill failed for provider {provider_name}: {e}"
+            logger.warning(msg)
+            errors.append(msg)
+
+    return RuntimeIdentityBackfillResponse(
+        providers=provider_reports,
+        errors=errors,
+    )
 
 
 @router.post("/cleanup-orphans")

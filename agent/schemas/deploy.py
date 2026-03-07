@@ -9,6 +9,7 @@ from agent.schemas.enums import Provider
 class DeployNode(HardwareSpecMixin):
     """Node definition for JSON deploy request."""
     name: str                         # Container name (internal ID)
+    node_definition_id: str | None = None
     display_name: str | None = None   # Human-readable name for logs
     kind: str = "linux"               # Device kind (ceos, srl, linux, etc.)
     image: str | None = None          # Docker image (uses vendor default if not specified)

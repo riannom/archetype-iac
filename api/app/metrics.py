@@ -298,6 +298,19 @@ if PROMETHEUS_AVAILABLE:
         buckets=(0.5, 1, 2, 5, 10, 30, 60, 120, float("inf")),
     )
 
+    # --- Runtime Identity Metrics ---
+
+    runtime_identity_events = Counter(
+        "archetype_runtime_identity_events_total",
+        "Runtime identity events observed during reconciliation",
+        ["event"],
+    )
+
+    runtime_identity_missing_runtime_id_active_placements = Gauge(
+        "archetype_runtime_identity_missing_runtime_id_active_placements",
+        "Number of active node placements missing runtime_id",
+    )
+
 else:
     # Dummy implementations when prometheus_client is not installed
     class DummyMetric:
@@ -352,6 +365,8 @@ else:
     broadcast_messages = DummyMetric()
     broadcast_failures = DummyMetric()
     enforcement_operation_duration = DummyMetric()
+    runtime_identity_events = DummyMetric()
+    runtime_identity_missing_runtime_id_active_placements = DummyMetric()
 
 
 def update_node_metrics(session: "Session") -> None:
@@ -396,6 +411,20 @@ def update_node_metrics(session: "Session") -> None:
         )
         for lab_id, count in ready_counts:
             nodes_ready.labels(lab_id=lab_id).set(count)
+
+        missing_runtime_id_active = (
+            session.query(func.count())
+            .select_from(models.NodePlacement)
+            .filter(
+                models.NodePlacement.runtime_id.is_(None),
+                models.NodePlacement.status.in_(("starting", "deployed")),
+            )
+            .scalar()
+            or 0
+        )
+        runtime_identity_missing_runtime_id_active_placements.set(
+            max(0, int(missing_runtime_id_active))
+        )
 
     except Exception as e:
         logger.warning(f"Error updating node metrics: {e}")
@@ -902,3 +931,10 @@ def record_enforcement_duration(duration: float) -> None:
     if not PROMETHEUS_AVAILABLE:
         return
     enforcement_operation_duration.observe(duration)
+
+
+def record_runtime_identity_event(event: str) -> None:
+    """Record a runtime identity event observed during reconciliation."""
+    if not PROMETHEUS_AVAILABLE:
+        return
+    runtime_identity_events.labels(event=_normalize_reason_label(event)).inc()

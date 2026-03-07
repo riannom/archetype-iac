@@ -8,6 +8,7 @@ from agent.schemas.base import BaseResponse, HardwareSpecMixin
 class CreateNodeRequest(HardwareSpecMixin):
     """Controller -> Agent: Create a single node container."""
     node_name: str
+    node_definition_id: str | None = None
     display_name: str | None = None
     kind: str = "linux"
     image: str | None = None

@@ -755,6 +755,7 @@ class TopologyService:
             graph_nodes.append(GraphNode(
                 id=node.gui_id,
                 name=node.display_name,
+                node_definition_id=node.id,
                 container_name=node.container_name,
                 node_type=node.node_type,
                 device=node.device,
@@ -1352,6 +1353,7 @@ class TopologyService:
 
         node_dict = {
             "name": node.container_name,
+            "node_definition_id": node.id,
             "display_name": node.display_name,
             "kind": kind,
             "image": image,

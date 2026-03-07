@@ -120,3 +120,42 @@ async def test_update_node_placements_skips_create_when_node_definition_missing(
     )
     assert placement is None
     mock_emit.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_update_node_placements_persists_runtime_id_from_agent_status(
+    test_db, sample_lab, sample_host,
+) -> None:
+    node = models.Node(
+        lab_id=sample_lab.id,
+        gui_id="node-r1",
+        display_name="R1",
+        container_name="r1",
+    )
+    test_db.add(node)
+    test_db.commit()
+
+    with patch(
+        "app.tasks.jobs.agent_client.get_lab_status_from_agent",
+        new=AsyncMock(return_value={"nodes": [{"name": "r1", "runtime_id": "runtime-123"}]}),
+    ), patch(
+        "app.tasks.jobs.emit_node_placement_changed",
+        new_callable=AsyncMock,
+    ):
+        await _update_node_placements(
+            test_db,
+            sample_lab.id,
+            sample_host.id,
+            ["r1"],
+            status="deployed",
+        )
+
+    placement = (
+        test_db.query(models.NodePlacement)
+        .filter(
+            models.NodePlacement.lab_id == sample_lab.id,
+            models.NodePlacement.node_name == "r1",
+        )
+        .one()
+    )
+    assert placement.runtime_id == "runtime-123"

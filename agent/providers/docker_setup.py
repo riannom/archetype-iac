@@ -27,6 +27,7 @@ logger = logging.getLogger(__name__)
 
 # Duplicated from docker.py so this module is self-contained for labels.
 LABEL_LAB_ID = "archetype.lab_id"
+LABEL_NODE_DEFINITION_ID = "archetype.node_definition_id"
 LABEL_NODE_NAME = "archetype.node_name"
 LABEL_NODE_DISPLAY_NAME = "archetype.node_display_name"
 LABEL_NODE_KIND = "archetype.node_kind"
@@ -213,6 +214,8 @@ def create_container_config(
         LABEL_NODE_KIND: node.kind,
         LABEL_PROVIDER: provider_name,
     }
+    if getattr(node, "node_definition_id", None):
+        labels[LABEL_NODE_DEFINITION_ID] = node.node_definition_id
     if interface_count and interface_count > 0:
         labels[LABEL_NODE_INTERFACE_COUNT] = str(interface_count)
     if node.display_name:

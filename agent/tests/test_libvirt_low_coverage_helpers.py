@@ -488,10 +488,17 @@ def test_get_domain_status_and_node_from_domain(monkeypatch):
         state=lambda: (1, 0),
         UUIDString=lambda: "abcdef1234567890",
     )
+    monkeypatch.setattr(provider, "_get_domain_metadata_values", lambda _domain: {
+        "node_name": "r1",
+        "node_definition_id": "node-def-r1",
+    })
     node = provider._node_from_domain(domain, "arch-lab1")
     assert node is not None
     assert node.name == "r1"
     assert node.container_id == "abcdef123456"
+
+    monkeypatch.setattr(provider, "_get_domain_metadata_values", lambda _domain: {})
+    assert provider._node_from_domain(domain, "arch-lab1") is None
 
     other = SimpleNamespace(name=lambda: "arch-other-r2")
     assert provider._node_from_domain(other, "arch-lab1") is None

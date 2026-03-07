@@ -18,6 +18,7 @@ from agent.schemas import (
     NodeReconcileResult,
     NodeReconcileTarget,
     NodeStatus,
+    RuntimeIdentityBackfillRequest,
     UpdateConfigRequest,
 )
 
@@ -48,6 +49,8 @@ def _status_node(name: str, status=NodeStatus.RUNNING) -> SimpleNamespace:
         name=name,
         status=status,
         container_id=f"id-{name}",
+        runtime_id=f"runtime-{name}",
+        node_definition_id=f"node-def-{name}",
         image=f"img-{name}",
         ip_addresses=["10.0.0.1"],
     )
@@ -713,6 +716,113 @@ async def test_discover_labs_merges_nodes_and_skips_failing_provider():
     by_id = {lab.lab_id: lab for lab in result.labs}
     assert set(by_id.keys()) == {"lab1", "lab2"}
     assert {n.name for n in by_id["lab1"].nodes} == {"r1", "vm1"}
+
+
+@pytest.mark.asyncio
+async def test_runtime_identity_audit_aggregates_provider_reports():
+    p1 = MagicMock()
+    p1.audit_runtime_identity = AsyncMock(return_value={
+        "provider": "docker",
+        "managed_runtimes": 2,
+        "resolved_by_metadata": 1,
+        "name_only": 1,
+        "missing_node_definition_id": 1,
+        "missing_runtime_id": 0,
+        "inconsistent_metadata": 0,
+        "nodes": [{
+            "provider": "docker",
+            "runtime_name": "ctr-r1",
+            "lab_id": "lab1",
+            "node_name": "r1",
+            "node_definition_id": "node-def-r1",
+            "runtime_id": "runtime-1",
+            "resolved_by_metadata": True,
+            "name_only": False,
+            "missing_node_definition_id": False,
+            "missing_runtime_id": False,
+            "inconsistent_metadata": False,
+        }],
+    })
+    p2 = MagicMock()
+    p2.audit_runtime_identity = AsyncMock(side_effect=RuntimeError("bad provider"))
+
+    with patch.object(labs_mod, "list_providers", return_value=["docker", "libvirt"]):
+        with patch.object(
+            labs_mod,
+            "get_provider",
+            side_effect=lambda p: p1 if p == "docker" else p2,
+        ):
+            result = await labs_mod.runtime_identity_audit()
+
+    assert len(result.providers) == 1
+    assert result.providers[0].provider == "docker"
+    assert result.providers[0].managed_runtimes == 2
+    assert len(result.errors) == 1
+    assert "bad provider" in result.errors[0]
+
+
+@pytest.mark.asyncio
+async def test_runtime_identity_backfill_groups_entries_by_provider():
+    req = RuntimeIdentityBackfillRequest(
+        dry_run=True,
+        entries=[
+            {
+                "lab_id": "lab1",
+                "node_name": "r1",
+                "node_definition_id": "node-def-r1",
+                "provider": "docker",
+            },
+            {
+                "lab_id": "lab1",
+                "node_name": "vm1",
+                "node_definition_id": "node-def-vm1",
+                "provider": "libvirt",
+            },
+        ],
+    )
+    p1 = MagicMock()
+    p1.backfill_runtime_identity = AsyncMock(return_value={
+        "provider": "docker",
+        "updated": 0,
+        "recreate_required": 1,
+        "missing": 0,
+        "skipped": 0,
+        "nodes": [{
+            "lab_id": "lab1",
+            "node_name": "r1",
+            "node_definition_id": "node-def-r1",
+            "runtime_name": "ctr-r1",
+            "outcome": "recreate_required",
+            "dry_run": True,
+        }],
+        "errors": [],
+    })
+    p2 = MagicMock()
+    p2.backfill_runtime_identity = AsyncMock(return_value={
+        "provider": "libvirt",
+        "updated": 1,
+        "recreate_required": 0,
+        "missing": 0,
+        "skipped": 0,
+        "nodes": [{
+            "lab_id": "lab1",
+            "node_name": "vm1",
+            "node_definition_id": "node-def-vm1",
+            "runtime_name": "arch-lab1-vm1",
+            "outcome": "would_update",
+            "dry_run": True,
+        }],
+        "errors": [],
+    })
+
+    with patch.object(labs_mod, "get_provider", side_effect=lambda p: p1 if p == "docker" else p2):
+        result = await labs_mod.backfill_runtime_identity(req)
+
+    assert len(result.providers) == 2
+    assert result.providers[0].provider == "docker"
+    assert result.providers[1].provider == "libvirt"
+    assert result.providers[0].recreate_required == 1
+    assert result.providers[1].updated == 1
 
 
 @pytest.mark.asyncio

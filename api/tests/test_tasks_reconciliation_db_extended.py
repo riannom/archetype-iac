@@ -175,12 +175,23 @@ def _make_link_state(
     return ls
 
 
-def _make_placement(db, lab_id, node_name, host_id, *, node_definition_id=None):
+def _make_placement(
+    db,
+    lab_id,
+    node_name,
+    host_id,
+    *,
+    node_definition_id=None,
+    status="pending",
+    runtime_id=None,
+):
     p = models.NodePlacement(
         lab_id=lab_id,
         node_name=node_name,
         host_id=host_id,
         node_definition_id=node_definition_id,
+        status=status,
+        runtime_id=runtime_id,
     )
     db.add(p)
     db.commit()
@@ -617,6 +628,132 @@ class TestDoReconcileLabContainerMapping:
         test_db.refresh(lab)
         # Lab state should be computed (stopped since the node is counted as stopped)
         assert lab.state in (LabState.STOPPED.value, LabState.RUNNING.value, LabState.ERROR.value)
+
+
+# ---------------------------------------------------------------------------
+# Tests: _do_reconcile_lab - runtime identity decisions
+# ---------------------------------------------------------------------------
+
+class TestDoReconcileLabRuntimeIdentity:
+    """Tests for runtime identity reconciliation decisions."""
+
+    @pytest.mark.asyncio
+    async def test_runtime_id_mismatch_flags_placement_drift(self, test_db, test_user):
+        from app.tasks.reconciliation_db import _do_reconcile_lab
+
+        host = _make_host(test_db, "host-runtime-drift")
+        lab = _make_lab(test_db, test_user, state="running", agent_id=host.id)
+        node_def = _make_node(test_db, lab.id, "R1", host_id=host.id)
+        _make_node_state(
+            test_db,
+            lab.id,
+            "R1",
+            actual="running",
+            desired="running",
+            node_definition_id=node_def.id,
+        )
+        placement = _make_placement(
+            test_db,
+            lab.id,
+            "R1",
+            host.id,
+            node_definition_id=node_def.id,
+            status="deployed",
+            runtime_id="runtime-old",
+        )
+
+        with _ReconcileContext(agent_status_nodes=[{
+            "name": "R1",
+            "status": "running",
+            "node_definition_id": node_def.id,
+            "runtime_id": "runtime-new",
+        }]):
+            await _do_reconcile_lab(test_db, lab, lab.id)
+
+        test_db.refresh(placement)
+        assert placement.status == "drifted"
+        assert placement.runtime_id == "runtime-old"
+
+    @pytest.mark.asyncio
+    async def test_runtime_id_mismatch_during_starting_is_adopted(self, test_db, test_user):
+        from app.tasks.reconciliation_db import _do_reconcile_lab
+
+        host = _make_host(test_db, "host-runtime-replace")
+        lab = _make_lab(test_db, test_user, state="running", agent_id=host.id)
+        node_def = _make_node(test_db, lab.id, "R1", host_id=host.id)
+        _make_node_state(
+            test_db,
+            lab.id,
+            "R1",
+            actual="starting",
+            desired="running",
+            node_definition_id=node_def.id,
+        )
+        placement = _make_placement(
+            test_db,
+            lab.id,
+            "R1",
+            host.id,
+            node_definition_id=node_def.id,
+            status="starting",
+            runtime_id="runtime-old",
+        )
+
+        with _ReconcileContext(agent_status_nodes=[{
+            "name": "R1",
+            "status": "running",
+            "node_definition_id": node_def.id,
+            "runtime_id": "runtime-new",
+        }]):
+            await _do_reconcile_lab(test_db, lab, lab.id)
+
+        test_db.refresh(placement)
+        assert placement.status == "deployed"
+        assert placement.runtime_id == "runtime-new"
+
+    @pytest.mark.asyncio
+    async def test_metadata_node_definition_id_canonicalizes_reported_name(self, test_db, test_user):
+        from app.tasks.reconciliation_db import _do_reconcile_lab
+
+        host = _make_host(test_db, "host-runtime-canonical")
+        lab = _make_lab(test_db, test_user, state="running", agent_id=host.id)
+        node_def = _make_node(test_db, lab.id, "R1", host_id=host.id)
+        node_state = _make_node_state(
+            test_db,
+            lab.id,
+            "R1",
+            actual="stopped",
+            desired="running",
+            node_definition_id=node_def.id,
+        )
+        placement = _make_placement(
+            test_db,
+            lab.id,
+            "R1",
+            host.id,
+            node_definition_id=node_def.id,
+            status="deployed",
+            runtime_id="runtime-123",
+        )
+
+        with _ReconcileContext(agent_status_nodes=[{
+            "name": "wrong-name",
+            "status": "running",
+            "node_definition_id": node_def.id,
+            "runtime_id": "runtime-123",
+        }]):
+            with patch(
+                "app.tasks.reconciliation_db.agent_client.check_node_readiness",
+                new_callable=AsyncMock,
+                return_value={"is_ready": False},
+            ):
+                await _do_reconcile_lab(test_db, lab, lab.id)
+
+        test_db.refresh(node_state)
+        test_db.refresh(placement)
+        assert node_state.actual_state == NodeActualState.RUNNING.value
+        assert placement.node_name == "R1"
+        assert placement.runtime_id == "runtime-123"
 
 
 # ---------------------------------------------------------------------------
