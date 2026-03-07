@@ -318,6 +318,7 @@ const InfrastructurePage: React.FC = () => {
               agentImageDetails={data.agentImageDetails}
               agentImagesLoading={data.agentImagesLoading}
               agentImagesCleaning={data.agentImagesCleaning}
+              agentImagesBulkCleaning={data.agentImagesBulkCleaning}
               updatingAgents={updates.updatingAgents}
               updateStatuses={updates.updateStatuses}
               isUpdateAvailable={(host) => updates.isUpdateAvailable(host, data.latestVersion)}
@@ -337,6 +338,24 @@ const InfrastructurePage: React.FC = () => {
                   }
                 } catch (err) {
                   notifyError('Failed to clean stale agent images', err);
+                }
+              }}
+              onCleanupAllStaleImages={async () => {
+                try {
+                  const result = await data.cleanupAllStaleAgentImages();
+                  if (result.total_deleted > 0) {
+                    addNotification(
+                      'success',
+                      'Removed stale agent images',
+                      `${result.total_deleted} artifact${result.total_deleted !== 1 ? 's' : ''} removed across ${result.processed_hosts} host${result.processed_hosts !== 1 ? 's' : ''}.`
+                    );
+                  } else if (result.total_failed > 0) {
+                    addNotification('warning', 'Bulk stale cleanup incomplete', `${result.total_failed} deletions failed.`);
+                  } else {
+                    addNotification('info', 'No stale images removed');
+                  }
+                } catch (err) {
+                  notifyError('Failed to clean stale images across hosts', err);
                 }
               }}
               onUpdateSyncStrategy={updateSyncStrategy}

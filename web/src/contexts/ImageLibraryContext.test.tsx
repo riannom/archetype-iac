@@ -28,9 +28,6 @@ describe('ImageLibraryContext', () => {
       if (path === '/images/library') {
         return { images: [{ id: 'img1', kind: 'docker', reference: 'ref1' }] };
       }
-      if (path === '/agents/images/stale-summary') {
-        return { hosts: [], total_stale_images: 2, affected_agents: 1 };
-      }
       throw new Error(`unexpected path: ${path}`);
     });
 
@@ -40,7 +37,7 @@ describe('ImageLibraryContext', () => {
       </ImageLibraryProvider>
     );
 
-    await waitFor(() => expect(screen.getByText('count:1;stale:2')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('count:1;stale:0')).toBeInTheDocument());
   });
 
   it('handles fetch errors', async () => {

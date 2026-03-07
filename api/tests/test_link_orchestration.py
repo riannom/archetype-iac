@@ -894,6 +894,63 @@ class TestLinkOrchestrationReliability:
         assert tunnel.vni == 3333
 
     @pytest.mark.asyncio
+    async def test_multiple_cross_host_links_same_host_pair_keep_distinct_vlans(
+        self, test_db: Session, sample_lab: models.Lab, multiple_hosts: list[models.Host]
+    ):
+        """Two different cross-host links on the same host pair should keep distinct VLAN state."""
+        from app.tasks.link_orchestration import create_cross_host_link
+
+        link_a = models.LinkState(
+            id=str(uuid4()),
+            lab_id=sample_lab.id,
+            link_name="R1:eth1-R3:eth1",
+            source_node="archetype-test-r1",
+            source_interface="eth1",
+            target_node="archetype-test-r3",
+            target_interface="eth1",
+            source_host_id=multiple_hosts[0].id,
+            target_host_id=multiple_hosts[1].id,
+            actual_state="pending",
+            is_cross_host=True,
+        )
+        link_b = models.LinkState(
+            id=str(uuid4()),
+            lab_id=sample_lab.id,
+            link_name="R1:eth2-R3:eth2",
+            source_node="archetype-test-r1",
+            source_interface="eth2",
+            target_node="archetype-test-r3",
+            target_interface="eth2",
+            source_host_id=multiple_hosts[0].id,
+            target_host_id=multiple_hosts[1].id,
+            actual_state="pending",
+            is_cross_host=True,
+        )
+        test_db.add_all([link_a, link_b])
+        test_db.commit()
+
+        host_to_agent = {h.id: h for h in multiple_hosts}
+        with patch("app.tasks.link_orchestration.agent_client") as mock_client, \
+             patch("app.tasks.link_orchestration.verify_link_connected", new_callable=AsyncMock, return_value=(True, None)), \
+             patch("app.tasks.link_orchestration.update_interface_mappings", new_callable=AsyncMock):
+            mock_client.setup_cross_host_link_v2 = AsyncMock(side_effect=[
+                {"success": True, "vni": 4101, "local_vlans": {"a": 2101, "b": 3101}},
+                {"success": True, "vni": 4102, "local_vlans": {"a": 2102, "b": 3102}},
+            ])
+            mock_client.resolve_agent_ip = AsyncMock(side_effect=lambda addr: addr.split(":")[0])
+            mock_client.detach_overlay_interface_on_agent = AsyncMock()
+
+            assert await create_cross_host_link(test_db, sample_lab.id, link_a, host_to_agent, [])
+            assert await create_cross_host_link(test_db, sample_lab.id, link_b, host_to_agent, [])
+
+        assert link_a.source_vlan_tag == 2101
+        assert link_a.target_vlan_tag == 3101
+        assert link_b.source_vlan_tag == 2102
+        assert link_b.target_vlan_tag == 3102
+        assert mock_client.setup_cross_host_link_v2.await_count == 2
+        mock_client.detach_overlay_interface_on_agent.assert_not_awaited()
+
+    @pytest.mark.asyncio
     async def test_create_external_network_links_missing_managed_interface(
         self, test_db: Session, sample_lab: models.Lab, sample_host: models.Host
     ):

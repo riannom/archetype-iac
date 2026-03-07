@@ -326,6 +326,14 @@ class TestAgentImages:
         assert data["stale_images_remaining"] == 0
         assert data["inventory_refreshed_at"] is not None
 
+    def test_cleanup_agent_stale_images_unreachable_agent_returns_503(
+        self, test_client: TestClient, test_db: Session, sample_host: models.Host, admin_auth_headers: dict
+    ):
+        with patch("app.agent_client.is_agent_online", return_value=False):
+            response = test_client.post(f"/agents/{sample_host.id}/images/cleanup-stale", headers=admin_auth_headers)
+
+        assert response.status_code == 503
+
     def test_list_stale_agent_images_summary(
         self, test_client: TestClient, test_db: Session, sample_host: models.Host, auth_headers: dict
     ):
@@ -348,6 +356,41 @@ class TestAgentImages:
         assert data["affected_agents"] == 1
         assert data["hosts"][0]["agent_id"] == sample_host.id
         assert data["hosts"][0]["stale_image_count"] == 1
+
+    def test_cleanup_all_agent_stale_images(
+        self, test_client: TestClient, test_db: Session, sample_host: models.Host, admin_auth_headers: dict
+    ):
+        offline_host = models.Host(
+            id="offline-agent",
+            name="Offline Agent",
+            address="10.0.0.2:8001",
+            status="offline",
+            capabilities=json.dumps({"providers": ["docker"]}),
+        )
+        test_db.add(offline_host)
+        test_db.commit()
+
+        with patch("app.agent_client.is_agent_online", return_value=True), \
+             patch(
+                 "app.agent_client.get_agent_images",
+                 new_callable=AsyncMock,
+                 side_effect=[
+                     {"images": [{"reference": "/var/lib/archetype/images/stale.qcow2", "kind": "qcow2", "tags": []}]},
+                     {"images": []},
+                 ],
+             ), \
+             patch("app.agent_client.delete_image_on_agent", new_callable=AsyncMock, return_value={"success": True, "deleted": True}), \
+             patch("app.image_store.load_manifest", return_value={"images": []}):
+            response = test_client.post("/agents/images/cleanup-stale", headers=admin_auth_headers)
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total_hosts"] == 2
+        assert data["processed_hosts"] == 1
+        assert data["skipped_offline_hosts"] == 1
+        assert data["total_requested"] == 1
+        assert data["total_deleted"] == 1
+        assert data["total_failed"] == 0
 
 
 class TestAgentUpdates:

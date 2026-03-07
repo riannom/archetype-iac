@@ -1049,12 +1049,52 @@ async def cleanup_agent_stale_images(
     host = database.get(models.Host, agent_id)
     if not host:
         raise HTTPException(status_code=404, detail="Agent not found")
-    if host.status != HostStatus.ONLINE:
+    result = await _cleanup_stale_images_for_host(host, database)
+    if result.get("status") == "offline":
         raise HTTPException(status_code=503, detail="Agent is offline")
+    if result.get("status") == "inventory_error":
+        detail = result.get("failed", [{}])[0].get("error") or "Failed to query agent inventory"
+        raise HTTPException(status_code=503, detail=detail)
+    return result
 
+
+async def _cleanup_stale_images_for_host(host: models.Host, database: Session) -> dict:
+    """Delete stale image artifacts from one host and return a structured result."""
     from app import agent_client
 
+    if host.status != HostStatus.ONLINE or not agent_client.is_agent_online(host):
+        return {
+            "agent_id": host.id,
+            "agent_name": host.name,
+            "status": "offline",
+            "requested": 0,
+            "deleted": [],
+            "failed": [],
+            "stale_images_remaining": 0,
+            "inventory_refreshed_at": None,
+        }
+
     details = await _build_agent_image_details(host, database)
+    inventory_error = next(
+        (
+            str(entry.get("reason"))
+            for entry in details["stale_images"]
+            if entry.get("reference") == "" and entry.get("reason")
+        ),
+        None,
+    )
+    if inventory_error:
+        return {
+            "agent_id": host.id,
+            "agent_name": host.name,
+            "status": "inventory_error",
+            "requested": 0,
+            "deleted": [],
+            "failed": [{"reference": "", "error": inventory_error}],
+            "stale_images_remaining": 0,
+            "inventory_refreshed_at": details.get("inventory_refreshed_at"),
+        }
+
     stale_images = [
         entry for entry in details["stale_images"]
         if entry.get("is_stale") and isinstance(entry.get("reference"), str) and entry.get("reference")
@@ -1082,11 +1122,48 @@ async def cleanup_agent_stale_images(
     return {
         "agent_id": host.id,
         "agent_name": host.name,
+        "status": "completed",
         "requested": len(stale_references),
         "deleted": deleted,
         "failed": failed,
         "stale_images_remaining": sum(1 for entry in refreshed["stale_images"] if entry.get("is_stale")),
         "inventory_refreshed_at": refreshed.get("inventory_refreshed_at"),
+    }
+
+
+@router.post("/images/cleanup-stale")
+async def cleanup_all_agent_stale_images(
+    database: Session = Depends(db.get_db),
+    current_user: models.User = Depends(get_current_user),
+) -> dict:
+    """Delete stale image artifacts from all agents immediately."""
+    require_admin(current_user)
+
+    hosts = database.query(models.Host).all()
+    results: list[dict[str, object]] = []
+    total_requested = 0
+    total_deleted = 0
+    total_failed = 0
+    skipped_offline = 0
+
+    for host in hosts:
+        result = await _cleanup_stale_images_for_host(host, database)
+        results.append(result)
+        if result.get("status") == "offline":
+            skipped_offline += 1
+            continue
+        total_requested += int(result.get("requested", 0))
+        total_deleted += len(result.get("deleted", []))
+        total_failed += len(result.get("failed", []))
+
+    return {
+        "hosts": results,
+        "total_hosts": len(hosts),
+        "processed_hosts": len(hosts) - skipped_offline,
+        "skipped_offline_hosts": skipped_offline,
+        "total_requested": total_requested,
+        "total_deleted": total_deleted,
+        "total_failed": total_failed,
     }
 
 

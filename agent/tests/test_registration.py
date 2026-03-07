@@ -417,3 +417,136 @@ class TestBootstrapTransportConfig:
         assert ["ip", "addr", "add", "10.0.0.5/24", "dev", "eth0.100"] in ip_calls
         assert ["ip", "link", "set", "eth0.100", "up"] in ip_calls
         assert dp_ip_set.get("ip") == "10.0.0.5"
+
+    @pytest.mark.asyncio
+    async def test_subinterface_mode_existing_interface_updates_parent_mtu(self, monkeypatch):
+        """Existing subinterface should be reused and parent MTU raised when needed."""
+        _state.set_registered(True)
+        client = FakeHttpClient()
+        client.get = AsyncMock(return_value=FakeResponse(200, {
+            "transport_mode": "subinterface",
+            "parent_interface": "eth0",
+            "vlan_id": 200,
+            "transport_ip": "10.0.1.5/24",
+            "desired_mtu": 9000,
+        }))
+        monkeypatch.setattr("agent.registration.get_http_client", lambda: client)
+        monkeypatch.setattr("agent.registration.get_controller_auth_headers", lambda: {})
+
+        ip_calls = []
+        dp_ip_set = {}
+
+        async def fake_run_cmd(cmd):
+            ip_calls.append(cmd)
+            if cmd == ["ip", "link", "show", "eth0.200"]:
+                return (0, "", "")
+            return (0, "", "")
+
+        monkeypatch.setattr("agent.network.cmd.run_cmd", fake_run_cmd)
+        monkeypatch.setattr(
+            "agent.network.transport.set_data_plane_ip",
+            lambda ip: dp_ip_set.update({"ip": ip}),
+        )
+
+        class _FakeFile:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def read(self):
+                return "1500"
+
+        monkeypatch.setattr("builtins.open", lambda *_args, **_kwargs: _FakeFile())
+
+        await _bootstrap_transport_config()
+
+        assert ["ip", "link", "show", "eth0.200"] in ip_calls
+        assert ["ip", "link", "add", "link", "eth0", "name", "eth0.200", "type", "vlan", "id", "200"] not in ip_calls
+        assert ["ip", "link", "set", "eth0", "mtu", "9000"] in ip_calls
+        assert ["ip", "link", "set", "eth0.200", "mtu", "9000"] in ip_calls
+        assert dp_ip_set.get("ip") == "10.0.1.5"
+
+    @pytest.mark.asyncio
+    async def test_subinterface_mode_missing_parent_or_vlan_is_noop(self, monkeypatch):
+        """Incomplete subinterface config should not attempt interface provisioning."""
+        _state.set_registered(True)
+        client = FakeHttpClient()
+        client.get = AsyncMock(return_value=FakeResponse(200, {
+            "transport_mode": "subinterface",
+            "parent_interface": "eth0",
+        }))
+        monkeypatch.setattr("agent.registration.get_http_client", lambda: client)
+        monkeypatch.setattr("agent.registration.get_controller_auth_headers", lambda: {})
+
+        ip_calls = []
+
+        async def fake_run_cmd(cmd):
+            ip_calls.append(cmd)
+            return (0, "", "")
+
+        monkeypatch.setattr("agent.network.cmd.run_cmd", fake_run_cmd)
+
+        await _bootstrap_transport_config()
+
+        assert ip_calls == []
+
+    @pytest.mark.asyncio
+    async def test_dedicated_mode_configures_interface_and_sets_data_plane_ip(self, monkeypatch):
+        """Dedicated transport mode should configure the data plane interface directly."""
+        _state.set_registered(True)
+        client = FakeHttpClient()
+        client.get = AsyncMock(return_value=FakeResponse(200, {
+            "transport_mode": "dedicated",
+            "data_plane_interface": "ens224",
+            "transport_ip": "10.0.2.5/24",
+            "desired_mtu": 9100,
+        }))
+        monkeypatch.setattr("agent.registration.get_http_client", lambda: client)
+        monkeypatch.setattr("agent.registration.get_controller_auth_headers", lambda: {})
+
+        ip_calls = []
+        dp_ip_set = {}
+
+        async def fake_run_cmd(cmd):
+            ip_calls.append(cmd)
+            return (0, "", "")
+
+        monkeypatch.setattr("agent.network.cmd.run_cmd", fake_run_cmd)
+        monkeypatch.setattr(
+            "agent.network.transport.set_data_plane_ip",
+            lambda ip: dp_ip_set.update({"ip": ip}),
+        )
+
+        await _bootstrap_transport_config()
+
+        assert ["ip", "link", "set", "ens224", "mtu", "9100"] in ip_calls
+        assert ["ip", "addr", "flush", "dev", "ens224"] in ip_calls
+        assert ["ip", "addr", "add", "10.0.2.5/24", "dev", "ens224"] in ip_calls
+        assert ["ip", "link", "set", "ens224", "up"] in ip_calls
+        assert dp_ip_set.get("ip") == "10.0.2.5"
+
+    @pytest.mark.asyncio
+    async def test_dedicated_mode_missing_interface_is_noop(self, monkeypatch):
+        """Incomplete dedicated config should not attempt interface provisioning."""
+        _state.set_registered(True)
+        client = FakeHttpClient()
+        client.get = AsyncMock(return_value=FakeResponse(200, {
+            "transport_mode": "dedicated",
+            "transport_ip": "10.0.3.5/24",
+        }))
+        monkeypatch.setattr("agent.registration.get_http_client", lambda: client)
+        monkeypatch.setattr("agent.registration.get_controller_auth_headers", lambda: {})
+
+        ip_calls = []
+
+        async def fake_run_cmd(cmd):
+            ip_calls.append(cmd)
+            return (0, "", "")
+
+        monkeypatch.setattr("agent.network.cmd.run_cmd", fake_run_cmd)
+
+        await _bootstrap_transport_config()
+
+        assert ip_calls == []

@@ -3,6 +3,7 @@ import { apiRequest } from '../../api';
 import type {
   AgentImagesDetailResponse,
   AgentStaleCleanupResponse,
+  BulkAgentStaleCleanupResponse,
   AgentMeshResponse,
   HostDetailed,
   AgentNetworkConfig,
@@ -30,6 +31,7 @@ export function useInfrastructureData() {
   const [agentImageDetails, setAgentImageDetails] = useState<Record<string, AgentImagesDetailResponse>>({});
   const [agentImagesLoading, setAgentImagesLoading] = useState<Set<string>>(new Set());
   const [agentImagesCleaning, setAgentImagesCleaning] = useState<Set<string>>(new Set());
+  const [agentImagesBulkCleaning, setAgentImagesBulkCleaning] = useState(false);
 
   // Host network config state
   const [networkConfigs, setNetworkConfigs] = useState<AgentNetworkConfig[]>([]);
@@ -115,6 +117,20 @@ export function useInfrastructureData() {
     }
   }, [loadAgentImageDetails]);
 
+  const cleanupAllStaleAgentImages = useCallback(async () => {
+    setAgentImagesBulkCleaning(true);
+    try {
+      const response = await apiRequest<BulkAgentStaleCleanupResponse>('/agents/images/cleanup-stale', {
+        method: 'POST',
+      });
+      const cachedHostIds = Object.keys(agentImageDetails);
+      await Promise.all(cachedHostIds.map((hostId) => loadAgentImageDetails(hostId, true)));
+      return response;
+    } finally {
+      setAgentImagesBulkCleaning(false);
+    }
+  }, [agentImageDetails, loadAgentImageDetails]);
+
   const loadLatestVersion = useCallback(async () => {
     try {
       const data = await apiRequest<{ version: string }>('/agents/updates/latest');
@@ -198,8 +214,10 @@ export function useInfrastructureData() {
     agentImageDetails,
     agentImagesLoading,
     agentImagesCleaning,
+    agentImagesBulkCleaning,
     loadAgentImageDetails,
     cleanupStaleAgentImages,
+    cleanupAllStaleAgentImages,
     loadHosts,
     // Network configs
     networkConfigs,

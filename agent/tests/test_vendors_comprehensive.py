@@ -561,6 +561,7 @@ class TestGetVendorsForUI:
 
         assert sonic is not None
         assert sonic["supportedImageKinds"] == ["qcow2"]
+        assert sonic["defaultCredentials"] == "admin / YourPaSsWoRd"
 
 
 class TestLinuxDeviceSupportedImageKinds:

@@ -15,6 +15,7 @@ interface HostsTabProps {
   agentImageDetails: Record<string, AgentImagesDetailResponse>;
   agentImagesLoading: Set<string>;
   agentImagesCleaning: Set<string>;
+  agentImagesBulkCleaning: boolean;
   updatingAgents: Set<string>;
   updateStatuses: Map<string, UpdateStatus>;
   isUpdateAvailable: (host: HostDetailed) => boolean;
@@ -23,6 +24,7 @@ interface HostsTabProps {
   onToggleVMs: (hostId: string) => void;
   onToggleImages: (hostId: string) => void;
   onCleanupStaleImages: (hostId: string) => void;
+  onCleanupAllStaleImages: () => void;
   onUpdateSyncStrategy: (hostId: string, strategy: SyncStrategy) => void;
   onTriggerUpdate: (hostId: string) => void;
   onTriggerRebuild: (hostId: string) => void;
@@ -44,6 +46,7 @@ const HostsTab: React.FC<HostsTabProps> = ({
   agentImageDetails,
   agentImagesLoading,
   agentImagesCleaning,
+  agentImagesBulkCleaning,
   updatingAgents,
   updateStatuses,
   isUpdateAvailable,
@@ -52,6 +55,7 @@ const HostsTab: React.FC<HostsTabProps> = ({
   onToggleVMs,
   onToggleImages,
   onCleanupStaleImages,
+  onCleanupAllStaleImages,
   onUpdateSyncStrategy,
   onTriggerUpdate,
   onTriggerRebuild,
@@ -70,6 +74,14 @@ const HostsTab: React.FC<HostsTabProps> = ({
           </p>
         </div>
         <div className="flex items-center gap-4 text-sm text-stone-600 dark:text-stone-400">
+          <button
+            onClick={onCleanupAllStaleImages}
+            disabled={agentImagesBulkCleaning}
+            className="flex items-center gap-2 px-3 py-1.5 bg-amber-100 dark:bg-amber-900/30 hover:bg-amber-200 dark:hover:bg-amber-900/50 text-amber-700 dark:text-amber-400 rounded-lg transition-all text-xs font-medium disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            <i className={`fa-solid ${agentImagesBulkCleaning ? 'fa-spinner fa-spin' : 'fa-broom'}`}></i>
+            Clean Stale Images
+          </button>
           {outdatedCount > 0 && (
             <button
               onClick={onTriggerBulkUpdate}

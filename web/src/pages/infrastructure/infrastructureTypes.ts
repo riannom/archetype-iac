@@ -205,6 +205,7 @@ export interface AgentImagesDetailResponse {
 export interface AgentStaleCleanupResponse {
   agent_id: string;
   agent_name: string;
+  status?: string;
   requested: number;
   deleted: string[];
   failed: Array<{
@@ -213,6 +214,16 @@ export interface AgentStaleCleanupResponse {
   }>;
   stale_images_remaining: number;
   inventory_refreshed_at: string | null;
+}
+
+export interface BulkAgentStaleCleanupResponse {
+  hosts: AgentStaleCleanupResponse[];
+  total_hosts: number;
+  processed_hosts: number;
+  skipped_offline_hosts: number;
+  total_requested: number;
+  total_deleted: number;
+  total_failed: number;
 }
 
 export interface HostDetailed {

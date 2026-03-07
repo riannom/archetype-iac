@@ -54,23 +54,21 @@ export function ImageLibraryProvider({ children }: ImageLibraryProviderProps) {
     await fetchStaleAgentSummary();
   }, [fetchStaleAgentSummary]);
 
-  // Fetch on mount
+  // Fetch library on mount
   useEffect(() => {
     fetchImageLibrary();
-    fetchStaleAgentSummary();
-  }, [fetchImageLibrary, fetchStaleAgentSummary]);
+  }, [fetchImageLibrary]);
 
   // Refetch when auth token changes (e.g., after login)
   useEffect(() => {
     const handleStorageChange = (e: StorageEvent) => {
       if (e.key === 'token' && e.newValue) {
         fetchImageLibrary();
-        fetchStaleAgentSummary();
       }
     };
     window.addEventListener('storage', handleStorageChange);
     return () => window.removeEventListener('storage', handleStorageChange);
-  }, [fetchImageLibrary, fetchStaleAgentSummary]);
+  }, [fetchImageLibrary]);
 
   const contextValue: ImageLibraryContextType = useMemo(() => ({
     imageLibrary,
