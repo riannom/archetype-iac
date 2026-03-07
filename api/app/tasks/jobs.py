@@ -603,6 +603,23 @@ async def _update_node_placements(
     """
     try:
         placement_moves: list[tuple[str, str, str]] = []
+        runtime_ids_by_name: dict[str, str] = {}
+        agent = session.get(models.Host, agent_id)
+        if agent:
+            try:
+                status_result = await agent_client.get_lab_status_from_agent(agent, lab_id)
+                runtime_ids_by_name = {
+                    node.get("name", ""): node.get("runtime_id", "")
+                    for node in status_result.get("nodes", [])
+                    if node.get("name") and node.get("runtime_id")
+                }
+            except Exception as status_error:
+                logger.warning(
+                    "Failed to collect runtime IDs for lab %s on agent %s: %s",
+                    lab_id,
+                    agent_id,
+                    status_error,
+                )
         node_defs = (
             session.query(models.Node)
             .filter(
@@ -645,6 +662,9 @@ async def _update_node_placements(
                 existing.host_id = agent_id
                 existing.status = status
                 existing.node_name = node_def.container_name
+                runtime_id = runtime_ids_by_name.get(node_def.container_name)
+                if runtime_id:
+                    existing.runtime_id = runtime_id
                 if old_host_id and old_host_id != agent_id:
                     placement_moves.append((node_def.container_name, old_host_id, agent_id))
             else:
@@ -654,6 +674,7 @@ async def _update_node_placements(
                     node_name=node_def.container_name,
                     node_definition_id=node_def.id,
                     host_id=agent_id,
+                    runtime_id=runtime_ids_by_name.get(node_def.container_name),
                     status=status,
                 )
                 session.add(placement)

@@ -12,6 +12,7 @@ from agent.providers import docker as docker_mod
 from agent.providers.base import NodeInfo, NodeStatus
 from agent.providers.docker import (
     LABEL_LAB_ID,
+    LABEL_NODE_DEFINITION_ID,
     LABEL_NODE_KIND,
     LABEL_NODE_NAME,
     LABEL_PROVIDER,
@@ -38,6 +39,7 @@ def _container(
     container_id: str,
     node_name: str,
     lab_id: str | None,
+    node_definition_id: str | None = None,
     kind: str = "linux",
     status: str = "running",
     ips: list[str] | None = None,
@@ -45,6 +47,8 @@ def _container(
     labels = {LABEL_NODE_NAME: node_name, LABEL_NODE_KIND: kind, LABEL_PROVIDER: "docker"}
     if lab_id is not None:
         labels[LABEL_LAB_ID] = lab_id
+    if node_definition_id is not None:
+        labels[LABEL_NODE_DEFINITION_ID] = node_definition_id
 
     networks = {}
     for idx, ip in enumerate(ips or []):
@@ -63,43 +67,58 @@ def _container(
 
 
 @pytest.mark.asyncio
-async def test_status_merges_label_and_prefix_results_without_duplicate_ids(sync_to_thread):
+async def test_status_uses_label_query_only(sync_to_thread):
     provider = DockerProvider()
     docker_client = MagicMock()
     provider._docker = docker_client
 
     c1 = _container(container_id="id-1", node_name="r1", lab_id="lab-a", ips=["10.0.0.11"])
-    c2 = _container(container_id="id-2", node_name="r2", lab_id="lab-a", ips=["10.0.0.12"])
-    docker_client.containers.list.side_effect = [[c1], [c1, c2]]
+    docker_client.containers.list.return_value = [c1]
 
     result = await provider.status("lab-a", Path("/tmp/workspace"))
 
     assert result.lab_exists is True
     assert result.error is None
-    assert sorted(n.name for n in result.nodes) == ["r1", "r2"]
-    assert docker_client.containers.list.call_count == 2
+    assert [n.name for n in result.nodes] == ["r1"]
+    assert docker_client.containers.list.call_count == 1
 
 
 @pytest.mark.asyncio
-async def test_status_falls_back_to_prefix_when_label_query_fails(sync_to_thread):
+async def test_status_does_not_fall_back_to_prefix_when_label_query_fails(sync_to_thread):
     provider = DockerProvider()
     docker_client = MagicMock()
     provider._docker = docker_client
 
-    c1 = _container(container_id="id-1", node_name="r1", lab_id="lab-a")
-    docker_client.containers.list.side_effect = [RuntimeError("stale labels"), [c1]]
+    docker_client.containers.list.side_effect = RuntimeError("stale labels")
 
     result = await provider.status("lab-a", Path("/tmp/workspace"))
 
-    assert result.lab_exists is True
-    assert [n.name for n in result.nodes] == ["r1"]
+    assert result.lab_exists is False
+    assert result.nodes == []
+    assert result.error == "stale labels"
+
+
+def test_node_from_container_returns_runtime_identity():
+    provider = DockerProvider()
+    container = _container(
+        container_id="full-runtime-id-123456",
+        node_name="r1",
+        lab_id="lab-a",
+        node_definition_id="node-def-r1",
+    )
+
+    node = provider._node_from_container(container)
+
+    assert node is not None
+    assert node.runtime_id == "full-runtime-id-123456"
+    assert node.node_definition_id == "node-def-r1"
 
 
 @pytest.mark.asyncio
 async def test_status_returns_error_on_outer_failure(sync_to_thread, monkeypatch):
     provider = DockerProvider()
     provider._docker = MagicMock()
-    monkeypatch.setattr(provider, "_lab_prefix", lambda _lab_id: (_ for _ in ()).throw(RuntimeError("boom")))
+    provider._docker.containers.list.side_effect = RuntimeError("boom")
 
     result = await provider.status("lab-a", Path("/tmp/workspace"))
 
@@ -400,3 +419,32 @@ async def test_extract_all_ceos_configs_alias_calls_extract_all_container_config
 
     assert result == [("ceos1", "cfg")]
     provider._extract_all_container_configs.assert_awaited_once_with("lab-a", Path("/tmp/workspace"))
+
+
+@pytest.mark.asyncio
+async def test_audit_runtime_identity_counts_name_only_and_metadata(sync_to_thread):
+    provider = DockerProvider()
+    docker_client = MagicMock()
+    provider._docker = docker_client
+    docker_client.containers.list.return_value = [
+        _container(
+            container_id="id-1-full",
+            node_name="r1",
+            lab_id="lab-a",
+            node_definition_id="node-def-r1",
+        ),
+        _container(
+            container_id="id-2-full",
+            node_name="r2",
+            lab_id="lab-a",
+            node_definition_id=None,
+        ),
+    ]
+
+    audit = await provider.audit_runtime_identity()
+
+    assert audit["managed_runtimes"] == 2
+    assert audit["resolved_by_metadata"] == 1
+    assert audit["name_only"] == 1
+    assert audit["missing_node_definition_id"] == 1
+    assert audit["inconsistent_metadata"] == 0

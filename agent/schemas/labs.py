@@ -14,6 +14,8 @@ class NodeInfo(BaseModel):
     name: str
     status: NodeStatus
     container_id: str | None = None
+    runtime_id: str | None = None
+    node_definition_id: str | None = None
     image: str | None = None
     ip_addresses: list[str] = Field(default_factory=list)
     error: str | None = None
@@ -65,6 +67,83 @@ class DiscoveredLab(BaseModel):
 class DiscoverLabsResponse(BaseModel):
     """Response from lab discovery endpoint."""
     labs: list[DiscoveredLab] = Field(default_factory=list)
+    timestamp: datetime = Field(default_factory=datetime.utcnow)
+
+
+class RuntimeIdentityAuditNode(BaseModel):
+    """Provider-reported runtime identity coverage for one runtime object."""
+    provider: str
+    runtime_name: str
+    lab_id: str | None = None
+    node_name: str | None = None
+    node_definition_id: str | None = None
+    runtime_id: str | None = None
+    resolved_by_metadata: bool = False
+    name_only: bool = False
+    missing_node_definition_id: bool = False
+    missing_runtime_id: bool = False
+    inconsistent_metadata: bool = False
+
+
+class RuntimeIdentityAuditProvider(BaseModel):
+    """Runtime identity audit summary for one provider on an agent."""
+    provider: str
+    managed_runtimes: int = 0
+    resolved_by_metadata: int = 0
+    name_only: int = 0
+    missing_node_definition_id: int = 0
+    missing_runtime_id: int = 0
+    inconsistent_metadata: int = 0
+    error: str | None = None
+    nodes: list[RuntimeIdentityAuditNode] = Field(default_factory=list)
+
+
+class RuntimeIdentityAuditResponse(BaseModel):
+    """Agent -> Controller: runtime identity audit across providers."""
+    providers: list[RuntimeIdentityAuditProvider] = Field(default_factory=list)
+    errors: list[str] = Field(default_factory=list)
+    timestamp: datetime = Field(default_factory=datetime.utcnow)
+
+
+class RuntimeIdentityBackfillEntry(BaseModel):
+    """Authoritative runtime identity mapping for an existing runtime."""
+    lab_id: str
+    node_name: str
+    node_definition_id: str
+    provider: str
+
+
+class RuntimeIdentityBackfillRequest(BaseModel):
+    """Controller -> Agent: request runtime identity backfill."""
+    entries: list[RuntimeIdentityBackfillEntry] = Field(default_factory=list)
+    dry_run: bool = True
+
+
+class RuntimeIdentityBackfillNodeResult(BaseModel):
+    """Per-runtime backfill result."""
+    lab_id: str
+    node_name: str
+    node_definition_id: str
+    runtime_name: str
+    outcome: str
+    dry_run: bool | None = None
+
+
+class RuntimeIdentityBackfillProviderResult(BaseModel):
+    """Backfill result for one provider on one agent."""
+    provider: str
+    updated: int = 0
+    recreate_required: int = 0
+    missing: int = 0
+    skipped: int = 0
+    nodes: list[RuntimeIdentityBackfillNodeResult] = Field(default_factory=list)
+    errors: list[str] = Field(default_factory=list)
+
+
+class RuntimeIdentityBackfillResponse(BaseModel):
+    """Agent -> Controller: runtime identity backfill results."""
+    providers: list[RuntimeIdentityBackfillProviderResult] = Field(default_factory=list)
+    errors: list[str] = Field(default_factory=list)
     timestamp: datetime = Field(default_factory=datetime.utcnow)
 
 

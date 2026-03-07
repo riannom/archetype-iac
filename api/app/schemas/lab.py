@@ -68,6 +68,7 @@ class GraphLink(BaseModel):
 class GraphNode(BaseModel):
     id: str
     name: str  # Display name for UI
+    node_definition_id: str | None = None
     # Node type: "device" for lab devices, "external" for external network connections
     node_type: str = "device"
     device: str | None = None

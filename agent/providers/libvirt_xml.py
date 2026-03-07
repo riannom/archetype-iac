@@ -541,9 +541,13 @@ def generate_domain_xml(
       <model type='{nic_driver}'/>
     </interface>'''
 
-    # Build metadata section with device kind for config extraction
+    # Build metadata section with runtime identity and device details.
     metadata_xml = ""
     if kind:
+        lab_id = node_config.get("lab_id")
+        node_definition_id = node_config.get("node_definition_id")
+        node_name = node_config.get("node_name") or name
+        provider_name = node_config.get("provider", "libvirt")
         readiness_probe = node_config.get("readiness_probe")
         readiness_pattern = node_config.get("readiness_pattern")
         readiness_timeout = node_config.get("readiness_timeout")
@@ -577,10 +581,22 @@ def generate_domain_xml(
         serial_type = node_config.get("serial_type", "pty")
         if serial_type and serial_type != "pty":
             readiness_xml += f"\n      <archetype:serial_type>{xml_escape(str(serial_type))}</archetype:serial_type>"
+        identity_xml = ""
+        if lab_id:
+            identity_xml += f"\n      <archetype:lab_id>{xml_escape(str(lab_id))}</archetype:lab_id>"
+        if node_definition_id:
+            identity_xml += (
+                f"\n      <archetype:node_definition_id>{xml_escape(str(node_definition_id))}"
+                "</archetype:node_definition_id>"
+            )
+        if node_name:
+            identity_xml += f"\n      <archetype:node_name>{xml_escape(str(node_name))}</archetype:node_name>"
+        if provider_name:
+            identity_xml += f"\n      <archetype:provider>{xml_escape(str(provider_name))}</archetype:provider>"
         metadata_xml = f'''
   <metadata>
     <archetype:node xmlns:archetype="http://archetype.io/libvirt/1">
-      <archetype:kind>{xml_escape(kind)}</archetype:kind>{readiness_xml}
+      <archetype:kind>{xml_escape(kind)}</archetype:kind>{identity_xml}{readiness_xml}
     </archetype:node>
   </metadata>'''
 

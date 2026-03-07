@@ -13,7 +13,11 @@ from datetime import datetime, timezone
 
 from app import agent_client, models
 from app.config import settings
-from app.metrics import nlm_phase_duration, record_node_state_transition
+from app.metrics import (
+    nlm_phase_duration,
+    record_node_state_transition,
+    record_runtime_identity_event,
+)
 
 from app.services.broadcaster import broadcast_node_state_change, broadcast_link_state_change
 from app.services.link_reservations import release_link_endpoint_reservations
@@ -32,6 +36,115 @@ from app.services.state_machine import LabStateMachine
 from app.utils.time import utcnow
 
 logger = logging.getLogger(__name__)
+
+
+def _record_runtime_identity_observation(
+    event: str,
+    *,
+    lab_id: str,
+    agent_id: str | None = None,
+    node_name: str | None = None,
+    node_definition_id: str | None = None,
+    expected_node_definition_id: str | None = None,
+    expected_runtime_id: str | None = None,
+    observed_runtime_id: str | None = None,
+    level: int = logging.INFO,
+) -> None:
+    """Emit a bounded metric plus structured log for identity decisions."""
+    record_runtime_identity_event(event)
+    logger.log(
+        level,
+        "Runtime identity observation: %s",
+        event,
+        extra={
+            "event": f"runtime_identity_{event}",
+            "lab_id": lab_id,
+            "agent_id": agent_id,
+            "node_name": node_name,
+            "node_definition_id": node_definition_id,
+            "expected_node_definition_id": expected_node_definition_id,
+            "expected_runtime_id": expected_runtime_id,
+            "observed_runtime_id": observed_runtime_id,
+        },
+    )
+
+
+def _apply_runtime_identity_decision(
+    placement: models.NodePlacement,
+    *,
+    lab_id: str,
+    agent_id: str,
+    node_name: str,
+    node_definition_id: str,
+    observed_runtime_id: str | None,
+) -> bool:
+    """Apply the runtime identity decision table to a placement.
+
+    Decision table for the hot reconciliation path:
+    - metadata/topology match + no stored runtime_id + observed runtime_id:
+      adopt the observed runtime_id.
+    - metadata/topology match + stored runtime_id == observed runtime_id:
+      keep the placement and clear prior drift flags.
+    - metadata/topology match + stored runtime_id != observed runtime_id +
+      placement.status == "starting":
+      treat as an explicit replacement, update runtime_id, mark deployed.
+    - metadata/topology match + stored runtime_id != observed runtime_id +
+      placement.status != "starting":
+      flag placement drift, keep the stored runtime_id, and require operator
+      review instead of silently re-associating.
+    - observed runtime_id missing:
+      keep the current placement identity and surface the missing identity.
+
+    Returns True when the placement is drifted and should keep its drift flag.
+    """
+    if not observed_runtime_id:
+        if placement.runtime_id is None:
+            _record_runtime_identity_observation(
+                "placement_runtime_id_missing",
+                lab_id=lab_id,
+                agent_id=agent_id,
+                node_name=node_name,
+                node_definition_id=node_definition_id,
+            )
+        return placement.status == "drifted"
+
+    if placement.runtime_id is None:
+        placement.runtime_id = observed_runtime_id
+        if placement.status == "drifted":
+            placement.status = "deployed"
+        return False
+
+    if placement.runtime_id == observed_runtime_id:
+        if placement.status == "drifted":
+            placement.status = "deployed"
+        return False
+
+    if placement.status == "starting":
+        _record_runtime_identity_observation(
+            "runtime_replaced",
+            lab_id=lab_id,
+            agent_id=agent_id,
+            node_name=node_name,
+            node_definition_id=node_definition_id,
+            expected_runtime_id=placement.runtime_id,
+            observed_runtime_id=observed_runtime_id,
+        )
+        placement.runtime_id = observed_runtime_id
+        placement.status = "deployed"
+        return False
+
+    _record_runtime_identity_observation(
+        "runtime_id_mismatch",
+        lab_id=lab_id,
+        agent_id=agent_id,
+        node_name=node_name,
+        node_definition_id=node_definition_id,
+        expected_runtime_id=placement.runtime_id,
+        observed_runtime_id=observed_runtime_id,
+        level=logging.WARNING,
+    )
+    placement.status = "drifted"
+    return True
 
 
 def _ensure_link_states_for_lab(session, lab_id: str) -> int:
@@ -530,6 +643,8 @@ async def _do_reconcile_lab(session, lab, lab_id: str) -> int:
         # Track both status and which agent has each container
         container_status_map: dict[str, str] = {}
         container_agent_map: dict[str, str] = {}  # node_name -> agent_id
+        container_runtime_id_map: dict[str, str] = {}  # node_name -> runtime_id
+        container_node_definition_id_map: dict[str, str] = {}  # node_name -> node_definition_id
         agents_successfully_queried: set[str] = set()  # Track which agents responded
         host_to_agent: dict[str, models.Host] = {}  # For live link creation
 
@@ -582,10 +697,66 @@ async def _do_reconcile_lab(session, lab, lab_id: str) -> int:
                     _set_agent_error(ag, agent_error)
 
                 for n in nodes:
-                    node_name = n.get("name", "")
-                    if node_name:
-                        container_status_map[node_name] = n.get("status", "unknown")
-                        container_agent_map[node_name] = aid
+                    reported_node_name = n.get("name", "")
+                    if not reported_node_name:
+                        continue
+
+                    node_definition_id = n.get("node_definition_id")
+                    matched_node = (
+                        nodes_by_id.get(node_definition_id)
+                        if node_definition_id
+                        else None
+                    )
+                    canonical_node_name = (
+                        matched_node.container_name
+                        if matched_node
+                        else reported_node_name
+                    )
+
+                    if node_definition_id and not matched_node:
+                        _record_runtime_identity_observation(
+                            "unknown_node_definition_id",
+                            lab_id=lab_id,
+                            agent_id=aid,
+                            node_name=reported_node_name,
+                            node_definition_id=node_definition_id,
+                            level=logging.WARNING,
+                        )
+                    elif matched_node and reported_node_name != canonical_node_name:
+                        _record_runtime_identity_observation(
+                            "metadata_name_mismatch",
+                            lab_id=lab_id,
+                            agent_id=aid,
+                            node_name=reported_node_name,
+                            node_definition_id=node_definition_id,
+                            expected_node_definition_id=matched_node.id,
+                            level=logging.WARNING,
+                        )
+
+                    container_status_map[canonical_node_name] = n.get("status", "unknown")
+                    container_agent_map[canonical_node_name] = aid
+
+                    runtime_id = n.get("runtime_id")
+                    if runtime_id:
+                        container_runtime_id_map[canonical_node_name] = runtime_id
+                    else:
+                        _record_runtime_identity_observation(
+                            "missing_runtime_id",
+                            lab_id=lab_id,
+                            agent_id=aid,
+                            node_name=canonical_node_name,
+                            node_definition_id=node_definition_id,
+                        )
+
+                    if node_definition_id and matched_node:
+                        container_node_definition_id_map[canonical_node_name] = node_definition_id
+                    elif not node_definition_id:
+                        _record_runtime_identity_observation(
+                            "missing_node_definition_id",
+                            lab_id=lab_id,
+                            agent_id=aid,
+                            node_name=canonical_node_name,
+                        )
 
         logger.debug(f"Lab {lab_id} container status: {container_status_map}")
 
@@ -947,8 +1118,21 @@ async def _do_reconcile_lab(session, lab, lab_id: str) -> int:
         # IMPORTANT: Don't blindly trust where containers are found - check node_def.host_id
         misplaced_containers: dict[str, str] = {}  # node_name -> wrong_agent_id
         for node_name, agent_id in container_agent_map.items():
-            # Look up node definition from pre-built index (D.2)
-            node_def = nodes_by_container_name.get(node_name)
+            # Prefer exact runtime-provided node definition identity when available.
+            runtime_node_definition_id = container_node_definition_id_map.get(node_name)
+            node_def = (
+                nodes_by_id.get(runtime_node_definition_id)
+                if runtime_node_definition_id
+                else nodes_by_container_name.get(node_name)
+            )
+            if not runtime_node_definition_id:
+                _record_runtime_identity_observation(
+                    "name_fallback_used",
+                    lab_id=lab_id,
+                    agent_id=agent_id,
+                    node_name=node_name,
+                    expected_node_definition_id=node_def.id if node_def else None,
+                )
 
             # Check if container is on the WRONG agent according to node definition
             if node_def and node_def.host_id and node_def.host_id != agent_id:
@@ -966,6 +1150,8 @@ async def _do_reconcile_lab(session, lab, lab_id: str) -> int:
                 else None
             )
             if existing_placement:
+                placement_is_drifted = False
+                observed_runtime_id = container_runtime_id_map.get(node_name)
                 # Update if container moved to a different agent (and move is valid per node_def)
                 if existing_placement.host_id != agent_id:
                     logger.info(
@@ -973,8 +1159,27 @@ async def _do_reconcile_lab(session, lab, lab_id: str) -> int:
                         f"{existing_placement.host_id} -> {agent_id}"
                     )
                     existing_placement.host_id = agent_id
-                    existing_placement.status = "deployed"
                 existing_placement.node_name = node_def.container_name
+                placement_is_drifted = _apply_runtime_identity_decision(
+                    existing_placement,
+                    lab_id=lab_id,
+                    agent_id=agent_id,
+                    node_name=node_name,
+                    node_definition_id=node_def.id,
+                    observed_runtime_id=observed_runtime_id,
+                )
+                if (
+                    not placement_is_drifted
+                    and existing_placement.status == "starting"
+                    and (observed_runtime_id or existing_placement.runtime_id)
+                ):
+                    existing_placement.status = "deployed"
+                elif (
+                    not placement_is_drifted
+                    and existing_placement.status != "failed"
+                    and observed_runtime_id
+                ):
+                    existing_placement.status = "deployed"
                 node_expected_agent_by_node_definition_id[node_def.id] = agent_id
                 node_expected_agent_by_name[node_def.container_name] = agent_id
             else:
@@ -995,12 +1200,21 @@ async def _do_reconcile_lab(session, lab, lab_id: str) -> int:
                     node_name=node_def.container_name,
                     node_definition_id=node_def.id,
                     host_id=agent_id,
+                    runtime_id=container_runtime_id_map.get(node_name),
                     status="deployed",
                 )
                 session.add(new_placement)
                 placements_by_node_definition_id[node_def.id] = new_placement
                 node_expected_agent_by_node_definition_id[node_def.id] = agent_id
                 node_expected_agent_by_name[node_def.container_name] = agent_id
+                if not new_placement.runtime_id:
+                    _record_runtime_identity_observation(
+                        "placement_runtime_id_missing",
+                        lab_id=lab_id,
+                        agent_id=agent_id,
+                        node_name=node_name,
+                        node_definition_id=node_def.id,
+                    )
 
         # Remove misplaced containers from wrong agents
         # Only do this when no active job to avoid interfering with deployments

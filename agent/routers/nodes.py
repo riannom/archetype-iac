@@ -179,6 +179,7 @@ async def create_node(
         node_name=node_name,
         kind=request.kind,
         workspace=workspace,
+        node_definition_id=request.node_definition_id,
         image=request.image,
         display_name=request.display_name,
         interface_count=request.interface_count,

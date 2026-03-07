@@ -116,6 +116,7 @@ def graph_to_deploy_topology(graph: TopologyGraph) -> dict:
 
         node_dict = {
             "name": n.container_name or n.name,
+            "node_definition_id": n.node_definition_id,
             "display_name": n.name,
             "kind": kind,
             "image": image,

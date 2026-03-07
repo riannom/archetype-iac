@@ -113,6 +113,14 @@ class TestGraphToDeployTopology:
         assert result["nodes"][0]["name"] == "custom-r1"
         assert result["nodes"][0]["display_name"] == "R1"
 
+    def test_node_definition_id_is_preserved(self):
+        graph = TopologyGraph(
+            nodes=[_node("R1", node_definition_id="node-def-r1")],
+            links=[],
+        )
+        result = graph_to_deploy_topology(graph)
+        assert result["nodes"][0]["node_definition_id"] == "node-def-r1"
+
     def test_node_vars_extraction(self):
         vars_ = {
             "env": {"VAR1": "val1"},

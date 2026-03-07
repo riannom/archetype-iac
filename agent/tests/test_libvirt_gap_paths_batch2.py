@@ -372,16 +372,48 @@ async def test_extract_all_vm_configs_success_and_error_paths(tmp_path):
 def test_discover_labs_sync_success_and_error(monkeypatch):
     provider = _make_provider()
 
-    d1 = SimpleNamespace(name=lambda: "arch-lab1-r1", UUIDString=lambda: "abcdef1234567890")
-    d2 = SimpleNamespace(name=lambda: "arch-lab1-r2", UUIDString=lambda: "0123456789abcdef")
-    malformed = SimpleNamespace(name=lambda: "arch-lab1", UUIDString=lambda: "ffffffffffffffff")
-    other = SimpleNamespace(name=lambda: "not-managed", UUIDString=lambda: "1111111111111111")
+    d1 = SimpleNamespace(
+        name=lambda: "arch-lab1-r1",
+        UUIDString=lambda: "abcdef1234567890",
+        XMLDesc=lambda: "<domain><metadata/></domain>",
+    )
+    d2 = SimpleNamespace(
+        name=lambda: "arch-lab1-r2",
+        UUIDString=lambda: "0123456789abcdef",
+        XMLDesc=lambda: "<domain><metadata/></domain>",
+    )
+    malformed = SimpleNamespace(
+        name=lambda: "arch-lab1",
+        UUIDString=lambda: "ffffffffffffffff",
+        XMLDesc=lambda: "<domain><metadata/></domain>",
+    )
+    other = SimpleNamespace(
+        name=lambda: "not-managed",
+        UUIDString=lambda: "1111111111111111",
+        XMLDesc=lambda: "<domain><metadata/></domain>",
+    )
 
     provider._conn = SimpleNamespace(
         isAlive=lambda: True,
         listAllDomains=lambda _flags=0: [d1, d2, malformed, other],
     )
     monkeypatch.setattr(provider, "_get_domain_status", lambda _domain: libvirt_mod.NodeStatus.RUNNING)
+    def _metadata(domain):
+        if domain is d1:
+            return {
+                "lab_id": "lab1",
+                "node_name": "r1",
+                "node_definition_id": "node-def-r1",
+            }
+        if domain is d2:
+            return {
+                "lab_id": "lab1",
+                "node_name": "r2",
+                "node_definition_id": "node-def-r2",
+            }
+        return {}
+
+    monkeypatch.setattr(provider, "_get_domain_metadata_values", _metadata)
 
     discovered = provider._discover_labs_sync()
     assert "lab1" in discovered
@@ -392,6 +424,85 @@ def test_discover_labs_sync_success_and_error(monkeypatch):
         listAllDomains=lambda _flags=0: (_ for _ in ()).throw(RuntimeError("boom")),
     )
     assert provider._discover_labs_sync() == {}
+
+
+def test_audit_runtime_identity_sync_counts_metadata_and_name_only(monkeypatch):
+    provider = _make_provider()
+
+    d1 = SimpleNamespace(name=lambda: "arch-lab1-r1", UUIDString=lambda: "abcdef1234567890")
+    d2 = SimpleNamespace(name=lambda: "arch-lab1-r2", UUIDString=lambda: "0123456789abcdef")
+    provider._conn = SimpleNamespace(
+        isAlive=lambda: True,
+        listAllDomains=lambda _flags=0: [d1, d2],
+    )
+
+    def _metadata(domain):
+        if domain is d1:
+            return {
+                "lab_id": "lab1",
+                "node_name": "r1",
+                "node_definition_id": "node-def-r1",
+                "provider": "libvirt",
+            }
+        return {}
+
+    monkeypatch.setattr(provider, "_get_domain_metadata_values", _metadata)
+
+    audit = provider._audit_runtime_identity_sync()
+
+    assert audit["managed_runtimes"] == 2
+    assert audit["resolved_by_metadata"] == 1
+    assert audit["name_only"] == 1
+    assert audit["missing_node_definition_id"] == 1
+    assert audit["inconsistent_metadata"] == 1
+
+
+def test_backfill_runtime_identity_sync_updates_domain_metadata():
+    provider = _make_provider()
+    xml = "<domain><name>arch-lab1-r1</name><metadata><archetype:node xmlns:archetype='http://archetype.io/libvirt/1'><archetype:kind>iosv</archetype:kind></archetype:node></metadata></domain>"
+    domain = SimpleNamespace(XMLDesc=lambda _flags=0: xml)
+    defined_xml: list[str] = []
+    provider._conn = SimpleNamespace(
+        isAlive=lambda: True,
+        lookupByName=lambda _name: domain,
+        defineXML=lambda new_xml: defined_xml.append(new_xml) or object(),
+    )
+
+    result = provider._backfill_runtime_identity_sync([{
+        "lab_id": "lab1",
+        "node_name": "r1",
+        "node_definition_id": "node-def-r1",
+        "provider": "libvirt",
+    }], dry_run=False)
+
+    assert result["updated"] == 1
+    assert "node-def-r1" in defined_xml[0]
+    assert "<archetype:lab_id>lab1</archetype:lab_id>" in defined_xml[0]
+
+
+def test_backfill_runtime_identity_sync_skips_when_metadata_already_present(monkeypatch):
+    provider = _make_provider()
+    domain = SimpleNamespace()
+    provider._conn = SimpleNamespace(
+        isAlive=lambda: True,
+        lookupByName=lambda _name: domain,
+    )
+    monkeypatch.setattr(provider, "_get_domain_metadata_values", lambda _domain: {
+        "lab_id": "lab1",
+        "node_name": "r1",
+        "node_definition_id": "node-def-r1",
+        "provider": "libvirt",
+    })
+
+    result = provider._backfill_runtime_identity_sync([{
+        "lab_id": "lab1",
+        "node_name": "r1",
+        "node_definition_id": "node-def-r1",
+        "provider": "libvirt",
+    }], dry_run=False)
+
+    assert result["skipped"] == 1
+    assert result["updated"] == 0
 
 
 @pytest.mark.asyncio

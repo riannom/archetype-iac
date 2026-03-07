@@ -67,6 +67,7 @@ from app.agent_client.overlay import (  # noqa: F401
 # --- node_ops.py: Per-node + lab-level operations ---
 from app.agent_client.node_ops import (  # noqa: F401
     backfill_image_metadata,
+    backfill_runtime_identity,
     check_node_readiness,
     cleanup_lab_orphans,
     cleanup_orphans_on_agent,
@@ -82,6 +83,7 @@ from app.agent_client.node_ops import (  # noqa: F401
     get_agent_images,
     get_agent_lock_status,
     get_lab_status_from_agent,
+    get_runtime_identity_audit,
     get_node_runtime_profile,
     reconcile_nodes_on_agent,
     release_agent_lock,
@@ -176,6 +178,7 @@ __all__ = [
     "setup_cross_host_link_v2",
     # Node/lab operations
     "backfill_image_metadata",
+    "backfill_runtime_identity",
     "check_node_readiness",
     "cleanup_lab_orphans",
     "cleanup_orphans_on_agent",
@@ -191,6 +194,7 @@ __all__ = [
     "get_agent_images",
     "get_agent_lock_status",
     "get_lab_status_from_agent",
+    "get_runtime_identity_audit",
     "get_node_runtime_profile",
     "reconcile_nodes_on_agent",
     "release_agent_lock",

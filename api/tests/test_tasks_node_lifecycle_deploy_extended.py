@@ -229,6 +229,7 @@ class TestDeploySingleNode:
         assert result is None
         assert ns.actual_state == NodeActualState.ERROR.value
         assert "disk full" in (ns.error_message or "")
+        assert mock_ac.create_node_on_agent.await_args.kwargs["node_definition_id"] == node_def.id
 
     @pytest.mark.asyncio
     async def test_start_fails_returns_error(self, test_db, test_user):

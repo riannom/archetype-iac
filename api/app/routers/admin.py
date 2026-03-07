@@ -1,6 +1,7 @@
 """Admin and reconciliation endpoints."""
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 from datetime import datetime, timezone
@@ -151,6 +152,282 @@ async def reconcile_state(
     logger.info(f"Reconciliation complete: {result['labs_updated']} labs updated")
 
     return result
+
+
+@router.get("/runtime-identity-audit")
+async def audit_runtime_identity(
+    provider: str | None = Query(
+        None,
+        description="Optional provider filter (docker or libvirt)",
+    ),
+    database: Session = Depends(db.get_db),
+    current_user: models.User = Depends(get_current_admin),
+) -> dict:
+    """Aggregate runtime identity audit coverage across all online agents."""
+    agents = database.query(models.Host).filter(models.Host.status == HostStatus.ONLINE).all()
+    if not agents:
+        return {
+            "summary": {
+                "agents_queried": 0,
+                "providers_reported": 0,
+                "managed_runtimes": 0,
+                "resolved_by_metadata": 0,
+                "name_only": 0,
+                "missing_node_definition_id": 0,
+                "missing_runtime_id": 0,
+                "inconsistent_metadata": 0,
+            },
+            "agents": [],
+            "errors": ["No healthy agents available"],
+        }
+
+    agent_reports: list[dict] = []
+    errors: list[str] = []
+
+    async def _fetch(agent: models.Host):
+        try:
+            result = await agent_client.get_runtime_identity_audit(agent)
+            return agent, result, None
+        except Exception as exc:
+            return agent, None, str(exc)
+
+    results = await asyncio.gather(*[_fetch(agent) for agent in agents])
+    for agent, report, error in results:
+        if error:
+            errors.append(f"{agent.name or agent.id}: {error}")
+            continue
+
+        providers = report.get("providers", [])
+        if provider:
+            providers = [item for item in providers if item.get("provider") == provider]
+
+        agent_reports.append({
+            "agent_id": agent.id,
+            "agent_name": agent.name,
+            "providers": providers,
+            "errors": report.get("errors", []),
+        })
+        errors.extend(
+            f"{agent.name or agent.id}: {msg}"
+            for msg in report.get("errors", [])
+        )
+
+    provider_reports = [
+        provider_report
+        for agent_report in agent_reports
+        for provider_report in agent_report["providers"]
+    ]
+
+    return {
+        "summary": {
+            "agents_queried": len(agent_reports),
+            "providers_reported": len(provider_reports),
+            "managed_runtimes": sum(p.get("managed_runtimes", 0) for p in provider_reports),
+            "resolved_by_metadata": sum(p.get("resolved_by_metadata", 0) for p in provider_reports),
+            "name_only": sum(p.get("name_only", 0) for p in provider_reports),
+            "missing_node_definition_id": sum(p.get("missing_node_definition_id", 0) for p in provider_reports),
+            "missing_runtime_id": sum(p.get("missing_runtime_id", 0) for p in provider_reports),
+            "inconsistent_metadata": sum(p.get("inconsistent_metadata", 0) for p in provider_reports),
+        },
+        "agents": agent_reports,
+        "errors": errors,
+    }
+
+
+@router.post("/runtime-identity-backfill")
+async def backfill_runtime_identity(
+    lab_id: str | None = Query(
+        None,
+        description="Optional lab scope for the backfill run",
+    ),
+    provider: str | None = Query(
+        None,
+        description="Optional provider filter (docker or libvirt)",
+    ),
+    dry_run: bool = Query(
+        True,
+        description="When true, report what would change without mutating runtimes",
+    ),
+    database: Session = Depends(db.get_db),
+    current_user: models.User = Depends(get_current_admin),
+) -> dict:
+    """Backfill runtime identity metadata using topology as the source of truth."""
+    from app.utils.lab import get_node_provider
+
+    labs_query = database.query(models.Lab)
+    if lab_id:
+        labs_query = labs_query.filter(models.Lab.id == lab_id)
+    labs = labs_query.all()
+    if lab_id and not labs:
+        raise HTTPException(status_code=404, detail="Lab not found")
+
+    placements = (
+        database.query(models.NodePlacement)
+        .filter(
+            models.NodePlacement.node_definition_id.is_not(None),
+            models.NodePlacement.host_id.is_not(None),
+        )
+        .all()
+    )
+    placements_by_node_definition_id = {
+        placement.node_definition_id: placement
+        for placement in placements
+        if placement.node_definition_id and placement.host_id
+    }
+    labs_by_id = {lab.id: lab for lab in labs}
+
+    entries_by_agent: dict[str, list[dict[str, str]]] = {}
+    skipped_nodes: list[dict[str, str]] = []
+    lab_ids = [lab.id for lab in labs]
+    nodes = (
+        database.query(models.Node)
+        .filter(models.Node.lab_id.in_(lab_ids))
+        .all()
+        if lab_ids
+        else []
+    )
+    for node in nodes:
+        node_provider = get_node_provider(node, database)
+        if provider and node_provider != provider:
+            continue
+        placement = placements_by_node_definition_id.get(node.id)
+        target_host_id = None
+        if placement and placement.host_id:
+            target_host_id = placement.host_id
+        elif node.host_id:
+            target_host_id = node.host_id
+        elif node.lab_id in labs_by_id:
+            target_host_id = labs_by_id[node.lab_id].agent_id
+        if not target_host_id:
+            skipped_nodes.append({
+                "lab_id": node.lab_id,
+                "node_name": node.container_name,
+                "node_definition_id": node.id,
+                "reason": "no_target_host",
+            })
+            continue
+        entries_by_agent.setdefault(target_host_id, []).append({
+            "lab_id": node.lab_id,
+            "node_name": node.container_name,
+            "node_definition_id": node.id,
+            "provider": node_provider,
+        })
+
+    agent_reports: list[dict] = []
+    errors: list[str] = []
+
+    async def _backfill_agent(agent: models.Host, entries: list[dict[str, str]]):
+        try:
+            result = await agent_client.backfill_runtime_identity(
+                agent,
+                entries,
+                dry_run=dry_run,
+            )
+            return agent, result, None
+        except Exception as exc:
+            return agent, None, str(exc)
+
+    online_agents = []
+    for agent_id, entries in entries_by_agent.items():
+        agent = database.get(models.Host, agent_id)
+        if not agent or not agent_client.is_agent_online(agent):
+            errors.append(f"{agent_id}: agent offline or missing")
+            continue
+        online_agents.append((agent, entries))
+
+    results = await asyncio.gather(
+        *[_backfill_agent(agent, entries) for agent, entries in online_agents]
+    ) if online_agents else []
+
+    for agent, report, error in results:
+        if error:
+            errors.append(f"{agent.name or agent.id}: {error}")
+            continue
+        agent_reports.append({
+            "agent_id": agent.id,
+            "agent_name": agent.name,
+            "providers": report.get("providers", []),
+            "errors": report.get("errors", []),
+        })
+        errors.extend(
+            f"{agent.name or agent.id}: {msg}"
+            for msg in report.get("errors", [])
+        )
+
+    provider_reports = [
+        provider_report
+        for agent_report in agent_reports
+        for provider_report in agent_report["providers"]
+    ]
+    return {
+        "summary": {
+            "dry_run": dry_run,
+            "agents_targeted": len(agent_reports),
+            "providers_reported": len(provider_reports),
+            "entries_considered": sum(len(entries) for entries in entries_by_agent.values()),
+            "updated": sum(p.get("updated", 0) for p in provider_reports),
+            "recreate_required": sum(p.get("recreate_required", 0) for p in provider_reports),
+            "missing": sum(p.get("missing", 0) for p in provider_reports),
+            "skipped": sum(p.get("skipped", 0) for p in provider_reports),
+            "topology_skipped": len(skipped_nodes),
+        },
+        "agents": agent_reports,
+        "topology_skipped": skipped_nodes,
+        "errors": errors,
+    }
+
+
+@router.get("/runtime-id-readiness")
+async def runtime_id_readiness(
+    database: Session = Depends(db.get_db),
+    current_user: models.User = Depends(get_current_admin),
+) -> dict:
+    """Report whether active placements are ready for a future runtime_id constraint."""
+    placements = (
+        database.query(models.NodePlacement)
+        .filter(models.NodePlacement.status.in_(("starting", "deployed", "drifted")))
+        .all()
+    )
+    missing = [placement for placement in placements if not placement.runtime_id]
+    labs_by_id = {
+        lab.id: lab
+        for lab in database.query(models.Lab)
+        .filter(models.Lab.id.in_({p.lab_id for p in missing} if missing else []))
+        .all()
+    }
+    hosts_by_id = {
+        host.id: host
+        for host in database.query(models.Host)
+        .filter(models.Host.id.in_({p.host_id for p in missing if p.host_id} if missing else []))
+        .all()
+    }
+
+    return {
+        "summary": {
+            "active_placements": len(placements),
+            "active_placements_missing_runtime_id": len(missing),
+            "constraint_eligible_now": len(missing) == 0,
+            "recommended_next_step": (
+                "observe_zero_count_window"
+                if len(missing) == 0
+                else "backfill_or_redeploy_remaining_placements"
+            ),
+        },
+        "placements": [
+            {
+                "placement_id": placement.id,
+                "lab_id": placement.lab_id,
+                "lab_name": labs_by_id.get(placement.lab_id).name if placement.lab_id in labs_by_id else None,
+                "node_name": placement.node_name,
+                "node_definition_id": placement.node_definition_id,
+                "host_id": placement.host_id,
+                "host_name": hosts_by_id.get(placement.host_id).name if placement.host_id in hosts_by_id else None,
+                "status": placement.status,
+                "runtime_id": placement.runtime_id,
+            }
+            for placement in missing
+        ],
+    }
 
 
 @router.get("/labs/{lab_id}/runtime-drift")
@@ -347,6 +624,130 @@ async def audit_lab_runtime_drift(
             "errors": errors,
         },
         "nodes": results,
+    }
+
+
+@router.get("/labs/{lab_id}/runtime-identity-audit")
+async def audit_lab_runtime_identity(
+    lab_id: str,
+    database: Session = Depends(db.get_db),
+    current_user: models.User = Depends(get_current_admin),
+) -> dict:
+    """Audit runtime identity coverage for a lab across queried agents."""
+    lab = get_lab_or_404(lab_id, database, current_user)
+
+    db_nodes = (
+        database.query(models.Node)
+        .filter(models.Node.lab_id == lab_id)
+        .all()
+    )
+    nodes_by_id = {node.id: node for node in db_nodes}
+    nodes_by_name = {node.container_name: node for node in db_nodes}
+
+    placements = (
+        database.query(models.NodePlacement)
+        .filter(models.NodePlacement.lab_id == lab_id)
+        .all()
+    )
+    placements_by_node_id = {
+        placement.node_definition_id: placement
+        for placement in placements
+        if placement.node_definition_id
+    }
+    placements_by_name = {placement.node_name: placement for placement in placements}
+    agent_ids = {p.host_id for p in placements if p.host_id}
+    if lab.agent_id:
+        agent_ids.add(lab.agent_id)
+
+    active_placements_missing_runtime_id = sum(
+        1 for p in placements if p.status in {"starting", "deployed"} and not p.runtime_id
+    )
+
+    agents = []
+    if agent_ids:
+        agents = database.query(models.Host).filter(models.Host.id.in_(agent_ids)).all()
+
+    node_reports: list[dict] = []
+    agent_errors: list[str] = []
+
+    async def _fetch(agent: models.Host):
+        try:
+            result = await agent_client.get_lab_status_from_agent(agent, lab_id)
+            return agent, result.get("nodes", []), result.get("error")
+        except Exception as exc:
+            return agent, [], str(exc)
+
+    if agents:
+        results = await asyncio.gather(*[_fetch(agent) for agent in agents])
+        for agent, nodes, error in results:
+            if error:
+                agent_errors.append(f"{agent.name or agent.id}: {error}")
+                continue
+            for node in nodes:
+                node_name = node.get("name", "")
+                node_definition_id = node.get("node_definition_id")
+                runtime_id = node.get("runtime_id")
+                expected = (
+                    nodes_by_id.get(node_definition_id)
+                    if node_definition_id and node_definition_id in nodes_by_id
+                    else nodes_by_name.get(node_name)
+                )
+                placement = (
+                    placements_by_node_id.get(expected.id)
+                    if expected
+                    else placements_by_name.get(node_name)
+                )
+                orphan_runtime = expected is None
+                mismatched_node_definition = bool(
+                    expected and node_definition_id and expected.id != node_definition_id
+                )
+                metadata_name_mismatch = bool(
+                    expected and node_definition_id and node_name and expected.container_name != node_name
+                )
+                resolved_by_metadata = bool(
+                    node_definition_id and runtime_id and node_definition_id in nodes_by_id
+                )
+                runtime_id_mismatch = bool(
+                    placement and placement.runtime_id and runtime_id and placement.runtime_id != runtime_id
+                )
+                node_reports.append({
+                    "agent_id": agent.id,
+                    "agent_name": agent.name,
+                    "node_name": node_name,
+                    "node_definition_id": node_definition_id,
+                    "runtime_id": runtime_id,
+                    "expected_node_definition_id": expected.id if expected else None,
+                    "expected_runtime_id": placement.runtime_id if placement else None,
+                    "placement_status": placement.status if placement else None,
+                    "resolved_by_metadata": resolved_by_metadata,
+                    "name_only": bool(node_name and not node_definition_id),
+                    "missing_node_definition_id": not bool(node_definition_id),
+                    "missing_runtime_id": not bool(runtime_id),
+                    "orphan_runtime": orphan_runtime,
+                    "mismatched_node_definition": mismatched_node_definition,
+                    "metadata_name_mismatch": metadata_name_mismatch,
+                    "runtime_id_mismatch": runtime_id_mismatch,
+                })
+
+    return {
+        "lab_id": lab_id,
+        "summary": {
+            "agents_queried": len(agents),
+            "reported_nodes": len(node_reports),
+            "resolved_by_metadata": sum(1 for n in node_reports if n["resolved_by_metadata"]),
+            "name_only": sum(1 for n in node_reports if n["name_only"]),
+            "missing_node_definition_id": sum(1 for n in node_reports if n["missing_node_definition_id"]),
+            "missing_runtime_id": sum(1 for n in node_reports if n["missing_runtime_id"]),
+            "orphan_runtimes": sum(1 for n in node_reports if n["orphan_runtime"]),
+            "mismatched_node_definition": sum(1 for n in node_reports if n["mismatched_node_definition"]),
+            "metadata_name_mismatch": sum(1 for n in node_reports if n["metadata_name_mismatch"]),
+            "runtime_id_mismatch": sum(1 for n in node_reports if n["runtime_id_mismatch"]),
+            "drifted_placements": sum(1 for p in placements if p.status == "drifted"),
+            "active_placements_missing_runtime_id": active_placements_missing_runtime_id,
+            "errors": len(agent_errors),
+        },
+        "errors": agent_errors,
+        "nodes": node_reports,
     }
 
 

@@ -93,6 +93,7 @@ from agent.providers.libvirt_config import (
 )
 
 logger = logging.getLogger(__name__)
+ARCHETYPE_LIBVIRT_NS = "http://archetype.io/libvirt/1"
 
 
 def _log_name(node_name: str, node_config: dict) -> str:
@@ -101,6 +102,49 @@ def _log_name(node_name: str, node_config: dict) -> str:
     if display_name and display_name != node_name:
         return f"{display_name}({node_name})"
     return node_name
+
+
+def _update_domain_identity_metadata_xml(
+    xml_text: str,
+    *,
+    lab_id: str,
+    node_name: str,
+    node_definition_id: str,
+    provider: str,
+) -> str:
+    """Upsert runtime identity fields in a libvirt domain XML document."""
+    ET.register_namespace("archetype", ARCHETYPE_LIBVIRT_NS)
+    root = ET.fromstring(xml_text)
+    metadata = root.find("metadata")
+    if metadata is None:
+        metadata = ET.SubElement(root, "metadata")
+
+    node_elem = None
+    for child in metadata:
+        local_tag = child.tag.split("}")[-1] if isinstance(child.tag, str) else ""
+        if local_tag == "node":
+            node_elem = child
+            break
+    if node_elem is None:
+        node_elem = ET.SubElement(metadata, f"{{{ARCHETYPE_LIBVIRT_NS}}}node")
+
+    def _upsert(local_tag: str, value: str) -> None:
+        elem = None
+        for child in node_elem:
+            child_local = child.tag.split("}")[-1] if isinstance(child.tag, str) else ""
+            if child_local == local_tag:
+                elem = child
+                break
+        if elem is None:
+            elem = ET.SubElement(node_elem, f"{{{ARCHETYPE_LIBVIRT_NS}}}{local_tag}")
+        elem.text = value
+
+    _upsert("lab_id", lab_id)
+    _upsert("node_name", node_name)
+    _upsert("node_definition_id", node_definition_id)
+    _upsert("provider", provider)
+
+    return ET.tostring(root, encoding="unicode")
 
 
 # Try to import libvirt - it's optional
@@ -436,6 +480,9 @@ class LibvirtProvider(Provider, VlanPersistenceMixin):
 
         This is a safety net for cases where the agent lost its in-memory VLAN state
         (restart) or the persisted JSON is missing/incomplete.
+
+        This is intentionally a recovery-only path: it uses legacy domain-name
+        parsing for local VLAN cleanup/state repair, not runtime identity.
         """
         discovered: dict[str, list[int]] = {}
         try:
@@ -523,6 +570,9 @@ class LibvirtProvider(Provider, VlanPersistenceMixin):
             existing_nodes = set()
             prefix = self._lab_prefix(lab_id)
 
+            # Recovery-only scan keyed by deterministic domain names. Reconciliation
+            # identity is metadata-based elsewhere; this scan exists only to recover
+            # local VLAN allocation state after agent restarts.
             for domain in all_domains:
                 name = domain.name()
                 if name.startswith(prefix + "-"):
@@ -853,17 +903,26 @@ class LibvirtProvider(Provider, VlanPersistenceMixin):
     def _node_from_domain(self, domain, prefix: str) -> NodeInfo | None:
         """Convert libvirt domain to NodeInfo."""
         name = domain.name()
+        metadata = self._get_domain_metadata_values(domain)
 
         # Check if this domain belongs to our lab
         if not name.startswith(prefix + "-"):
             return None
 
-        node_name = name[len(prefix) + 1:]
+        node_name = metadata.get("node_name")
+        if not node_name or not metadata.get("node_definition_id"):
+            logger.debug(
+                "Skipping metadata-incomplete domain during status: %s",
+                name,
+            )
+            return None
 
         return NodeInfo(
             name=node_name,
             status=self._get_domain_status(domain),
             container_id=domain.UUIDString()[:12],
+            runtime_id=domain.UUIDString(),
+            node_definition_id=metadata.get("node_definition_id"),
         )
 
     async def deploy(
@@ -947,6 +1006,10 @@ class LibvirtProvider(Provider, VlanPersistenceMixin):
             c = _coalesce  # short alias for config resolution
             node_config = {
                 "image": node.image,
+                "lab_id": lab_id,
+                "node_name": node_name,
+                "node_definition_id": getattr(node, "node_definition_id", None),
+                "provider": self.name,
                 "memory": c(node.memory, libvirt_config.memory_mb),
                 "cpu": c(node.cpu, libvirt_config.cpu_count),
                 "cpu_limit": node.cpu_limit,
@@ -1204,6 +1267,9 @@ class LibvirtProvider(Provider, VlanPersistenceMixin):
             defined_domains = self.conn.listAllDomains(libvirt.VIR_CONNECT_LIST_DOMAINS_INACTIVE)
             all_domains = running_domains + defined_domains
 
+            # Cleanup path: accept deterministic domain-name matching so legacy
+            # metadata-missing domains can still be removed. This is not used by
+            # hot-path identity reconciliation.
             for domain in all_domains:
                 name = domain.name()
                 if not name.startswith(prefix + "-"):
@@ -1286,7 +1352,12 @@ class LibvirtProvider(Provider, VlanPersistenceMixin):
         )
 
     def _status_sync(self, lab_id: str) -> StatusResult:
-        """Synchronous status check — runs on the libvirt thread."""
+        """Synchronous status check — runs on the libvirt thread.
+
+        Managed-runtime identity here is metadata-only. Domain names remain a
+        convenience handle for direct node actions and recovery operations, not
+        a reconciliation identity source.
+        """
         prefix = self._lab_prefix(lab_id)
         nodes: list[NodeInfo] = []
         try:
@@ -1624,6 +1695,7 @@ class LibvirtProvider(Provider, VlanPersistenceMixin):
         kind: str,
         workspace: Path,
         *,
+        node_definition_id: str | None = None,
         image: str | None = None,
         display_name: str | None = None,
         interface_count: int | None = None,
@@ -1659,6 +1731,7 @@ class LibvirtProvider(Provider, VlanPersistenceMixin):
             # Build node_config from vendor registry, with API-resolved overrides
             libvirt_config = get_libvirt_config(kind)
             node_config: dict[str, Any] = {
+                "node_definition_id": node_definition_id,
                 "image": image,
                 "memory": memory or libvirt_config.memory_mb,
                 "cpu": cpu or libvirt_config.cpu_count,
@@ -2603,9 +2676,14 @@ class LibvirtProvider(Provider, VlanPersistenceMixin):
             local_tag = elem.tag.split("}")[-1] if isinstance(elem.tag, str) else ""
             if local_tag in {
                 "kind",
+                "lab_id",
+                "node_definition_id",
+                "node_name",
+                "provider",
                 "readiness_probe",
                 "readiness_pattern",
                 "readiness_timeout",
+                "serial_type",
             }:
                 text = (elem.text or "").strip()
                 if text:
@@ -2857,16 +2935,22 @@ class LibvirtProvider(Provider, VlanPersistenceMixin):
                 name = domain.name()
                 if not name.startswith("arch-"):
                     continue
-                parts = name.split("-", 2)
-                if len(parts) < 3:
-                    logger.debug(f"Skipping malformed domain name: {name}")
+                metadata = self._get_domain_metadata_values(domain)
+                lab_id = metadata.get("lab_id")
+                node_name = metadata.get("node_name")
+                node_definition_id = metadata.get("node_definition_id")
+                if not lab_id or not node_name or not node_definition_id:
+                    logger.debug(
+                        "Skipping metadata-incomplete domain during discovery: %s",
+                        name,
+                    )
                     continue
-                lab_id = parts[1]
-                node_name = parts[2]
                 node = NodeInfo(
                     name=node_name,
                     status=self._get_domain_status(domain),
                     container_id=domain.UUIDString()[:12],
+                    runtime_id=domain.UUIDString(),
+                    node_definition_id=node_definition_id,
                 )
                 if lab_id not in discovered:
                     discovered[lab_id] = []
@@ -2879,6 +2963,168 @@ class LibvirtProvider(Provider, VlanPersistenceMixin):
     async def discover_labs(self) -> dict[str, list[NodeInfo]]:
         """Discover all running labs managed by this provider."""
         return await self._run_libvirt(self._discover_labs_sync)
+
+    def _audit_runtime_identity_sync(self) -> dict[str, Any]:
+        """Audit libvirt metadata coverage for all Archetype-managed domains."""
+        audit: dict[str, Any] = {
+            "provider": self.name,
+            "managed_runtimes": 0,
+            "resolved_by_metadata": 0,
+            "name_only": 0,
+            "missing_node_definition_id": 0,
+            "missing_runtime_id": 0,
+            "inconsistent_metadata": 0,
+            "nodes": [],
+        }
+        try:
+            all_domains = self.conn.listAllDomains(0)
+            for domain in all_domains:
+                runtime_name = domain.name()
+                if not runtime_name.startswith("arch-"):
+                    continue
+
+                metadata = self._get_domain_metadata_values(domain)
+                parts = runtime_name.split("-", 2)
+                parsed_lab_id = parts[1] if len(parts) >= 3 else None
+                parsed_node_name = parts[2] if len(parts) >= 3 else None
+                lab_id = metadata.get("lab_id") or parsed_lab_id
+                node_name = metadata.get("node_name") or parsed_node_name
+                node_definition_id = metadata.get("node_definition_id")
+                runtime_id = domain.UUIDString()
+                provider_metadata = metadata.get("provider")
+                inconsistent_metadata = bool(
+                    provider_metadata not in (None, "", self.name)
+                    or not metadata.get("lab_id")
+                    or not metadata.get("node_name")
+                )
+                name_only = bool(node_name and not node_definition_id)
+                resolved_by_metadata = bool(
+                    metadata.get("lab_id")
+                    and metadata.get("node_name")
+                    and node_definition_id
+                    and runtime_id
+                    and provider_metadata == self.name
+                )
+
+                audit["managed_runtimes"] += 1
+                audit["resolved_by_metadata"] += int(resolved_by_metadata)
+                audit["name_only"] += int(name_only)
+                audit["missing_node_definition_id"] += int(not bool(node_definition_id))
+                audit["missing_runtime_id"] += int(not bool(runtime_id))
+                audit["inconsistent_metadata"] += int(inconsistent_metadata)
+                audit["nodes"].append({
+                    "provider": self.name,
+                    "runtime_name": runtime_name,
+                    "lab_id": lab_id,
+                    "node_name": node_name,
+                    "node_definition_id": node_definition_id,
+                    "runtime_id": runtime_id,
+                    "resolved_by_metadata": resolved_by_metadata,
+                    "name_only": name_only,
+                    "missing_node_definition_id": not bool(node_definition_id),
+                    "missing_runtime_id": not bool(runtime_id),
+                    "inconsistent_metadata": inconsistent_metadata,
+                })
+        except Exception as e:
+            logger.error(f"Error auditing libvirt runtime identity: {e}")
+            audit["error"] = str(e)
+        return audit
+
+    async def audit_runtime_identity(self) -> dict[str, Any]:
+        """Audit libvirt runtime metadata coverage across all managed domains."""
+        return await self._run_libvirt(self._audit_runtime_identity_sync)
+
+    def _backfill_runtime_identity_sync(
+        self,
+        entries: list[dict[str, str]],
+        *,
+        dry_run: bool = True,
+    ) -> dict[str, Any]:
+        """Backfill libvirt domain identity metadata in place."""
+        result: dict[str, Any] = {
+            "provider": self.name,
+            "updated": 0,
+            "recreate_required": 0,
+            "missing": 0,
+            "skipped": 0,
+            "nodes": [],
+            "errors": [],
+        }
+        for entry in entries:
+            lab_id = entry.get("lab_id", "")
+            node_name = entry.get("node_name", "")
+            node_definition_id = entry.get("node_definition_id", "")
+            provider_name = entry.get("provider", self.name) or self.name
+            runtime_name = self._domain_name(lab_id, node_name)
+            try:
+                domain = self.conn.lookupByName(runtime_name)
+            except Exception:
+                result["missing"] += 1
+                result["nodes"].append({
+                    "lab_id": lab_id,
+                    "node_name": node_name,
+                    "node_definition_id": node_definition_id,
+                    "runtime_name": runtime_name,
+                    "outcome": "missing",
+                })
+                continue
+
+            metadata = self._get_domain_metadata_values(domain)
+            if (
+                metadata.get("lab_id") == lab_id
+                and metadata.get("node_name") == node_name
+                and metadata.get("node_definition_id") == node_definition_id
+                and metadata.get("provider", self.name) == provider_name
+            ):
+                result["skipped"] += 1
+                result["nodes"].append({
+                    "lab_id": lab_id,
+                    "node_name": node_name,
+                    "node_definition_id": node_definition_id,
+                    "runtime_name": runtime_name,
+                    "outcome": "already_present",
+                })
+                continue
+
+            try:
+                if not dry_run:
+                    xml = domain.XMLDesc(0)
+                    updated_xml = _update_domain_identity_metadata_xml(
+                        xml,
+                        lab_id=lab_id,
+                        node_name=node_name,
+                        node_definition_id=node_definition_id,
+                        provider=provider_name,
+                    )
+                    updated = self.conn.defineXML(updated_xml)
+                    if not updated:
+                        raise RuntimeError(f"Failed to redefine domain {runtime_name}")
+                result["updated"] += 1
+                result["nodes"].append({
+                    "lab_id": lab_id,
+                    "node_name": node_name,
+                    "node_definition_id": node_definition_id,
+                    "runtime_name": runtime_name,
+                    "outcome": "updated" if not dry_run else "would_update",
+                    "dry_run": dry_run,
+                })
+            except Exception as e:
+                result["errors"].append(f"{runtime_name}: {e}")
+
+        return result
+
+    async def backfill_runtime_identity(
+        self,
+        entries: list[dict[str, str]],
+        *,
+        dry_run: bool = True,
+    ) -> dict[str, Any]:
+        """Backfill libvirt runtime metadata for existing domains."""
+        return await self._run_libvirt(
+            self._backfill_runtime_identity_sync,
+            entries,
+            dry_run=dry_run,
+        )
 
     def _cleanup_orphan_domains_sync(
         self,
@@ -2897,6 +3143,9 @@ class LibvirtProvider(Provider, VlanPersistenceMixin):
                 for node in nodes:
                     domain_name = self._domain_name(lab_id, node.name)
                     try:
+                        # Recovery-only direct lookup by generated domain name.
+                        # Managed discovery/status no longer uses domain names as
+                        # identity, but cleanup must still remove legacy domains.
                         domain = self.conn.lookupByName(domain_name)
                         state, _ = domain.state()
                         if state == libvirt.VIR_DOMAIN_RUNNING:

@@ -199,6 +199,7 @@ echo "if-wait: Starting init"
 
 # Label keys for container metadata
 LABEL_LAB_ID = "archetype.lab_id"
+LABEL_NODE_DEFINITION_ID = "archetype.node_definition_id"
 LABEL_NODE_NAME = "archetype.node_name"
 LABEL_NODE_DISPLAY_NAME = "archetype.node_display_name"
 LABEL_NODE_KIND = "archetype.node_kind"
@@ -227,6 +228,7 @@ class TopologyNode:
     """Parsed node from topology YAML."""
     name: str
     kind: str
+    node_definition_id: str | None = None
     display_name: str | None = None  # Human-readable name for logs
     image: str | None = None
     host: str | None = None
@@ -1847,6 +1849,8 @@ class DockerProvider(Provider, VlanPersistenceMixin):
             name=node_name,
             status=self._get_container_status(container),
             container_id=container.short_id,
+            runtime_id=container.id,
+            node_definition_id=labels.get(LABEL_NODE_DEFINITION_ID),
             image=container.image.tags[0] if container.image.tags else str(container.image.id)[:12],
             ip_addresses=self._get_container_ips(container),
         )
@@ -1873,6 +1877,7 @@ class DockerProvider(Provider, VlanPersistenceMixin):
                     )
             nodes[n.name] = TopologyNode(
                 name=n.name,
+                node_definition_id=n.node_definition_id,
                 kind=n.kind,
                 display_name=n.display_name,
                 image=n.image,
@@ -2041,7 +2046,9 @@ class DockerProvider(Provider, VlanPersistenceMixin):
                 filters={"label": f"{LABEL_LAB_ID}={lab_id}"},
             )
 
-            # Also find by prefix (fallback)
+            # Recovery-only path: destroy must still clean up legacy unlabeled
+            # containers, but hot-path status/reconciliation never uses prefix
+            # identity anymore.
             prefix_containers = await asyncio.to_thread(
                 self.docker.containers.list,
                 all=True,
@@ -2145,36 +2152,13 @@ class DockerProvider(Provider, VlanPersistenceMixin):
         nodes: list[NodeInfo] = []
 
         try:
-            all_containers: dict[str, Any] = {}
+            containers = await asyncio.to_thread(
+                self.docker.containers.list,
+                all=True,
+                filters={"label": f"{LABEL_LAB_ID}={lab_id}"},
+            )
 
-            # Find containers by label - may fail if Docker has stale container references
-            try:
-                containers = await asyncio.to_thread(
-                    self.docker.containers.list,
-                    all=True,
-                    filters={"label": f"{LABEL_LAB_ID}={lab_id}"},
-                )
-                for c in containers:
-                    all_containers[c.id] = c
-            except Exception as e:
-                # Label query failed (possibly due to ghost container references)
-                # Log and continue with prefix-based fallback
-                logger.warning(f"Label-based container query failed for lab {lab_id}: {e}")
-
-            # Also find by prefix (fallback) - more resilient to Docker state issues
-            prefix = self._lab_prefix(lab_id)
-            try:
-                prefix_containers = await asyncio.to_thread(
-                    self.docker.containers.list,
-                    all=True,
-                    filters={"name": prefix},
-                )
-                for c in prefix_containers:
-                    all_containers[c.id] = c
-            except Exception as e:
-                logger.warning(f"Prefix-based container query failed for lab {lab_id}: {e}")
-
-            for container in all_containers.values():
+            for container in containers:
                 try:
                     node = self._node_from_container(container)
                     if node:
@@ -2189,6 +2173,11 @@ class DockerProvider(Provider, VlanPersistenceMixin):
             )
 
         except Exception as e:
+            logger.warning(
+                "Label-only Docker status query failed for lab %s; refusing name-prefix fallback: %s",
+                lab_id,
+                e,
+            )
             return StatusResult(
                 lab_exists=False,
                 error=str(e),
@@ -2427,6 +2416,7 @@ class DockerProvider(Provider, VlanPersistenceMixin):
         kind: str,
         workspace: Path,
         *,
+        node_definition_id: str | None = None,
         image: str | None = None,
         display_name: str | None = None,
         interface_count: int | None = None,
@@ -2460,6 +2450,7 @@ class DockerProvider(Provider, VlanPersistenceMixin):
             # Build a TopologyNode for _create_container_config
             node = TopologyNode(
                 name=node_name,
+                node_definition_id=node_definition_id,
                 kind=kind,
                 display_name=display_name,
                 image=image,
@@ -2865,6 +2856,126 @@ class DockerProvider(Provider, VlanPersistenceMixin):
             logger.error(f"Error discovering labs: {e}")
 
         return discovered
+
+    async def audit_runtime_identity(self) -> dict[str, Any]:
+        """Audit Docker label coverage for all Archetype-managed containers."""
+        audit = {
+            "provider": self.name,
+            "managed_runtimes": 0,
+            "resolved_by_metadata": 0,
+            "name_only": 0,
+            "missing_node_definition_id": 0,
+            "missing_runtime_id": 0,
+            "inconsistent_metadata": 0,
+            "nodes": [],
+        }
+
+        try:
+            containers = await asyncio.to_thread(
+                self.docker.containers.list,
+                all=True,
+                filters={"label": LABEL_PROVIDER + "=" + self.name},
+            )
+
+            for container in containers:
+                labels = container.labels or {}
+                lab_id = labels.get(LABEL_LAB_ID)
+                node_name = labels.get(LABEL_NODE_NAME)
+                node_definition_id = labels.get(LABEL_NODE_DEFINITION_ID)
+                runtime_id = getattr(container, "id", None)
+                provider_label = labels.get(LABEL_PROVIDER)
+                inconsistent_metadata = bool(
+                    provider_label != self.name or not lab_id or not node_name
+                )
+                name_only = bool(node_name and not node_definition_id)
+                resolved_by_metadata = bool(
+                    lab_id and node_name and node_definition_id and runtime_id and not inconsistent_metadata
+                )
+
+                audit["managed_runtimes"] += 1
+                audit["resolved_by_metadata"] += int(resolved_by_metadata)
+                audit["name_only"] += int(name_only)
+                audit["missing_node_definition_id"] += int(not bool(node_definition_id))
+                audit["missing_runtime_id"] += int(not bool(runtime_id))
+                audit["inconsistent_metadata"] += int(inconsistent_metadata)
+                audit["nodes"].append({
+                    "provider": self.name,
+                    "runtime_name": container.name,
+                    "lab_id": lab_id,
+                    "node_name": node_name,
+                    "node_definition_id": node_definition_id,
+                    "runtime_id": runtime_id,
+                    "resolved_by_metadata": resolved_by_metadata,
+                    "name_only": name_only,
+                    "missing_node_definition_id": not bool(node_definition_id),
+                    "missing_runtime_id": not bool(runtime_id),
+                    "inconsistent_metadata": inconsistent_metadata,
+                })
+        except Exception as e:
+            logger.error(f"Error auditing Docker runtime identity: {e}")
+            audit["error"] = str(e)
+
+        return audit
+
+    async def backfill_runtime_identity(
+        self,
+        entries: list[dict[str, str]],
+        *,
+        dry_run: bool = True,
+    ) -> dict[str, Any]:
+        """Report Docker containers that require recreate for identity labels."""
+        result = {
+            "provider": self.name,
+            "updated": 0,
+            "recreate_required": 0,
+            "missing": 0,
+            "skipped": 0,
+            "nodes": [],
+            "errors": [],
+        }
+        for entry in entries:
+            lab_id = entry.get("lab_id", "")
+            node_name = entry.get("node_name", "")
+            node_definition_id = entry.get("node_definition_id", "")
+            runtime_name = self.get_container_name(lab_id, node_name)
+            try:
+                container = await asyncio.to_thread(self.docker.containers.get, runtime_name)
+            except docker.errors.NotFound:
+                result["missing"] += 1
+                result["nodes"].append({
+                    "lab_id": lab_id,
+                    "node_name": node_name,
+                    "node_definition_id": node_definition_id,
+                    "runtime_name": runtime_name,
+                    "outcome": "missing",
+                })
+                continue
+            except Exception as e:
+                result["errors"].append(f"{runtime_name}: {e}")
+                continue
+
+            labels = container.labels or {}
+            if labels.get(LABEL_NODE_DEFINITION_ID) == node_definition_id:
+                result["skipped"] += 1
+                result["nodes"].append({
+                    "lab_id": lab_id,
+                    "node_name": node_name,
+                    "node_definition_id": node_definition_id,
+                    "runtime_name": runtime_name,
+                    "outcome": "already_labeled",
+                })
+                continue
+
+            result["recreate_required"] += 1
+            result["nodes"].append({
+                "lab_id": lab_id,
+                "node_name": node_name,
+                "node_definition_id": node_definition_id,
+                "runtime_name": runtime_name,
+                "outcome": "recreate_required",
+                "dry_run": dry_run,
+            })
+        return result
 
     async def cleanup_orphan_containers(self, valid_lab_ids: set[str]) -> list[str]:
         """Remove containers for labs that no longer exist.

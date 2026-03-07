@@ -264,9 +264,17 @@ class TestCreateNodeOnAgent:
              patch("app.agent_client.node_ops._timed_node_operation", new_callable=AsyncMock) as mock_op:
             mock_op.return_value = {"success": True}
             from app.agent_client.node_ops import create_node_on_agent
-            result = await create_node_on_agent(agent, "lab1", "r1", "ceos", image="ceos:latest")
+            result = await create_node_on_agent(
+                agent,
+                "lab1",
+                "r1",
+                "ceos",
+                node_definition_id="node-def-1",
+                image="ceos:latest",
+            )
             assert result["success"] is True
             mock_op.assert_awaited_once()
+            assert mock_op.await_args.kwargs["json_body"]["node_definition_id"] == "node-def-1"
 
     @pytest.mark.asyncio
     async def test_exception_propagates(self):
