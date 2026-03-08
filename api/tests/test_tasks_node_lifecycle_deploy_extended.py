@@ -1571,6 +1571,109 @@ class TestConnectSameHostLinksExtended:
         mock_create.assert_awaited_once()
 
     @pytest.mark.asyncio
+    async def test_first_link_fails_second_still_attempted(self, test_db, test_user):
+        """Serial link wiring: first link exception → second link still attempted."""
+        host = _make_host(test_db)
+        lab = _make_lab(test_db, test_user, agent_id=host.id)
+        job = _make_job(test_db, lab, test_user)
+
+        ns1 = _make_node_state(test_db, lab, "n1", "R1", actual="running")
+        ns2 = _make_node_state(test_db, lab, "n2", "R2", actual="running")
+        ns3 = _make_node_state(test_db, lab, "n3", "R3", actual="running")
+        ns1.is_ready = True
+        ns2.is_ready = True
+        ns3.is_ready = True
+        test_db.commit()
+        _make_placement(test_db, lab, "R1", host.id)
+        _make_placement(test_db, lab, "R2", host.id)
+        _make_placement(test_db, lab, "R3", host.id)
+
+        manager = _make_manager(test_db, lab, job, ["n1", "n2", "n3"], agent=host)
+        manager.all_lab_states = {"R1": ns1, "R2": ns2, "R3": ns3}
+        manager.placements_map = {
+            name: test_db.query(models.NodePlacement).filter_by(node_name=name).first()
+            for name in ("R1", "R2", "R3")
+        }
+
+        ep_a1 = MagicMock(node="n1", ifname="eth1")
+        ep_b1 = MagicMock(node="n2", ifname="eth1")
+        ep_a2 = MagicMock(node="n2", ifname="eth2")
+        ep_b2 = MagicMock(node="n3", ifname="eth1")
+        link1 = MagicMock(endpoints=[ep_a1, ep_b1])
+        link2 = MagicMock(endpoints=[ep_a2, ep_b2])
+
+        node_mocks = [
+            MagicMock(id="n1", container_name="R1", name="R1"),
+            MagicMock(id="n2", container_name="R2", name="R2"),
+            MagicMock(id="n3", container_name="R3", name="R3"),
+        ]
+        manager.graph = MagicMock(links=[link1, link2], nodes=node_mocks)
+        for n in node_mocks:
+            manager.db_nodes_map[n.name] = MagicMock(device="linux")
+
+        # First link raises, second succeeds
+        call_count = 0
+
+        async def _create_mock(session, lab_id, ls, host_map, log_parts):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                raise RuntimeError("agent unreachable")
+            return True
+
+        with patch(
+            "app.tasks.node_lifecycle_deploy._create_same_host_link",
+            new=_create_mock,
+        ):
+            await manager._connect_same_host_links({"R1", "R2", "R3"})
+
+        assert call_count == 2  # Both links attempted despite first failure
+
+    @pytest.mark.asyncio
+    async def test_create_same_host_link_returns_false_logged(self, test_db, test_user):
+        """_create_same_host_link returning False → warning logged, continues."""
+        host = _make_host(test_db)
+        lab = _make_lab(test_db, test_user, agent_id=host.id)
+        job = _make_job(test_db, lab, test_user)
+
+        ns1 = _make_node_state(test_db, lab, "n1", "R1", actual="running")
+        ns2 = _make_node_state(test_db, lab, "n2", "R2", actual="running")
+        ns1.is_ready = True
+        ns2.is_ready = True
+        test_db.commit()
+        _make_placement(test_db, lab, "R1", host.id)
+        _make_placement(test_db, lab, "R2", host.id)
+
+        manager = _make_manager(test_db, lab, job, ["n1", "n2"], agent=host)
+        manager.all_lab_states = {"R1": ns1, "R2": ns2}
+        manager.placements_map = {
+            name: test_db.query(models.NodePlacement).filter_by(node_name=name).first()
+            for name in ("R1", "R2")
+        }
+
+        ep_a = MagicMock(node="n1", ifname="eth1")
+        ep_b = MagicMock(node="n2", ifname="eth1")
+        mock_link = MagicMock(endpoints=[ep_a, ep_b])
+        node_mocks = [
+            MagicMock(id="n1", container_name="R1", name="R1"),
+            MagicMock(id="n2", container_name="R2", name="R2"),
+        ]
+        manager.graph = MagicMock(links=[mock_link], nodes=node_mocks)
+        for n in node_mocks:
+            manager.db_nodes_map[n.name] = MagicMock(device="linux")
+
+        with patch(
+            "app.tasks.node_lifecycle_deploy._create_same_host_link",
+            new_callable=AsyncMock,
+            return_value=False,
+        ):
+            # Should not raise — just log warning and continue
+            await manager._connect_same_host_links({"R1", "R2"})
+
+        # No links connected (both returned False → 0 count → no log_parts append)
+        assert not any("Connected" in p for p in manager.log_parts)
+
+    @pytest.mark.asyncio
     async def test_running_but_unready_nodes_skip_link_connection(self, test_db, test_user):
         """Same-host links must wait for node readiness, not only running state."""
         host = _make_host(test_db)

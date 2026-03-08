@@ -575,3 +575,61 @@ class TestBuildManagedPorts:
 
         result = build_managed_ports(libvirt_provider=BrokenLibvirt())
         assert result == {}
+
+
+class TestResolvePortMetadataOnly:
+    """Verify _resolve_port uses metadata node_name without fallback."""
+
+    def test_node_name_set_skips_container_to_node(self):
+        """When MonitoredPort has node_name, _container_to_node is never needed."""
+        from agent.network.carrier_monitor import CarrierMonitor, MonitoredPort
+
+        mon = CarrierMonitor(
+            ovs_bridge="arch-ovs",
+            get_managed_ports=lambda: {
+                "vh1": MonitoredPort(
+                    port_name="vh1",
+                    container_name="archetype-lab1-wrong-parse",
+                    interface_name="eth1",
+                    lab_id="lab1",
+                    node_name="correct-node",
+                )
+            },
+            notifier=AsyncMock(return_value=True),
+        )
+
+        result = mon._resolve_port("vh1")
+        assert result == ("lab1", "correct-node", "eth1")
+
+    def test_node_name_none_falls_back_to_name_parsing(self):
+        """When node_name is None, falls back to _container_to_node."""
+        from agent.network.carrier_monitor import CarrierMonitor, MonitoredPort
+
+        mon = CarrierMonitor(
+            ovs_bridge="arch-ovs",
+            get_managed_ports=lambda: {
+                "vh1": MonitoredPort(
+                    port_name="vh1",
+                    container_name="archetype-lab1-parsed-node",
+                    interface_name="eth1",
+                    lab_id="lab1",
+                    node_name=None,
+                )
+            },
+            notifier=AsyncMock(return_value=True),
+        )
+
+        result = mon._resolve_port("vh1")
+        assert result == ("lab1", "parsed-node", "eth1")
+
+    def test_unknown_port_returns_none(self):
+        """Unknown port name returns None."""
+        from agent.network.carrier_monitor import CarrierMonitor
+
+        mon = CarrierMonitor(
+            ovs_bridge="arch-ovs",
+            get_managed_ports=lambda: {},
+            notifier=AsyncMock(return_value=True),
+        )
+
+        assert mon._resolve_port("unknown") is None

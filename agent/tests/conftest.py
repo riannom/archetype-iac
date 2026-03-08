@@ -6,6 +6,7 @@ import types
 import inspect
 import asyncio
 import threading
+import concurrent.futures
 
 import pytest
 import httpx

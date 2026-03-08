@@ -82,6 +82,7 @@ class OVSPort:
     interface_name: str  # Interface name inside container
     vlan_tag: int  # Current VLAN tag for isolation
     lab_id: str  # Lab this port belongs to
+    node_name: str | None = None  # Logical node name when known
 
     @property
     def key(self) -> str:
@@ -535,6 +536,7 @@ class OVSNetworkManager:
         container_name: str,
         interface_name: str,
         lab_id: str,
+        node_name: str | None = None,
     ) -> int:
         """Create veth pair and attach to OVS with isolated VLAN tag.
 
@@ -546,6 +548,7 @@ class OVSNetworkManager:
             container_name: Docker container name
             interface_name: Interface name inside container (e.g., "eth1")
             lab_id: Lab identifier for tracking
+            node_name: Logical node name (optional, used for metadata tracking)
 
         Returns:
             Allocated VLAN tag
@@ -554,7 +557,7 @@ class OVSNetworkManager:
             RuntimeError: If provisioning fails
         """
         return await _provision_interface_impl(
-            self, container_name, interface_name, lab_id,
+            self, container_name, interface_name, lab_id, node_name=node_name,
         )
 
     async def hot_connect(

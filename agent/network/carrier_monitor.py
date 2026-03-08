@@ -282,10 +282,15 @@ class CarrierMonitor:
         port = self._get_managed_ports().get(port_name)
         if port is None:
             return None
-        node_name = getattr(port, "node_name", None) or self._container_to_node(
-            port.container_name,
-            port.lab_id,
-        )
+        node_name = port.node_name
+        if not node_name:
+            # Legacy fallback for ports created before metadata population
+            node_name = self._container_to_node(port.container_name, port.lab_id)
+            logger.debug(
+                "Resolved node_name via name parsing for port %s (container=%s)",
+                port_name,
+                port.container_name,
+            )
         return (port.lab_id, node_name, port.interface_name)
 
     @staticmethod
