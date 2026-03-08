@@ -67,24 +67,6 @@ class TopologyService:
         if graph_node.vars:
             config["vars"] = graph_node.vars
 
-        base_hw_specs: dict[str, Any] = {}
-        if graph_node.device:
-            from app.services.device_service import get_device_service
-
-            try:
-                base_hw_specs = get_device_service().resolve_hardware_specs(
-                    graph_node.device,
-                    None,
-                    graph_node.image,
-                    version=graph_node.version,
-                )
-            except Exception:
-                logger.debug(
-                    "Failed to resolve base hardware specs for %s; preserving incoming node config",
-                    graph_node.device,
-                    exc_info=True,
-                )
-
         for field in (
             "memory",
             "cpu",
@@ -97,8 +79,6 @@ class TopologyService:
         ):
             value = getattr(graph_node, field)
             if value is None:
-                continue
-            if base_hw_specs.get(field) == value:
                 continue
             config[field] = value
 

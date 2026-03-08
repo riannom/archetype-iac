@@ -327,6 +327,17 @@ class TestDeploySingleNode:
             mock_ds.return_value.resolve_hardware_specs.return_value = {}
             mock_ac.create_node_on_agent = AsyncMock(return_value={"success": True})
             mock_ac.start_node_on_agent = AsyncMock(return_value={"success": True})
+            mock_ac.get_lab_status_from_agent = AsyncMock(
+                return_value={
+                    "nodes": [
+                        {
+                            "name": "R1",
+                            "node_definition_id": node_def.id,
+                            "runtime_id": "container://r1",
+                        }
+                    ]
+                }
+            )
             result = await manager._deploy_single_node(ns)
 
         assert result == "R1"
