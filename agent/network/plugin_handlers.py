@@ -130,7 +130,17 @@ class PluginHandlersMixin:
                 return web.json_response({"Err": "Failed to create veth pair"})
 
             # Attach to OVS
-            if not await self._attach_to_ovs(network.bridge_name, host_veth, vlan_tag):
+            if not await self._attach_to_ovs(
+                network.bridge_name,
+                host_veth,
+                vlan_tag,
+                external_ids={
+                    "archetype.endpoint_id": endpoint_id,
+                    "archetype.interface_name": network.interface_name,
+                    "archetype.lab_id": network.lab_id,
+                    "archetype.network_id": network_id,
+                },
+            ):
                 await self._run_cmd(["ip", "link", "delete", host_veth])
                 return web.json_response({"Err": "Failed to attach to OVS"})
 

@@ -134,9 +134,7 @@ async def test_resolve_ovs_port_via_ifindex_handles_invalid_ifindex(sync_to_thre
 
     proc_calls = iter(
         [
-            _Proc(stdout=b"vh-bad\nvh-good\n"),
-            _Proc(stdout=b"not-a-number\n"),
-            _Proc(stdout=b"22\n"),
+            _Proc(stdout=b"vh-good\n"),
         ]
     )
 

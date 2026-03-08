@@ -107,6 +107,11 @@ def test_recover_stale_network_discovers_domain_tags_even_without_file(tmp_path)
             ]
 
     p._conn = _Conn()
+    p._get_domain_metadata_values = lambda domain: {
+        "arch-lab1-nodeA": {"lab_id": "lab1", "node_name": "nodeA"},
+        "arch-lab1-nodeB": {"lab_id": "lab1", "node_name": "nodeB"},
+        "arch-otherlab-x": {"lab_id": "otherlab", "node_name": "x"},
+    }[domain._name]
 
     recovered = p._recover_stale_network("lab1", tmp_path)
     assert recovered["nodeA"] == [2007]

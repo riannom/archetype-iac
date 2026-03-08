@@ -15,6 +15,13 @@ class _FakeContainer:
             "NetworkSettings": {"Networks": networks},
             "State": {"Pid": 1234},
         }
+        self.labels = {}
+
+    def exec_run(self, cmd, demux=False):
+        _ = demux
+        if cmd == ["cat", "/sys/class/net/eth3/iflink"]:
+            return (0, b"17\n")
+        return (1, b"")
 
 
 class _FakeDocker:
@@ -153,8 +160,19 @@ async def test_discover_endpoint_reconstructs_from_ports(monkeypatch, tmp_path):
     _stub_binding_match(monkeypatch, plugin, "eth3")
 
     async def _ovs_vsctl(*args):
+        if args == (
+            "--data=bare",
+            "--no-heading",
+            "--columns=name",
+            "find",
+            "Interface",
+            "ifindex=17",
+        ):
+            return 0, "vh-exact\n", ""
+        if args == ("get", "port", "vh-exact", "tag"):
+            return 0, "[123]", ""
         if args == ("list-ports", "arch-ovs"):
-            return 0, f"vh{endpoint_id[:5]}xyz\n", ""
+            return 0, "", ""
         if args == ("get", "port", f"vh{endpoint_id[:5]}xyz", "tag"):
             return 0, "[123]", ""
         return 1, "", ""
@@ -168,9 +186,55 @@ async def test_discover_endpoint_reconstructs_from_ports(monkeypatch, tmp_path):
     ep = await plugin._discover_endpoint("lab", "container-3", "eth3")
     assert ep is not None
     assert ep.endpoint_id == endpoint_id
-    assert ep.host_veth.startswith("vh")
+    assert ep.host_veth == "vh-exact"
     assert ep.vlan_tag == 123
     assert ep.container_name == "container-3"
+
+
+@pytest.mark.asyncio
+async def test_discover_endpoint_returns_none_without_exact_ifindex_match(monkeypatch, tmp_path):
+    monkeypatch.setattr("agent.network.docker_plugin.settings.workspace_path", str(tmp_path))
+    plugin = DockerOVSPlugin()
+
+    endpoint_id = "ep-789"
+    network_id = "net-3"
+    plugin.networks[network_id] = NetworkState(
+        network_id=network_id,
+        lab_id="lab",
+        interface_name="eth3",
+        bridge_name="arch-ovs",
+    )
+
+    networks = {
+        "random-name": {
+            "EndpointID": endpoint_id,
+            "NetworkID": network_id,
+        }
+    }
+
+    _patch_docker_from_env(monkeypatch, networks)
+    _stub_binding_match(monkeypatch, plugin, "eth3")
+
+    async def _ovs_vsctl(*args):
+        if args == (
+            "--data=bare",
+            "--no-heading",
+            "--columns=name",
+            "find",
+            "Interface",
+            "ifindex=17",
+        ):
+            return 0, "", ""
+        return 1, "", ""
+
+    async def _noop():
+        return None
+
+    monkeypatch.setattr(plugin, "_ovs_vsctl", _ovs_vsctl)
+    monkeypatch.setattr(plugin, "_mark_dirty_and_save", _noop)
+
+    ep = await plugin._discover_endpoint("lab", "container-3", "eth3")
+    assert ep is None
 
 
 @pytest.mark.asyncio

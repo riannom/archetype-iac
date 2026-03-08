@@ -43,6 +43,7 @@ class MonitoredPort:
     container_name: str  # Container/VM name
     interface_name: str  # Interface name inside container (e.g. "eth1")
     lab_id: str  # Lab this port belongs to
+    node_name: str | None = None  # Logical node name when already known
 
 
 def build_managed_ports(
@@ -66,6 +67,7 @@ def build_managed_ports(
                 container_name=port.container_name,
                 interface_name=port.interface_name,
                 lab_id=port.lab_id,
+                node_name=getattr(port, "node_name", None),
             )
 
     # 2. DockerOVSPlugin.endpoints (keyed by endpoint_id)
@@ -87,6 +89,7 @@ def build_managed_ports(
                 container_name=ep.container_name or "",
                 interface_name=ep.interface_name,
                 lab_id=lab_id,
+                node_name=getattr(ep, "node_name", None),
             )
 
     # 3. LibvirtProvider VM tap ports (pre-built cache, sync read).
@@ -279,7 +282,10 @@ class CarrierMonitor:
         port = self._get_managed_ports().get(port_name)
         if port is None:
             return None
-        node_name = self._container_to_node(port.container_name, port.lab_id)
+        node_name = getattr(port, "node_name", None) or self._container_to_node(
+            port.container_name,
+            port.lab_id,
+        )
         return (port.lab_id, node_name, port.interface_name)
 
     @staticmethod

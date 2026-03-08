@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from docker.errors import APIError, NotFound
 
+import agent.network.plugin_state as plugin_state_mod
 from agent.network import docker_plugin as plugin_mod
 from agent.network.docker_plugin import (
     DockerOVSPlugin,
@@ -147,6 +148,34 @@ async def test_reconnect_missing_endpoints_from_docker(plugin, sync_to_thread, m
 
 
 @pytest.mark.asyncio
+async def test_reconnect_missing_endpoints_prefers_tracked_host_veth(plugin, sync_to_thread, monkeypatch):
+    plugin.networks["id-1"] = NetworkState("id-1", "lab1", "eth1", "arch-ovs")
+    plugin.endpoints["ep-1"] = EndpointState(
+        endpoint_id="ep-1",
+        network_id="id-1",
+        interface_name="eth1",
+        host_veth="vh-tracked",
+        cont_veth="vc-tracked",
+        vlan_tag=200,
+        container_name="c1",
+    )
+
+    net = MagicMock()
+    net.attrs = {"Containers": {"container-1": {"EndpointID": "ep-1"}}}
+
+    client = MagicMock()
+    client.networks.get.return_value = net
+    monkeypatch.setattr("os.path.exists", lambda path: path == "/sys/class/net/vh-tracked")
+    monkeypatch.setattr("os.listdir", lambda _path: (_ for _ in ()).throw(AssertionError("prefix scan should not run")))
+
+    with patch("docker.from_env", return_value=client):
+        await plugin._reconnect_missing_endpoints_from_docker()
+
+    net.disconnect.assert_not_called()
+    net.connect.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_reconnect_missing_endpoints_handles_thread_failure(plugin):
     with patch.object(asyncio, "to_thread", new=AsyncMock(side_effect=RuntimeError("boom"))):
         await plugin._reconnect_missing_endpoints_from_docker()
@@ -245,6 +274,8 @@ async def test_recover_bridge_state_parses_vlan_vxlan_and_external(plugin):
             return 0, '"5000"\n', ""
         if cmd == ("get", "port", "vh1"):
             return 0, "200\n", ""
+        if args == ("get", "interface", "vh1", "external_ids"):
+            return 0, '{archetype.lab_id="lab-full"}\n', ""
         if cmd == ("get", "interface", "vh1"):
             return 0, "system\n", ""
         if cmd == ("get", "port", "vxlan9"):
@@ -258,7 +289,6 @@ async def test_recover_bridge_state_parses_vlan_vxlan_and_external(plugin):
         return 1, "", ""
 
     plugin._ovs_vsctl = _ovs_vsctl
-    plugin._find_lab_id_from_containers = AsyncMock(return_value="lab-full")
     plugin._recover_endpoints_for_bridge = AsyncMock()
 
     await plugin._recover_bridge_state(bridge_name, skip_endpoints=False)
@@ -270,26 +300,89 @@ async def test_recover_bridge_state_parses_vlan_vxlan_and_external(plugin):
 
 
 @pytest.mark.asyncio
-async def test_find_lab_id_from_containers_match_and_error(plugin):
-    c1 = SimpleNamespace(labels={"archetype.lab_id": "lab-abc"})
-    client = MagicMock()
-    client.containers.list.return_value = [c1]
+async def test_recover_bridge_state_skips_without_metadata(plugin):
+    bridge_name = f"{OVS_BRIDGE_PREFIX}labprefix"
 
-    with patch("docker.from_env", return_value=client):
-        assert await plugin._find_lab_id_from_containers("lab-") == "lab-abc"
+    async def _ovs_vsctl(*args):
+        if args[0] == "list-ports":
+            return 0, "vh1\n", ""
+        if args == ("get", "port", "vh1", "tag"):
+            return 0, "200\n", ""
+        if args == ("get", "interface", "vh1", "type"):
+            return 0, "system\n", ""
+        if args == ("get", "interface", "vh1", "external_ids"):
+            return 0, "{}", ""
+        return 1, "", ""
 
-    with patch("docker.from_env", side_effect=RuntimeError("docker down")):
-        assert await plugin._find_lab_id_from_containers("lab-") is None
+    plugin._ovs_vsctl = _ovs_vsctl
+    plugin._recover_endpoints_for_bridge = AsyncMock()
+
+    await plugin._recover_bridge_state(bridge_name, skip_endpoints=False)
+
+    assert plugin.lab_bridges == {}
+    plugin._recover_endpoints_for_bridge.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_recover_bridge_state_increments_skip_metric(plugin):
+    bridge_name = f"{OVS_BRIDGE_PREFIX}labprefix"
+    metric = MagicMock()
+    metric.labels.return_value = metric
+
+    async def _ovs_vsctl(*args):
+        if args[0] == "list-ports":
+            return 0, "vh1\nvh2\n", ""
+        if args[0:3] == ("get", "port", "vh1"):
+            return 0, "200\n", ""
+        if args[0:3] == ("get", "port", "vh2"):
+            return 0, "201\n", ""
+        if args == ("get", "interface", "vh1", "type"):
+            return 0, "system\n", ""
+        if args == ("get", "interface", "vh2", "type"):
+            return 0, "system\n", ""
+        if args == ("get", "interface", "vh1", "external_ids"):
+            return 0, '{archetype.lab_id="lab-a"}\n', ""
+        if args == ("get", "interface", "vh2", "external_ids"):
+            return 0, '{archetype.lab_id="lab-b"}\n', ""
+        return 1, "", ""
+
+    plugin._ovs_vsctl = _ovs_vsctl
+    plugin._recover_endpoints_for_bridge = AsyncMock()
+
+    with patch.object(plugin_state_mod, "runtime_identity_skips", metric):
+        await plugin._recover_bridge_state(bridge_name, skip_endpoints=False)
+
+    metric.labels.assert_called_once_with(
+        resource_type="ovs_bridge",
+        operation="recover_bridge_state",
+        reason="missing_lab_metadata",
+    )
+    metric.inc.assert_called_once_with()
 
 
 @pytest.mark.asyncio
 async def test_recover_endpoints_for_bridge_and_vlan_parse_fallback(plugin):
     bridge = LabBridge(lab_id="lab1", bridge_name="arch-ovs")
+    plugin.networks["net-eth1"] = NetworkState("net-eth1", "lab1", "eth1", "arch-ovs")
     container = SimpleNamespace(
         name="archetype-lab1-r1",
         id="cid1",
         labels={"archetype.lab_id": "lab1"},
-        attrs={"State": {"Pid": 1234}},
+        attrs={
+            "State": {"Pid": 1234},
+            "NetworkSettings": {
+                "Networks": {
+                    "lab1-eth1": {
+                        "NetworkID": "net-eth1",
+                        "EndpointID": "docker-ep-1",
+                    },
+                    "lab1-eth2": {
+                        "NetworkID": "net-eth2-missing",
+                        "EndpointID": "docker-ep-2",
+                    },
+                }
+            },
+        },
     )
 
     client = MagicMock()
@@ -300,17 +393,77 @@ async def test_recover_endpoints_for_bridge_and_vlan_parse_fallback(plugin):
             return 0, "301\n", ""
         if args[0:3] == ("get", "port", "vh2"):
             return 0, "not-a-number\n", ""
+        if args == ("get", "interface", "vh1", "external_ids"):
+            return 0, '{archetype.endpoint_id="docker-ep-1", archetype.interface_name="eth1", archetype.network_id="net-eth1"}\n', ""
+        if args == ("get", "interface", "vh2", "external_ids"):
+            return 0, "{}", ""
         return 1, "", ""
 
     plugin._ovs_vsctl = _ovs_vsctl
-    plugin._find_interface_in_container = AsyncMock(side_effect=["eth1", "eth2"])
+    plugin._find_interface_in_container = AsyncMock(return_value="eth2")
 
     with patch("docker.from_env", return_value=client):
         await plugin._recover_endpoints_for_bridge(bridge, ["vh1", "vh2"])
 
-    assert "recovered-vh1" in plugin.endpoints
-    assert plugin.endpoints["recovered-vh1"].vlan_tag == 301
+    assert "docker-ep-1" in plugin.endpoints
+    assert plugin.endpoints["docker-ep-1"].network_id == "net-eth1"
+    assert plugin.endpoints["docker-ep-1"].vlan_tag == 301
     assert plugin.endpoints["recovered-vh2"].vlan_tag == VLAN_RANGE_START
+    plugin._find_interface_in_container.assert_awaited_once_with(1234, "vh2")
+
+
+@pytest.mark.asyncio
+async def test_restart_recovery_rebuilds_endpoint_state_from_metadata(plugin):
+    bridge_name = "arch-ovs"
+    plugin.networks["net-eth1"] = NetworkState("net-eth1", "lab1", "eth1", bridge_name)
+    plugin.lab_bridges.clear()
+    plugin.endpoints.clear()
+    container = SimpleNamespace(
+        name="arbitrary-runtime-name",
+        id="cid1",
+        labels={"archetype.lab_id": "lab1", "archetype.node_name": "r1"},
+        attrs={
+            "State": {"Pid": 4321},
+            "NetworkSettings": {
+                "Networks": {
+                    "lab1-eth1": {
+                        "NetworkID": "net-eth1",
+                        "EndpointID": "docker-ep-1",
+                    },
+                }
+            },
+        },
+    )
+    client = MagicMock()
+    client.containers.list.return_value = [container]
+
+    async def _ovs_vsctl(*args):
+        if args == ("list-ports", bridge_name):
+            return 0, "vh1\n", ""
+        if args == ("get", "port", "vh1", "tag"):
+            return 0, "301\n", ""
+        if args == ("get", "interface", "vh1", "type"):
+            return 0, "system\n", ""
+        if args == ("get", "interface", "vh1", "external_ids"):
+            return 0, (
+                '{archetype.lab_id="lab1", archetype.endpoint_id="docker-ep-1", '
+                'archetype.interface_name="eth1", archetype.network_id="net-eth1"}\n'
+            ), ""
+        return 1, "", ""
+
+    plugin._ovs_vsctl = _ovs_vsctl
+
+    with patch("docker.from_env", return_value=client):
+        await plugin._recover_bridge_state(bridge_name, skip_endpoints=False)
+
+    endpoint = plugin.endpoints["docker-ep-1"]
+    assert plugin.lab_bridges["lab1"].bridge_name == bridge_name
+    assert endpoint.network_id == "net-eth1"
+    assert endpoint.interface_name == "eth1"
+    assert endpoint.host_veth == "vh1"
+    assert endpoint.container_name == "arbitrary-runtime-name"
+    assert endpoint.node_name == "r1"
+    assert endpoint.vlan_tag == 301
 
 
 @pytest.mark.asyncio

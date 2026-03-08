@@ -459,3 +459,23 @@
 **Fix**: Added `prune_missing` control to `sync_catalog_from_manifest()`, switched runtime `save_manifest()` sync to `prune_missing=False`, and added regression coverage plus dedicated gates (`make test-api-catalog-regression`, confidence-gate rules, CI job) for merge-vs-prune behavior.
 
 **Rule**: Only use prune semantics for explicit full-snapshot reconciliation jobs. Any runtime read/modify/write path must default to merge/upsert behavior and carry regression tests for fallback-read then save flows.
+
+## 2026-03-07: Async DB sessions must be released before awaited agent I/O
+
+**Bug/Issue**: Reconciliation and provisioning helpers read ORM state, awaited agent/network calls, and then wrote back using the same SQLAlchemy session/transaction.
+
+**Impact**: This produced `idle in transaction` sessions, row-lock chains on `link_states` and `interface_mappings`, statement timeouts, and stale post-op state after rollback paths.
+
+**Fix**: Centralized transaction-release/reset helpers in `api/app/tasks/jobs.py`, threaded them through node lifecycle, link reconciliation, and interface mapping flows, and added regression tests plus DB-contention observability.
+
+**Rule**: Never hold a SQLAlchemy transaction open across awaited agent or network calls. Read state, release the transaction, await external I/O, then reopen a short write transaction.
+
+## 2026-03-07: Runtime identity and interface readiness must be first-pass provisioning gates
+
+**Bug/Issue**: Initial provisioning could report success before authoritative runtime status appeared or before required live interfaces/OVS ports were actually resolvable.
+
+**Impact**: Healthy-looking first deploys still needed reconciliation, backfill, or link repair to become usable, especially for libvirt nodes and cross-host links.
+
+**Fix**: Added hard first-init gates for host/image/runtime conflicts/capacity, made runtime visibility mandatory for start success, required `is_ready` plus live interface readiness before link creation, and demoted name-based recovery logic out of the hot path.
+
+**Rule**: Provisioning success must mean the runtime is visible through the authoritative status path and required interfaces are live enough to attach links. Reconciliation should handle drift, not normal initialization gaps.

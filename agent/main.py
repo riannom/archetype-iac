@@ -410,10 +410,11 @@ async def lifespan(app: FastAPI):
 
 
 # Create FastAPI app
+_app_lifespan = None if os.getenv("ARCHETYPE_AGENT_TESTING") == "1" else lifespan
 app = FastAPI(
     title="Archetype Agent",
     version=__version__,
-    lifespan=lifespan,
+    lifespan=_app_lifespan,
 )
 
 _cors_origins = [settings.controller_url] if settings.controller_url else ["*"]

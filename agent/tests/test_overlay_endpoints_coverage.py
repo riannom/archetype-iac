@@ -180,6 +180,61 @@ class TestBridgePorts:
 
 
 # ---------------------------------------------------------------------------
+# GET /labs/{lab_id}/port-state
+# ---------------------------------------------------------------------------
+
+class TestLabPortState:
+    """Tests for GET /labs/{lab_id}/port-state."""
+
+    def test_uses_node_label_instead_of_runtime_name_regex(self, client, monkeypatch):
+        class _FakeContainer:
+            name = "archetype-12345678-1234-1234-1234-123456789abc-runtime-name"
+            labels = {"archetype.node_name": "leaf-1"}
+
+            def exec_run(self, _cmd, demux=False):
+                _ = demux
+                return (0, b"eth1:42\n")
+
+        class _FakeDockerClient:
+            class _Containers:
+                def list(self, filters=None):
+                    _ = filters
+                    return [_FakeContainer()]
+
+            containers = _Containers()
+
+        class _FakeDockerProvider:
+            pass
+
+        async def fake_subprocess(*args, **kwargs):
+            _ = kwargs
+            if args == ("ovs-vsctl", "list-ports", settings.ovs_bridge_name or "arch-ovs"):
+                return _mock_subprocess("vh-leaf1")
+            if args == ("ovs-vsctl", "get", "interface", "vh-leaf1", "ifindex"):
+                return _mock_subprocess("42")
+            if args == ("ovs-vsctl", "get", "port", "vh-leaf1", "tag"):
+                return _mock_subprocess("2050")
+            return _mock_subprocess("")
+
+        monkeypatch.setattr("agent.routers.overlay.get_provider", lambda name: _FakeDockerProvider() if name == "docker" else None)
+        monkeypatch.setattr("docker.from_env", lambda timeout=None: _FakeDockerClient())
+
+        with patch("asyncio.create_subprocess_exec", side_effect=fake_subprocess):
+            resp = client.get("/labs/lab-a/port-state")
+
+        assert resp.status_code == 200
+        assert resp.json()["ports"] == [
+            {
+                "node_name": "leaf-1",
+                "interface_name": "eth1",
+                "ovs_port_name": "vh-leaf1",
+                "vlan_tag": 2050,
+                "carrier": "unknown",
+            }
+        ]
+
+
+# ---------------------------------------------------------------------------
 # POST /cleanup/audit
 # ---------------------------------------------------------------------------
 

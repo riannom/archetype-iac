@@ -435,7 +435,17 @@ class TestHandleCreateEndpoint:
         plugin._generate_veth_names.assert_called_once_with("ep-abc123")
         plugin._allocate_vlan.assert_awaited_once_with(lb)
         plugin._create_veth_pair.assert_awaited_once_with("vh-test", "vc-test")
-        plugin._attach_to_ovs.assert_awaited_once_with("arch-ovs", "vh-test", 100)
+        plugin._attach_to_ovs.assert_awaited_once_with(
+            "arch-ovs",
+            "vh-test",
+            100,
+            external_ids={
+                "archetype.endpoint_id": "ep-abc123",
+                "archetype.interface_name": "eth2",
+                "archetype.lab_id": "lab1",
+                "archetype.network_id": "net1",
+            },
+        )
         plugin._touch_lab.assert_called_once_with("lab1")
         plugin._mark_dirty_and_save.assert_awaited_once()
 

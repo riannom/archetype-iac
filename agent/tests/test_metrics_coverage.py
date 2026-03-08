@@ -81,3 +81,8 @@ def test_module_metrics_are_functional() -> None:
     m.ovs_operation_duration.labels(operation="add-port", status="ok").observe(0.05)
     m.node_operation_duration.labels(operation="create", status="ok").observe(1.0)
     m.node_operation_errors.labels(operation="create").inc()
+    m.runtime_identity_skips.labels(
+        resource_type="libvirt_domain",
+        operation="recover_stale_network",
+        reason="missing_runtime_metadata",
+    ).inc()

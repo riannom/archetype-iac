@@ -78,6 +78,12 @@ class TestRecoverStaleNetwork:
             isAlive=lambda: True,
             listAllDomains=lambda _flags: domains,
         )
+        provider._get_domain_metadata_values = MagicMock(
+            side_effect=lambda domain: {
+                "lab_id": "lab1" if domain._name.startswith("arch-lab1-") else "other",
+                "node_name": domain._name.split("-", 2)[2] if domain._name.startswith("arch-") else None,
+            }
+        )
         # Ensure _lab_prefix returns known prefix
         monkeypatch.setattr(
             libvirt_mod, "sanitize_id", lambda v, max_len=20: v[:max_len],
@@ -618,6 +624,15 @@ class TestDestroySync:
         )
 
         provider._undefine_domain = MagicMock()
+        provider._get_domain_metadata_values = MagicMock(
+            side_effect=lambda domain: (
+                {"lab_id": "lab1", "node_name": "r1"}
+                if domain is running_domain
+                else {"lab_id": "lab1", "node_name": "sw1"}
+                if domain is stopped_domain
+                else {"lab_id": "other", "node_name": "other"}
+            )
+        )
 
         provider._conn = SimpleNamespace(
             isAlive=lambda: True,

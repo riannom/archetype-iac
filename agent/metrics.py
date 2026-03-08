@@ -60,11 +60,18 @@ if PROMETHEUS_AVAILABLE:
         "Total node operation errors",
         ["operation"],
     )
+
+    runtime_identity_skips = Counter(
+        "archetype_agent_runtime_identity_skips_total",
+        "Managed runtime resources skipped because required identity metadata was missing",
+        ["resource_type", "operation", "reason"],
+    )
 else:
     docker_api_duration = DummyMetric()
     ovs_operation_duration = DummyMetric()
     node_operation_duration = DummyMetric()
     node_operation_errors = DummyMetric()
+    runtime_identity_skips = DummyMetric()
 
 
 def get_metrics() -> tuple[bytes, str]:

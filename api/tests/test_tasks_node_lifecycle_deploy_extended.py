@@ -1313,7 +1313,7 @@ class TestConnectSameHostLinksExtended:
 
     @pytest.mark.asyncio
     async def test_no_eligible_links_is_noop(self, test_db, test_user):
-        """When no links qualify, create_link_on_agent is never called."""
+        """When no links qualify, same-host orchestration is never called."""
         host = _make_host(test_db)
         lab = _make_lab(test_db, test_user, agent_id=host.id)
         job = _make_job(test_db, lab, test_user)
@@ -1355,14 +1355,16 @@ class TestConnectSameHostLinksExtended:
         mock_graph.nodes = [mock_node1, mock_node2]
         manager.graph = mock_graph
 
-        with patch("app.tasks.node_lifecycle_deploy.agent_client") as mock_ac:
-            mock_ac.create_link_on_agent = AsyncMock()
+        with patch(
+            "app.tasks.node_lifecycle_deploy._create_same_host_link",
+            new_callable=AsyncMock,
+        ) as mock_create:
             await manager._connect_same_host_links({"R1"})
-            mock_ac.create_link_on_agent.assert_not_awaited()
+            mock_create.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_gather_exception_is_logged_not_raised(self, test_db, test_user):
-        """Exception raised inside _connect_one gather task is logged, not propagated."""
+    async def test_link_orchestration_exception_is_logged_not_raised(self, test_db, test_user):
+        """Exception raised inside same-host orchestration is logged, not propagated."""
         host = _make_host(test_db)
         lab = _make_lab(test_db, test_user, agent_id=host.id)
         job = _make_job(test_db, lab, test_user)
@@ -1405,12 +1407,11 @@ class TestConnectSameHostLinksExtended:
         mock_graph.nodes = [mock_node1, mock_node2]
         manager.graph = mock_graph
 
-        with patch("app.tasks.node_lifecycle_deploy.agent_client") as mock_ac:
-            # Raise an exception inside the gather coroutine
-            mock_ac.create_link_on_agent = AsyncMock(
-                side_effect=RuntimeError("OVS bridge down")
-            )
-            # Should not raise — gather uses return_exceptions=True
+        with patch(
+            "app.tasks.node_lifecycle_deploy._create_same_host_link",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("OVS bridge down"),
+        ):
             await manager._connect_same_host_links({"R1", "R2"})
 
     @pytest.mark.asyncio
@@ -1454,10 +1455,12 @@ class TestConnectSameHostLinksExtended:
         mock_graph.nodes = [mock_node1, mock_node2]
         manager.graph = mock_graph
 
-        with patch("app.tasks.node_lifecycle_deploy.agent_client") as mock_ac:
-            mock_ac.create_link_on_agent = AsyncMock()
+        with patch(
+            "app.tasks.node_lifecycle_deploy._create_same_host_link",
+            new_callable=AsyncMock,
+        ) as mock_create:
             await manager._connect_same_host_links({"R1"})
-            mock_ac.create_link_on_agent.assert_not_awaited()
+            mock_create.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_node_not_in_deployed_set_skips_link(self, test_db, test_user):
@@ -1504,11 +1507,68 @@ class TestConnectSameHostLinksExtended:
         mock_graph.nodes = [mock_node1, mock_node2]
         manager.graph = mock_graph
 
-        with patch("app.tasks.node_lifecycle_deploy.agent_client") as mock_ac:
-            mock_ac.create_link_on_agent = AsyncMock()
+        with patch(
+            "app.tasks.node_lifecycle_deploy._create_same_host_link",
+            new_callable=AsyncMock,
+        ) as mock_create:
             # Neither R1 nor R2 is in the deployed set
             await manager._connect_same_host_links({"R3"})
-            mock_ac.create_link_on_agent.assert_not_awaited()
+            mock_create.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_refreshes_placements_before_initial_link_creation(self, test_db, test_user):
+        """Fresh DB placements are used even when the manager cache is stale."""
+        host = _make_host(test_db)
+        lab = _make_lab(test_db, test_user, agent_id=host.id)
+        job = _make_job(test_db, lab, test_user)
+
+        ns1 = _make_node_state(test_db, lab, "n1", "R1", actual="running")
+        ns2 = _make_node_state(test_db, lab, "n2", "R2", actual="running")
+        ns1.is_ready = True
+        ns2.is_ready = True
+        test_db.commit()
+        _make_placement(test_db, lab, "R1", host.id)
+        _make_placement(test_db, lab, "R2", host.id)
+
+        node1 = _make_node_def(test_db, lab, "n1", "R1", "R1", host_id=host.id)
+        node2 = _make_node_def(test_db, lab, "n2", "R2", "R2", host_id=host.id)
+
+        manager = _make_manager(test_db, lab, job, ["n1", "n2"], agent=host)
+        manager.db_nodes_map = {"R1": node1, "R2": node2}
+        manager.all_lab_states = {"R1": ns1, "R2": ns2}
+        manager.placements_map = {}  # stale cache
+
+        ep_a = MagicMock()
+        ep_a.node = "n1"
+        ep_a.ifname = "eth1"
+        ep_b = MagicMock()
+        ep_b.node = "n2"
+        ep_b.ifname = "eth1"
+        mock_link = MagicMock()
+        mock_link.endpoints = [ep_a, ep_b]
+
+        mock_node1 = MagicMock()
+        mock_node1.id = "n1"
+        mock_node1.container_name = "R1"
+        mock_node1.name = "R1"
+        mock_node2 = MagicMock()
+        mock_node2.id = "n2"
+        mock_node2.container_name = "R2"
+        mock_node2.name = "R2"
+
+        mock_graph = MagicMock()
+        mock_graph.links = [mock_link]
+        mock_graph.nodes = [mock_node1, mock_node2]
+        manager.graph = mock_graph
+
+        with patch(
+            "app.tasks.node_lifecycle_deploy._create_same_host_link",
+            new_callable=AsyncMock,
+            return_value=True,
+        ) as mock_create:
+            await manager._connect_same_host_links({"R1", "R2"})
+
+        mock_create.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_running_but_unready_nodes_skip_link_connection(self, test_db, test_user):
