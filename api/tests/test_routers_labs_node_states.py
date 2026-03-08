@@ -199,6 +199,46 @@ class TestListNodeStates:
         test_db.refresh(ns)
         assert ns.actual_state == NodeActualState.RUNNING
 
+    def test_clears_stale_error_for_stopped_undeployed_node(
+        self,
+        test_client: TestClient,
+        test_db: Session,
+        sample_lab: models.Lab,
+        auth_headers: dict,
+    ):
+        """Stopped undeployed nodes should not keep stale deploy/image errors."""
+        _make_node_def(test_db, sample_lab, gui_id="n1", container_name="archetype-test-r1")
+        ns = _make_node_state(
+            test_db,
+            sample_lab,
+            "n1",
+            "archetype-test-r1",
+            desired_state="stopped",
+            actual_state="undeployed",
+        )
+        ns.error_message = "Image not available on host"
+        ns.image_sync_status = "failed"
+        ns.image_sync_message = "Image not found on agent"
+        test_db.commit()
+
+        response = test_client.get(
+            f"/labs/{sample_lab.id}/nodes/states",
+            headers=auth_headers,
+        )
+
+        assert response.status_code == 200
+        node = response.json()["nodes"][0]
+        assert node["actual_state"] == "undeployed"
+        assert node["desired_state"] == "stopped"
+        assert node["error_message"] is None
+        assert node["image_sync_status"] is None
+        assert node["image_sync_message"] is None
+
+        test_db.refresh(ns)
+        assert ns.error_message is None
+        assert ns.image_sync_status is None
+        assert ns.image_sync_message is None
+
 
 # ============================================================================
 # TestGetNodeState
