@@ -75,6 +75,8 @@ class Settings(BaseSettings):
     docker_client_timeout: int = 300  # 5 minutes for individual Docker API calls
     docker_config_extract_retry_attempts: int = 3  # Short retry window for CLI-ready lag after boot
     docker_config_extract_retry_delay_seconds: float = 2.0
+    docker_post_boot_retry_attempts: int = 3
+    docker_post_boot_retry_delay_seconds: float = 5.0
 
     # Deploy operation timeouts (seconds)
     deploy_timeout: float = 900.0  # 15 minutes for deploy operations

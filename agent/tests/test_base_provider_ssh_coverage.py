@@ -61,6 +61,10 @@ class _ConcreteProvider(Provider):
 class _ConcreteVlanProvider(VlanPersistenceMixin):
     """Concrete class using VlanPersistenceMixin for testing."""
 
+    @property
+    def name(self) -> str:
+        return "test"
+
     def __init__(self):
         self.__init_vlan_state__()
 
@@ -257,7 +261,7 @@ class TestSaveVlanAllocations:
 
         provider._save_vlan_allocations("lab1", tmp_path)
 
-        vlan_file = tmp_path / "vlans" / "lab1.json"
+        vlan_file = tmp_path / "vlans" / "lab1.test.json"
         assert vlan_file.exists()
 
         data = json.loads(vlan_file.read_text())
@@ -270,7 +274,7 @@ class TestSaveVlanAllocations:
 
         provider._save_vlan_allocations("lab1", tmp_path)
 
-        vlan_file = tmp_path / "vlans" / "lab1.json"
+        vlan_file = tmp_path / "vlans" / "lab1.test.json"
         assert vlan_file.exists()
 
         data = json.loads(vlan_file.read_text())
@@ -285,7 +289,7 @@ class TestSaveVlanAllocations:
 
         provider._save_vlan_allocations("lab1", workspace)
 
-        assert (workspace / "vlans" / "lab1.json").exists()
+        assert (workspace / "vlans" / "lab1.test.json").exists()
 
     def test_save_handles_write_error(self, tmp_path):
         """Write errors are logged but don't raise."""
@@ -294,7 +298,7 @@ class TestSaveVlanAllocations:
         # Make the vlans dir a file to cause a write error
         vlans_dir = tmp_path / "vlans"
         vlans_dir.mkdir()
-        (vlans_dir / "lab1.json").mkdir()  # directory instead of file
+        (vlans_dir / "lab1.test.json").mkdir()  # directory instead of file
 
         # Should not raise
         provider._save_vlan_allocations("lab1", tmp_path)
@@ -314,7 +318,7 @@ class TestLoadVlanAllocations:
         # Write a valid VLAN file
         vlans_dir = tmp_path / "vlans"
         vlans_dir.mkdir()
-        vlan_file = vlans_dir / "lab1.json"
+        vlan_file = vlans_dir / "lab1.test.json"
         vlan_file.write_text(json.dumps({
             "allocations": {"node1": [100, 101]},
             "next_vlan": 102,
@@ -331,12 +335,29 @@ class TestLoadVlanAllocations:
         result = provider._load_vlan_allocations("nonexistent", tmp_path)
         assert result is False
 
+    def test_load_legacy_file_when_provider_file_missing(self, tmp_path):
+        provider = _ConcreteVlanProvider()
+
+        vlans_dir = tmp_path / "vlans"
+        vlans_dir.mkdir()
+        legacy_file = vlans_dir / "lab1.json"
+        legacy_file.write_text(json.dumps({
+            "allocations": {"node1": [100, 101]},
+            "next_vlan": 102,
+        }))
+
+        result = provider._load_vlan_allocations("lab1", tmp_path)
+
+        assert result is True
+        assert provider._vlan_allocations["lab1"] == {"node1": [100, 101]}
+        assert provider._next_vlan["lab1"] == 102
+
     def test_load_corrupted_json(self, tmp_path):
         provider = _ConcreteVlanProvider()
 
         vlans_dir = tmp_path / "vlans"
         vlans_dir.mkdir()
-        vlan_file = vlans_dir / "lab1.json"
+        vlan_file = vlans_dir / "lab1.test.json"
         vlan_file.write_text("not valid json{{{")
 
         result = provider._load_vlan_allocations("lab1", tmp_path)
@@ -348,7 +369,7 @@ class TestLoadVlanAllocations:
 
         vlans_dir = tmp_path / "vlans"
         vlans_dir.mkdir()
-        vlan_file = vlans_dir / "lab1.json"
+        vlan_file = vlans_dir / "lab1.test.json"
         vlan_file.write_text(json.dumps({}))
 
         result = provider._load_vlan_allocations("lab1", tmp_path)
@@ -371,12 +392,15 @@ class TestRemoveVlanFile:
 
         vlans_dir = tmp_path / "vlans"
         vlans_dir.mkdir()
-        vlan_file = vlans_dir / "lab1.json"
-        vlan_file.write_text("{}")
+        provider_file = vlans_dir / "lab1.test.json"
+        legacy_file = vlans_dir / "lab1.json"
+        provider_file.write_text("{}")
+        legacy_file.write_text("{}")
 
         provider._remove_vlan_file("lab1", tmp_path)
 
-        assert not vlan_file.exists()
+        assert not provider_file.exists()
+        assert not legacy_file.exists()
 
     def test_remove_nonexistent_file(self, tmp_path):
         """Removing a non-existent file is a no-op."""
@@ -391,8 +415,8 @@ class TestRemoveVlanFile:
 
         vlans_dir = tmp_path / "vlans"
         vlans_dir.mkdir()
-        vlan_file = vlans_dir / "lab1.json"
-        vlan_file.mkdir()  # directory instead of file — unlink will fail
+        provider_file = vlans_dir / "lab1.test.json"
+        provider_file.mkdir()  # directory instead of file — unlink will fail
 
         # Should not raise
         provider._remove_vlan_file("lab1", tmp_path)

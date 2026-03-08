@@ -36,6 +36,10 @@ from agent.providers.base import (
 class _VlanProvider(VlanPersistenceMixin):
     """Concrete class using VlanPersistenceMixin."""
 
+    @property
+    def name(self) -> str:
+        return "test-vlan"
+
     def __init__(self):
         self.__init_vlan_state__()
 
@@ -100,7 +104,7 @@ class TestSaveVlanAllocationsEdge:
         p._next_vlan["lab1"] = 104
         p._save_vlan_allocations("lab1", tmp_path)
 
-        data = json.loads((tmp_path / "vlans" / "lab1.json").read_text())
+        data = json.loads((tmp_path / "vlans" / "lab1.test-vlan.json").read_text())
         assert data["allocations"]["n2"] == [102, 103]
         assert data["next_vlan"] == 104
 
@@ -115,8 +119,8 @@ class TestSaveVlanAllocationsEdge:
         p._save_vlan_allocations("lab-a", tmp_path)
         p._save_vlan_allocations("lab-b", tmp_path)
 
-        a = json.loads((tmp_path / "vlans" / "lab-a.json").read_text())
-        b = json.loads((tmp_path / "vlans" / "lab-b.json").read_text())
+        a = json.loads((tmp_path / "vlans" / "lab-a.test-vlan.json").read_text())
+        b = json.loads((tmp_path / "vlans" / "lab-b.test-vlan.json").read_text())
         assert a["allocations"]["r1"] == [200]
         assert b["allocations"]["r2"] == [300]
 
@@ -132,7 +136,7 @@ class TestLoadVlanAllocationsEdge:
         p = _VlanProvider()
         vlans_dir = tmp_path / "vlans"
         vlans_dir.mkdir()
-        (vlans_dir / "lab1.json").write_text(json.dumps({
+        (vlans_dir / "lab1.test-vlan.json").write_text(json.dumps({
             "allocations": "not-a-dict",
             "next_vlan": 150,
         }))
@@ -147,7 +151,7 @@ class TestLoadVlanAllocationsEdge:
         p = _VlanProvider()
         vlans_dir = tmp_path / "vlans"
         vlans_dir.mkdir()
-        (vlans_dir / "lab1.json").write_text("")
+        (vlans_dir / "lab1.test-vlan.json").write_text("")
 
         result = p._load_vlan_allocations("lab1", tmp_path)
         assert result is False
