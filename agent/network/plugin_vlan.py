@@ -10,7 +10,6 @@ import asyncio
 import logging
 from typing import Any
 
-from agent.config import settings
 from agent.network.docker_plugin import (
     EndpointState,
     LINKED_VLAN_END,

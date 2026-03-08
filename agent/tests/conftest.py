@@ -6,7 +6,6 @@ import types
 import inspect
 import asyncio
 import threading
-import concurrent.futures
 
 import pytest
 import httpx
@@ -189,8 +188,8 @@ def _file_uses_asyncio_run(item: pytest.Item) -> bool:
     return "asyncio.run(" in _file_text(item)
 
 
-def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
-    """Run TestClient-backed tests before asyncio.run-heavy tests.
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+    """Order tests to avoid TestClient deadlocks and skip integration by default.
 
     In this environment, Starlette TestClient can deadlock after earlier tests
     call ``asyncio.run(...)`` in the same process. Prefer HTTP/websocket client
@@ -205,6 +204,15 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         return (1, item.nodeid)
 
     items.sort(key=_priority)
+    if os.getenv("ARCHETYPE_RUN_INTEGRATION") in {"1", "true", "TRUE", "yes", "YES"}:
+        return
+
+    skip_integration = pytest.mark.skip(
+        reason="Integration tests require Docker. Set ARCHETYPE_RUN_INTEGRATION=1 to run."
+    )
+    for item in items:
+        if "integration" in item.keywords:
+            item.add_marker(skip_integration)
 
 
 class _AsyncRequestRunner:
@@ -329,14 +337,3 @@ def _install_asyncssh_stub() -> None:
 
 
 _install_asyncssh_stub()
-
-
-def pytest_collection_modifyitems(config, items):
-    """Skip integration tests unless explicitly enabled."""
-    if os.getenv("ARCHETYPE_RUN_INTEGRATION") in {"1", "true", "TRUE", "yes", "YES"}:
-        return
-
-    skip_integration = pytest.mark.skip(reason="Integration tests require Docker. Set ARCHETYPE_RUN_INTEGRATION=1 to run.")
-    for item in items:
-        if "integration" in item.keywords:
-            item.add_marker(skip_integration)
