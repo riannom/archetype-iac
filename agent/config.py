@@ -73,6 +73,8 @@ class Settings(BaseSettings):
     # Docker client timeout (seconds) - covers container create, network ops, etc.
     # This needs to be long enough for slow operations like image layer extraction
     docker_client_timeout: int = 300  # 5 minutes for individual Docker API calls
+    docker_config_extract_retry_attempts: int = 3  # Short retry window for CLI-ready lag after boot
+    docker_config_extract_retry_delay_seconds: float = 2.0
 
     # Deploy operation timeouts (seconds)
     deploy_timeout: float = 900.0  # 15 minutes for deploy operations

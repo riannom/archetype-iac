@@ -712,7 +712,7 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
             # sees a new transition, propagates back → both sides errdisabled).
             # Note: cEOS 4.35+ uses `no errdisable flap-setting cause link-flap`
             # instead of the older `no errdisable detect cause link-flap`.
-            "FastCli -p 15 -c 'configure\nno errdisable flap-setting cause link-flap\nerrdisable recovery cause link-flap\nerrdisable recovery interval 30\nend'",
+            "printf 'configure\nno errdisable flap-setting cause link-flap\nerrdisable recovery cause link-flap\nerrdisable recovery interval 30\nend\n' | FastCli -p 15",
         ],
         default_credentials="admin / (no password)",
     ),

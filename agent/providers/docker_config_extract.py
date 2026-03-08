@@ -12,6 +12,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
+from agent.config import settings
 from agent.vendors import (
     get_config_extraction_settings,
     get_console_credentials,
@@ -24,6 +25,14 @@ LABEL_NODE_NAME = "archetype.node_name"
 LABEL_NODE_KIND = "archetype.node_kind"
 LABEL_NODE_DISPLAY_NAME = "archetype.node_display_name"
 LABEL_PROVIDER = "archetype.provider"
+
+_TRANSIENT_CLI_FAILURE_MARKERS = (
+    "authorization denied",
+    "default authorization provider rejects all commands",
+    "cli not available",
+    "command is not available",
+    "system is not ready",
+)
 
 
 def _log_name_from_labels(labels: dict[str, str]) -> str:
@@ -194,23 +203,52 @@ async def extract_config_via_docker(
     """
     try:
         exec_cmd = ["sh", "-c", cmd]
-
-        result = await asyncio.to_thread(
-            container.exec_run,
-            exec_cmd,
-            demux=True,
+        attempts = max(1, int(getattr(settings, "docker_config_extract_retry_attempts", 1)))
+        retry_delay = max(
+            0.0,
+            float(getattr(settings, "docker_config_extract_retry_delay_seconds", 0.0)),
         )
-        stdout, stderr = result.output
+        is_fastcli_command = "fastcli" in cmd.lower()
 
-        if result.exit_code != 0:
-            stderr_str = stderr.decode("utf-8") if stderr else ""
-            logger.warning(
-                f"Failed to extract config from {log_name}: "
-                f"exit={result.exit_code}, stderr={stderr_str}"
+        for attempt in range(1, attempts + 1):
+            result = await asyncio.to_thread(
+                container.exec_run,
+                exec_cmd,
+                demux=True,
             )
-            return None
+            stdout, stderr = result.output
+            stdout_str = stdout.decode("utf-8", errors="replace") if stdout else ""
+            stderr_str = stderr.decode("utf-8", errors="replace") if stderr else ""
 
-        return stdout.decode("utf-8") if stdout else None
+            if result.exit_code == 0 and stdout_str:
+                return stdout_str
+
+            combined_output = "\n".join(part for part in (stdout_str, stderr_str) if part).lower()
+            transient_cli_failure = is_fastcli_command and (
+                not combined_output.strip()
+                or any(marker in combined_output for marker in _TRANSIENT_CLI_FAILURE_MARKERS)
+            )
+            should_retry = transient_cli_failure and attempt < attempts
+
+            if should_retry:
+                logger.info(
+                    f"Retrying config extraction from {log_name} after transient CLI state "
+                    f"(attempt {attempt}/{attempts})"
+                )
+                if retry_delay > 0:
+                    await asyncio.sleep(retry_delay)
+                continue
+
+            if result.exit_code != 0:
+                logger.warning(
+                    f"Failed to extract config from {log_name}: "
+                    f"exit={result.exit_code}, stdout={stdout_str}, stderr={stderr_str}"
+                )
+                return None
+
+            if stdout_str:
+                return stdout_str
+            return None
 
     except Exception as e:
         logger.error(f"Docker exec failed for {log_name}: {e}")
