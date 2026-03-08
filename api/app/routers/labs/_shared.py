@@ -160,15 +160,41 @@ def _create_node_sync_job(
 
 
 def _converge_stopped_error_state(state: models.NodeState) -> bool:
-    """Force convergence when desired_state=stopped but actual_state=error."""
-    if state.desired_state == NodeDesiredState.STOPPED and state.actual_state == NodeActualState.ERROR:
+    """Normalize stale state residue for intentionally stopped nodes."""
+    if state.desired_state != NodeDesiredState.STOPPED:
+        return False
+
+    changed = False
+    if state.actual_state == NodeActualState.ERROR:
         state.actual_state = NodeActualState.STOPPED
+        changed = True
+
+    if state.actual_state not in (NodeActualState.STOPPED, NodeActualState.UNDEPLOYED):
+        return changed
+
+    if state.image_sync_status is not None:
         state.image_sync_status = None
+        changed = True
+    if state.image_sync_message is not None:
         state.image_sync_message = None
+        changed = True
+    if state.starting_started_at is not None:
         state.starting_started_at = None
+        changed = True
+    if state.stopping_started_at is not None:
         state.stopping_started_at = None
+        changed = True
+    if state.boot_started_at is not None:
         state.boot_started_at = None
+        changed = True
+    if state.is_ready:
         state.is_ready = False
+        changed = True
+    if state.error_message is not None:
+        state.error_message = None
+        changed = True
+    if state.enforcement_attempts or state.enforcement_failed_at is not None:
         state.reset_enforcement(clear_error=True)
-        return True
-    return False
+        changed = True
+
+    return changed
