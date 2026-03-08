@@ -1223,28 +1223,53 @@ class NodeLifecycleManager(AgentResolutionMixin, DeploymentMixin, StopMixin):
         await _create_cross_host_links_if_ready(
             self.session, self.lab.id, self.log_parts,
         )
-        try:
-            self._release_db_transaction_for_io("post-op link reconciliation")
-            reconcile_result = await reconcile_lab_links(self.session, self.lab.id)
-            if reconcile_result["checked"] or reconcile_result["errors"]:
-                self.log_parts.append(
-                    "Post-op link reconciliation: "
-                    f"checked={reconcile_result['checked']}, "
-                    f"created={reconcile_result['created']}, "
-                    f"repaired={reconcile_result['repaired']}, "
-                    f"errors={reconcile_result['errors']}, "
-                    f"skipped={reconcile_result['skipped']}"
+        unresolved_links = (
+            self.session.query(models.LinkState)
+            .filter(
+                models.LinkState.lab_id == self.lab.id,
+                models.LinkState.desired_state == "up",
+                models.LinkState.actual_state.in_(["pending", "creating", "down", "error"]),
+            )
+            .count()
+        )
+        missing_link_states = (
+            self.session.query(models.Link.id)
+            .filter(models.Link.lab_id == self.lab.id)
+            .filter(
+                ~models.Link.id.in_(
+                    self.session.query(models.LinkState.link_definition_id)
+                    .filter(
+                        models.LinkState.lab_id == self.lab.id,
+                        models.LinkState.link_definition_id.isnot(None),
+                    )
                 )
-        except Exception as e:
-            # Reconciliation can fail after a DB error (e.g. statement timeout).
-            # Reset session state so finalize() can still persist job outcome.
+            )
+            .count()
+        )
+
+        if unresolved_links or missing_link_states:
             try:
-                self.session.rollback()
-            except Exception:
-                pass
-            self.post_operation_cleanup_failed = True
-            logger.warning(f"Post-op link reconciliation failed for lab {self.lab.id}: {e}")
-            self.log_parts.append(f"WARNING: Post-op link reconciliation failed: {e}")
+                self._release_db_transaction_for_io("post-op link reconciliation")
+                reconcile_result = await reconcile_lab_links(self.session, self.lab.id)
+                if reconcile_result["checked"] or reconcile_result["errors"]:
+                    self.log_parts.append(
+                        "Post-op link reconciliation (fallback): "
+                        f"checked={reconcile_result['checked']}, "
+                        f"created={reconcile_result['created']}, "
+                        f"repaired={reconcile_result['repaired']}, "
+                        f"errors={reconcile_result['errors']}, "
+                        f"skipped={reconcile_result['skipped']}"
+                    )
+            except Exception as e:
+                # Reconciliation can fail after a DB error (e.g. statement timeout).
+                # Reset session state so finalize() can still persist job outcome.
+                try:
+                    self.session.rollback()
+                except Exception:
+                    pass
+                self.post_operation_cleanup_failed = True
+                logger.warning(f"Post-op link reconciliation failed for lab {self.lab.id}: {e}")
+                self.log_parts.append(f"WARNING: Post-op link reconciliation failed: {e}")
 
         # Immediate per-lab convergence: push VLAN tags to overlay + container
         # ports so cross-host links work right away (no 60s wait).
@@ -1737,3 +1762,17 @@ class NodeLifecycleManager(AgentResolutionMixin, DeploymentMixin, StopMixin):
             .all()
         )
         self.placements_map = {p.node_name: p for p in all_placements}
+
+    def _refresh_all_lab_states(self) -> None:
+        """Re-query node states after lifecycle mutations."""
+        all_states = (
+            self.session.query(models.NodeState)
+            .filter(models.NodeState.lab_id == self.lab.id)
+            .all()
+        )
+        self.all_lab_states = {ns.node_name: ns for ns in all_states}
+
+    def _refresh_runtime_maps(self) -> None:
+        """Refresh cached placement/state maps used by initial provisioning."""
+        self._refresh_placements()
+        self._refresh_all_lab_states()

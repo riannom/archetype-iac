@@ -73,14 +73,54 @@ class PluginVlanMixin:
                 mapped_if = await self._find_interface_in_container(pid, host_veth)
                 return mapped_if == interface_name
 
+            async def _resolve_host_veth_by_ifindex() -> str | None:
+                """Resolve the OVS host veth via exact interface ifindex lookup."""
+                def _get_peer_ifindex() -> int | None:
+                    client = docker.from_env()
+                    container = client.containers.get(container_name)
+                    exit_code, output = container.exec_run(
+                        ["cat", f"/sys/class/net/{interface_name}/iflink"],
+                        demux=False,
+                    )
+                    if exit_code != 0:
+                        return None
+                    return int(output.decode().strip())
+
+                try:
+                    peer_ifindex = await asyncio.to_thread(_get_peer_ifindex)
+                except Exception:
+                    return None
+                if peer_ifindex is None:
+                    return None
+
+                code, stdout, _ = await self._ovs_vsctl(
+                    "--data=bare",
+                    "--no-heading",
+                    "--columns=name",
+                    "find",
+                    "Interface",
+                    f"ifindex={peer_ifindex}",
+                )
+                if code != 0 or not stdout.strip():
+                    return None
+
+                for port_name in stdout.strip().splitlines():
+                    port_name = port_name.strip()
+                    if port_name:
+                        return port_name
+                return None
+
             # Get container's network memberships
-            def _get_container_networks():
+            def _get_container_details():
                 client = docker.from_env()
                 container = client.containers.get(container_name)
-                return container.attrs["NetworkSettings"]["Networks"]
+                return (
+                    container.attrs["NetworkSettings"]["Networks"],
+                    (container.labels or {}).get("archetype.node_name"),
+                )
 
             try:
-                networks = await asyncio.to_thread(_get_container_networks)
+                networks, node_name = await asyncio.to_thread(_get_container_details)
             except docker.errors.NotFound:
                 pruned = await self._prune_stale_container_endpoints(lab_id, container_name)
                 logger.warning(
@@ -114,6 +154,7 @@ class PluginVlanMixin:
                             )
                             continue
                         ep.container_name = container_name
+                        ep.node_name = node_name or ep.node_name
                         logger.info(
                             f"Matched endpoint via EndpointID: {container_name}:{interface_name} -> {ep.host_veth}"
                         )
@@ -139,6 +180,7 @@ class PluginVlanMixin:
                                 )
                                 continue
                             ep.container_name = container_name
+                            ep.node_name = node_name or ep.node_name
                             logger.info(
                                 f"Matched endpoint via NetworkID: {container_name}:{interface_name} -> {ep.host_veth}"
                             )
@@ -147,8 +189,7 @@ class PluginVlanMixin:
             # Attempt to reconstruct endpoint state when tracking is missing.
             # This can happen after agent restarts where endpoints are not loaded,
             # but Docker networks and OVS ports still exist.
-            code, stdout, _ = await self._ovs_vsctl("list-ports", settings.ovs_bridge_name)
-            ovs_ports = set(stdout.strip().split("\n")) if code == 0 and stdout.strip() else set()
+            exact_host_veth = await _resolve_host_veth_by_ifindex()
 
             for net_name, net_info in networks.items():
                 target_endpoint_id = net_info.get("EndpointID")
@@ -160,8 +201,7 @@ class PluginVlanMixin:
                 if not network or network.interface_name != interface_name or network.lab_id != lab_id:
                     continue
 
-                port_prefix = f"vh{target_endpoint_id[:5]}"
-                host_veth = next((p for p in ovs_ports if p.startswith(port_prefix)), None)
+                host_veth = exact_host_veth
                 if not host_veth:
                     continue
 
@@ -183,6 +223,7 @@ class PluginVlanMixin:
                     cont_veth="",
                     vlan_tag=vlan_tag,
                     container_name=container_name,
+                    node_name=node_name,
                 )
                 if not await _binding_matches(host_veth):
                     logger.warning(
@@ -222,6 +263,7 @@ class PluginVlanMixin:
             if len(fallback_candidates) == 1:
                 ep = fallback_candidates[0]
                 ep.container_name = container_name
+                ep.node_name = node_name or ep.node_name
                 logger.info(
                     f"Matched endpoint by strict fallback: "
                     f"{container_name}:{interface_name} -> {ep.host_veth}"

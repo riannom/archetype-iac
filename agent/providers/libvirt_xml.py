@@ -41,6 +41,17 @@ def generate_mac_address(domain_name: str, interface_index: int) -> str:
     return mac
 
 
+def generate_ovs_interface_id(domain_name: str, interface_role: str, interface_index: int) -> str:
+    """Generate a deterministic OVS iface-id for a VM interface.
+
+    Using UUID5 keeps interface identity stable across restart/recreate for the
+    same logical node/interface while remaining compatible with OVS/libvirt's
+    UUID-shaped expectations.
+    """
+    seed = f"{domain_name}:{interface_role}:{interface_index}"
+    return str(uuid.uuid5(uuid.NAMESPACE_DNS, seed))
+
+
 # ---------------------------------------------------------------------------
 # OVMF / EFI helpers
 # ---------------------------------------------------------------------------
@@ -375,6 +386,7 @@ def generate_domain_xml(
     nic_driver_substitutions: dict[str, str],
     allowed_domain_drivers: set[str],
     mac_generator=generate_mac_address,
+    ovs_interface_id_generator=generate_ovs_interface_id,
 ) -> str:
     """Generate libvirt domain XML for a VM.
 
@@ -499,7 +511,7 @@ def generate_domain_xml(
     # These get their own VLAN tags from the beginning of vlan_tags.
     for r in range(reserved_nics):
         mac_address = mac_generator(name, r + data_interface_mac_offset)
-        interface_id = str(uuid.uuid4())
+        interface_id = ovs_interface_id_generator(name, "reserved", r)
         vlan_xml = ""
         if vlan_tags and r < len(vlan_tags):
             vlan_xml = f'''
@@ -519,7 +531,7 @@ def generate_domain_xml(
 
     for i in range(interface_count):
         mac_address = mac_generator(name, i + data_interface_mac_offset)
-        interface_id = str(uuid.uuid4())
+        interface_id = ovs_interface_id_generator(name, "data", i)
 
         # Add VLAN tag if provided (for OVS isolation)
         # Data interfaces use vlan_tags after the reserved_nics offset

@@ -747,10 +747,13 @@ class TestConnectSameHostLinks:
         mock_graph.nodes = [mock_node1, mock_node2]
         manager.graph = mock_graph
 
-        with patch("app.tasks.node_lifecycle_deploy.agent_client") as mock_ac:
-            mock_ac.create_link_on_agent = AsyncMock(return_value={"success": True})
+        with patch(
+            "app.tasks.node_lifecycle_deploy._create_same_host_link",
+            new_callable=AsyncMock,
+            return_value=True,
+        ) as mock_create:
             await manager._connect_same_host_links({"R1", "R2"})
-            mock_ac.create_link_on_agent.assert_awaited_once()
+            mock_create.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_skips_cross_host_links(self, test_db, test_user):
@@ -795,11 +798,14 @@ class TestConnectSameHostLinks:
         mock_graph.nodes = [mock_node1, mock_node2]
         manager.graph = mock_graph
 
-        with patch("app.tasks.node_lifecycle_deploy.agent_client") as mock_ac:
-            mock_ac.create_link_on_agent = AsyncMock(return_value={"success": True})
+        with patch(
+            "app.tasks.node_lifecycle_deploy._create_same_host_link",
+            new_callable=AsyncMock,
+            return_value=True,
+        ) as mock_create:
             await manager._connect_same_host_links({"R1", "R2"})
             # R2 is on host2, not host1 — link should be skipped
-            mock_ac.create_link_on_agent.assert_not_awaited()
+            mock_create.assert_not_awaited()
 
 
 # ---------------------------------------------------------------------------

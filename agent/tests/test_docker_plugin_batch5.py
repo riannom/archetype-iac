@@ -290,6 +290,46 @@ class TestLowLevelHelpers:
         plugin = _make_plugin(monkeypatch, tmp_path)
         result = await plugin._attach_to_ovs("arch-ovs", "vh-port", 100)
         assert result is True
+        plugin._ovs_vsctl.assert_awaited_once_with(
+            "add-port",
+            "arch-ovs",
+            "vh-port",
+            "tag=100",
+            "--",
+            "set",
+            "interface",
+            "vh-port",
+            "type=system",
+        )
+
+    @pytest.mark.asyncio
+    async def test_attach_to_ovs_writes_external_ids(self, monkeypatch, tmp_path):
+        plugin = _make_plugin(monkeypatch, tmp_path)
+
+        result = await plugin._attach_to_ovs(
+            "arch-ovs",
+            "vh-port",
+            100,
+            external_ids={
+                "archetype.endpoint_id": "ep-1",
+                "archetype.lab_id": "lab1",
+            },
+        )
+
+        assert result is True
+        plugin._ovs_vsctl.assert_awaited_once_with(
+            "add-port",
+            "arch-ovs",
+            "vh-port",
+            "tag=100",
+            "--",
+            "set",
+            "interface",
+            "vh-port",
+            "type=system",
+            "external_ids:archetype.endpoint_id=ep-1",
+            "external_ids:archetype.lab_id=lab1",
+        )
 
     @pytest.mark.asyncio
     async def test_attach_to_ovs_failure(self, monkeypatch, tmp_path):

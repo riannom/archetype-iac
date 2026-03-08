@@ -3053,6 +3053,19 @@ class TestPostOperationCleanup:
         manager.log_parts = []
         manager._release_db_transaction_for_io = MagicMock()
 
+        node_a = _make_node_def(test_db, lab, "n1", "R1", "R1", host_id=host.id)
+        node_b = _make_node_def(test_db, lab, "n2", "R2", "R2", host_id=host.id)
+        link = models.Link(
+            lab_id=lab.id,
+            link_name="R1:eth1-R2:eth1",
+            source_node_id=node_a.id,
+            source_interface="eth1",
+            target_node_id=node_b.id,
+            target_interface="eth1",
+        )
+        test_db.add(link)
+        test_db.commit()
+
         rollback_spy = MagicMock(wraps=test_db.rollback)
         monkeypatch.setattr(test_db, "rollback", rollback_spy)
 
@@ -3073,6 +3086,27 @@ class TestPostOperationCleanup:
             for line in manager.log_parts
         )
         assert manager.post_operation_cleanup_failed is True
+
+    @pytest.mark.asyncio
+    async def test_skips_reconcile_when_initial_provisioning_resolved_links(self, test_db, test_user):
+        host = _make_host(test_db)
+        lab = _make_lab(test_db, test_user, agent_id=host.id)
+        job = _make_job(test_db, lab, test_user)
+        manager = _make_manager(test_db, lab, job, [], agent=host)
+        manager.log_parts = []
+        manager._release_db_transaction_for_io = MagicMock()
+
+        with patch(
+            "app.tasks.jobs._create_cross_host_links_if_ready",
+            new_callable=AsyncMock,
+        ) as mock_cross_host, patch(
+            "app.tasks.link_reconciliation.reconcile_lab_links",
+            new_callable=AsyncMock,
+        ) as mock_reconcile:
+            await manager._post_operation_cleanup()
+
+        mock_cross_host.assert_awaited_once()
+        mock_reconcile.assert_not_awaited()
 
 
 class TestFinalizePostOperationFailure:

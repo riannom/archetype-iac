@@ -61,6 +61,25 @@ from agent.network.ovs_vlan_tags import used_vlan_tags_on_bridge_from_ovs_output
 
 logger = logging.getLogger(__name__)
 
+def _parse_ovs_map(raw: str) -> dict[str, str]:
+    """Parse a simple OVS ``map`` string into a Python dict."""
+    text = (raw or "").strip()
+    if not text or text == "{}":
+        return {}
+    if text.startswith("{") and text.endswith("}"):
+        text = text[1:-1].strip()
+    if not text:
+        return {}
+
+    result: dict[str, str] = {}
+    for entry in text.split(","):
+        if "=" not in entry:
+            continue
+        key, value = entry.split("=", 1)
+        result[key.strip().strip('"')] = value.strip().strip('"')
+    return result
+
+
 # Plugin configuration
 PLUGIN_NAME = "archetype-ovs"
 PLUGIN_SOCKET_PATH = f"/run/docker/plugins/{PLUGIN_NAME}.sock"
@@ -120,6 +139,7 @@ class EndpointState:
     cont_veth: str
     vlan_tag: int
     container_name: str | None = None
+    node_name: str | None = None
 
 
 from agent.network.plugin_state import PluginStateMixin  # noqa: E402
@@ -330,13 +350,24 @@ class DockerOVSPlugin(PluginStateMixin, PluginHandlersMixin, PluginVlanMixin):
 
         return True
 
-    async def _attach_to_ovs(self, bridge_name: str, port_name: str, vlan_tag: int) -> bool:
+    async def _attach_to_ovs(
+        self,
+        bridge_name: str,
+        port_name: str,
+        vlan_tag: int,
+        external_ids: dict[str, str] | None = None,
+    ) -> bool:
         """Attach a veth to OVS bridge with VLAN tag."""
-        code, _, stderr = await self._ovs_vsctl(
+        ovs_args = [
             "add-port", bridge_name, port_name,
             f"tag={vlan_tag}",
-            "--", "set", "interface", port_name, "type=system"
-        )
+            "--", "set", "interface", port_name, "type=system",
+        ]
+        if external_ids:
+            for key, value in sorted(external_ids.items()):
+                ovs_args.append(f"external_ids:{key}={value}")
+
+        code, _, stderr = await self._ovs_vsctl(*ovs_args)
         if code != 0:
             logger.error(f"Failed to attach {port_name} to OVS: {stderr}")
             return False
@@ -1317,7 +1348,18 @@ class DockerOVSPlugin(PluginStateMixin, PluginHandlersMixin, PluginVlanMixin):
                     continue
 
                 # Attach host side to OVS bridge with stored VLAN tag
-                if not await self._attach_to_ovs(bridge_name, host_veth, ep.vlan_tag):
+                network = self.networks.get(ep.network_id)
+                if not await self._attach_to_ovs(
+                    bridge_name,
+                    host_veth,
+                    ep.vlan_tag,
+                    external_ids={
+                        "archetype.endpoint_id": ep.endpoint_id,
+                        "archetype.interface_name": ep.interface_name,
+                        "archetype.lab_id": network.lab_id if network else lab_id,
+                        "archetype.network_id": ep.network_id,
+                    },
+                ):
                     await self._run_cmd(["ip", "link", "delete", host_veth])
                     results.append({
                         "interface": iface,

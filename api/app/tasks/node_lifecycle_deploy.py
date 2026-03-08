@@ -74,6 +74,12 @@ def get_device_service():
     return _impl()
 
 
+async def _create_same_host_link(session, lab_id: str, link_state, host_to_agent: dict, log_parts: list[str]) -> bool:
+    from app.tasks.link_orchestration import create_same_host_link as _impl
+
+    return await _impl(session, lab_id, link_state, host_to_agent, log_parts)
+
+
 class DeploymentMixin:
     """Mixin providing deploy/start/stop methods for NodeLifecycleManager."""
 
@@ -1053,16 +1059,22 @@ class DeploymentMixin:
     async def _connect_same_host_links(self, node_names: set[str]):
         """Connect same-host links for the given nodes.
 
-        Collects eligible links then connects them all in parallel via
-        asyncio.gather (each link is independent — unique VLAN tags).
+        Refreshes placement/state caches first so newly deployed nodes do not
+        depend on reconcile for their initial link wiring. Each eligible link
+        is driven through the DB-backed same-host orchestration path so
+        LinkState and InterfaceMapping bookkeeping stay aligned with the
+        runtime change.
         """
         if not self.graph:
             self.graph = self.topo_service.export_to_graph(self.lab.id)
 
+        self._refresh_runtime_maps()
+
         from app.services.interface_naming import normalize_interface
+        from app.utils.link import generate_link_name
 
         # Collect eligible links
-        link_tasks = []
+        link_tasks: list[models.LinkState] = []
         for link in self.graph.links:
             if len(link.endpoints) != 2:
                 continue
@@ -1100,36 +1112,104 @@ class DeploymentMixin:
             if state_b.actual_state != NodeActualState.RUNNING.value:
                 continue
 
-            ifname_a = normalize_interface(ep_a.ifname)
-            ifname_b = normalize_interface(ep_b.ifname)
-            link_tasks.append((node_a, ifname_a, node_b, ifname_b))
+            db_node_a = self.db_nodes_map.get(node_a)
+            db_node_b = self.db_nodes_map.get(node_b)
+            ifname_a = normalize_interface(
+                ep_a.ifname,
+                db_node_a.device if db_node_a else None,
+            )
+            ifname_b = normalize_interface(
+                ep_b.ifname,
+                db_node_b.device if db_node_b else None,
+            )
+            link_name = generate_link_name(node_a, ifname_a, node_b, ifname_b)
+
+            link_state = (
+                self.session.query(models.LinkState)
+                .filter(
+                    models.LinkState.lab_id == self.lab.id,
+                    models.LinkState.link_name == link_name,
+                )
+                .first()
+            )
+
+            link_definition = (
+                self.session.query(models.Link)
+                .filter(
+                    models.Link.lab_id == self.lab.id,
+                    models.Link.link_name == link_name,
+                )
+                .first()
+            )
+
+            if link_state is None:
+                link_state = models.LinkState(
+                    lab_id=self.lab.id,
+                    link_definition_id=link_definition.id if link_definition else None,
+                    link_name=link_name,
+                    source_node=node_a,
+                    source_interface=ifname_a,
+                    target_node=node_b,
+                    target_interface=ifname_b,
+                    desired_state="up",
+                    actual_state="pending",
+                    source_host_id=self.agent.id,
+                    target_host_id=self.agent.id,
+                    is_cross_host=False,
+                )
+                self.session.add(link_state)
+                self.session.flush()
+            else:
+                link_state.link_definition_id = (
+                    link_definition.id if link_definition else link_state.link_definition_id
+                )
+                link_state.source_node = node_a
+                link_state.source_interface = ifname_a
+                link_state.target_node = node_b
+                link_state.target_interface = ifname_b
+                link_state.desired_state = "up"
+                link_state.source_host_id = self.agent.id
+                link_state.target_host_id = self.agent.id
+                link_state.is_cross_host = False
+
+            if link_state.actual_state == "up":
+                continue
+
+            link_tasks.append(link_state)
 
         if not link_tasks:
             return
 
-        # Connect all links in parallel
-        async def _connect_one(na, ifa, nb, ifb):
-            result = await agent_client.create_link_on_agent(
-                self.agent, self.lab.id, na, ifa, nb, ifb,
+        # Connect links serially because the orchestration helper mutates the
+        # shared DB session (LinkState + InterfaceMapping updates).
+        async def _connect_one(link_state: models.LinkState):
+            success = await _create_same_host_link(
+                self.session,
+                self.lab.id,
+                link_state,
+                {self.agent.id: self.agent},
+                [],
             )
-            if result.get("success"):
+            if success:
                 return True
             logger.warning(
-                f"Failed to connect link {na}:{ifa} <-> {nb}:{ifb}: {result.get('error')}"
+                "Failed to connect same-host link %s during initial provisioning",
+                link_state.link_name,
             )
             return False
 
-        results = await asyncio.gather(
-            *[_connect_one(*args) for args in link_tasks],
-            return_exceptions=True,
-        )
-
         links_connected = 0
-        for i, result in enumerate(results):
-            if isinstance(result, Exception):
-                na, ifa, nb, ifb = link_tasks[i]
-                logger.warning(f"Failed to connect link {na}:{ifa} <-> {nb}:{ifb}: {result}")
-            elif result:
+        for link_state in link_tasks:
+            try:
+                result = await _connect_one(link_state)
+            except Exception as exc:
+                logger.warning(
+                    "Failed to connect same-host link %s: %s",
+                    link_state.link_name,
+                    exc,
+                )
+                continue
+            if result:
                 links_connected += 1
 
         if links_connected:

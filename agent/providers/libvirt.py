@@ -43,10 +43,12 @@ from agent.vendors import (
     get_vendor_config,
 )
 from agent.network.ovs_vlan_tags import used_vlan_tags_on_bridge_from_ovs_outputs
+from agent.metrics import runtime_identity_skips
 
 # Companion modules — extracted from this file to reduce size.
 from agent.providers.libvirt_xml import (
     generate_mac_address as _generate_mac_address,
+    generate_ovs_interface_id as _generate_ovs_interface_id,
     find_ovmf_code_path as _find_ovmf_code_path,
     find_ovmf_vars_template as _find_ovmf_vars_template,
     resolve_domain_driver as _resolve_domain_driver,
@@ -381,19 +383,19 @@ class LibvirtProvider(Provider, VlanPersistenceMixin):
             all_domains = self.conn.listAllDomains(0)
             for domain in all_domains:
                 name = domain.name()
-                if not name.startswith("arch-"):
+                metadata = self._get_domain_metadata_values(domain)
+                lab_id = metadata.get("lab_id")
+                node_name = metadata.get("node_name")
+                if not lab_id or not node_name:
                     continue
                 state, _ = domain.state()
                 is_running = state == libvirt.VIR_DOMAIN_RUNNING
-                parts = name.split("-", 2)
-                lab_prefix = parts[1] if len(parts) >= 2 else ""
-                node_name = parts[2] if len(parts) >= 3 else name
                 # domain.info() -> [state, maxMem_kb, mem_kb, nrVirtCpu, cpuTime]
                 info = domain.info()
                 results.append({
                     "name": name,
                     "status": "running" if is_running else "stopped",
-                    "lab_prefix": lab_prefix,
+                    "lab_prefix": sanitize_id(lab_id, max_len=20),
                     "node_name": node_name,
                     "is_vm": True,
                     "vcpus": info[3],
@@ -504,20 +506,16 @@ class LibvirtProvider(Provider, VlanPersistenceMixin):
         This is a safety net for cases where the agent lost its in-memory VLAN state
         (restart) or the persisted JSON is missing/incomplete.
 
-        This is intentionally a recovery-only path: it uses legacy domain-name
-        parsing for local VLAN cleanup/state repair, not runtime identity.
+        This is intentionally a recovery-only path and relies on
+        metadata-backed identity only.
         """
         discovered: dict[str, list[int]] = {}
         try:
-            prefix = self._lab_prefix(lab_id)
             for domain in self.conn.listAllDomains(0):
-                try:
-                    name = domain.name()
-                except Exception:
+                metadata = self._get_domain_metadata_values(domain)
+                node_name = metadata.get("node_name")
+                if metadata.get("lab_id") != lab_id or not node_name:
                     continue
-                if not name.startswith(prefix + "-"):
-                    continue
-                node_name = name[len(prefix) + 1 :]
                 tags = self._extract_domain_vlan_tags(domain)
                 if tags:
                     discovered[node_name] = tags
@@ -591,16 +589,26 @@ class LibvirtProvider(Provider, VlanPersistenceMixin):
         try:
             all_domains = self.conn.listAllDomains(0)
             existing_nodes = set()
-            prefix = self._lab_prefix(lab_id)
-
-            # Recovery-only scan keyed by deterministic domain names. Reconciliation
-            # identity is metadata-based elsewhere; this scan exists only to recover
-            # local VLAN allocation state after agent restarts.
+            skipped_metadata = 0
             for domain in all_domains:
-                name = domain.name()
-                if name.startswith(prefix + "-"):
-                    node_name = name[len(prefix) + 1:]
+                metadata = self._get_domain_metadata_values(domain)
+                node_name = metadata.get("node_name")
+                if metadata.get("lab_id") == lab_id and node_name:
                     existing_nodes.add(node_name)
+                elif not metadata.get("lab_id") or not node_name:
+                    skipped_metadata += 1
+
+            if skipped_metadata:
+                runtime_identity_skips.labels(
+                    resource_type="libvirt_domain",
+                    operation="recover_stale_network",
+                    reason="missing_runtime_metadata",
+                ).inc(skipped_metadata)
+                logger.info(
+                    "Skipped %d libvirt domain(s) without metadata while recovering lab %s",
+                    skipped_metadata,
+                    lab_id,
+                )
 
             # Keep allocations for nodes that still have domains
             for node_name, vlans in allocations.items():
@@ -850,6 +858,14 @@ class LibvirtProvider(Provider, VlanPersistenceMixin):
     def _generate_mac_address(self, domain_name: str, interface_index: int) -> str:
         return _generate_mac_address(domain_name, interface_index)
 
+    def _generate_ovs_interface_id(
+        self,
+        domain_name: str,
+        interface_role: str,
+        interface_index: int,
+    ) -> str:
+        return _generate_ovs_interface_id(domain_name, interface_role, interface_index)
+
     def _find_ovmf_code_path(self) -> str | None:
         return _find_ovmf_code_path()
 
@@ -923,13 +939,12 @@ class LibvirtProvider(Provider, VlanPersistenceMixin):
         }
         return state_map.get(state, NodeStatus.UNKNOWN)
 
-    def _node_from_domain(self, domain, prefix: str) -> NodeInfo | None:
+    def _node_from_domain(self, domain, lab_id: str) -> NodeInfo | None:
         """Convert libvirt domain to NodeInfo."""
         name = domain.name()
         metadata = self._get_domain_metadata_values(domain)
 
-        # Check if this domain belongs to our lab
-        if not name.startswith(prefix + "-"):
+        if metadata.get("lab_id") != lab_id:
             return None
 
         node_name = metadata.get("node_name")
@@ -961,7 +976,7 @@ class LibvirtProvider(Provider, VlanPersistenceMixin):
         except libvirt.libvirtError:
             return False
 
-        node = self._node_from_domain(domain, self._lab_prefix(lab_id))
+        node = self._node_from_domain(domain, lab_id)
         if node is None or node.name != node_name:
             return False
         if node_definition_id and node.node_definition_id != node_definition_id:
@@ -1301,7 +1316,6 @@ class LibvirtProvider(Provider, VlanPersistenceMixin):
 
         Returns (destroyed_count, errors_list, fatal_error_or_none).
         """
-        prefix = self._lab_prefix(lab_id)
         destroyed_count = 0
         errors: list[str] = []
 
@@ -1309,13 +1323,16 @@ class LibvirtProvider(Provider, VlanPersistenceMixin):
             running_domains = self.conn.listAllDomains(libvirt.VIR_CONNECT_LIST_DOMAINS_ACTIVE)
             defined_domains = self.conn.listAllDomains(libvirt.VIR_CONNECT_LIST_DOMAINS_INACTIVE)
             all_domains = running_domains + defined_domains
+            skipped_metadata = 0
 
-            # Cleanup path: accept deterministic domain-name matching so legacy
-            # metadata-missing domains can still be removed. This is not used by
-            # hot-path identity reconciliation.
             for domain in all_domains:
                 name = domain.name()
-                if not name.startswith(prefix + "-"):
+                metadata = self._get_domain_metadata_values(domain)
+                node_name = metadata.get("node_name")
+                if metadata.get("lab_id") != lab_id:
+                    continue
+                if not node_name:
+                    skipped_metadata += 1
                     continue
                 try:
                     state, _ = domain.state()
@@ -1323,13 +1340,24 @@ class LibvirtProvider(Provider, VlanPersistenceMixin):
                         domain.destroy()
                     self._undefine_domain(domain, name)
                     self._clear_vm_post_boot_commands_cache(name)
-                    node_name = name[len(prefix) + 1:]
                     self._teardown_n9kv_poap_network(lab_id, node_name)
                     destroyed_count += 1
                     logger.info(f"Destroyed domain {name}")
                 except libvirt.libvirtError as e:
                     logger.warning(f"Error destroying domain {name}: {e}")
                     errors.append(f"{name}: {e}")
+
+            if skipped_metadata:
+                runtime_identity_skips.labels(
+                    resource_type="libvirt_domain",
+                    operation="destroy",
+                    reason="missing_node_metadata",
+                ).inc(skipped_metadata)
+                logger.info(
+                    "Skipped %d libvirt domain(s) without node metadata during destroy for lab %s",
+                    skipped_metadata,
+                    lab_id,
+                )
 
             # Clean up disk overlays
             disks_dir = self._disks_dir(workspace)
@@ -1401,12 +1429,11 @@ class LibvirtProvider(Provider, VlanPersistenceMixin):
         convenience handle for direct node actions and recovery operations, not
         a reconciliation identity source.
         """
-        prefix = self._lab_prefix(lab_id)
         nodes: list[NodeInfo] = []
         try:
             all_domains = self.conn.listAllDomains(0)
             for domain in all_domains:
-                node = self._node_from_domain(domain, prefix)
+                node = self._node_from_domain(domain, lab_id)
                 if node:
                     nodes.append(node)
             return StatusResult(lab_exists=len(nodes) > 0, nodes=nodes)
@@ -2327,9 +2354,34 @@ class LibvirtProvider(Provider, VlanPersistenceMixin):
         )
         tap_mac = "fe" + guest_mac[2:]
         expected_macs = {guest_mac.lower(), tap_mac.lower()}
+        domain_name = self._domain_name(lab_id, node_name)
+        expected_iface_id = self._generate_ovs_interface_id(
+            domain_name,
+            "data",
+            interface_index,
+        )
 
         try:
-            domain_name = self._domain_name(lab_id, node_name)
+            iface_result = subprocess.run(
+                [
+                    "ovs-vsctl",
+                    "--data=bare",
+                    "--no-heading",
+                    "--columns=name",
+                    "find",
+                    "Interface",
+                    f"external_ids:iface-id={expected_iface_id}",
+                ],
+                capture_output=True,
+                text=True,
+            )
+            if iface_result.returncode == 0:
+                exact_port = iface_result.stdout.strip().splitlines()
+                if exact_port:
+                    port_name = exact_port[0].strip()
+                    if port_name:
+                        return port_name
+
             try:
                 domain = self.conn.lookupByName(domain_name)
                 root = ET.fromstring(domain.XMLDesc(0))
@@ -2496,6 +2548,7 @@ class LibvirtProvider(Provider, VlanPersistenceMixin):
                             container_name=domain_name,
                             interface_name=f"eth{iface_idx + 1}",
                             lab_id=lab_id,
+                            node_name=node_name,
                         )
         return ports
 
@@ -2746,6 +2799,69 @@ class LibvirtProvider(Provider, VlanPersistenceMixin):
         """Get the device kind for a VM node (async)."""
         return await self._run_libvirt(self._get_node_kind_sync, lab_id, node_name)
 
+    def _resolve_node_name_for_action_sync(
+        self,
+        lab_id: str,
+        identifier: str,
+    ) -> str | None:
+        """Resolve a libvirt action target to a node name using metadata first.
+
+        Accepts a runtime UUID, exact runtime name, or explicit node name.
+        This keeps direct-action/recovery paths anchored on runtime metadata
+        rather than reverse-parsing generated domain names.
+        """
+        if not identifier:
+            return None
+
+        candidates = []
+        seen_names: set[str] = set()
+
+        def _add_candidate(domain) -> None:
+            try:
+                name = domain.name()
+            except Exception:
+                return
+            if name in seen_names:
+                return
+            seen_names.add(name)
+            candidates.append(domain)
+
+        lookup_by_uuid = getattr(self.conn, "lookupByUUIDString", None)
+        if callable(lookup_by_uuid):
+            try:
+                _add_candidate(lookup_by_uuid(identifier))
+            except Exception:
+                pass
+
+        try:
+            _add_candidate(self.conn.lookupByName(identifier))
+        except Exception:
+            pass
+
+        if "-" not in identifier:
+            try:
+                _add_candidate(self.conn.lookupByName(self._domain_name(lab_id, identifier)))
+            except Exception:
+                pass
+
+        for domain in candidates:
+            metadata = self._get_domain_metadata_values(domain)
+            if metadata.get("lab_id") != lab_id:
+                continue
+            node_name = metadata.get("node_name")
+            if node_name:
+                return node_name
+
+        return identifier if "-" not in identifier else None
+
+    async def resolve_node_name_for_action(self, lab_id: str, identifier: str) -> str | None:
+        """Resolve a libvirt direct-action target to a node name."""
+        return await self._run_libvirt(
+            self._resolve_node_name_for_action_sync,
+            lab_id,
+            identifier,
+        )
+
     def _get_domain_kind(self, domain) -> str | None:
         """Get the device kind for a libvirt domain.
 
@@ -2988,15 +3104,16 @@ class LibvirtProvider(Provider, VlanPersistenceMixin):
 
         Returns list of (node_name, kind) tuples.
         """
-        prefix = self._lab_prefix(lab_id)
         results: list[tuple[str, str]] = []
         try:
             all_domains = self.conn.listAllDomains(libvirt.VIR_CONNECT_LIST_DOMAINS_ACTIVE)
             for domain in all_domains:
-                name = domain.name()
-                if not name.startswith(prefix + "-"):
+                metadata = self._get_domain_metadata_values(domain)
+                if metadata.get("lab_id") != lab_id:
                     continue
-                node_name = name[len(prefix) + 1:]
+                node_name = metadata.get("node_name")
+                if not node_name:
+                    continue
                 kind = self._get_domain_kind(domain)
                 if kind:
                     results.append((node_name, kind))

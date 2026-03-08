@@ -1019,47 +1019,6 @@ class TestMigratePerLabBridges:
 
 
 # ===========================================================================
-# Find Lab ID From Containers
-# ===========================================================================
-
-class TestFindLabIdFromContainers:
-    """Tests for _find_lab_id_from_containers."""
-
-    @pytest.mark.asyncio
-    async def test_finds_matching_container(self, monkeypatch, tmp_path):
-        plugin = _make_plugin(monkeypatch, tmp_path)
-        c1 = SimpleNamespace(labels={"archetype.lab_id": "lab-full-uuid"})
-        client = MagicMock()
-        client.containers.list.return_value = [c1]
-
-        with patch("docker.from_env", return_value=client):
-            result = await plugin._find_lab_id_from_containers("lab-full")
-
-        assert result == "lab-full-uuid"
-
-    @pytest.mark.asyncio
-    async def test_returns_none_on_no_match(self, monkeypatch, tmp_path):
-        plugin = _make_plugin(monkeypatch, tmp_path)
-        c1 = SimpleNamespace(labels={"archetype.lab_id": "other-lab"})
-        client = MagicMock()
-        client.containers.list.return_value = [c1]
-
-        with patch("docker.from_env", return_value=client):
-            result = await plugin._find_lab_id_from_containers("lab-xyz")
-
-        assert result is None
-
-    @pytest.mark.asyncio
-    async def test_returns_none_on_docker_error(self, monkeypatch, tmp_path):
-        plugin = _make_plugin(monkeypatch, tmp_path)
-
-        with patch("docker.from_env", side_effect=RuntimeError("docker down")):
-            result = await plugin._find_lab_id_from_containers("lab-")
-
-        assert result is None
-
-
-# ===========================================================================
 # VLAN Allocation State Tracking
 # ===========================================================================
 

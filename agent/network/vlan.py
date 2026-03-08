@@ -222,8 +222,8 @@ async def cleanup_external_networks(lab_id: str) -> list[str]:
     Returns:
         List of deleted interface names
     """
-    def _sync_cleanup() -> list[str]:
-        manager = get_vlan_manager()
-        return manager.cleanup_lab(lab_id)
-
-    return await asyncio.to_thread(_sync_cleanup)
+    # This path only updates local VLAN tracking and deletes interfaces
+    # synchronously through VlanManager. Keeping it in-process avoids
+    # thread-hop deadlocks during test shutdown while staying deterministic.
+    manager = get_vlan_manager()
+    return manager.cleanup_lab(lab_id)

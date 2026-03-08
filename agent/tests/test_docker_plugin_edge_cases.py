@@ -96,22 +96,11 @@ class TestIfindexResolution:
                 return_value=200,
             ),
         ):
-            # First call: list-ports
-            list_proc = AsyncMock()
-            list_proc.communicate = AsyncMock(return_value=(b"vhabc\nvhdef\n", b""))
-            list_proc.returncode = 0
+            find_proc = AsyncMock()
+            find_proc.communicate = AsyncMock(return_value=(b"vhdef\n", b""))
+            find_proc.returncode = 0
 
-            # Second call: get ifindex for vhabc -> no match
-            idx_proc_1 = AsyncMock()
-            idx_proc_1.communicate = AsyncMock(return_value=(b"99\n", b""))
-            idx_proc_1.returncode = 0
-
-            # Third call: get ifindex for vhdef -> match
-            idx_proc_2 = AsyncMock()
-            idx_proc_2.communicate = AsyncMock(return_value=(b"42\n", b""))
-            idx_proc_2.returncode = 0
-
-            mock_exec.side_effect = [list_proc, idx_proc_1, idx_proc_2]
+            mock_exec.return_value = find_proc
 
             from agent.helpers import _resolve_ovs_port_via_ifindex
 
@@ -129,15 +118,15 @@ class TestIfindexResolution:
 
     @pytest.mark.asyncio
     async def test_returns_none_when_list_ports_fails(self):
-        """Should return None when ovs-vsctl list-ports fails."""
+        """Should return None when exact OVS ifindex lookup does not resolve a port."""
         with (
             patch("agent.helpers._resolve_ifindex_sync", return_value=42),
             patch("asyncio.create_subprocess_exec") as mock_exec,
         ):
-            list_proc = AsyncMock()
-            list_proc.communicate = AsyncMock(return_value=(b"", b"error"))
-            list_proc.returncode = 1
-            mock_exec.return_value = list_proc
+            find_proc = AsyncMock()
+            find_proc.communicate = AsyncMock(return_value=(b"", b""))
+            find_proc.returncode = 0
+            mock_exec.return_value = find_proc
 
             from agent.helpers import _resolve_ovs_port_via_ifindex
 
@@ -145,27 +134,25 @@ class TestIfindexResolution:
             assert result is None
 
     @pytest.mark.asyncio
-    async def test_skips_non_vh_ports(self):
-        """Should skip ports that don't start with 'vh' prefix."""
+    async def test_returns_none_when_exact_lookup_returns_non_vh_port(self):
+        """Exact lookup must not treat a non-veth interface as a container OVS port."""
         with (
             patch("agent.helpers._resolve_ifindex_sync", return_value=42),
             patch("asyncio.create_subprocess_exec") as mock_exec,
         ):
-            list_proc = AsyncMock()
-            list_proc.communicate = AsyncMock(
-                return_value=(b"vtep-100\npatch-int\n", b"")
-            )
-            list_proc.returncode = 0
-            mock_exec.return_value = list_proc
+            find_proc = AsyncMock()
+            find_proc.communicate = AsyncMock(return_value=(b"patch-int\n", b""))
+            find_proc.returncode = 0
+            mock_exec.return_value = find_proc
 
             from agent.helpers import _resolve_ovs_port_via_ifindex
 
             result = await _resolve_ovs_port_via_ifindex("ctr-a", "eth1")
-            assert result is None
+            assert result == ("patch-int", 0)
 
     @pytest.mark.asyncio
-    async def test_handles_non_numeric_ifindex_gracefully(self):
-        """Should skip ports where ifindex read returns non-numeric data."""
+    async def test_returns_first_exact_match(self):
+        """Exact ifindex lookup returns the first resolved interface name."""
         with (
             patch("agent.helpers._resolve_ifindex_sync", return_value=42),
             patch("asyncio.create_subprocess_exec") as mock_exec,
@@ -175,22 +162,10 @@ class TestIfindexResolution:
                 return_value=300,
             ),
         ):
-            # list-ports
-            list_proc = AsyncMock()
-            list_proc.communicate = AsyncMock(return_value=(b"vhbad\nvhgood\n", b""))
-            list_proc.returncode = 0
-
-            # First port returns garbage ifindex
-            bad_idx = AsyncMock()
-            bad_idx.communicate = AsyncMock(return_value=(b"not_a_number\n", b""))
-            bad_idx.returncode = 0
-
-            # Second port matches
-            good_idx = AsyncMock()
-            good_idx.communicate = AsyncMock(return_value=(b"42\n", b""))
-            good_idx.returncode = 0
-
-            mock_exec.side_effect = [list_proc, bad_idx, good_idx]
+            find_proc = AsyncMock()
+            find_proc.communicate = AsyncMock(return_value=(b"vhgood\nvhother\n", b""))
+            find_proc.returncode = 0
+            mock_exec.return_value = find_proc
 
             from agent.helpers import _resolve_ovs_port_via_ifindex
 
@@ -209,15 +184,11 @@ class TestIfindexResolution:
                 return_value=None,
             ),
         ):
-            list_proc = AsyncMock()
-            list_proc.communicate = AsyncMock(return_value=(b"vhonly\n", b""))
-            list_proc.returncode = 0
+            find_proc = AsyncMock()
+            find_proc.communicate = AsyncMock(return_value=(b"vhonly\n", b""))
+            find_proc.returncode = 0
 
-            idx_proc = AsyncMock()
-            idx_proc.communicate = AsyncMock(return_value=(b"7\n", b""))
-            idx_proc.returncode = 0
-
-            mock_exec.side_effect = [list_proc, idx_proc]
+            mock_exec.return_value = find_proc
 
             from agent.helpers import _resolve_ovs_port_via_ifindex
 
@@ -655,6 +626,10 @@ class TestPortSwapPrevention:
                 return_value=500,
             ),
         ):
+            find_proc = AsyncMock()
+            find_proc.communicate = AsyncMock(return_value=(b"", b""))
+            find_proc.returncode = 0
+
             list_proc = AsyncMock()
             list_proc.communicate = AsyncMock(
                 return_value=(b"vhswap1\nvhswap2\nvhswap3\n", b"")
@@ -671,7 +646,7 @@ class TestPortSwapPrevention:
             p2.communicate = AsyncMock(return_value=(b"55\n", b""))
             p2.returncode = 0
 
-            mock_exec.side_effect = [list_proc, p1, p2]
+            mock_exec.side_effect = [find_proc, list_proc, p1, p2]
 
             from agent.helpers import _resolve_ovs_port_via_ifindex
 
@@ -686,6 +661,10 @@ class TestPortSwapPrevention:
             patch("agent.helpers._resolve_ifindex_sync", return_value=99),
             patch("asyncio.create_subprocess_exec") as mock_exec,
         ):
+            find_proc = AsyncMock()
+            find_proc.communicate = AsyncMock(return_value=(b"", b""))
+            find_proc.returncode = 0
+
             list_proc = AsyncMock()
             list_proc.communicate = AsyncMock(return_value=(b"vhonly\n", b""))
             list_proc.returncode = 0
@@ -694,7 +673,7 @@ class TestPortSwapPrevention:
             p1.communicate = AsyncMock(return_value=(b"88\n", b""))
             p1.returncode = 0
 
-            mock_exec.side_effect = [list_proc, p1]
+            mock_exec.side_effect = [find_proc, list_proc, p1]
 
             from agent.helpers import _resolve_ovs_port_via_ifindex
 

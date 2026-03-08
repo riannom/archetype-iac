@@ -34,10 +34,8 @@ async def test_resolve_ovs_port_via_ifindex_branches(monkeypatch):
     async def _create_subprocess_exec(*_args, **_kwargs):
         calls["count"] += 1
         if calls["count"] == 1:
-            return _Proc(b"vh-stale\nvh-good\n")
-        if calls["count"] == 2:
-            return _Proc(b"not-a-number\n")
-        return _Proc(b"17\n")
+            return _Proc(b"vh-good\n")
+        return _Proc(b"")
 
     monkeypatch.setattr(helpers.asyncio, "create_subprocess_exec", _create_subprocess_exec)
     monkeypatch.setattr(helpers, "_ovs_get_port_vlan", AsyncMock(return_value=2049))
@@ -45,10 +43,10 @@ async def test_resolve_ovs_port_via_ifindex_branches(monkeypatch):
     resolved = await helpers._resolve_ovs_port_via_ifindex("arch-lab-r1", "eth1")
     assert resolved == ("vh-good", 2049)
 
-    async def _fail_list_ports(*_args, **_kwargs):
+    async def _fail_all(*_args, **_kwargs):
         return _Proc(b"", returncode=1)
 
-    monkeypatch.setattr(helpers.asyncio, "create_subprocess_exec", _fail_list_ports)
+    monkeypatch.setattr(helpers.asyncio, "create_subprocess_exec", _fail_all)
     assert await helpers._resolve_ovs_port_via_ifindex("arch-lab-r1", "eth1") is None
 
 

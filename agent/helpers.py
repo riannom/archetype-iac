@@ -405,30 +405,26 @@ async def _resolve_ovs_port_via_ifindex(
     if peer_ifindex is None:
         return None
 
-    bridge = settings.ovs_bridge_name or "arch-ovs"
     proc = await asyncio.create_subprocess_exec(
-        "ovs-vsctl", "list-ports", bridge,
+        "ovs-vsctl",
+        "--data=bare",
+        "--no-heading",
+        "--columns=name",
+        "find",
+        "Interface",
+        f"ifindex={peer_ifindex}",
         stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
     )
     stdout, _ = await proc.communicate()
-    if proc.returncode != 0:
-        return None
-
-    for port_name in stdout.decode().strip().split("\n"):
-        port_name = port_name.strip()
-        if not port_name or not port_name.startswith("vh"):
-            continue
-        proc2 = await asyncio.create_subprocess_exec(
-            "ovs-vsctl", "get", "interface", port_name, "ifindex",
-            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
-        )
-        idx_out, _ = await proc2.communicate()
-        try:
-            if int(idx_out.decode().strip()) == peer_ifindex:
-                vlan_tag = await _ovs_get_port_vlan(port_name)
-                return (port_name, vlan_tag or 0)
-        except (ValueError, TypeError):
-            continue
+    if proc.returncode == 0:
+        exact_matches = [
+            port_name.strip()
+            for port_name in stdout.decode().strip().splitlines()
+            if port_name.strip()
+        ]
+        if exact_matches:
+            vlan_tag = await _ovs_get_port_vlan(exact_matches[0])
+            return (exact_matches[0], vlan_tag or 0)
 
     return None
 

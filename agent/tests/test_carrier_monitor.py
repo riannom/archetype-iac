@@ -343,6 +343,26 @@ class TestContainerToNodeResolution:
 
         assert CarrierMonitor._container_to_node("archetype-lab1-my-node", "lab1") == "my-node"
 
+    def test_resolve_port_prefers_explicit_node_name(self):
+        """Explicit node metadata wins over runtime-name parsing."""
+        from agent.network.carrier_monitor import CarrierMonitor, MonitoredPort
+
+        mon = CarrierMonitor(
+            ovs_bridge="arch-ovs",
+            get_managed_ports=lambda: {
+                "vnet0": MonitoredPort(
+                    port_name="vnet0",
+                    container_name="arch-lab1-runtime-name",
+                    interface_name="eth1",
+                    lab_id="lab1",
+                    node_name="vm1",
+                )
+            },
+            notifier=AsyncMock(return_value=True),
+        )
+
+        assert mon._resolve_port("vnet0") == ("lab1", "vm1", "eth1")
+
 
 class TestBuildManagedPorts:
     """Verify build_managed_ports merges OVS manager and Docker plugin ports."""

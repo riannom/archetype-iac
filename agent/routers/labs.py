@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 from pathlib import Path
 
@@ -184,23 +185,14 @@ async def _reconcile_single_node(
     libvirt_provider = get_provider("libvirt")
     if libvirt_provider:
         try:
-            # Recovery/direct-action path only: extract node name from the
-            # generated runtime name so explicit per-node operations can still
-            # target legacy runtimes. Managed status/discovery no longer treats
-            # names as runtime identity.
-            # NLM truncates lab_id to 20 chars: archetype-{lab_id[:20]}-{node}
-            # Libvirt domains also truncate: arch-{lab_id[:20]}-{node}
-            # Must use same sanitization as NLM's _get_container_name()
-            import re as _re
-            safe_lab = _re.sub(r"[^a-zA-Z0-9_-]", "", lab_id)[:20]
-            archetype_prefix = f"archetype-{safe_lab}-"
-            arch_prefix = f"arch-{safe_lab}-"
-            if container_name.startswith(archetype_prefix):
-                node_name = container_name[len(archetype_prefix):]
-            elif container_name.startswith(arch_prefix):
-                node_name = container_name[len(arch_prefix):]
+            resolver = getattr(libvirt_provider, "resolve_node_name_for_action", None)
+            if callable(resolver):
+                resolved = resolver(lab_id, container_name)
+                node_name = await resolved if inspect.isawaitable(resolved) else resolved
             else:
-                node_name = container_name  # fallback
+                node_name = None
+            if not node_name:
+                node_name = container_name
 
             if desired == "running":
                 result = await libvirt_provider.start_node(lab_id, node_name, workspace)

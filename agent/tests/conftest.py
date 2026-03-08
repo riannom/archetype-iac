@@ -3,10 +3,19 @@ from __future__ import annotations
 import os
 import sys
 import types
+import inspect
+import asyncio
+import threading
+import concurrent.futures
 
 import pytest
+import httpx
 
 from agent.config import settings
+
+# Test modules import ``agent.main.app`` at collection time, before fixtures run.
+# Set the flag here so the app is built in test mode and avoids lifespan/TestClient deadlocks.
+os.environ.setdefault("ARCHETYPE_AGENT_TESTING", "1")
 
 
 @pytest.fixture(autouse=True)
@@ -146,6 +155,128 @@ def _install_aiohttp_stub() -> None:
 
     sys.modules["aiohttp"] = aiohttp_mod
     sys.modules["aiohttp.web"] = web_mod
+
+
+def _item_source(item: pytest.Item) -> str:
+    try:
+        obj = getattr(item, "obj", None)
+        if obj is None:
+            return ""
+        return inspect.getsource(obj)
+    except Exception:
+        return ""
+
+
+_FILE_TEXT_CACHE: dict[str, str] = {}
+
+
+def _file_text(item: pytest.Item) -> str:
+    path = str(getattr(item, "fspath", ""))
+    if path not in _FILE_TEXT_CACHE:
+        try:
+            _FILE_TEXT_CACHE[path] = open(path, encoding="utf-8").read()
+        except Exception:
+            _FILE_TEXT_CACHE[path] = ""
+    return _FILE_TEXT_CACHE[path]
+
+
+def _file_uses_test_client(item: pytest.Item) -> bool:
+    text = _file_text(item)
+    return "TestClient" in text or "websocket_connect(" in text
+
+
+def _file_uses_asyncio_run(item: pytest.Item) -> bool:
+    return "asyncio.run(" in _file_text(item)
+
+
+def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
+    """Run TestClient-backed tests before asyncio.run-heavy tests.
+
+    In this environment, Starlette TestClient can deadlock after earlier tests
+    call ``asyncio.run(...)`` in the same process. Prefer HTTP/websocket client
+    tests first, then ordinary tests, then direct ``asyncio.run`` callers.
+    """
+
+    def _priority(item: pytest.Item) -> tuple[int, str]:
+        if _file_uses_test_client(item):
+            return (0, item.nodeid)
+        if _file_uses_asyncio_run(item):
+            return (2, item.nodeid)
+        return (1, item.nodeid)
+
+    items.sort(key=_priority)
+
+
+class _AsyncRequestRunner:
+    def __init__(self) -> None:
+        self._loop = asyncio.new_event_loop()
+        self._thread = threading.Thread(
+            target=self._run_loop,
+            name="agent-test-http-loop",
+            daemon=True,
+        )
+        self._thread.start()
+
+    def _run_loop(self) -> None:
+        asyncio.set_event_loop(self._loop)
+        self._loop.run_forever()
+
+    def run(self, coro):
+        future = asyncio.run_coroutine_threadsafe(coro, self._loop)
+        return future.result()
+
+    def close(self) -> None:
+        self._loop.call_soon_threadsafe(self._loop.stop)
+        self._thread.join(timeout=5)
+        self._loop.close()
+
+
+@pytest.fixture(autouse=True, scope="session")
+def _patch_testclient_http_requests():
+    """Route TestClient HTTP requests through ASGITransport in tests.
+
+    In this environment, Starlette's blocking portal can deadlock once enough
+    agent tests have been collected. Plain HTTP requests do not need the portal,
+    so use httpx.ASGITransport directly and keep websocket paths on the native
+    TestClient implementation.
+    """
+
+    from starlette.testclient import TestClient as StarletteTestClient
+
+    original_request = StarletteTestClient.request
+    runner = _AsyncRequestRunner()
+
+    def _request(self, method: str, url: str, *args, **kwargs):
+        if url.startswith("ws://") or url.startswith("wss://"):
+            return original_request(self, method, url, *args, **kwargs)
+
+        async def _send():
+            transport_config = getattr(self, "_transport", None)
+            transport = httpx.ASGITransport(
+                app=self.app,
+                raise_app_exceptions=getattr(transport_config, "raise_server_exceptions", True),
+                root_path=getattr(transport_config, "root_path", ""),
+                client=getattr(transport_config, "client", ("testclient", 50000)),
+            )
+            async with httpx.AsyncClient(
+                transport=transport,
+                base_url=str(getattr(self, "_base_url", "http://testserver")),
+                headers=getattr(self, "_headers", None),
+                cookies=getattr(self, "_cookies", None),
+                follow_redirects=self.follow_redirects,
+            ) as client:
+                return await client.request(method, url, *args, **kwargs)
+
+        response = runner.run(_send())
+        getattr(self, "_cookies").update(response.cookies)
+        return response
+
+    StarletteTestClient.request = _request
+    try:
+        yield
+    finally:
+        StarletteTestClient.request = original_request
+        runner.close()
 
 
 _install_docker_stub()

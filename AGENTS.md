@@ -9,6 +9,7 @@
 - Developer commands are defined in the `Makefile`:
   - `make audit` — dry-run cleanup audit (no deletions).
   - `make audit-ovs` — dry-run cleanup audit including OVS/VXLAN checks.
+  - `make cleanup-legacy-runtime-artifacts` — dry-run audit for pre-metadata OVS/libvirt runtime artifacts (`python3 scripts/cleanup_legacy_runtime_artifacts.py --apply` to remove them explicitly).
   - `make test-agent` — run agent test suite.
   - `make test-api` — run API test suite (uses local `python3.14` when available; otherwise falls back to `make test-api-container` if `archetype-iac-api-1` is running).
   - `make test-api-container` — run API tests inside the running API container (`API_TEST=<path-or-kexpr>` optional, default `tests`).
@@ -33,6 +34,7 @@
   - `python3 scripts/backfill_manifest_compatible_devices.py --manifest /var/lib/archetype/images/manifest.json` — dry-run manifest compatibility backfill for shared qcow2 images (`--apply` to write changes).
   - `python3 scripts/backfill_device_image_catalog_db.py --manifest /var/lib/archetype/images/manifest.json` — dry-run DB catalog backfill (`--apply` to persist) after Alembic revisions `055` and `056`.
   - `python3 scripts/catalog_manifest_drift_check.py --manifest /var/lib/archetype/images/manifest.json` — compare manifest and catalog projection (`--json-out <path>` and `--fail-on-drift` supported).
+  - `python3 scripts/cleanup_legacy_runtime_artifacts.py [--apply] [--skip-ovs] [--skip-libvirt]` — audit or explicitly remove pre-metadata OVS ports and libvirt domains that lack deterministic Archetype identity metadata.
   - `python3 scripts/observability_canary.py --apply --lab-id <lab_id> --sync-node-id <node_id> --run-up-down` — generate controlled traffic (status/sync/up/down) and validate metric coverage.
   - `./scripts/run_support_bundle_triage_nonprod.sh` — seed deterministic failure signals, generate a support bundle via API, and validate triage artifact completeness.
   - `./scripts/observability_db_report.sh [days]` — query Postgres for long-running tasks, failure rates, and failure classes.

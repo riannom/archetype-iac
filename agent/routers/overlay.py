@@ -491,7 +491,7 @@ async def get_lab_port_state(lab_id: str) -> PortStateResponse:
 
         # Step 1: Collect per-container interface->iflink data via Docker SDK
         # in a worker thread so we do not block the asyncio event loop.
-        def _collect_container_iflinks() -> list[tuple[str, str]]:
+        def _collect_container_iflinks() -> list[tuple[str, str, str]]:
             client = docker.from_env(timeout=settings.docker_client_timeout)
             containers = client.containers.list(
                 filters={"label": f"archetype.lab_id={lab_id}"},
@@ -499,9 +499,11 @@ async def get_lab_port_state(lab_id: str) -> PortStateResponse:
             if not containers:
                 return []
 
-            results: list[tuple[str, str]] = []
+            results: list[tuple[str, str, str]] = []
             for container in containers:
                 cname = container.name or ""
+                labels = getattr(container, "labels", {}) or {}
+                node_name = labels.get("archetype.node_name") or cname
                 try:
                     exit_code, output = container.exec_run(
                         [
@@ -519,7 +521,7 @@ async def get_lab_port_state(lab_id: str) -> PortStateResponse:
 
                 if exit_code != 0:
                     continue
-                results.append((cname, output.decode("utf-8", errors="replace")))
+                results.append((node_name, cname, output.decode("utf-8", errors="replace")))
 
             return results
 
@@ -561,14 +563,7 @@ async def get_lab_port_state(lab_id: str) -> PortStateResponse:
 
         # Step 3: For each container, read interface iflinks and match
         ports = []
-        for cname, iface_output in container_iflinks:
-            # Extract node name
-            match = re.match(
-                r'archetype-[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9-]+-(.+)$',
-                cname,
-            )
-            node_name = match.group(1) if match else cname
-
+        for node_name, _cname, iface_output in container_iflinks:
             for line in iface_output.strip().split("\n"):
                 if ":" not in line:
                     continue

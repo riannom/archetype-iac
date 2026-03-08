@@ -107,6 +107,15 @@ def test_get_vm_stats_sync_filters_and_extracts_fields(monkeypatch):
         _Domain("arch-lab2-node2", 5, (5, 1_024_000, 256_000, 1, 20)),
     ]
     provider._conn = SimpleNamespace(isAlive=lambda: True, listAllDomains=lambda _flags=0: domains)
+    monkeypatch.setattr(
+        provider,
+        "_get_domain_metadata_values",
+        lambda domain: {
+            "arch-lab1-node1": {"lab_id": "lab1", "node_name": "node1"},
+            "other-domain": {},
+            "arch-lab2-node2": {"lab_id": "lab2", "node_name": "node2"},
+        }[domain.name()],
+    )
 
     stats = provider.get_vm_stats_sync()
 
@@ -239,6 +248,10 @@ def test_discover_vlan_allocations_from_domains_handles_name_errors():
         ],
     )
     provider._extract_domain_vlan_tags = lambda d: d._tags if hasattr(d, "_tags") else []
+    provider._get_domain_metadata_values = lambda domain: {
+        "arch-lab1-r1": {"lab_id": "lab1", "node_name": "r1"},
+        "arch-other-r2": {"lab_id": "other", "node_name": "r2"},
+    }.get(getattr(domain, "_name", ""), {})
 
     discovered = provider._discover_vlan_allocations_from_domains("lab1")
     assert discovered == {"r1": [2001]}
@@ -283,10 +296,12 @@ def test_recover_stale_network_keeps_only_existing_nodes_and_handles_errors(tmp_
     provider._load_vlan_allocations = lambda *_args, **_kwargs: None
     provider._save_vlan_allocations = MagicMock()
     provider._discover_vlan_allocations_from_domains = lambda _lab_id: {}
+    domain = SimpleNamespace(name=lambda: "arch-lab1-nodeA")
     provider._conn = SimpleNamespace(
         isAlive=lambda: True,
-        listAllDomains=lambda _flags=0: [SimpleNamespace(name=lambda: "arch-lab1-nodeA")],
+        listAllDomains=lambda _flags=0: [domain],
     )
+    provider._get_domain_metadata_values = lambda d: {"lab_id": "lab1", "node_name": "nodeA"} if d is domain else {}
 
     recovered = provider._recover_stale_network("lab1", tmp_path)
     assert recovered == {"nodeA": [2001]}
@@ -297,6 +312,49 @@ def test_recover_stale_network_keeps_only_existing_nodes_and_handles_errors(tmp_
         listAllDomains=lambda _flags=0: (_ for _ in ()).throw(RuntimeError("down")),
     )
     assert provider._recover_stale_network("lab1", tmp_path) == {}
+
+
+def test_recover_stale_network_skips_metadata_missing_domains(tmp_path):
+    provider = _make_provider()
+    provider._vlan_allocations["lab1"] = {"nodeA": [2001]}
+    provider._load_vlan_allocations = lambda *_args, **_kwargs: None
+    provider._save_vlan_allocations = MagicMock()
+    domain = SimpleNamespace(name=lambda: "arch-lab1-nodeA")
+    provider._conn = SimpleNamespace(
+        isAlive=lambda: True,
+        listAllDomains=lambda _flags=0: [domain],
+    )
+    provider._discover_vlan_allocations_from_domains = lambda _lab_id: {}
+    provider._get_domain_metadata_values = lambda _domain: {}
+
+    assert provider._recover_stale_network("lab1", tmp_path) == {}
+
+
+def test_recover_stale_network_increments_skip_metric(tmp_path):
+    provider = _make_provider()
+    provider._vlan_allocations["lab1"] = {"nodeA": [2001]}
+    provider._load_vlan_allocations = lambda *_args, **_kwargs: None
+    provider._save_vlan_allocations = MagicMock()
+    provider._discover_vlan_allocations_from_domains = lambda _lab_id: {}
+    domain = SimpleNamespace(name=lambda: "legacy-domain")
+    provider._conn = SimpleNamespace(
+        isAlive=lambda: True,
+        listAllDomains=lambda _flags=0: [domain],
+    )
+    provider._get_domain_metadata_values = lambda _domain: {}
+    metric = MagicMock()
+    metric.labels.return_value = metric
+
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        monkeypatch.setattr(libvirt_mod, "runtime_identity_skips", metric)
+        assert provider._recover_stale_network("lab1", tmp_path) == {}
+
+    metric.labels.assert_called_once_with(
+        resource_type="libvirt_domain",
+        operation="recover_stale_network",
+        reason="missing_runtime_metadata",
+    )
+    metric.inc.assert_called_once_with(1)
 
 
 def test_allocate_vlans_reallocates_when_recovered_insufficient_and_saves(tmp_path):
@@ -489,19 +547,21 @@ def test_get_domain_status_and_node_from_domain(monkeypatch):
         UUIDString=lambda: "abcdef1234567890",
     )
     monkeypatch.setattr(provider, "_get_domain_metadata_values", lambda _domain: {
+        "lab_id": "lab1",
         "node_name": "r1",
         "node_definition_id": "node-def-r1",
     })
-    node = provider._node_from_domain(domain, "arch-lab1")
+    node = provider._node_from_domain(domain, "lab1")
     assert node is not None
     assert node.name == "r1"
     assert node.container_id == "abcdef123456"
 
     monkeypatch.setattr(provider, "_get_domain_metadata_values", lambda _domain: {})
-    assert provider._node_from_domain(domain, "arch-lab1") is None
+    assert provider._node_from_domain(domain, "lab1") is None
 
     other = SimpleNamespace(name=lambda: "arch-other-r2")
-    assert provider._node_from_domain(other, "arch-lab1") is None
+    monkeypatch.setattr(provider, "_get_domain_metadata_values", lambda _domain: {"lab_id": "other"})
+    assert provider._node_from_domain(other, "lab1") is None
 
 
 @pytest.mark.asyncio
@@ -611,6 +671,7 @@ def test_get_vm_interface_port_sync_paths(monkeypatch):
     provider = _make_provider()
     monkeypatch.setattr(provider, "_resolve_data_interface_mac_sync", lambda *_args: "52:54:00:aa:bb:cc")
     provider._domain_name = lambda _lab_id, _node_name: "arch-lab1-r1"
+    provider._generate_ovs_interface_id = lambda _domain_name, _role, _index: "iface-id-1"
     provider._ovs_port_exists = lambda port_name: port_name == "vnet-direct"
 
     domain = SimpleNamespace(
@@ -627,14 +688,46 @@ def test_get_vm_interface_port_sync_paths(monkeypatch):
     )
     provider._conn = SimpleNamespace(isAlive=lambda: True, lookupByName=lambda _name: domain)
 
-    monkeypatch.setattr(
-        libvirt_mod.subprocess,
-        "run",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("fallback should not run")),
-    )
+    def _run_xml_direct(args, **_kwargs):
+        if args[:6] == [
+            "ovs-vsctl",
+            "--data=bare",
+            "--no-heading",
+            "--columns=name",
+            "find",
+            "Interface",
+        ]:
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+        raise AssertionError(f"unexpected fallback args: {args!r}")
+
+    monkeypatch.setattr(libvirt_mod.subprocess, "run", _run_xml_direct)
     assert provider._get_vm_interface_port_sync("lab1", "r1", 0) == "vnet-direct"
 
     def _run_success(args, **_kwargs):
+        if args[:6] == [
+            "ovs-vsctl",
+            "--data=bare",
+            "--no-heading",
+            "--columns=name",
+            "find",
+            "Interface",
+        ]:
+            return SimpleNamespace(returncode=0, stdout="vnet-ifaceid\n", stderr="")
+        raise AssertionError(f"unexpected args: {args!r}")
+
+    monkeypatch.setattr(libvirt_mod.subprocess, "run", _run_success)
+    assert provider._get_vm_interface_port_sync("lab1", "r1", 0) == "vnet-ifaceid"
+
+    def _run_mac_fallback(args, **_kwargs):
+        if args[:6] == [
+            "ovs-vsctl",
+            "--data=bare",
+            "--no-heading",
+            "--columns=name",
+            "find",
+            "Interface",
+        ]:
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
         if args[:4] == ["ovs-vsctl", "--format=json", "list-ports", libvirt_mod.settings.ovs_bridge_name]:
             return SimpleNamespace(returncode=0, stdout="vnet1\nvnet2\n", stderr="")
         if args[:4] == ["ovs-vsctl", "get", "interface", "vnet1"]:
@@ -648,15 +741,26 @@ def test_get_vm_interface_port_sync_paths(monkeypatch):
         lookupByName=lambda _name: (_ for _ in ()).throw(RuntimeError("lookup failed")),
     )
     provider._ovs_port_exists = lambda _port_name: False
-    monkeypatch.setattr(libvirt_mod.subprocess, "run", _run_success)
+    monkeypatch.setattr(libvirt_mod.subprocess, "run", _run_mac_fallback)
     assert provider._get_vm_interface_port_sync("lab1", "r1", 0) == "vnet2"
 
     monkeypatch.setattr(
         libvirt_mod.subprocess,
         "run",
-        lambda args, **_kwargs: SimpleNamespace(returncode=1, stdout="", stderr="")
-        if args[:4] == ["ovs-vsctl", "--format=json", "list-ports", libvirt_mod.settings.ovs_bridge_name]
-        else SimpleNamespace(returncode=0, stdout="", stderr=""),
+        lambda args, **_kwargs: (
+            SimpleNamespace(returncode=0, stdout="", stderr="")
+            if args[:6] == [
+                "ovs-vsctl",
+                "--data=bare",
+                "--no-heading",
+                "--columns=name",
+                "find",
+                "Interface",
+            ]
+            else SimpleNamespace(returncode=1, stdout="", stderr="")
+            if args[:4] == ["ovs-vsctl", "--format=json", "list-ports", libvirt_mod.settings.ovs_bridge_name]
+            else SimpleNamespace(returncode=0, stdout="", stderr="")
+        ),
     )
     assert provider._get_vm_interface_port_sync("lab1", "r1", 0) is None
 
@@ -883,6 +987,15 @@ def test_list_lab_vm_kinds_sync_filters_and_handles_errors(monkeypatch):
     )
     kinds = {"arch-lab1-r1": "iosv", "arch-lab1-r2": None}
     monkeypatch.setattr(provider, "_get_domain_kind", lambda domain: kinds[domain.name()])
+    monkeypatch.setattr(
+        provider,
+        "_get_domain_metadata_values",
+        lambda domain: {
+            "arch-lab1-r1": {"lab_id": "lab1", "node_name": "r1"},
+            "arch-lab1-r2": {"lab_id": "lab1", "node_name": "r2"},
+            "arch-other-r3": {"lab_id": "other", "node_name": "r3"},
+        }[domain.name()],
+    )
 
     assert provider._list_lab_vm_kinds_sync("lab1") == [("r1", "iosv")]
 
@@ -1265,6 +1378,11 @@ def test_destroy_sync_cleans_domains_and_handles_errors(monkeypatch, tmp_path):
         return [d_err]
 
     provider._conn = SimpleNamespace(isAlive=lambda: True, listAllDomains=_list_domains)
+    provider._get_domain_metadata_values = lambda domain: {
+        d_ok: {"lab_id": "lab1", "node_name": "r1"},
+        d_err: {"lab_id": "lab1", "node_name": "r2"},
+        d_other: {"lab_id": "other", "node_name": "r3"},
+    }.get(domain, {})
     provider._undefine_domain = MagicMock(
         side_effect=lambda domain, _name: (_ for _ in ()).throw(_LibvirtError("undefine fail"))
         if domain is d_err
@@ -1349,7 +1467,7 @@ def test_status_sync_and_wrapper():
     d1 = SimpleNamespace(name=lambda: "arch-lab1-r1")
     d2 = SimpleNamespace(name=lambda: "arch-other-r2")
     provider._conn = SimpleNamespace(isAlive=lambda: True, listAllDomains=lambda _flags=0: [d1, d2])
-    provider._node_from_domain = lambda domain, _prefix: (
+    provider._node_from_domain = lambda domain, _lab_id: (
         libvirt_mod.NodeInfo(name="r1", status=libvirt_mod.NodeStatus.RUNNING, container_id="abc")
         if domain is d1
         else None

@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from agent.config import settings
+from agent.metrics import runtime_identity_skips
 from agent.network.docker_plugin import (
     EndpointState,
     LabBridge,
@@ -22,6 +23,7 @@ from agent.network.docker_plugin import (
     OVS_BRIDGE_PREFIX,
     VLAN_RANGE_END,
     VLAN_RANGE_START,
+    _parse_ovs_map,
 )
 
 logger = logging.getLogger(__name__)
@@ -75,6 +77,7 @@ class PluginStateMixin:
                     "cont_veth": ep.cont_veth,
                     "vlan_tag": ep.vlan_tag,
                     "container_name": ep.container_name,
+                    "node_name": ep.node_name,
                 }
                 for ep_id, ep in self.endpoints.items()
             },
@@ -127,6 +130,7 @@ class PluginStateMixin:
                 cont_veth=ep_data["cont_veth"],
                 vlan_tag=ep_data["vlan_tag"],
                 container_name=ep_data.get("container_name"),
+                node_name=ep_data.get("node_name"),
             )
 
         self._allocated_vlans = {ep.vlan_tag for ep in self.endpoints.values()}
@@ -565,16 +569,10 @@ class PluginStateMixin:
 
             client = docker.from_env(timeout=30)
 
-            def _host_veth_exists(endpoint_id: str) -> bool:
-                if not endpoint_id:
-                    return False
-                prefix = f"vh{endpoint_id[:5]}"
-                try:
-                    for name in os.listdir("/sys/class/net"):
-                        if name.startswith(prefix):
-                            return True
-                except Exception:
-                    return False
+            def _host_veth_exists(endpoint_id: str, tracked_host_veth: str | None) -> bool:
+                _ = endpoint_id
+                if tracked_host_veth:
+                    return os.path.exists(f"/sys/class/net/{tracked_host_veth}")
                 return False
 
             actions: list[tuple[str, str, str, bool]] = []
@@ -592,7 +590,9 @@ class PluginStateMixin:
                 containers = network.attrs.get("Containers") or {}
                 for container_id, info in containers.items():
                     endpoint_id = info.get("EndpointID", "")
-                    if endpoint_id and _host_veth_exists(endpoint_id):
+                    tracked_endpoint = self.endpoints.get(endpoint_id) if endpoint_id else None
+                    tracked_host_veth = tracked_endpoint.host_veth if tracked_endpoint else None
+                    if endpoint_id and _host_veth_exists(endpoint_id, tracked_host_veth):
                         continue
 
                     try:
@@ -618,7 +618,8 @@ class PluginStateMixin:
             lab_id = None
             if endpoint_id and endpoint_id in self.endpoints:
                 network_id = self.endpoints[endpoint_id].network_id
-                lab_id = self.networks.get(network_id).lab_id if network_id in self.networks else None
+                network_state = self.networks.get(network_id)
+                lab_id = network_state.lab_id if network_state else None
             lab_label = lab_id or "unknown"
             if ok:
                 logger.info(
@@ -825,9 +826,6 @@ class PluginStateMixin:
 
     async def _recover_bridge_state(self, bridge_name: str, skip_endpoints: bool = False) -> None:
         """Recover state for a single OVS bridge."""
-        # Extract lab_id from bridge name (ovs-{lab_id[:12]})
-        lab_id_prefix = bridge_name[len(OVS_BRIDGE_PREFIX):]
-
         # List ports on this bridge
         code, stdout, _ = await self._ovs_vsctl("list-ports", bridge_name)
         if code != 0:
@@ -840,6 +838,7 @@ class PluginStateMixin:
         max_vlan = VLAN_RANGE_START
         vxlan_tunnels: dict[int, str] = {}
         external_ports: dict[str, int] = {}
+        recovered_lab_ids: set[str] = set()
 
         for port_name in ports:
             # Get port info including VLAN tag
@@ -869,8 +868,16 @@ class PluginStateMixin:
 
             # Check for external interface (not veth, not vxlan, not internal)
             elif code == 0 and stdout.strip() == "system":
-                # Could be external interface if not a veth
-                if not port_name.startswith("vh"):
+                if port_name.startswith("vh"):
+                    code, ext_ids_raw, _ = await self._ovs_vsctl(
+                        "get", "interface", port_name, "external_ids"
+                    )
+                    if code == 0:
+                        lab_id = _parse_ovs_map(ext_ids_raw).get("archetype.lab_id")
+                        if lab_id:
+                            recovered_lab_ids.add(lab_id)
+                else:
+                    # Could be external interface if not a veth
                     code, tag_stdout, _ = await self._ovs_vsctl("get", "port", port_name, "tag")
                     if code == 0:
                         try:
@@ -880,10 +887,19 @@ class PluginStateMixin:
                         except (ValueError, TypeError):
                             external_ports[port_name] = 0
 
-        # Try to find the full lab_id by checking Docker containers
-        full_lab_id = await self._find_lab_id_from_containers(lab_id_prefix)
-        if not full_lab_id:
-            full_lab_id = lab_id_prefix  # Fall back to prefix
+        if len(recovered_lab_ids) != 1:
+            runtime_identity_skips.labels(
+                resource_type="ovs_bridge",
+                operation="recover_bridge_state",
+                reason="missing_lab_metadata",
+            ).inc()
+            logger.warning(
+                "Skipping bridge recovery for %s: expected exactly one metadata lab_id, got %s",
+                bridge_name,
+                sorted(recovered_lab_ids),
+            )
+            return
+        full_lab_id = next(iter(recovered_lab_ids))
 
         # Create LabBridge
         lab_bridge = LabBridge(
@@ -901,35 +917,16 @@ class PluginStateMixin:
             f"vxlan_tunnels={len(vxlan_tunnels)}, external={len(external_ports)}"
         )
 
-        # Optionally recover endpoint state by matching veth ports to containers
-        # This is expensive (nsenter for each port/container) and usually not needed
-        # since Docker will re-register endpoints when containers reconnect
+        # Optionally recover endpoint state. OVS metadata is authoritative when
+        # present; container/ifindex matching is only used to backfill missing
+        # container_name/node_name or to cope with older metadata-incomplete ports.
         if not skip_endpoints:
             await self._recover_endpoints_for_bridge(lab_bridge, ports)
-
-    async def _find_lab_id_from_containers(self, lab_id_prefix: str) -> str | None:
-        """Find full lab_id by checking Docker container labels."""
-        def _sync_find():
-            try:
-                import docker
-                client = docker.from_env()
-
-                for container in client.containers.list(all=True):
-                    labels = container.labels
-                    lab_id = labels.get("archetype.lab_id", "")
-                    if lab_id and lab_id.startswith(lab_id_prefix):
-                        return lab_id
-            except Exception as e:
-                logger.debug(f"Error finding lab_id from containers: {e}")
-            return None
-
-        # Run synchronous Docker calls in thread pool to avoid blocking event loop
-        return await asyncio.get_running_loop().run_in_executor(None, _sync_find)
 
     async def _recover_endpoints_for_bridge(
         self, lab_bridge: LabBridge, ports: list[str]
     ) -> None:
-        """Recover endpoint state by matching veth ports to containers."""
+        """Recover endpoint state from OVS metadata, with limited legacy fallback."""
         try:
             # Run synchronous Docker calls in thread pool
             def _get_container_pids():
@@ -939,16 +936,27 @@ class PluginStateMixin:
                 for container in client.containers.list():
                     labels = container.labels
                     lab_id = labels.get("archetype.lab_id", "")
-                    if lab_id and lab_id.startswith(lab_bridge.lab_id[:12]):
+                    if lab_id == lab_bridge.lab_id:
                         pids[container.name] = (
                             container.id,
                             container.attrs["State"]["Pid"],
+                            container.attrs.get("NetworkSettings", {}).get("Networks", {}),
+                            labels.get("archetype.node_name"),
                         )
                 return pids
 
             container_pids = await asyncio.get_running_loop().run_in_executor(
                 None, _get_container_pids
             )
+            endpoint_to_container: dict[str, str] = {}
+            endpoint_to_node: dict[str, str] = {}
+            for container_name, (_container_id, _pid, attached_networks, node_name) in container_pids.items():
+                for net_info in attached_networks.values():
+                    endpoint_id = net_info.get("EndpointID")
+                    if endpoint_id:
+                        endpoint_to_container[endpoint_id] = container_name
+                        if node_name:
+                            endpoint_to_node[endpoint_id] = node_name
 
             # For each veth port (vh* pattern), try to find its container
             for port_name in ports:
@@ -966,22 +974,97 @@ class PluginStateMixin:
                 except (ValueError, TypeError):
                     vlan_tag = VLAN_RANGE_START
 
+                code, ext_ids_raw, _ = await self._ovs_vsctl(
+                    "get", "interface", port_name, "external_ids"
+                )
+                ext_ids = _parse_ovs_map(ext_ids_raw) if code == 0 else {}
+                endpoint_id = ext_ids.get("archetype.endpoint_id")
+                network_id = ext_ids.get("archetype.network_id")
+                interface_name = ext_ids.get("archetype.interface_name")
+                network_state = self.networks.get(network_id) if network_id else None
+                if (
+                    endpoint_id
+                    and network_state is not None
+                    and interface_name
+                    and network_state.lab_id == lab_bridge.lab_id
+                    and network_state.interface_name == interface_name
+                ):
+                    container_name = endpoint_to_container.get(endpoint_id)
+                    node_name = endpoint_to_node.get(endpoint_id)
+                    if endpoint_id in self.endpoints:
+                        existing = self.endpoints[endpoint_id]
+                        existing.network_id = network_id
+                        existing.interface_name = interface_name
+                        existing.host_veth = port_name
+                        existing.vlan_tag = vlan_tag
+                        existing.container_name = container_name or existing.container_name
+                        existing.node_name = node_name or existing.node_name
+                    else:
+                        self.endpoints[endpoint_id] = EndpointState(
+                            endpoint_id=endpoint_id,
+                            network_id=network_id,
+                            interface_name=interface_name,
+                            host_veth=port_name,
+                            cont_veth=f"peer-{port_name}",
+                            vlan_tag=vlan_tag,
+                            container_name=container_name,
+                            node_name=node_name,
+                        )
+                    logger.debug(
+                        f"Recovered endpoint from OVS metadata: {endpoint_id[:12]} "
+                        f"-> {port_name} ({interface_name}, VLAN {vlan_tag})"
+                    )
+                    continue
+
                 # Try to find which container owns this port by checking ifindex
-                for container_name, (container_id, pid) in container_pids.items():
+                for container_name, (container_id, pid, attached_networks, node_name) in container_pids.items():
                     interface_name = await self._find_interface_in_container(
                         pid, port_name
                     )
                     if interface_name:
+                        network_id = None
+                        endpoint_id = None
+                        for net_info in attached_networks.values():
+                            candidate_network_id = net_info.get("NetworkID")
+                            if not candidate_network_id:
+                                continue
+                            network_state = self.networks.get(candidate_network_id)
+                            if not network_state:
+                                continue
+                            if (
+                                network_state.lab_id == lab_bridge.lab_id
+                                and network_state.interface_name == interface_name
+                            ):
+                                network_id = candidate_network_id
+                                endpoint_id = net_info.get("EndpointID")
+                                break
+
+                        if endpoint_id and endpoint_id in self.endpoints:
+                            existing = self.endpoints[endpoint_id]
+                            existing.network_id = network_id or existing.network_id
+                            existing.interface_name = interface_name
+                            existing.host_veth = port_name
+                            existing.vlan_tag = vlan_tag
+                            existing.container_name = container_name
+                            existing.node_name = node_name or existing.node_name
+                            logger.debug(
+                                f"Refreshed recovered endpoint: {container_name}:{interface_name} "
+                                f"-> {port_name} (VLAN {vlan_tag})"
+                            )
+                            break
+
+                        endpoint_id = endpoint_id or f"recovered-{port_name}"
+                        network_id = network_id or f"recovered-{lab_bridge.lab_id}-{interface_name}"
                         # Found the container, create endpoint state
-                        endpoint_id = f"recovered-{port_name}"
                         endpoint = EndpointState(
                             endpoint_id=endpoint_id,
-                            network_id=f"recovered-{lab_bridge.lab_id}-{interface_name}",
+                            network_id=network_id,
                             interface_name=interface_name,
                             host_veth=port_name,
                             cont_veth=f"peer-{port_name}",  # We don't know the exact name
                             vlan_tag=vlan_tag,
                             container_name=container_name,
+                            node_name=node_name,
                         )
                         self.endpoints[endpoint_id] = endpoint
                         logger.debug(

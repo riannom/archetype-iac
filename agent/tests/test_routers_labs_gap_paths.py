@@ -202,9 +202,10 @@ async def test_reconcile_single_node_returns_error_on_docker_exception(tmp_path)
 
 @pytest.mark.asyncio
 async def test_reconcile_single_node_falls_back_to_libvirt_start(tmp_path):
-    target = SimpleNamespace(container_name="archetype-lab1-r1", desired_state="running")
+    target = SimpleNamespace(container_name="runtime-uuid-1", desired_state="running")
     client = _docker_client_for_get(docker.errors.NotFound("missing"))
     libvirt_provider = MagicMock()
+    libvirt_provider.resolve_node_name_for_action = AsyncMock(return_value="r1")
     libvirt_provider.start_node = AsyncMock(
         return_value=SimpleNamespace(success=True, new_status=NodeStatus.RUNNING, error=None)
     )
@@ -219,14 +220,16 @@ async def test_reconcile_single_node_falls_back_to_libvirt_start(tmp_path):
 
     assert result.success is True
     assert result.action == "started"
+    libvirt_provider.resolve_node_name_for_action.assert_awaited_once_with("lab1", "runtime-uuid-1")
     libvirt_provider.start_node.assert_awaited_once_with("lab1", "r1", tmp_path)
 
 
 @pytest.mark.asyncio
 async def test_reconcile_single_node_falls_back_to_libvirt_stop(tmp_path):
-    target = SimpleNamespace(container_name="arch-lab1-r2", desired_state="stopped")
+    target = SimpleNamespace(container_name="runtime-uuid-2", desired_state="stopped")
     client = _docker_client_for_get(docker.errors.NotFound("missing"))
     libvirt_provider = MagicMock()
+    libvirt_provider.resolve_node_name_for_action = AsyncMock(return_value="r2")
     libvirt_provider.stop_node = AsyncMock(
         return_value=SimpleNamespace(success=True, new_status=NodeStatus.STOPPED, error=None)
     )
@@ -241,6 +244,7 @@ async def test_reconcile_single_node_falls_back_to_libvirt_stop(tmp_path):
 
     assert result.success is True
     assert result.action == "stopped"
+    libvirt_provider.resolve_node_name_for_action.assert_awaited_once_with("lab1", "runtime-uuid-2")
     libvirt_provider.stop_node.assert_awaited_once_with("lab1", "r2", tmp_path)
 
 
