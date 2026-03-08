@@ -31,6 +31,7 @@ from agent.providers.base import (
     NodeInfo,
     NodeStatus,
     Provider,
+    RuntimeConflictProbeResult,
     StatusResult,
     VlanPersistenceMixin,
 )
@@ -968,6 +969,35 @@ class LibvirtProvider(Provider, VlanPersistenceMixin):
             return False
         return True
 
+    def _classify_existing_domain_identity(
+        self,
+        domain,
+        *,
+        lab_id: str,
+        node_name: str,
+        node_definition_id: str | None,
+    ) -> str:
+        """Classify an existing libvirt domain before create."""
+        metadata = self._get_domain_metadata_values(domain)
+        if not metadata:
+            return "foreign"
+
+        provider_name = metadata.get("provider")
+        if provider_name not in (None, "", self.name):
+            return "foreign"
+
+        existing_lab_id = metadata.get("lab_id")
+        existing_node_name = metadata.get("node_name")
+        existing_node_definition_id = metadata.get("node_definition_id")
+
+        if not existing_lab_id or not existing_node_name or not existing_node_definition_id:
+            return "foreign"
+        if existing_lab_id != lab_id or existing_node_name != node_name:
+            return "stale_managed"
+        if node_definition_id and existing_node_definition_id != node_definition_id:
+            return "stale_managed"
+        return "expected"
+
     async def deploy(
         self,
         lab_id: str,
@@ -1124,15 +1154,13 @@ class LibvirtProvider(Provider, VlanPersistenceMixin):
         domain_name: str,
         workspace: Path,
         disks_dir: Path,
-    ) -> tuple[bool, str | None, str | None]:
+        node_definition_id: str | None = None,
+    ) -> tuple[bool, str | None, str | None, str | None]:
         """Shared pre-deployment cleanup — libvirt thread.
 
-        Recovers network state, checks for an existing domain, and tears down
-        stale (non-running) domains so the caller can proceed with fresh creation.
+        Recovers network state and classifies an existing domain, if present.
 
-        Returns ``(already_running, uuid_short, status)`` where:
-        - already_running=True, uuid_short=<id>, status=<NodeStatus> when running
-        - already_running=False, None, None after cleanup or when no domain exists
+        Returns ``(already_running, uuid_short, status, identity)``.
         """
         try:
             self._recover_stale_network(lab_id, workspace)
@@ -1143,28 +1171,19 @@ class LibvirtProvider(Provider, VlanPersistenceMixin):
             existing = self.conn.lookupByName(domain_name)
             if existing:
                 state = self._get_domain_status(existing)
+                identity = self._classify_existing_domain_identity(
+                    existing,
+                    lab_id=lab_id,
+                    node_name=node_name,
+                    node_definition_id=node_definition_id,
+                )
                 if state == NodeStatus.RUNNING:
                     logger.info(f"Domain {domain_name} already running")
-                    return True, existing.UUIDString()[:12], state
-                logger.info(
-                    "Undefining stale shut-off domain %s for fresh creation",
-                    domain_name,
-                )
-                self._undefine_domain(existing, domain_name)
-                self._clear_vm_post_boot_commands_cache(domain_name)
-                self._teardown_n9kv_poap_network(lab_id, node_name)
-                for suffix in ("", "-data"):
-                    disk = disks_dir / f"{node_name}{suffix}.qcow2"
-                    if disk.exists():
-                        disk.unlink()
-                        logger.info("Removed stale disk: %s", disk)
-                lab_allocs = self._vlan_allocations.get(lab_id, {})
-                if node_name in lab_allocs:
-                    del lab_allocs[node_name]
-                    self._save_vlan_allocations(lab_id, workspace)
+                    return True, existing.UUIDString()[:12], state, identity
+                return False, existing.UUIDString()[:12], state, identity
         except libvirt.libvirtError:
             pass
-        return False, None, None
+        return False, None, None, None
 
     def _deploy_node_pre_sync(
         self,
@@ -1177,7 +1196,7 @@ class LibvirtProvider(Provider, VlanPersistenceMixin):
 
         Returns NodeInfo if domain already running, None to proceed with creation.
         """
-        already_running, uuid_short, state = self._node_precheck_sync(
+        already_running, uuid_short, state, _identity = self._node_precheck_sync(
             lab_id, node_name, domain_name, disks_dir.parent, disks_dir,
         )
         if already_running:
@@ -1728,10 +1747,29 @@ class LibvirtProvider(Provider, VlanPersistenceMixin):
         Returns NodeActionResult if domain already running, None to proceed.
         """
         disks_dir = self._disks_dir(workspace)
-        already_running, _, state = self._node_precheck_sync(
+        already_running, _, state, identity = self._node_precheck_sync(
             lab_id, node_name, domain_name, workspace, disks_dir,
+            node_definition_id,
         )
         if already_running:
+            if identity == "foreign":
+                return NodeActionResult(
+                    success=False,
+                    node_name=node_name,
+                    error=(
+                        f"Runtime namespace conflict: domain {domain_name} exists "
+                        "but is not managed by Archetype"
+                    ),
+                )
+            if identity == "stale_managed":
+                return NodeActionResult(
+                    success=False,
+                    node_name=node_name,
+                    error=(
+                        f"Runtime namespace conflict: managed domain {domain_name} "
+                        "belongs to a different node identity"
+                    ),
+                )
             if not self._running_domain_identity_visible(
                 domain_name,
                 lab_id,
@@ -1751,6 +1789,31 @@ class LibvirtProvider(Provider, VlanPersistenceMixin):
                 node_name=node_name,
                 new_status=state,
                 stdout=f"Domain {domain_name} already running",
+            )
+        if state is not None:
+            if identity == "foreign":
+                return NodeActionResult(
+                    success=False,
+                    node_name=node_name,
+                    error=(
+                        f"Runtime namespace conflict: domain {domain_name} exists "
+                        "but is not managed by Archetype"
+                    ),
+                )
+            if identity == "stale_managed":
+                return NodeActionResult(
+                    success=False,
+                    node_name=node_name,
+                    error=(
+                        f"Runtime namespace conflict: managed domain {domain_name} "
+                        "belongs to a different node identity"
+                    ),
+                )
+            return NodeActionResult(
+                success=True,
+                node_name=node_name,
+                new_status=state,
+                stdout=f"Domain {domain_name} already exists",
             )
         return None
 
@@ -2021,12 +2084,57 @@ class LibvirtProvider(Provider, VlanPersistenceMixin):
                 node_name=node_name,
                 error=f"Libvirt error: {e}",
             )
+
         except Exception as e:
             return NodeActionResult(
                 success=False,
                 node_name=node_name,
                 error=str(e),
             )
+
+    async def probe_runtime_conflict(
+        self,
+        lab_id: str,
+        node_name: str,
+        *,
+        node_definition_id: str | None = None,
+    ) -> RuntimeConflictProbeResult:
+        """Inspect the target libvirt domain namespace before create."""
+        domain_name = self._domain_name(lab_id, node_name)
+        try:
+            _already_running, runtime_id_short, status, identity = await self._run_libvirt(
+                self._node_precheck_sync,
+                lab_id,
+                node_name,
+                domain_name,
+                Path("/tmp"),
+                Path("/tmp"),
+                node_definition_id,
+            )
+        except Exception as e:
+            return RuntimeConflictProbeResult(
+                available=False,
+                classification="error",
+                runtime_name=domain_name,
+                error=f"Libvirt conflict probe failed: {e}",
+            )
+
+        classification = identity or "absent"
+        if classification == "foreign":
+            error = f"Domain {domain_name} is not managed by Archetype"
+        elif classification == "stale_managed":
+            error = f"Domain {domain_name} belongs to a different managed node identity"
+        else:
+            error = None
+
+        return RuntimeConflictProbeResult(
+            available=classification in {"absent", "expected"},
+            classification=classification,
+            runtime_name=domain_name,
+            status=status.value if hasattr(status, "value") else status,
+            runtime_id=runtime_id_short,
+            error=error,
+        )
 
     # -- Config extraction & injection helpers (delegated to libvirt_config) --
 

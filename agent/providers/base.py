@@ -81,6 +81,18 @@ class NodeActionResult:
     error: str | None = None
 
 
+@dataclass
+class RuntimeConflictProbeResult:
+    """Classification of a runtime namespace occupant before create."""
+
+    available: bool
+    classification: str
+    runtime_name: str
+    status: str | None = None
+    runtime_id: str | None = None
+    error: str | None = None
+
+
 class Provider(ABC):
     """Abstract base class for infrastructure providers."""
 
@@ -236,6 +248,18 @@ class Provider(ABC):
         """
         raise NotImplementedError(
             f"Provider {self.name} does not support per-node create"
+        )
+
+    async def probe_runtime_conflict(
+        self,
+        lab_id: str,
+        node_name: str,
+        *,
+        node_definition_id: str | None = None,
+    ) -> RuntimeConflictProbeResult:
+        """Inspect whether the target runtime namespace is safe for create."""
+        raise NotImplementedError(
+            f"Provider {self.name} does not support runtime conflict probing"
         )
 
     async def destroy_node(

@@ -189,6 +189,8 @@ from agent.schemas.node_lifecycle import (  # noqa: F401
     CreateNodeRequest,
     CreateNodeResponse,
     DestroyNodeResponse,
+    RuntimeConflictProbeRequest,
+    RuntimeConflictProbeResponse,
     StartNodeRequest,
     StartNodeResponse,
     StopNodeResponse,

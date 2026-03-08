@@ -85,6 +85,7 @@ class TopologyService:
                     exc_info=True,
                 )
 
+        sticky_fields = {"efi_boot", "efi_vars"}
         for field in (
             "memory",
             "cpu",
@@ -98,7 +99,7 @@ class TopologyService:
             value = getattr(graph_node, field)
             if value is None:
                 continue
-            if base_hw_specs.get(field) == value:
+            if field not in sticky_fields and base_hw_specs.get(field) == value:
                 continue
             config[field] = value
 

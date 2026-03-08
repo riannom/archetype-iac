@@ -205,6 +205,11 @@ async def test_create_node_existing_running(
     """create_node returns success without recreating when container is already running."""
     mock_docker_client.images.get.return_value = MagicMock()
     mock_container.status = "running"
+    mock_container.labels = {
+        "archetype.provider": "docker",
+        "archetype.lab_id": "lab1",
+        "archetype.node_name": "node1",
+    }
     mock_docker_client.containers.get.return_value = mock_container
 
     with patch("agent.providers.docker.get_config_by_device", return_value=mock_vendor_config):
@@ -231,17 +236,16 @@ async def test_create_node_existing_running(
 async def test_create_node_existing_stopped(
     provider, workspace, mock_docker_client, mock_container, mock_vendor_config
 ):
-    """create_node removes stopped container and recreates it."""
+    """create_node short-circuits when the managed container already exists stopped."""
     mock_docker_client.images.get.return_value = MagicMock()
 
-    # First .get() returns stopped container, subsequent gets raise NotFound
-    # (because we removed it and the code doesn't call get again after removal)
     mock_container.status = "exited"
+    mock_container.labels = {
+        "archetype.provider": "docker",
+        "archetype.lab_id": "lab1",
+        "archetype.node_name": "node1",
+    }
     mock_docker_client.containers.get.return_value = mock_container
-
-    new_container = MagicMock()
-    new_container.short_id = "new789"
-    mock_docker_client.containers.create.return_value = new_container
 
     with patch("agent.providers.docker.get_config_by_device", return_value=mock_vendor_config):
         with patch("agent.providers.docker.is_ceos_kind", return_value=False):
@@ -266,13 +270,9 @@ async def test_create_node_existing_stopped(
 
     assert result.success is True
     assert result.new_status == NodeStatus.STOPPED
-
-    # Old container should have been removed with force
-    mock_container.remove.assert_called_once_with(force=True)
-
-    # New container should have been created
-    mock_docker_client.containers.create.assert_called_once()
-    assert "new789" in result.stdout
+    assert "already exists" in result.stdout
+    mock_container.remove.assert_not_called()
+    mock_docker_client.containers.create.assert_not_called()
 
 
 @pytest.mark.asyncio

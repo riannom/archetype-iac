@@ -28,6 +28,23 @@ class CreateNodeResponse(BaseResponse):
     duration_ms: int | None = None
 
 
+class RuntimeConflictProbeRequest(BaseModel):
+    """Controller -> Agent: Probe whether a runtime namespace is safe for create."""
+
+    node_name: str
+    node_definition_id: str | None = None
+
+
+class RuntimeConflictProbeResponse(BaseResponse):
+    """Agent -> Controller: Runtime namespace conflict classification."""
+
+    available: bool = False
+    classification: str = "error"
+    runtime_name: str | None = None
+    status: str | None = None
+    runtime_id: str | None = None
+
+
 class StartNodeRequest(BaseModel):
     """Controller -> Agent: Start a node with optional veth repair."""
     repair_endpoints: bool = True

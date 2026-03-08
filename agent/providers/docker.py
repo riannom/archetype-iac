@@ -51,6 +51,7 @@ from agent.providers.base import (
     NodeInfo,
     NodeStatus,
     Provider,
+    RuntimeConflictProbeResult,
     StatusResult,
     VlanPersistenceMixin,
 )
@@ -221,6 +222,37 @@ def _log_name_from_labels(labels: dict[str, str]) -> str:
     if display_name and display_name != node_name:
         return f"{display_name}({node_name})"
     return node_name
+
+
+def _classify_existing_container_identity(
+    container,
+    *,
+    lab_id: str,
+    node_name: str,
+    node_definition_id: str | None,
+) -> str:
+    """Classify an existing runtime namespace occupant before create.
+
+    Returns one of:
+    - "expected": managed runtime identity matches the requested node
+    - "stale_managed": managed Archetype runtime exists but identity mismatches
+    - "foreign": container name is occupied by something unmanaged
+    """
+    labels = container.labels or {}
+    if not labels:
+        return "foreign"
+
+    if labels.get(LABEL_PROVIDER) != "docker":
+        return "foreign"
+
+    if labels.get(LABEL_LAB_ID) != lab_id or labels.get(LABEL_NODE_NAME) != node_name:
+        return "stale_managed"
+
+    existing_node_definition_id = labels.get(LABEL_NODE_DEFINITION_ID)
+    if node_definition_id and existing_node_definition_id and existing_node_definition_id != node_definition_id:
+        return "stale_managed"
+
+    return "expected"
 
 
 @dataclass
@@ -2501,6 +2533,30 @@ class DockerProvider(Provider, VlanPersistenceMixin):
                 existing = await asyncio.to_thread(
                     self.docker.containers.get, container_name
                 )
+                existing_identity = _classify_existing_container_identity(
+                    existing,
+                    lab_id=lab_id,
+                    node_name=node_name,
+                    node_definition_id=node_definition_id,
+                )
+                if existing_identity == "foreign":
+                    return NodeActionResult(
+                        success=False,
+                        node_name=node_name,
+                        error=(
+                            f"Runtime namespace conflict: container {container_name} exists "
+                            "but is not managed by Archetype"
+                        ),
+                    )
+                if existing_identity == "stale_managed":
+                    return NodeActionResult(
+                        success=False,
+                        node_name=node_name,
+                        error=(
+                            f"Runtime namespace conflict: managed container {container_name} "
+                            "belongs to a different node identity"
+                        ),
+                    )
                 if existing.status == "running":
                     logger.info(f"Container {log_name} already running, skipping create")
                     return NodeActionResult(
@@ -2510,8 +2566,13 @@ class DockerProvider(Provider, VlanPersistenceMixin):
                         stdout=f"Container {container_name} already running",
                     )
                 else:
-                    logger.info(f"Removing stopped container {log_name}")
-                    await asyncio.to_thread(existing.remove, force=True)
+                    logger.info(f"Container {log_name} already exists in stopped state, skipping create")
+                    return NodeActionResult(
+                        success=True,
+                        node_name=node_name,
+                        new_status=NodeStatus.STOPPED,
+                        stdout=f"Container {container_name} already exists",
+                    )
             except NotFound:
                 pass
 
@@ -2588,6 +2649,55 @@ class DockerProvider(Provider, VlanPersistenceMixin):
                 node_name=node_name,
                 error=f"Container creation failed: {e}",
             )
+
+    async def probe_runtime_conflict(
+        self,
+        lab_id: str,
+        node_name: str,
+        *,
+        node_definition_id: str | None = None,
+    ) -> RuntimeConflictProbeResult:
+        """Inspect the target Docker runtime namespace before create."""
+        container_name = self._container_name(lab_id, node_name)
+        try:
+            container = await asyncio.to_thread(self.docker.containers.get, container_name)
+        except NotFound:
+            return RuntimeConflictProbeResult(
+                available=True,
+                classification="absent",
+                runtime_name=container_name,
+            )
+        except APIError as e:
+            return RuntimeConflictProbeResult(
+                available=False,
+                classification="error",
+                runtime_name=container_name,
+                error=f"Docker API error: {e}",
+            )
+
+        classification = _classify_existing_container_identity(
+            container,
+            lab_id=lab_id,
+            node_name=node_name,
+            node_definition_id=node_definition_id,
+        )
+        runtime_id = getattr(container, "id", None)
+        status = getattr(container, "status", None)
+        if classification == "foreign":
+            error = f"Container {container_name} is not managed by Archetype"
+        elif classification == "stale_managed":
+            error = f"Container {container_name} belongs to a different managed node identity"
+        else:
+            error = None
+
+        return RuntimeConflictProbeResult(
+            available=classification in {"absent", "expected"},
+            classification=classification,
+            runtime_name=container_name,
+            status=status,
+            runtime_id=runtime_id,
+            error=error,
+        )
 
     async def cleanup_lab_resources_if_empty(
         self,

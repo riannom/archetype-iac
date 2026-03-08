@@ -84,6 +84,7 @@ def _get_container_name(lab_id: str, node_name: str) -> str:
 from app.tasks.node_lifecycle_agents import AgentResolutionMixin  # noqa: E402
 from app.tasks.node_lifecycle_deploy import DeploymentMixin  # noqa: E402
 from app.tasks.node_lifecycle_stop import StopMixin  # noqa: E402
+from app.tasks.jobs import _release_db_transaction_for_io as _release_db_tx_for_io  # noqa: E402
 
 
 class NodeLifecycleManager(AgentResolutionMixin, DeploymentMixin, StopMixin):
@@ -99,17 +100,18 @@ class NodeLifecycleManager(AgentResolutionMixin, DeploymentMixin, StopMixin):
 
     Phases (called in order by execute()):
         1. _load_and_validate     — Load state, batch-load maps, early exit if nothing to do
-        2. _set_transitional_states — Set starting/stopping BEFORE agent lookup
-        3. _resolve_agents        — Determine agent per node, spawn sub-jobs for other agents
-        4. _check_resources       — Pre-deploy resource validation (BEFORE migration)
-        5. _categorize_nodes      — Classify into deploy/start/stop groups
-        6. _handle_migration      — Detect and clean up misplaced containers
-        7. _check_images          — Pre-deploy image sync check
-        8. _deploy_nodes          — Deploy undeployed nodes via full topology
-        9. _start_nodes           — Start stopped nodes via full redeploy
-       10. _stop_nodes            — Stop running containers
-       11. _post_operation_cleanup — Cross-host VXLAN links
-       12. _finalize              — Set job status, broadcast result
+        2. _run_hard_preflight_gates — Fail fast on deterministic blockers
+        3. _set_transitional_states — Set starting/stopping BEFORE agent lookup
+        4. _resolve_agents        — Determine agent per node, spawn sub-jobs for other agents
+        5. _check_resources       — Pre-deploy resource validation (BEFORE migration)
+        6. _categorize_nodes      — Classify into deploy/start/stop groups
+        7. _handle_migration      — Detect and clean up misplaced containers
+        8. _check_images          — Pre-deploy image sync check
+        9. _deploy_nodes          — Deploy undeployed nodes via full topology
+       10. _start_nodes           — Start stopped nodes via full redeploy
+       11. _stop_nodes            — Stop running containers
+       12. _post_operation_cleanup — Cross-host VXLAN links
+       13. _finalize              — Set job status, broadcast result
     """
 
     def __init__(
@@ -216,26 +218,13 @@ class NodeLifecycleManager(AgentResolutionMixin, DeploymentMixin, StopMixin):
         Closing the transaction boundary before waits prevents idle-in-transaction
         timeouts and reduces session invalidation cascades.
         """
-        has_pending_writes = bool(
-            self.session.new or self.session.dirty or self.session.deleted
+        _release_db_tx_for_io(
+            self.session,
+            context=reason,
+            table="node_states",
+            lab_id=getattr(self.lab, "id", None),
+            job_id=getattr(self.job, "id", None),
         )
-        try:
-            if has_pending_writes:
-                self.session.commit()
-            else:
-                self.session.rollback()
-        except Exception as exc:
-            logger.warning(
-                "Sync job %s failed to release DB transaction before %s: %s",
-                self.job.id,
-                reason,
-                exc,
-            )
-            try:
-                self.session.rollback()
-            except Exception:
-                pass
-            raise
 
     async def execute(self) -> LifecycleResult:
         """Main orchestrator — calls phases in order."""
@@ -246,6 +235,12 @@ class NodeLifecycleManager(AgentResolutionMixin, DeploymentMixin, StopMixin):
             return LifecycleResult(
                 success=True, log=self.log_parts or ["No action needed"]
             )
+
+        # Phase: Hard preflight gates (before transitional churn)
+        if not await self._run_hard_preflight_gates():
+            if self.job.status == JobStatus.FAILED.value:
+                record_job_failed(self.job.action, failure_message=self.job.log_path)
+            return LifecycleResult(success=False, log=self.log_parts)
 
         # Phase: Set transitional states (BEFORE agent lookup)
         await self._set_transitional_states()
@@ -563,6 +558,459 @@ class NodeLifecycleManager(AgentResolutionMixin, DeploymentMixin, StopMixin):
             return False
 
         return True
+
+    async def _run_hard_preflight_gates(self) -> bool:
+        """Fail fast on deterministic first-init blockers before any mutation.
+
+        First-init decision table, in enforcement order:
+        - assigned host unavailable -> fail before transitional state changes
+        - assigned host catastrophically over capacity -> fail before mutation
+        - required image unavailable/sync-disabled/missing-from-library -> fail before mutation
+        - target runtime namespace occupied by foreign or stale managed identity -> fail before create
+        - required cross-host VLAN capacity unavailable -> fail before partial node bring-up
+
+        After start, a second-stage readiness table applies:
+        - runtime not visible through authoritative status within stabilization window -> start failure
+        - node running but not ready / interface not live -> defer link creation, do not treat as fully usable
+        """
+        if not self._check_assigned_host_health_gate():
+            return False
+        if not self._check_assigned_host_capacity_gate():
+            return False
+        if not await self._check_assigned_host_image_gate():
+            return False
+        if not await self._check_runtime_namespace_gate():
+            return False
+        return await self._check_cross_host_link_capacity_gate()
+
+    def _provider_for_db_node(self, db_node: models.Node | None) -> str:
+        """Resolve the provider for a node using image metadata when possible."""
+        node_provider = self.provider
+        if not db_node:
+            return node_provider
+
+        kind = db_node.device or "linux"
+        image = resolve_node_image(
+            db_node.device,
+            kind,
+            db_node.image,
+            db_node.version,
+        )
+        if image:
+            return get_image_provider(image)
+        return node_provider
+
+    def _check_assigned_host_health_gate(self) -> bool:
+        """Block requested start/deploy when explicitly assigned hosts are unavailable."""
+        node_host_ids: dict[str, str] = {}
+        required_host_ids: set[str] = set()
+
+        for ns in self.node_states:
+            if ns.desired_state != NodeDesiredState.RUNNING.value:
+                continue
+            if ns.actual_state == NodeActualState.RUNNING.value:
+                continue
+
+            db_node = self.db_nodes_map.get(ns.node_name)
+            if not db_node and ns.node_id in self.db_nodes_by_gui_id:
+                db_node = self.db_nodes_by_gui_id[ns.node_id]
+            if not db_node or not db_node.host_id:
+                continue
+
+            node_host_ids[ns.node_name] = db_node.host_id
+            required_host_ids.add(db_node.host_id)
+
+        if not required_host_ids:
+            return True
+
+        hosts = (
+            self.session.query(models.Host)
+            .filter(models.Host.id.in_(required_host_ids))
+            .all()
+        )
+        hosts_by_id = {host.id: host for host in hosts}
+
+        blocked: dict[str, str] = {}
+        for node_name, host_id in node_host_ids.items():
+            host = hosts_by_id.get(host_id)
+            if not host:
+                blocked[node_name] = f"{host_id} (missing host record)"
+                continue
+            if host.status != HostStatus.ONLINE.value or not agent_client.is_agent_online(host):
+                blocked[node_name] = host.name or host.id
+
+        if not blocked:
+            return True
+
+        self.log_parts.append("=== Preflight Failed ===")
+        self.log_parts.append(
+            "Assigned host availability check failed before lifecycle changes:"
+        )
+        for node_name in sorted(blocked):
+            host_label = blocked[node_name]
+            self.log_parts.append(f"  {node_name}: assigned host unavailable ({host_label})")
+
+        for ns in self.node_states:
+            if ns.node_name in blocked:
+                ns.actual_state = NodeActualState.ERROR.value
+                ns.error_message = f"Assigned host unavailable: {blocked[ns.node_name]}"
+
+        self.job.status = JobStatus.FAILED.value
+        self.job.completed_at = utcnow()
+        self.job.log_path = "\n".join(self.log_parts)
+        self.session.commit()
+        return False
+
+    def _check_assigned_host_capacity_gate(self) -> bool:
+        """Block first-init on explicitly assigned hosts that are catastrophically over capacity."""
+        if not settings.resource_validation_enabled:
+            return True
+
+        from app.services.resource_capacity import check_capacity, format_capacity_error
+
+        host_device_map: dict[str, list[str]] = {}
+        for ns in self.node_states:
+            if ns.desired_state != NodeDesiredState.RUNNING.value:
+                continue
+            if ns.actual_state not in (NodeActualState.UNDEPLOYED.value, NodeActualState.PENDING.value):
+                continue
+
+            db_node = self.db_nodes_map.get(ns.node_name)
+            if not db_node and ns.node_id in self.db_nodes_by_gui_id:
+                db_node = self.db_nodes_by_gui_id[ns.node_id]
+            if not db_node or not db_node.host_id:
+                continue
+
+            host_device_map.setdefault(db_node.host_id, []).append(db_node.device or "linux")
+
+        if not host_device_map:
+            return True
+
+        failed_results: dict[str, object] = {}
+        warnings: list[str] = []
+        for host_id, device_types in host_device_map.items():
+            host = self.session.get(models.Host, host_id)
+            if not host:
+                continue
+            cap_result = check_capacity(host, device_types)
+            if not cap_result.fits:
+                is_catastrophic = (
+                    cap_result.required_memory_mb > 0
+                    and cap_result.available_memory_mb < cap_result.required_memory_mb * 0.5
+                )
+                if is_catastrophic:
+                    failed_results[host_id] = cap_result
+            if cap_result.has_warnings:
+                warnings.extend(cap_result.warnings)
+
+        if warnings:
+            for warning in warnings:
+                self.log_parts.append(f"WARNING: {warning}")
+
+        if not failed_results:
+            return True
+
+        error_msg = format_capacity_error(failed_results)
+        self.log_parts.append("=== Preflight Failed ===")
+        self.log_parts.append(
+            "Assigned-host capacity validation failed before lifecycle changes:"
+        )
+        self.log_parts.append(error_msg)
+
+        blocked_hosts = set(failed_results.keys())
+        for ns in self.node_states:
+            db_node = self.db_nodes_map.get(ns.node_name)
+            if not db_node and ns.node_id in self.db_nodes_by_gui_id:
+                db_node = self.db_nodes_by_gui_id[ns.node_id]
+            if not db_node or db_node.host_id not in blocked_hosts:
+                continue
+            if ns.desired_state != NodeDesiredState.RUNNING.value:
+                continue
+            if ns.actual_state not in (NodeActualState.UNDEPLOYED.value, NodeActualState.PENDING.value):
+                continue
+            ns.actual_state = NodeActualState.ERROR.value
+            ns.error_message = "Insufficient resources on assigned host"
+
+        self.job.status = JobStatus.FAILED.value
+        self.job.completed_at = utcnow()
+        self.job.log_path = "\n".join(self.log_parts)
+        self.session.commit()
+        return False
+
+    async def _check_assigned_host_image_gate(self) -> bool:
+        """Verify required images for explicitly assigned hosts before lifecycle mutation."""
+        if not (
+            settings.image_sync_enabled
+            and settings.image_sync_pre_deploy_check
+        ):
+            return True
+
+        from app.tasks.image_sync import ensure_images_for_deployment
+
+        host_to_images: dict[str, set[str]] = {}
+        host_image_to_nodes: dict[str, dict[str, list[str]]] = {}
+        missing_image_nodes: dict[str, str] = {}
+
+        for ns in self.node_states:
+            if ns.desired_state != NodeDesiredState.RUNNING.value:
+                continue
+            if ns.actual_state == NodeActualState.RUNNING.value:
+                continue
+
+            db_node = self.db_nodes_map.get(ns.node_name)
+            if not db_node and ns.node_id in self.db_nodes_by_gui_id:
+                db_node = self.db_nodes_by_gui_id[ns.node_id]
+            if not db_node or not db_node.host_id:
+                continue
+
+            kind = db_node.device or "linux"
+            image = resolve_node_image(db_node.device, kind, db_node.image, db_node.version)
+            if not image:
+                missing_image_nodes[ns.node_name] = (
+                    f"No image found for device '{db_node.device}'. Import one first."
+                )
+                continue
+
+            host_to_images.setdefault(db_node.host_id, set()).add(image)
+            host_image_to_nodes.setdefault(db_node.host_id, {}).setdefault(image, []).append(ns.node_name)
+
+        if missing_image_nodes:
+            self.log_parts.append("=== Preflight Failed ===")
+            self.log_parts.append("Assigned-host image validation failed before lifecycle changes:")
+            for node_name in sorted(missing_image_nodes):
+                self.log_parts.append(f"  {node_name}: {missing_image_nodes[node_name]}")
+            for ns in self.node_states:
+                if ns.node_name in missing_image_nodes:
+                    ns.actual_state = NodeActualState.ERROR.value
+                    ns.error_message = missing_image_nodes[ns.node_name]
+            self.job.status = JobStatus.FAILED.value
+            self.job.completed_at = utcnow()
+            self.job.log_path = "\n".join(self.log_parts)
+            self.session.commit()
+            return False
+
+        for host_id, image_refs in host_to_images.items():
+            self._release_db_transaction_for_io(
+                f"assigned-host image preflight for host {host_id}"
+            )
+            all_ready, missing, sync_log = await ensure_images_for_deployment(
+                host_id,
+                sorted(image_refs),
+                timeout=min(settings.image_sync_timeout, 300),
+                database=self.session,
+                lab_id=self.lab.id,
+                image_to_nodes=host_image_to_nodes.get(host_id, {}),
+            )
+            self.log_parts.extend(sync_log)
+            if all_ready:
+                continue
+
+            blocked_nodes: set[str] = set()
+            for image_ref in missing:
+                blocked_nodes.update(
+                    host_image_to_nodes.get(host_id, {}).get(image_ref, [])
+                )
+
+            host = self.session.get(models.Host, host_id)
+            host_label = host.name if host and host.name else host_id
+            sync_log_text = "\n".join(sync_log)
+            if "Image sync is disabled" in sync_log_text:
+                node_error = f"Image sync disabled on assigned host: {host_label}"
+            elif "Missing images not found in library" in sync_log_text:
+                node_error = f"Required image not present in library for assigned host: {host_label}"
+            else:
+                node_error = f"Required image not available on assigned host: {host_label}"
+            self.log_parts.append("=== Preflight Failed ===")
+            self.log_parts.append(
+                f"Assigned-host image validation failed on {host_label}: "
+                f"{', '.join(missing[:5])}"
+                + (f" (+{len(missing) - 5} more)" if len(missing) > 5 else "")
+            )
+            for ns in self.node_states:
+                if ns.node_name in blocked_nodes:
+                    ns.actual_state = NodeActualState.ERROR.value
+                    ns.error_message = node_error
+            self.job.status = JobStatus.FAILED.value
+            self.job.completed_at = utcnow()
+            self.job.log_path = "\n".join(self.log_parts)
+            self.session.commit()
+            return False
+
+        return True
+
+    async def _check_runtime_namespace_gate(self) -> bool:
+        """Verify create targets are free or already match the expected identity."""
+        blocked: dict[str, str] = {}
+
+        for ns in self.node_states:
+            if ns.desired_state != NodeDesiredState.RUNNING.value:
+                continue
+            if ns.actual_state not in (
+                NodeActualState.UNDEPLOYED.value,
+                NodeActualState.PENDING.value,
+            ):
+                continue
+
+            db_node = self.db_nodes_map.get(ns.node_name)
+            if not db_node and ns.node_id in self.db_nodes_by_gui_id:
+                db_node = self.db_nodes_by_gui_id[ns.node_id]
+            if not db_node or not db_node.host_id:
+                continue
+            target_host = self.agent if self.agent and db_node.host_id == self.agent.id else self.session.get(
+                models.Host, db_node.host_id
+            )
+            if not target_host:
+                blocked[ns.node_name] = f"Assigned host record missing: {db_node.host_id}"
+                continue
+
+            provider = self._provider_for_db_node(db_node)
+            self._release_db_transaction_for_io(
+                f"runtime conflict preflight for {ns.node_name} on {target_host.id}"
+            )
+            try:
+                probe = await agent_client.probe_runtime_conflict_on_agent(
+                    target_host,
+                    self.lab.id,
+                    ns.node_name,
+                    node_definition_id=db_node.id,
+                    provider=provider,
+                )
+            except Exception as exc:
+                blocked[ns.node_name] = f"Runtime conflict probe failed: {exc}"
+                continue
+
+            classification = probe.get("classification", "error")
+            if classification in {"absent", "expected"} and probe.get("available", False):
+                continue
+
+            blocked[ns.node_name] = probe.get("error") or (
+                f"Runtime namespace occupied ({classification})"
+            )
+
+        if not blocked:
+            return True
+
+        self.log_parts.append("=== Preflight Failed ===")
+        self.log_parts.append(
+            "Runtime namespace conflict validation failed before lifecycle changes:"
+        )
+        for node_name in sorted(blocked):
+            self.log_parts.append(f"  {node_name}: {blocked[node_name]}")
+
+        for ns in self.node_states:
+            if ns.node_name in blocked:
+                ns.actual_state = NodeActualState.ERROR.value
+                ns.error_message = blocked[ns.node_name]
+
+        self.job.status = JobStatus.FAILED.value
+        self.job.completed_at = utcnow()
+        self.job.log_path = "\n".join(self.log_parts)
+        self.session.commit()
+        return False
+
+    async def _check_cross_host_link_capacity_gate(self) -> bool:
+        """Block first-init when required cross-host link allocations cannot fit."""
+        provisioning_nodes = {
+            ns.node_name
+            for ns in self.node_states
+            if ns.desired_state == NodeDesiredState.RUNNING.value
+            and ns.actual_state in (
+                NodeActualState.UNDEPLOYED.value,
+                NodeActualState.PENDING.value,
+            )
+        }
+        if not provisioning_nodes:
+            return True
+
+        cross_host_links = self.topo_service.get_cross_host_links(self.lab.id)
+        if not cross_host_links:
+            return True
+
+        existing_states = {
+            state.link_name: state
+            for state in self.session.query(models.LinkState)
+            .filter(models.LinkState.lab_id == self.lab.id)
+            .all()
+            if state.link_name
+        }
+
+        required_by_host: dict[str, int] = {}
+        for link in cross_host_links:
+            if link.node_a not in provisioning_nodes and link.node_b not in provisioning_nodes:
+                continue
+
+            node_a_state = self.all_lab_states.get(link.node_a)
+            node_b_state = self.all_lab_states.get(link.node_b)
+            if (
+                node_a_state and node_a_state.desired_state != NodeDesiredState.RUNNING.value
+            ) or (
+                node_b_state and node_b_state.desired_state != NodeDesiredState.RUNNING.value
+            ):
+                continue
+
+            existing_state = existing_states.get(link.link_id)
+            if existing_state and (
+                existing_state.vlan_tag
+                or existing_state.vni
+                or existing_state.actual_state == "up"
+            ):
+                continue
+
+            required_by_host[link.host_a] = required_by_host.get(link.host_a, 0) + 1
+            required_by_host[link.host_b] = required_by_host.get(link.host_b, 0) + 1
+
+        if not required_by_host:
+            return True
+
+        vlan_start = getattr(settings, "ovs_vlan_start", 100)
+        vlan_end = getattr(settings, "ovs_vlan_end", 4000)
+        total_vlan_capacity = vlan_end - vlan_start + 1
+        blocked: dict[str, str] = {}
+        for host_id, required_allocations in required_by_host.items():
+            host = self.session.get(models.Host, host_id)
+            if not host:
+                blocked[host_id] = f"Host record missing for cross-host link capacity check ({required_allocations} links)"
+                continue
+
+            self._release_db_transaction_for_io(
+                f"cross-host capacity preflight for host {host_id}"
+            )
+            status = await agent_client.get_ovs_status_from_agent(host)
+            if not status.get("initialized", False):
+                blocked[host.name or host.id] = (
+                    f"OVS unavailable for cross-host links ({required_allocations} links need allocation)"
+                )
+                continue
+
+            used_allocations = int(status.get("vlan_allocations", 0) or 0)
+            available = max(total_vlan_capacity - used_allocations, 0)
+            if available < required_allocations:
+                blocked[host.name or host.id] = (
+                    f"Insufficient VLAN capacity for cross-host links: "
+                    f"need {required_allocations}, have {available}"
+                )
+
+        if not blocked:
+            return True
+
+        self.log_parts.append("=== Preflight Failed ===")
+        self.log_parts.append(
+            "Cross-host link capacity validation failed before lifecycle changes:"
+        )
+        for host_label in sorted(blocked):
+            self.log_parts.append(f"  {host_label}: {blocked[host_label]}")
+
+        for ns in self.node_states:
+            if ns.node_name not in provisioning_nodes:
+                continue
+            ns.actual_state = NodeActualState.ERROR.value
+            ns.error_message = "Cross-host link capacity unavailable"
+
+        self.job.status = JobStatus.FAILED.value
+        self.job.completed_at = utcnow()
+        self.job.log_path = "\n".join(self.log_parts)
+        self.session.commit()
+        return False
 
     async def _set_transitional_states(self):
         """Set starting/stopping/pending states BEFORE agent lookup.
@@ -1256,13 +1704,15 @@ class NodeLifecycleManager(AgentResolutionMixin, DeploymentMixin, StopMixin):
             )
             host_to_agent = {a.id: a for a in agents}
             if host_to_agent:
-                self._release_db_transaction_for_io("post-op convergence")
+                self._release_db_transaction_for_io("post-op overlay convergence")
                 await run_overlay_convergence(
                     self.session, host_to_agent, lab_id=self.lab.id,
                 )
+                self._release_db_transaction_for_io("post-op interface mapping refresh")
                 await refresh_interface_mappings(
                     self.session, host_to_agent, lab_id=self.lab.id,
                 )
+                self._release_db_transaction_for_io("post-op cross-host port convergence")
                 await run_cross_host_port_convergence(
                     self.session, host_to_agent, lab_id=self.lab.id,
                 )
@@ -1468,6 +1918,7 @@ class NodeLifecycleManager(AgentResolutionMixin, DeploymentMixin, StopMixin):
 
             still_unready = []
             timed_out_by_timeout: dict[int, list[str]] = {}
+            ready_this_cycle: list[str] = []
             for ns in unready_nodes:
                 current_timeout = timeout_by_node.get(
                     ns.node_name,
@@ -1496,6 +1947,7 @@ class NodeLifecycleManager(AgentResolutionMixin, DeploymentMixin, StopMixin):
 
                     if result.get("is_ready"):
                         ns.is_ready = True
+                        ready_this_cycle.append(ns.node_name)
                         self._broadcast_state(ns, name_suffix="ready")
                         self.log_parts.append(
                             f"  {ns.node_name}: ready ({int(elapsed)}s)"
@@ -1540,6 +1992,9 @@ class NodeLifecycleManager(AgentResolutionMixin, DeploymentMixin, StopMixin):
                     f"  Readiness timeout ({timeout_seconds}s): "
                     f"{len(node_names)} node(s) still not ready: {', '.join(node_names)}"
                 )
+
+            if ready_this_cycle:
+                await self._connect_same_host_links(set(ready_this_cycle))
 
             unready_nodes = still_unready
 

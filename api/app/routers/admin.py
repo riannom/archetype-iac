@@ -4,10 +4,11 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import json
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from app import agent_client, db, models, schemas
@@ -17,6 +18,13 @@ from app.state import HostStatus, JobStatus, LabState, NodeActualState
 from app.utils.lab import get_lab_or_404
 
 _SAFE_SERVICE_RE = re.compile(r"^[a-zA-Z0-9_.\-]+$")
+_FIRST_INIT_FAILURE_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
+    ("host_unavailable", re.compile(r"assigned host .* offline|assigned host .* unavailable", re.IGNORECASE)),
+    ("image_unavailable", re.compile(r"image .* (missing|unavailable|not found|unreadable|invalid)", re.IGNORECASE)),
+    ("runtime_conflict", re.compile(r"(runtime|domain|container).*(conflict|occupied|409 name-conflict)", re.IGNORECASE)),
+    ("capacity_unavailable", re.compile(r"(no available vlan tags|insufficient capacity|capacity gate)", re.IGNORECASE)),
+    ("runtime_identity", re.compile(r"runtime identity|metadata-backed status|authoritative status", re.IGNORECASE)),
+)
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +47,14 @@ def _normalize_compare_value(value):
             return int(value)
         return round(value, 3)
     return value
+
+
+def _classify_first_init_failure(log_text: str | None) -> str:
+    text = log_text or ""
+    for failure_class, pattern in _FIRST_INIT_FAILURE_PATTERNS:
+        if pattern.search(text):
+            return failure_class
+    return "other"
 
 
 @router.post("/reconcile")
@@ -427,6 +443,104 @@ async def runtime_id_readiness(
             }
             for placement in missing
         ],
+    }
+
+
+@router.get("/first-init-reliability-report")
+async def first_init_reliability_report(
+    hours: int = Query(72, ge=1, le=24 * 30, description="Lookback window in hours"),
+    database: Session = Depends(db.get_db),
+    current_user: models.User = Depends(get_current_admin),
+) -> dict:
+    """Summarize first-init reliability signals for rollout/soak decisions."""
+    since = datetime.now(timezone.utc) - timedelta(hours=hours)
+    jobs = (
+        database.query(models.Job)
+        .filter(
+            models.Job.created_at >= since,
+            models.Job.status.in_(("failed", "completed", "completed_with_warnings")),
+            or_(
+                models.Job.action == "up",
+                models.Job.action.like("sync:lab%"),
+                models.Job.action.like("sync:node%"),
+            ),
+        )
+        .all()
+    )
+
+    failure_classes = {
+        "host_unavailable": 0,
+        "image_unavailable": 0,
+        "runtime_conflict": 0,
+        "capacity_unavailable": 0,
+        "runtime_identity": 0,
+        "other": 0,
+    }
+    post_op_reconciliation_failures = 0
+    statement_timeouts = 0
+    link_repair_mentions = 0
+    corrective_reconciliation_jobs = 0
+
+    for job in jobs:
+        log_text = job.log_path or ""
+        lowered = log_text.lower()
+        if job.status == "failed":
+            failure_classes[_classify_first_init_failure(log_text)] += 1
+        if "post-op" in lowered and "fail" in lowered:
+            post_op_reconciliation_failures += 1
+        if "statement timeout" in lowered:
+            statement_timeouts += 1
+        if "repair" in lowered and "link" in lowered:
+            link_repair_mentions += 1
+        if "reconcil" in lowered and ("repair" in lowered or "corrective" in lowered):
+            corrective_reconciliation_jobs += 1
+
+    total_corrective_links = (
+        database.query(func.count(models.LinkState.id))
+        .filter(
+            models.LinkState.desired_state == "up",
+            models.LinkState.actual_state != "up",
+        )
+        .scalar()
+        or 0
+    )
+    expected_waiting_links = (
+        database.query(func.count(models.LinkState.id))
+        .filter(
+            models.LinkState.desired_state == "up",
+            models.LinkState.actual_state == "pending",
+            models.LinkState.error_message.isnot(None),
+            models.LinkState.error_message.ilike("Waiting for %"),
+        )
+        .scalar()
+        or 0
+    )
+    unexpected_corrective_links = max(0, int(total_corrective_links) - int(expected_waiting_links))
+
+    return {
+        "summary": {
+            "hours": hours,
+            "jobs_examined": len(jobs),
+            "failed_jobs": sum(failure_classes.values()),
+            "post_op_reconciliation_failures": post_op_reconciliation_failures,
+            "statement_timeouts": statement_timeouts,
+            "link_repair_mentions": link_repair_mentions,
+            "unexpected_corrective_links": unexpected_corrective_links,
+            "corrective_reconciliation_jobs": corrective_reconciliation_jobs,
+        },
+        "first_init_failure_classes": failure_classes,
+        "soak_gate": {
+            "required_consecutive_hours": 72,
+            "eligible_now": (
+                post_op_reconciliation_failures == 0
+                and statement_timeouts == 0
+                and unexpected_corrective_links == 0
+            ),
+            "definition": (
+                "72 consecutive hours with zero unexpected corrective reconciliation "
+                "for newly provisioned healthy labs"
+            ),
+        },
     }
 
 
