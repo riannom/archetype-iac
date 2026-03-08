@@ -854,6 +854,7 @@ async def run_post_boot_commands(container_name: str, kind: str) -> bool:
                 logger.warning(f"Container {container_name} not running, skipping post-boot commands")
                 return False
 
+            all_succeeded = True
             for cmd in config.post_boot_commands:
                 logger.info(f"Running post-boot command on {container_name}: {cmd}")
                 exit_code, output = container.exec_run(
@@ -862,13 +863,14 @@ async def run_post_boot_commands(container_name: str, kind: str) -> bool:
                 )
                 output_str = output.decode("utf-8", errors="replace") if output else ""
                 if exit_code != 0:
+                    all_succeeded = False
                     logger.warning(
                         f"Post-boot command returned {exit_code} on {container_name}: {cmd}\n{output_str}"
                     )
                 else:
                     logger.debug(f"Post-boot command succeeded on {container_name}: {cmd}")
 
-            return True
+            return all_succeeded
 
         except docker.errors.NotFound:
             logger.warning(f"Container {container_name} not found for post-boot commands")

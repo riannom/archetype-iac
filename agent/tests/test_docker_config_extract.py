@@ -180,6 +180,57 @@ class TestExtractConfigViaDocker:
         result = await extract_config_via_docker(ctr, "cmd", "r1")
         assert result is None
 
+    async def test_retries_transient_fastcli_failure(self, fast_async, monkeypatch):
+        ctr = _container()
+        ctr.exec_run = MagicMock(side_effect=[
+            SimpleNamespace(exit_code=1, output=(b"% Authorization denied", b"")),
+            SimpleNamespace(exit_code=0, output=(b"hostname R1\nend\n", b"")),
+        ])
+
+        sleep_calls = []
+
+        async def _sleep(delay):
+            sleep_calls.append(delay)
+
+        monkeypatch.setattr(asyncio, "sleep", _sleep)
+
+        with patch(
+            "agent.providers.docker_config_extract.settings",
+            SimpleNamespace(
+                docker_config_extract_retry_attempts=2,
+                docker_config_extract_retry_delay_seconds=1.5,
+            ),
+        ):
+            result = await extract_config_via_docker(
+                ctr,
+                "FastCli -p 15 -c 'show running-config'",
+                "R1",
+            )
+
+        assert result == "hostname R1\nend\n"
+        assert sleep_calls == [1.5]
+        assert ctr.exec_run.call_count == 2
+
+    async def test_does_not_retry_non_fastcli_failure(self, fast_async, monkeypatch):
+        ctr = _container(exec_exit_code=1, exec_stdout=b"", exec_stderr=b"permission denied")
+
+        async def _sleep(_delay):
+            raise AssertionError("sleep should not be called")
+
+        monkeypatch.setattr(asyncio, "sleep", _sleep)
+
+        with patch(
+            "agent.providers.docker_config_extract.settings",
+            SimpleNamespace(
+                docker_config_extract_retry_attempts=3,
+                docker_config_extract_retry_delay_seconds=1.0,
+            ),
+        ):
+            result = await extract_config_via_docker(ctr, "cat /config", "r1")
+
+        assert result is None
+        assert ctr.exec_run.call_count == 1
+
 
 # ---------------------------------------------------------------------------
 # extract_config_via_ssh

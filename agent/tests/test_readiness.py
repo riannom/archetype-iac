@@ -566,19 +566,41 @@ class TestPostBootCommands:
 
     @pytest.mark.asyncio
     async def test_command_failure_continues(self):
-        """Non-zero exit codes are logged but don't stop execution."""
+        """Non-zero exit codes keep post-boot incomplete so it can be retried."""
         mock_container = MagicMock()
         mock_container.status = "running"
-        # Simulate command failure (e.g., iptables rule doesn't exist)
         mock_container.exec_run.return_value = (1, b"Rule not found")
 
         mock_client = MagicMock()
         mock_client.containers.get.return_value = mock_container
 
         with patch("agent.readiness.docker.from_env", return_value=mock_client):
-            # Should still return True (commands executed, even if some failed)
             result = await run_post_boot_commands("test-container", "ceos")
-            assert result is True
+            assert result is False
+            assert "test-container" not in _post_boot_completed
+
+    @pytest.mark.asyncio
+    async def test_command_failure_does_not_block_retry(self):
+        """A failed post-boot run should execute again on the next call."""
+        mock_container = MagicMock()
+        mock_container.status = "running"
+        mock_container.exec_run.side_effect = [
+            (1, b"not ready"),
+            (1, b"not ready"),
+            (0, b"OK"),
+            (0, b"OK"),
+        ]
+
+        mock_client = MagicMock()
+        mock_client.containers.get.return_value = mock_container
+
+        with patch("agent.readiness.docker.from_env", return_value=mock_client):
+            result1 = await run_post_boot_commands("test-container", "ceos")
+            result2 = await run_post_boot_commands("test-container", "ceos")
+
+        assert result1 is False
+        assert result2 is True
+        assert mock_container.exec_run.call_count == 4
 
 
 # --- State Management Tests ---
