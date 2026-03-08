@@ -28,6 +28,9 @@ from app.utils.time import utcnow
 
 logger = logging.getLogger(__name__)
 
+RUNTIME_IDENTITY_STABILIZATION_TIMEOUT_SECONDS = 15.0
+RUNTIME_IDENTITY_STABILIZATION_POLL_SECONDS = 1.0
+
 # Re-import module-level constants from main module to avoid duplication
 from app.tasks.node_lifecycle import (  # noqa: E402
     _is_ceos_kind,
@@ -87,42 +90,69 @@ class DeploymentMixin:
         self,
         node_names: list[str] | set[str],
     ) -> dict[str, str]:
-        """Verify newly started nodes are visible via agent status with identity fields."""
+        """Verify newly started nodes are visible via agent status with identity fields.
+
+        The agent status path may lag slightly behind the create/start RPC. Treat
+        runtime identity as authoritative, but allow a short bounded stabilization
+        window before failing the create/start path.
+        """
+        import time
+
         requested_names = list(node_names)
         if not requested_names:
             return {}
 
-        try:
-            status_result = await agent_client.get_lab_status_from_agent(self.agent, self.lab.id)
-        except Exception as exc:
-            return {
-                node_name: f"Status verification failed after start: {exc}"
-                for node_name in requested_names
-            }
-
-        status_nodes = status_result.get("nodes", []) or []
-        status_by_name = {
-            node.get("name"): node
-            for node in status_nodes
-            if node.get("name")
+        deadline = time.monotonic() + RUNTIME_IDENTITY_STABILIZATION_TIMEOUT_SECONDS
+        last_failures: dict[str, str] = {
+            node_name: "Agent status missing node after start"
+            for node_name in requested_names
         }
 
-        failures: dict[str, str] = {}
-        for node_name in requested_names:
-            db_node = self.db_nodes_map.get(node_name)
-            expected_runtime_name = (
-                db_node.container_name if db_node and db_node.container_name else node_name
-            )
-            status_node = status_by_name.get(expected_runtime_name) or status_by_name.get(node_name)
-            if not status_node:
-                failures[node_name] = "Agent status missing node after start"
-                continue
-            if db_node and status_node.get("node_definition_id") != db_node.id:
-                failures[node_name] = "Agent status missing expected node_definition_id after start"
-                continue
-            if not status_node.get("runtime_id"):
-                failures[node_name] = "Agent status missing runtime_id after start"
-        return failures
+        while True:
+            try:
+                self._release_db_transaction_for_io(
+                    f"runtime identity status verification for {len(requested_names)} node(s)"
+                )
+                status_result = await agent_client.get_lab_status_from_agent(self.agent, self.lab.id)
+            except Exception as exc:
+                last_failures = {
+                    node_name: f"Status verification failed after start: {exc}"
+                    for node_name in requested_names
+                }
+            else:
+                status_nodes = status_result.get("nodes", []) or []
+                status_by_name = {
+                    node.get("name"): node
+                    for node in status_nodes
+                    if node.get("name")
+                }
+
+                current_failures: dict[str, str] = {}
+                for node_name in requested_names:
+                    db_node = self.db_nodes_map.get(node_name)
+                    expected_runtime_name = (
+                        db_node.container_name if db_node and db_node.container_name else node_name
+                    )
+                    status_node = status_by_name.get(expected_runtime_name) or status_by_name.get(node_name)
+                    if not status_node:
+                        current_failures[node_name] = "Agent status missing node after start"
+                        continue
+                    if db_node and status_node.get("node_definition_id") != db_node.id:
+                        current_failures[node_name] = (
+                            "Agent status missing expected node_definition_id after start"
+                        )
+                        continue
+                    if not status_node.get("runtime_id"):
+                        current_failures[node_name] = "Agent status missing runtime_id after start"
+
+                if not current_failures:
+                    return {}
+                last_failures = current_failures
+
+            if time.monotonic() >= deadline:
+                return last_failures
+
+            await asyncio.sleep(RUNTIME_IDENTITY_STABILIZATION_POLL_SECONDS)
 
     async def _deploy_nodes(self, nodes_need_deploy: list[models.NodeState]):
         """Deploy nodes — dispatches to per-node or topology path."""
@@ -1102,7 +1132,9 @@ class DeploymentMixin:
             if placement_a.host_id != self.agent.id or placement_b.host_id != self.agent.id:
                 continue
 
-            # Both nodes should be running
+            # Both nodes should be running and ready. For libvirt, readiness now
+            # includes data-interface OVS visibility; attempting same-host links
+            # before readiness just creates immediate repair churn.
             state_a = self.all_lab_states.get(node_a)
             state_b = self.all_lab_states.get(node_b)
             if not state_a or not state_b:
@@ -1110,6 +1142,8 @@ class DeploymentMixin:
             if state_a.actual_state != NodeActualState.RUNNING.value:
                 continue
             if state_b.actual_state != NodeActualState.RUNNING.value:
+                continue
+            if not state_a.is_ready or not state_b.is_ready:
                 continue
 
             db_node_a = self.db_nodes_map.get(node_a)

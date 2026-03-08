@@ -238,6 +238,19 @@ if PROMETHEUS_AVAILABLE:
         ["state"],
     )
 
+    db_transaction_issues = Counter(
+        "archetype_db_transaction_issues_total",
+        "Database transaction/rollback issues by issue type and phase",
+        ["issue", "phase", "table"],
+    )
+
+    db_transaction_release_duration = Histogram(
+        "archetype_db_transaction_release_seconds",
+        "Duration spent releasing a DB transaction boundary before awaited I/O",
+        ["phase", "table", "result"],
+        buckets=(0.001, 0.01, 0.05, 0.1, 0.25, 0.5, 1, 2, 5, float("inf")),
+    )
+
     # --- Queue Metrics ---
 
     job_queue_depth = Gauge(
@@ -356,6 +369,8 @@ else:
     link_endpoint_reservation_conflicts = DummyMetric()
     db_connections_idle_in_transaction = DummyMetric()
     db_connections_total = DummyMetric()
+    db_transaction_issues = DummyMetric()
+    db_transaction_release_duration = DummyMetric()
     job_queue_depth = DummyMetric()
     reconciliation_cycle_duration = DummyMetric()
     reconciliation_labs_checked = DummyMetric()
@@ -884,6 +899,39 @@ def record_reconciliation_cycle(
     reconciliation_labs_checked.inc(labs_checked)
     if state_changes:
         reconciliation_state_changes.inc(state_changes)
+
+
+def record_db_transaction_issue(
+    *,
+    issue: str,
+    phase: str,
+    table: str = "unknown",
+) -> None:
+    """Record DB transaction boundary failures with bounded labels."""
+    if not PROMETHEUS_AVAILABLE:
+        return
+    db_transaction_issues.labels(
+        issue=_normalize_reason_label(issue),
+        phase=_normalize_reason_label(phase),
+        table=_normalize_reason_label(table),
+    ).inc()
+
+
+def record_db_transaction_release_duration(
+    *,
+    duration_seconds: float,
+    phase: str,
+    table: str = "unknown",
+    result: str = "success",
+) -> None:
+    """Record time spent releasing a DB transaction boundary."""
+    if not PROMETHEUS_AVAILABLE:
+        return
+    db_transaction_release_duration.labels(
+        phase=_normalize_reason_label(phase),
+        table=_normalize_reason_label(table),
+        result=_normalize_reason_label(result),
+    ).observe(max(0.0, float(duration_seconds)))
 
 
 def record_node_state_transition(transition_type: str) -> None:

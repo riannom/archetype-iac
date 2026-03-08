@@ -250,7 +250,14 @@ async def test_create_node_existing_running_short_circuit(monkeypatch, tmp_path)
     monkeypatch.setattr("agent.providers.docker.get_config_by_device", lambda _kind: None)
 
     provider = DockerProvider()
-    existing = SimpleNamespace(status="running")
+    existing = SimpleNamespace(
+        status="running",
+        labels={
+            "archetype.provider": "docker",
+            "archetype.lab_id": "lab1",
+            "archetype.node_name": "n1",
+        },
+    )
     provider._docker = MagicMock()
     provider.docker.containers.get.return_value = existing
 
@@ -268,22 +275,103 @@ async def test_create_node_non_ovs_removes_stopped_and_creates(monkeypatch, tmp_
     monkeypatch.setattr("agent.providers.docker.get_config_by_device", lambda _kind: None)
 
     provider = DockerProvider()
-    existing = SimpleNamespace(status="exited", remove=MagicMock())
-    created = SimpleNamespace(short_id="abc123")
+    existing = SimpleNamespace(
+        status="exited",
+        labels={
+            "archetype.provider": "docker",
+            "archetype.lab_id": "lab1",
+            "archetype.node_name": "n1",
+            "archetype.node_definition_id": "node-def-1",
+        },
+    )
 
     provider._docker = MagicMock()
     provider.docker.containers.get.return_value = existing
-    provider.docker.containers.create.return_value = created
     provider._create_container_config = lambda *_a, **_k: {"image": "alpine:latest"}  # type: ignore[method-assign]
 
-    result = await provider.create_node("lab1", "n1", "linux", tmp_path, interface_count=3)
+    result = await provider.create_node(
+        "lab1",
+        "n1",
+        "linux",
+        tmp_path,
+        interface_count=3,
+        node_definition_id="node-def-1",
+    )
 
     assert result.success is True
     assert result.new_status == NodeStatus.STOPPED
-    existing.remove.assert_called_once_with(force=True)
-    provider.docker.containers.create.assert_called_once()
-    kwargs = provider.docker.containers.create.call_args.kwargs
-    assert kwargs["network_mode"] == "none"
+    assert "already exists" in result.stdout
+    provider.docker.containers.create.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_create_node_rejects_foreign_namespace_conflict(monkeypatch, tmp_path):
+    monkeypatch.setattr(settings, "enable_ovs", False)
+    monkeypatch.setattr(settings, "enable_ovs_plugin", False)
+    monkeypatch.setattr("agent.providers.docker.get_config_by_device", lambda _kind: None)
+
+    provider = DockerProvider()
+    existing = SimpleNamespace(status="exited", labels={})
+    provider._docker = MagicMock()
+    provider.docker.containers.get.return_value = existing
+
+    result = await provider.create_node("lab1", "n1", "linux", tmp_path)
+
+    assert result.success is False
+    assert "not managed by Archetype" in (result.error or "")
+    provider.docker.containers.create.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_create_node_rejects_stale_managed_conflict(monkeypatch, tmp_path):
+    monkeypatch.setattr(settings, "enable_ovs", False)
+    monkeypatch.setattr(settings, "enable_ovs_plugin", False)
+    monkeypatch.setattr("agent.providers.docker.get_config_by_device", lambda _kind: None)
+
+    provider = DockerProvider()
+    existing = SimpleNamespace(
+        status="exited",
+        labels={
+            "archetype.provider": "docker",
+            "archetype.lab_id": "lab1",
+            "archetype.node_name": "n1",
+            "archetype.node_definition_id": "other-node-def",
+        },
+    )
+    provider._docker = MagicMock()
+    provider.docker.containers.get.return_value = existing
+
+    result = await provider.create_node(
+        "lab1",
+        "n1",
+        "linux",
+        tmp_path,
+        node_definition_id="node-def-1",
+    )
+
+    assert result.success is False
+    assert "different node identity" in (result.error or "")
+    provider.docker.containers.create.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_probe_runtime_conflict_classifies_foreign_namespace(monkeypatch, tmp_path):
+    monkeypatch.setattr(settings, "enable_ovs", False)
+    monkeypatch.setattr(settings, "enable_ovs_plugin", False)
+
+    provider = DockerProvider()
+    provider._docker = MagicMock()
+    provider.docker.containers.get.return_value = SimpleNamespace(
+        id="abc123def456",
+        status="exited",
+        labels={},
+    )
+
+    result = await provider.probe_runtime_conflict("lab1", "n1")
+
+    assert result.available is False
+    assert result.classification == "foreign"
+    assert "not managed by Archetype" in (result.error or "")
 
 
 @pytest.mark.asyncio

@@ -450,3 +450,80 @@ def test_admin_runtime_id_readiness_reports_constraint_eligible_when_zero_missin
     assert body["summary"]["constraint_eligible_now"] is True
     assert body["summary"]["recommended_next_step"] == "observe_zero_count_window"
     assert body["placements"] == []
+
+
+def test_admin_first_init_reliability_report_summarizes_failures(
+    test_client, test_db, admin_user, admin_auth_headers,
+) -> None:
+    lab = models.Lab(
+        name="Reliability Lab",
+        owner_id=admin_user.id,
+        provider="docker",
+        state="running",
+        workspace_path="/tmp/reliability-lab",
+    )
+    test_db.add(lab)
+    test_db.flush()
+    test_db.add_all([
+        models.Job(
+            lab_id=lab.id,
+            user_id=admin_user.id,
+            action="sync:lab",
+            status="failed",
+            log_path="assigned host agent-01 is offline",
+        ),
+        models.Job(
+            lab_id=lab.id,
+            user_id=admin_user.id,
+            action="sync:node",
+            status="failed",
+            log_path="Post-op link reconciliation failed: statement timeout on link_states",
+        ),
+        models.Job(
+            lab_id=lab.id,
+            user_id=admin_user.id,
+            action="up",
+            status="completed_with_warnings",
+            log_path="link repair attempted during reconcile",
+        ),
+    ])
+    test_db.add_all([
+        models.LinkState(
+            lab_id=lab.id,
+            link_name="r1:eth1-r2:eth1",
+            source_node="r1",
+            source_interface="eth1",
+            target_node="r2",
+            target_interface="eth1",
+            desired_state="up",
+            actual_state="error",
+            error_message="Cannot find OVS port",
+        ),
+        models.LinkState(
+            lab_id=lab.id,
+            link_name="r1:eth2-r3:eth1",
+            source_node="r1",
+            source_interface="eth2",
+            target_node="r3",
+            target_interface="eth1",
+            desired_state="up",
+            actual_state="pending",
+            error_message="Waiting for interface readiness: r3:eth1",
+        ),
+    ])
+    test_db.commit()
+
+    resp = test_client.get("/first-init-reliability-report", headers=admin_auth_headers)
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["summary"]["jobs_examined"] == 3
+    assert body["summary"]["failed_jobs"] == 2
+    assert body["summary"]["post_op_reconciliation_failures"] == 1
+    assert body["summary"]["statement_timeouts"] == 1
+    assert body["summary"]["link_repair_mentions"] == 1
+    assert body["summary"]["unexpected_corrective_links"] == 1
+    assert body["first_init_failure_classes"]["host_unavailable"] == 1
+    assert body["first_init_failure_classes"]["other"] == 1
+    assert body["soak_gate"]["required_consecutive_hours"] == 72
+    assert body["soak_gate"]["eligible_now"] is False

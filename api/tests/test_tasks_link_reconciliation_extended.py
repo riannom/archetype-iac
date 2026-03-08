@@ -653,6 +653,60 @@ class TestRunSameHostConvergence:
         mock_declare.assert_not_awaited()
         assert result == {}
 
+    @pytest.mark.asyncio
+    async def test_releases_transaction_before_agent_declare(
+        self, test_db: Session, sample_lab: models.Lab, sample_host: models.Host,
+    ):
+        """Same-host convergence should release DB transaction before agent I/O."""
+        from app.tasks.link_reconciliation import run_same_host_convergence
+
+        host_to_agent = {sample_host.id: sample_host}
+
+        link = _make_link_state(
+            test_db, sample_lab.id,
+            desired_state="up", actual_state="up",
+            is_cross_host=False,
+            source_host_id=sample_host.id,
+            target_host_id=sample_host.id,
+            vlan_tag=100,
+        )
+        node_r1 = _make_node(
+            test_db, sample_lab.id,
+            display_name="R1",
+            container_name=link.source_node,
+            host_id=sample_host.id,
+        )
+        node_r2 = _make_node(
+            test_db, sample_lab.id,
+            display_name="R2",
+            container_name=link.target_node,
+            host_id=sample_host.id,
+        )
+        _make_interface_mapping(
+            test_db, sample_lab.id, node_r1.id,
+            linux_interface=link.source_interface,
+            ovs_port="vh-src-port",
+            vlan_tag=100,
+        )
+        _make_interface_mapping(
+            test_db, sample_lab.id, node_r2.id,
+            linux_interface=link.target_interface,
+            ovs_port="vh-tgt-port",
+            vlan_tag=100,
+        )
+
+        with patch(
+            "app.tasks.link_reconciliation._release_db_transaction_for_io",
+        ) as mock_release, patch(
+            "app.tasks.link_reconciliation.declare_port_state_on_agent",
+            new_callable=AsyncMock,
+            return_value={"results": [{"link_name": link.link_name, "status": "converged"}]},
+        ):
+            await run_same_host_convergence(test_db, host_to_agent)
+
+        mock_release.assert_called_once()
+        assert "same-host convergence port-state declaration" == mock_release.call_args.kwargs["context"]
+
 
 # ============================================================================
 # run_cross_host_port_convergence
@@ -872,6 +926,61 @@ class TestRunCrossHostPortConvergence:
         # No corrections could be made without mappings
         assert result["updated"] == 0
 
+    @pytest.mark.asyncio
+    async def test_releases_transaction_before_vlan_correction(
+        self, test_db: Session, sample_lab: models.Lab, multiple_hosts: list[models.Host],
+    ):
+        """Cross-host convergence should release DB transaction before agent VLAN updates."""
+        from app.tasks.link_reconciliation import run_cross_host_port_convergence
+
+        host_a, host_b = multiple_hosts[0], multiple_hosts[1]
+        host_to_agent = {host_a.id: host_a, host_b.id: host_b}
+
+        link = _make_link_state(
+            test_db, sample_lab.id,
+            desired_state="up", actual_state="up",
+            is_cross_host=True,
+            source_host_id=host_a.id,
+            target_host_id=host_b.id,
+            source_vlan_tag=200,
+            target_vlan_tag=201,
+        )
+        node_a = _make_node(
+            test_db, sample_lab.id,
+            container_name=link.source_node,
+            host_id=host_a.id,
+        )
+        node_b = _make_node(
+            test_db, sample_lab.id,
+            container_name=link.target_node,
+            host_id=host_b.id,
+        )
+        _make_interface_mapping(
+            test_db, sample_lab.id, node_a.id,
+            linux_interface=link.source_interface,
+            ovs_port="vh-src",
+            vlan_tag=999,
+        )
+        _make_interface_mapping(
+            test_db, sample_lab.id, node_b.id,
+            linux_interface=link.target_interface,
+            ovs_port="vh-tgt",
+            vlan_tag=999,
+        )
+
+        with patch(
+            "app.tasks.link_reconciliation._release_db_transaction_for_io",
+        ) as mock_release, patch(
+            "app.tasks.link_reconciliation.agent_client",
+        ) as mock_client:
+            mock_client.set_port_vlan_on_agent = AsyncMock(return_value=True)
+            result = await run_cross_host_port_convergence(test_db, host_to_agent)
+
+        assert result["updated"] == 2
+        assert mock_release.call_count == 2
+        contexts = [call.kwargs["context"] for call in mock_release.call_args_list]
+        assert all("cross-host port convergence vlan update for agent" in context for context in contexts)
+
 
 # ============================================================================
 # refresh_interface_mappings
@@ -1039,6 +1148,34 @@ class TestRefreshInterfaceMappings:
         # No links for nonexistent lab → nothing called
         assert result == {"updated": 0, "created": 0}
 
+    @pytest.mark.asyncio
+    async def test_releases_transaction_before_port_state_fetch(
+        self, test_db: Session, sample_lab: models.Lab, sample_host: models.Host,
+    ):
+        """Interface mapping refresh should release DB transaction before agent port-state fetch."""
+        from app.tasks.link_reconciliation import refresh_interface_mappings
+
+        host_to_agent = {sample_host.id: sample_host}
+
+        _make_link_state(
+            test_db, sample_lab.id,
+            desired_state="up", actual_state="up",
+            is_cross_host=False,
+            source_host_id=sample_host.id,
+            target_host_id=sample_host.id,
+        )
+
+        with patch(
+            "app.tasks.link_reconciliation._release_db_transaction_for_io",
+        ) as mock_release, patch(
+            "app.tasks.link_reconciliation.agent_client",
+        ) as mock_client:
+            mock_client.get_lab_port_state = AsyncMock(return_value=[])
+            await refresh_interface_mappings(test_db, host_to_agent)
+
+        mock_release.assert_called_once()
+        assert "interface mapping refresh port-state fetch" in mock_release.call_args.kwargs["context"]
+
 
 # ============================================================================
 # reconcile_lab_links
@@ -1131,6 +1268,170 @@ class TestReconcileLabLinks:
         assert results["checked"] == 2
         assert results["errors"] >= 1
         assert results["valid"] >= 1
+
+    @pytest.mark.asyncio
+    async def test_link_level_statement_timeout_records_metric(
+        self, test_db: Session, sample_lab: models.Lab, sample_host: models.Host,
+    ):
+        """Statement timeouts during per-link reconcile emit DB contention metrics."""
+        from app.tasks.link_reconciliation import reconcile_lab_links
+
+        _make_link_state(
+            test_db, sample_lab.id,
+            link_name="R1:eth1--R2:eth1",
+            desired_state="up", actual_state="up",
+            source_host_id=sample_host.id,
+            target_host_id=sample_host.id,
+        )
+
+        with patch(
+            "app.tasks.link_reconciliation._cleanup_deleted_links",
+            new_callable=AsyncMock,
+            return_value=0,
+        ), patch(
+            "app.tasks.link_reconciliation.verify_link_connected",
+            side_effect=RuntimeError("statement timeout on link_states"),
+        ), patch(
+            "app.tasks.link_reconciliation.record_db_transaction_issue",
+        ) as mock_metric:
+            results = await reconcile_lab_links(test_db, sample_lab.id)
+
+        assert results["errors"] == 1
+        assert mock_metric.called
+        assert mock_metric.call_args_list[0].kwargs == {
+            "issue": "statement_timeout",
+            "phase": "link_reconciliation",
+            "table": "link_states",
+        }
+
+    @pytest.mark.asyncio
+    async def test_intentionally_stopped_endpoint_keeps_link_pending_without_repair(
+        self, test_db: Session, sample_lab: models.Lab, sample_host: models.Host,
+    ):
+        """Links waiting on intentionally stopped nodes should stay pending quietly."""
+        from app.tasks.link_reconciliation import reconcile_lab_links
+
+        link = _make_link_state(
+            test_db, sample_lab.id,
+            desired_state="up", actual_state="error",
+            source_host_id=sample_host.id,
+            target_host_id=sample_host.id,
+        )
+        test_db.add(models.NodeState(
+            lab_id=sample_lab.id,
+            node_id="n1",
+            node_name=link.source_node,
+            desired_state="stopped",
+            actual_state="undeployed",
+        ))
+        test_db.add(models.NodeState(
+            lab_id=sample_lab.id,
+            node_id="n2",
+            node_name=link.target_node,
+            desired_state="running",
+            actual_state="running",
+        ))
+        test_db.commit()
+
+        with patch(
+            "app.tasks.link_reconciliation._cleanup_deleted_links",
+            new_callable=AsyncMock,
+            return_value=0,
+        ), patch(
+            "app.tasks.link_reconciliation.create_link_if_ready",
+            new_callable=AsyncMock,
+        ) as mock_create, patch(
+            "app.tasks.link_reconciliation.attempt_link_repair",
+            new_callable=AsyncMock,
+        ) as mock_repair:
+            results = await reconcile_lab_links(test_db, sample_lab.id)
+
+        test_db.refresh(link)
+        assert results["skipped"] == 1
+        assert link.actual_state == "pending"
+        assert link.error_message is None
+        mock_create.assert_not_awaited()
+        mock_repair.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_reconcile_lab_links_releases_transaction_before_verify(
+        self, test_db: Session, sample_lab: models.Lab, sample_host: models.Host,
+    ):
+        """Per-link verification should release the DB transaction before awaited I/O."""
+        from app.tasks.link_reconciliation import reconcile_lab_links
+
+        _make_link_state(
+            test_db, sample_lab.id,
+            desired_state="up", actual_state="up",
+            source_host_id=sample_host.id,
+            target_host_id=sample_host.id,
+        )
+
+        with patch(
+            "app.tasks.link_reconciliation._cleanup_deleted_links",
+            new_callable=AsyncMock,
+            return_value=0,
+        ), patch(
+            "app.tasks.link_reconciliation._release_db_transaction_for_io",
+        ) as mock_release, patch(
+            "app.tasks.link_reconciliation.verify_link_connected",
+            new_callable=AsyncMock,
+            return_value=(True, None),
+        ):
+            results = await reconcile_lab_links(test_db, sample_lab.id)
+
+        assert results["valid"] == 1
+        contexts = [call.kwargs["context"] for call in mock_release.call_args_list]
+        assert any("link verification" in context for context in contexts)
+
+    @pytest.mark.asyncio
+    async def test_starting_endpoint_keeps_link_pending_without_repair(
+        self, test_db: Session, sample_lab: models.Lab, sample_host: models.Host,
+    ):
+        """Links should not churn through repair while an endpoint is still starting."""
+        from app.tasks.link_reconciliation import reconcile_lab_links
+
+        link = _make_link_state(
+            test_db, sample_lab.id,
+            desired_state="up", actual_state="up",
+            source_host_id=sample_host.id,
+            target_host_id=sample_host.id,
+        )
+        test_db.add(models.NodeState(
+            lab_id=sample_lab.id,
+            node_id="n1",
+            node_name=link.source_node,
+            desired_state="running",
+            actual_state="starting",
+        ))
+        test_db.add(models.NodeState(
+            lab_id=sample_lab.id,
+            node_id="n2",
+            node_name=link.target_node,
+            desired_state="running",
+            actual_state="running",
+        ))
+        test_db.commit()
+
+        with patch(
+            "app.tasks.link_reconciliation._cleanup_deleted_links",
+            new_callable=AsyncMock,
+            return_value=0,
+        ), patch(
+            "app.tasks.link_reconciliation.verify_link_connected",
+            new_callable=AsyncMock,
+        ) as mock_verify, patch(
+            "app.tasks.link_reconciliation.attempt_link_repair",
+            new_callable=AsyncMock,
+        ) as mock_repair:
+            results = await reconcile_lab_links(test_db, sample_lab.id)
+
+        test_db.refresh(link)
+        assert results["skipped"] == 1
+        assert link.actual_state == "pending"
+        assert link.error_message is None
+        mock_verify.assert_not_awaited()
+        mock_repair.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_vlan_mismatch_triggers_repair_in_lab_context(

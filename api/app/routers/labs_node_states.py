@@ -80,6 +80,15 @@ async def list_node_states(
         .all()
     )
 
+    normalized_stopped_nodes = False
+    for state in states:
+        if _converge_stopped_error_state(state):
+            normalized_stopped_nodes = True
+    if normalized_stopped_nodes:
+        database.commit()
+        for state in states:
+            database.refresh(state)
+
     # Auto-fix stale pending states: if any node is "pending" but no active job exists,
     # refresh from actual container status
     has_pending = any(s.actual_state == NodeActualState.PENDING for s in states)

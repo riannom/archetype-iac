@@ -15,6 +15,7 @@ from datetime import timedelta
 from app import agent_client, models
 from app.agent_client import AgentUnavailableError
 from app.config import settings
+from app.tasks.jobs import _release_db_transaction_for_io as _release_db_tx_for_io
 from app.state import (
     JobStatus,
     NodeActualState,
@@ -38,17 +39,13 @@ class AgentResolutionMixin:
         session = getattr(self, "session", None)
         if session is None:
             return
-        has_pending_writes = bool(session.new or session.dirty or session.deleted)
-        try:
-            if has_pending_writes:
-                session.commit()
-            else:
-                session.rollback()
-        except Exception:
-            try:
-                session.rollback()
-            except Exception:
-                pass
+        _release_db_tx_for_io(
+            session,
+            context=reason,
+            table="node_states",
+            lab_id=getattr(getattr(self, "lab", None), "id", None),
+            job_id=getattr(getattr(self, "job", None), "id", None),
+        )
 
     async def _get_candidate_agents(self) -> list[models.Host]:
         """Return online agents that support the required provider."""

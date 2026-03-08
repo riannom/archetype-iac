@@ -545,15 +545,81 @@ class TestSessionHelpers:
         session.dirty = set()
         session.deleted = set()
         session.commit.side_effect = RuntimeError("commit failed")
-        with pytest.raises(RuntimeError, match="commit failed"):
-            _release_db_transaction_for_io(session, context="test")
+        with patch("app.tasks.jobs.record_db_transaction_issue") as mock_metric, \
+             patch("app.tasks.jobs.record_db_transaction_release_duration") as mock_duration:
+            with pytest.raises(RuntimeError, match="commit failed"):
+                _release_db_transaction_for_io(
+                    session,
+                    context="test",
+                    table="link_states",
+                    lab_id="lab-1",
+                    job_id="job-1",
+                )
+
+        mock_metric.assert_called_once_with(
+            issue="release_failed",
+            phase="test",
+            table="link_states",
+        )
+        assert mock_duration.call_args.kwargs["table"] == "link_states"
+        assert mock_duration.call_args.kwargs["result"] == "release_failed"
+
+    def test_release_records_statement_timeout_metric(self):
+        """Statement timeouts are classified separately for observability."""
+        session = MagicMock()
+        session.new = set()
+        session.dirty = set()
+        session.deleted = set()
+        session.rollback.side_effect = RuntimeError("statement timeout during rollback")
+
+        with patch("app.tasks.jobs.record_db_transaction_issue") as mock_metric, \
+             patch("app.tasks.jobs.record_db_transaction_release_duration") as mock_duration, \
+             patch("app.tasks.jobs.logger.warning") as mock_warning:
+            with pytest.raises(RuntimeError, match="statement timeout"):
+                _release_db_transaction_for_io(
+                    session,
+                    context="test",
+                    table="interface_mappings",
+                    lab_id="lab-2",
+                    job_id="job-2",
+                )
+
+        assert mock_metric.call_args_list[0].kwargs == {
+            "issue": "statement_timeout",
+            "phase": "test",
+            "table": "interface_mappings",
+        }
+        assert mock_metric.call_args_list[1].kwargs == {
+            "issue": "rollback_failed",
+            "phase": "test",
+            "table": "interface_mappings",
+        }
+        assert mock_duration.call_args_list[0].kwargs["result"] == "statement_timeout"
+        assert mock_warning.call_args.kwargs["extra"]["lab_id"] == "lab-2"
+        assert mock_warning.call_args.kwargs["extra"]["job_id"] == "job-2"
 
     def test_reset_session_swallows_rollback_error(self):
         """Rollback failures during reset are logged but not raised."""
         session = MagicMock()
         session.rollback.side_effect = RuntimeError("rollback failed")
-        # Should not raise
-        _reset_session_after_db_error(session, context="test")
+        with patch("app.tasks.jobs.record_db_transaction_issue") as mock_metric, \
+             patch("app.tasks.jobs.logger.warning") as mock_warning:
+            # Should not raise
+            _reset_session_after_db_error(
+                session,
+                context="test",
+                table="node_states",
+                lab_id="lab-3",
+                job_id="job-3",
+            )
+
+        mock_metric.assert_called_once_with(
+            issue="rollback_failed",
+            phase="test",
+            table="node_states",
+        )
+        assert mock_warning.call_args.kwargs["extra"]["lab_id"] == "lab-3"
+        assert mock_warning.call_args.kwargs["extra"]["job_id"] == "job-3"
 
 
 # ---------------------------------------------------------------------------

@@ -409,6 +409,34 @@ async def create_node_on_agent(
     )
 
 
+async def probe_runtime_conflict_on_agent(
+    agent: models.Host,
+    lab_id: str,
+    node_name: str,
+    *,
+    node_definition_id: str | None = None,
+    provider: str = "docker",
+) -> dict:
+    """Probe whether the target runtime namespace is safe for create."""
+    url = (
+        f"{get_agent_url(agent)}/labs/{lab_id}/nodes/"
+        f"{node_name}/runtime-conflict?provider={provider}"
+    )
+    payload: dict[str, str] = {"node_name": node_name}
+    if node_definition_id:
+        payload["node_definition_id"] = node_definition_id
+    return await _timed_node_operation(
+        agent,
+        "POST",
+        url,
+        "probe_runtime_conflict",
+        lab_id,
+        node_name,
+        json_body=payload,
+        timeout=30.0,
+    )
+
+
 async def start_node_on_agent(
     agent: models.Host,
     lab_id: str,

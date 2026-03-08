@@ -327,19 +327,105 @@ class TestDeploySingleNode:
             mock_ds.return_value.resolve_hardware_specs.return_value = {}
             mock_ac.create_node_on_agent = AsyncMock(return_value={"success": True})
             mock_ac.start_node_on_agent = AsyncMock(return_value={"success": True})
-            mock_ac.get_lab_status_from_agent = AsyncMock(return_value={
-                "nodes": [{
-                    "name": "R1",
-                    "node_definition_id": node_def.id,
-                    "runtime_id": "runtime-r1",
-                }]
-            })
+            mock_ac.get_lab_status_from_agent = AsyncMock(
+                return_value={
+                    "nodes": [
+                        {
+                            "name": "R1",
+                            "node_definition_id": node_def.id,
+                            "runtime_id": "container://r1",
+                        }
+                    ]
+                }
+            )
             result = await manager._deploy_single_node(ns)
 
         assert result == "R1"
         assert ns.actual_state == NodeActualState.RUNNING.value
         assert ns.error_message is None
         assert ns.boot_started_at is not None
+
+    @pytest.mark.asyncio
+    async def test_start_success_waits_for_runtime_identity_stabilization(self, test_db, test_user):
+        """Post-start verification should tolerate a short status lag before succeeding."""
+        host = _make_host(test_db)
+        lab = _make_lab(test_db, test_user, agent_id=host.id)
+        job = _make_job(test_db, lab, test_user)
+        ns = _make_node_state(test_db, lab, "n1", "R1")
+        node_def = _make_node_def(test_db, lab, "n1", "R1", "R1", host_id=host.id)
+
+        manager = _make_manager(test_db, lab, job, ["n1"], agent=host)
+        manager.db_nodes_map = {"R1": node_def}
+        manager.explicit_snapshots_map = {}
+        manager.latest_snapshots_map = {}
+        manager._manifest = None
+        manager._release_db_transaction_for_io = MagicMock()
+
+        with (
+            patch.object(manager.topo_service, "get_interface_count_map", return_value={"R1": 4}),
+            patch("app.tasks.node_lifecycle_deploy.resolve_node_image", return_value="linux:latest"),
+            patch("app.tasks.node_lifecycle_deploy.get_image_provider", return_value="docker"),
+            patch("app.tasks.node_lifecycle_deploy.lab_workspace", return_value=MagicMock()),
+            patch("app.tasks.node_lifecycle_deploy.get_device_service") as mock_ds,
+            patch("app.tasks.node_lifecycle_deploy.agent_client") as mock_ac,
+            patch("app.tasks.node_lifecycle_deploy.asyncio.sleep", new_callable=AsyncMock) as mock_sleep,
+        ):
+            mock_ds.return_value.resolve_hardware_specs.return_value = {}
+            mock_ac.create_node_on_agent = AsyncMock(return_value={"success": True})
+            mock_ac.start_node_on_agent = AsyncMock(return_value={"success": True})
+            mock_ac.get_lab_status_from_agent = AsyncMock(side_effect=[
+                {"nodes": [{"name": "R1", "node_definition_id": node_def.id}]},
+                {"nodes": [{"name": "R1", "node_definition_id": node_def.id, "runtime_id": "container://r1"}]},
+            ])
+
+            result = await manager._deploy_single_node(ns)
+
+        assert result == "R1"
+        assert ns.actual_state == NodeActualState.RUNNING.value
+        assert mock_sleep.await_count == 1
+        assert manager._release_db_transaction_for_io.call_count >= 3
+
+    @pytest.mark.asyncio
+    async def test_start_success_fails_after_runtime_identity_timeout(self, test_db, test_user):
+        """Post-start verification should fail when authoritative status never stabilizes."""
+        host = _make_host(test_db)
+        lab = _make_lab(test_db, test_user, agent_id=host.id)
+        job = _make_job(test_db, lab, test_user)
+        ns = _make_node_state(test_db, lab, "n1", "R1")
+        node_def = _make_node_def(test_db, lab, "n1", "R1", "R1", host_id=host.id)
+
+        manager = _make_manager(test_db, lab, job, ["n1"], agent=host)
+        manager.db_nodes_map = {"R1": node_def}
+        manager.explicit_snapshots_map = {}
+        manager.latest_snapshots_map = {}
+        manager._manifest = None
+        manager._release_db_transaction_for_io = MagicMock()
+
+        monotonic_values = iter([0.0, 0.5, 15.5])
+
+        with (
+            patch.object(manager.topo_service, "get_interface_count_map", return_value={"R1": 4}),
+            patch("app.tasks.node_lifecycle_deploy.resolve_node_image", return_value="linux:latest"),
+            patch("app.tasks.node_lifecycle_deploy.get_image_provider", return_value="docker"),
+            patch("app.tasks.node_lifecycle_deploy.lab_workspace", return_value=MagicMock()),
+            patch("app.tasks.node_lifecycle_deploy.get_device_service") as mock_ds,
+            patch("app.tasks.node_lifecycle_deploy.agent_client") as mock_ac,
+            patch("app.tasks.node_lifecycle_deploy.asyncio.sleep", new_callable=AsyncMock) as mock_sleep,
+            patch("time.monotonic", side_effect=lambda: next(monotonic_values)),
+        ):
+            mock_ds.return_value.resolve_hardware_specs.return_value = {}
+            mock_ac.create_node_on_agent = AsyncMock(return_value={"success": True})
+            mock_ac.start_node_on_agent = AsyncMock(return_value={"success": True})
+            mock_ac.get_lab_status_from_agent = AsyncMock(
+                return_value={"nodes": [{"name": "R1", "node_definition_id": node_def.id}]}
+            )
+
+            result = await manager._deploy_single_node(ns)
+
+        assert result is None
+        assert ns.actual_state == NodeActualState.ERROR.value
+        assert "runtime_id" in (ns.error_message or "")
+        assert mock_sleep.await_count == 1
 
     @pytest.mark.asyncio
     async def test_agent_unavailable_sets_pending(self, test_db, test_user):
@@ -832,6 +918,59 @@ class TestCreateAndStartNodes:
 
         assert deployed == []
 
+    @pytest.mark.asyncio
+    async def test_mixed_provider_partial_success(self, test_db, test_user):
+        """A mixed Docker/libvirt batch can partially succeed without collapsing the whole batch."""
+        host, lab, job = self._base_manager(test_db, test_user)
+        ns_docker = _make_node_state(test_db, lab, "n1", "R1", desired="running", actual="undeployed")
+        ns_libvirt = _make_node_state(test_db, lab, "n2", "XRV1", desired="running", actual="undeployed")
+        node_def_docker = _make_node_def(test_db, lab, "n1", "R1", "R1", device="linux", host_id=host.id)
+        node_def_libvirt = _make_node_def(test_db, lab, "n2", "XRV1", "XRV1", device="cisco_iosxr", host_id=host.id)
+
+        manager = _make_manager(test_db, lab, job, ["n1", "n2"], agent=host)
+        manager.db_nodes_map = {"R1": node_def_docker, "XRV1": node_def_libvirt}
+        manager._manifest = None
+        manager._connect_same_host_links = AsyncMock()
+
+        def _resolve_image(device, kind, image, version):
+            return "linux:latest" if device == "linux" else "/images/xrv9k.qcow2"
+
+        def _provider_for_image(image):
+            return "libvirt" if str(image).endswith(".qcow2") else "docker"
+
+        async def _create_side_effect(agent, lab_id, node_name, kind, **kwargs):
+            if kwargs["provider"] == "libvirt":
+                return {"success": True, "details": "Defined domain arch-lab-xrv1"}
+            return {"success": True}
+
+        async def _verify_side_effect(node_names):
+            if node_names == ["XRV1"]:
+                return {"XRV1": "Agent status missing runtime_id after start"}
+            return {}
+
+        with (
+            patch.object(manager.topo_service, "get_interface_count_map", return_value={"R1": 4, "XRV1": 4}),
+            patch("app.tasks.node_lifecycle_deploy.resolve_node_image", side_effect=_resolve_image),
+            patch("app.tasks.node_lifecycle_deploy.get_image_provider", side_effect=_provider_for_image),
+            patch("app.tasks.node_lifecycle_deploy.lab_workspace", return_value=MagicMock()),
+            patch("app.tasks.node_lifecycle_deploy.get_device_service") as mock_ds,
+            patch("app.tasks.node_lifecycle_deploy.agent_client") as mock_ac,
+            patch("app.tasks.node_lifecycle_deploy._update_node_placements", new_callable=AsyncMock),
+            patch("app.tasks.node_lifecycle_deploy._capture_node_ips", new_callable=AsyncMock),
+        ):
+            mock_ds.return_value.resolve_hardware_specs.return_value = {}
+            mock_ac.create_node_on_agent = AsyncMock(side_effect=_create_side_effect)
+            mock_ac.start_node_on_agent = AsyncMock(return_value={"success": True})
+            manager._verify_runtime_identity_status = AsyncMock(side_effect=_verify_side_effect)
+
+            deployed = await manager._create_and_start_nodes([ns_docker, ns_libvirt], "=== Test ===")
+
+        assert deployed == ["R1"]
+        assert ns_docker.actual_state == NodeActualState.RUNNING.value
+        assert ns_docker.error_message is None
+        assert ns_libvirt.actual_state == NodeActualState.ERROR.value
+        assert ns_libvirt.error_message == "Agent status missing runtime_id after start"
+
 
 # ---------------------------------------------------------------------------
 # TestGetInterfaceCount
@@ -1181,6 +1320,8 @@ class TestConnectSameHostLinksExtended:
 
         ns1 = _make_node_state(test_db, lab, "n1", "R1", actual="running")
         ns2 = _make_node_state(test_db, lab, "n2", "R2", actual="stopped")  # Not running
+        ns1.is_ready = True
+        test_db.commit()
         _make_placement(test_db, lab, "R1", host.id)
         _make_placement(test_db, lab, "R2", host.id)
 
@@ -1230,6 +1371,9 @@ class TestConnectSameHostLinksExtended:
 
         ns1 = _make_node_state(test_db, lab, "n1", "R1", actual="running")
         ns2 = _make_node_state(test_db, lab, "n2", "R2", actual="running")
+        ns1.is_ready = True
+        ns2.is_ready = True
+        test_db.commit()
         _make_placement(test_db, lab, "R1", host.id)
         _make_placement(test_db, lab, "R2", host.id)
 
@@ -1279,6 +1423,9 @@ class TestConnectSameHostLinksExtended:
 
         ns1 = _make_node_state(test_db, lab, "n1", "R1", actual="running")
         ns2 = _make_node_state(test_db, lab, "n2", "R2", actual="running")
+        ns1.is_ready = True
+        ns2.is_ready = True
+        test_db.commit()
 
         manager = _make_manager(test_db, lab, job, ["n1", "n2"], agent=host)
         manager.all_lab_states = {"R1": ns1, "R2": ns2}
@@ -1324,6 +1471,9 @@ class TestConnectSameHostLinksExtended:
 
         ns1 = _make_node_state(test_db, lab, "n1", "R1", actual="running")
         ns2 = _make_node_state(test_db, lab, "n2", "R2", actual="running")
+        ns1.is_ready = True
+        ns2.is_ready = True
+        test_db.commit()
         _make_placement(test_db, lab, "R1", host.id)
         _make_placement(test_db, lab, "R2", host.id)
 
@@ -1374,6 +1524,9 @@ class TestConnectSameHostLinksExtended:
 
         ns1 = _make_node_state(test_db, lab, "n1", "R1", actual="running")
         ns2 = _make_node_state(test_db, lab, "n2", "R2", actual="running")
+        ns1.is_ready = True
+        ns2.is_ready = True
+        test_db.commit()
         _make_placement(test_db, lab, "R1", host.id)
         _make_placement(test_db, lab, "R2", host.id)
 
@@ -1416,3 +1569,50 @@ class TestConnectSameHostLinksExtended:
             await manager._connect_same_host_links({"R1", "R2"})
 
         mock_create.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_running_but_unready_nodes_skip_link_connection(self, test_db, test_user):
+        """Same-host links must wait for node readiness, not only running state."""
+        host = _make_host(test_db)
+        lab = _make_lab(test_db, test_user, agent_id=host.id)
+        job = _make_job(test_db, lab, test_user)
+
+        ns1 = _make_node_state(test_db, lab, "n1", "R1", actual="running")
+        ns2 = _make_node_state(test_db, lab, "n2", "R2", actual="running")
+        ns1.is_ready = True
+        ns2.is_ready = False
+        test_db.commit()
+        _make_placement(test_db, lab, "R1", host.id)
+        _make_placement(test_db, lab, "R2", host.id)
+
+        manager = _make_manager(test_db, lab, job, ["n1", "n2"], agent=host)
+        manager.all_lab_states = {"R1": ns1, "R2": ns2}
+        manager.placements_map = {
+            "R1": test_db.query(models.NodePlacement).filter_by(node_name="R1").first(),
+            "R2": test_db.query(models.NodePlacement).filter_by(node_name="R2").first(),
+        }
+
+        ep_a = MagicMock()
+        ep_a.node = "n1"
+        ep_a.ifname = "eth1"
+        ep_b = MagicMock()
+        ep_b.node = "n2"
+        ep_b.ifname = "eth1"
+        mock_link = MagicMock()
+        mock_link.endpoints = [ep_a, ep_b]
+
+        mock_node1 = MagicMock()
+        mock_node1.id = "n1"
+        mock_node1.container_name = "R1"
+        mock_node1.name = "R1"
+        mock_node2 = MagicMock()
+        mock_node2.id = "n2"
+        mock_node2.container_name = "R2"
+        mock_node2.name = "R2"
+
+        manager.graph = MagicMock(links=[mock_link], nodes=[mock_node1, mock_node2])
+
+        with patch("app.tasks.node_lifecycle_deploy.agent_client") as mock_ac:
+            mock_ac.create_link_on_agent = AsyncMock()
+            await manager._connect_same_host_links({"R1", "R2"})
+            mock_ac.create_link_on_agent.assert_not_awaited()

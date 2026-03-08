@@ -21,6 +21,8 @@ from agent.schemas import (
     FixInterfacesResponse,
     RepairEndpointsRequest,
     RepairEndpointsResponse,
+    RuntimeConflictProbeRequest,
+    RuntimeConflictProbeResponse,
     StartNodeRequest,
     StartNodeResponse,
     StopNodeResponse,
@@ -234,6 +236,31 @@ async def create_node(
         details=result.stdout or result.stderr or None,
         error=result.error,
         duration_ms=elapsed_ms,
+    )
+
+
+@router.post("/labs/{lab_id}/nodes/{node_name}/runtime-conflict")
+async def probe_runtime_conflict(
+    lab_id: str,
+    node_name: str,
+    request: RuntimeConflictProbeRequest,
+    provider: str = "docker",
+) -> RuntimeConflictProbeResponse:
+    """Probe whether the target runtime namespace is safe for create."""
+    provider_instance = get_provider_for_request(provider)
+    result = await provider_instance.probe_runtime_conflict(
+        lab_id=lab_id,
+        node_name=node_name,
+        node_definition_id=request.node_definition_id,
+    )
+    return RuntimeConflictProbeResponse(
+        success=result.error is None,
+        available=result.available,
+        classification=result.classification,
+        runtime_name=result.runtime_name,
+        status=result.status,
+        runtime_id=result.runtime_id,
+        error=result.error,
     )
 
 
