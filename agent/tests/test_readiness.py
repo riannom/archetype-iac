@@ -581,7 +581,7 @@ class TestPostBootCommands:
 
     @pytest.mark.asyncio
     async def test_command_failure_does_not_block_retry(self):
-        """A failed post-boot run should execute again on the next call."""
+        """A transient failure should be retried and then cached as complete."""
         mock_container = MagicMock()
         mock_container.status = "running"
         mock_container.exec_run.side_effect = [
@@ -595,11 +595,36 @@ class TestPostBootCommands:
         mock_client.containers.get.return_value = mock_container
 
         with patch("agent.readiness.docker.from_env", return_value=mock_client):
-            result1 = await run_post_boot_commands("test-container", "ceos")
-            result2 = await run_post_boot_commands("test-container", "ceos")
+            with patch("agent.readiness.settings.docker_post_boot_retry_attempts", 2), \
+                 patch("agent.readiness.settings.docker_post_boot_retry_delay_seconds", 0):
+                result1 = await run_post_boot_commands("test-container", "ceos")
+                result2 = await run_post_boot_commands("test-container", "ceos")
 
-        assert result1 is False
+        assert result1 is True
         assert result2 is True
+        assert mock_container.exec_run.call_count == 4
+
+    @pytest.mark.asyncio
+    async def test_command_retry_succeeds_within_single_call(self):
+        """Transient CLI-not-ready failures should be retried before returning."""
+        mock_container = MagicMock()
+        mock_container.status = "running"
+        mock_container.exec_run.side_effect = [
+            (1, b"not ready"),
+            (1, b"not ready"),
+            (0, b"OK"),
+            (0, b"OK"),
+        ]
+
+        mock_client = MagicMock()
+        mock_client.containers.get.return_value = mock_container
+
+        with patch("agent.readiness.docker.from_env", return_value=mock_client):
+            with patch("agent.readiness.settings.docker_post_boot_retry_attempts", 2), \
+                 patch("agent.readiness.settings.docker_post_boot_retry_delay_seconds", 0):
+                result = await run_post_boot_commands("test-container", "ceos")
+
+        assert result is True
         assert mock_container.exec_run.call_count == 4
 
 

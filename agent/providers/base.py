@@ -445,6 +445,17 @@ class VlanPersistenceMixin:
         vlans.mkdir(parents=True, exist_ok=True)
         return vlans
 
+    def _provider_vlan_file(self, lab_id: str, workspace: Path) -> Path:
+        """Get the provider-scoped VLAN allocation file for a lab."""
+        provider_name = getattr(self, "name", None)
+        if not isinstance(provider_name, str) or not provider_name:
+            provider_name = "provider"
+        return self._vlans_dir(workspace) / f"{lab_id}.{provider_name}.json"
+
+    def _legacy_vlan_file(self, lab_id: str, workspace: Path) -> Path:
+        """Get the legacy shared VLAN allocation file for a lab."""
+        return self._vlans_dir(workspace) / f"{lab_id}.json"
+
     # -- persistence ---------------------------------------------------------
 
     def _save_vlan_allocations(self, lab_id: str, workspace: Path) -> None:
@@ -466,8 +477,7 @@ class VlanPersistenceMixin:
             "next_vlan": next_vlan,
         }
 
-        vlans_dir = self._vlans_dir(workspace)
-        vlan_file = vlans_dir / f"{lab_id}.json"
+        vlan_file = self._provider_vlan_file(lab_id, workspace)
 
         try:
             with open(vlan_file, "w") as f:
@@ -489,31 +499,40 @@ class VlanPersistenceMixin:
         Returns:
             True if allocations were loaded, False if file doesn't exist or load failed
         """
-        vlans_dir = self._vlans_dir(workspace)
-        vlan_file = vlans_dir / f"{lab_id}.json"
+        for vlan_file in (
+            self._provider_vlan_file(lab_id, workspace),
+            self._legacy_vlan_file(lab_id, workspace),
+        ):
+            if not vlan_file.exists():
+                continue
 
-        if not vlan_file.exists():
-            return False
+            try:
+                with open(vlan_file) as f:
+                    vlan_data = json.load(f)
 
-        try:
-            with open(vlan_file) as f:
-                vlan_data = json.load(f)
+                allocations = vlan_data.get("allocations", {})
+                next_vlan = vlan_data.get("next_vlan", self.VLAN_RANGE_START)
 
-            allocations = vlan_data.get("allocations", {})
-            next_vlan = vlan_data.get("next_vlan", self.VLAN_RANGE_START)
+                self._vlan_allocations[lab_id] = allocations
+                self._next_vlan[lab_id] = next_vlan
 
-            self._vlan_allocations[lab_id] = allocations
-            self._next_vlan[lab_id] = next_vlan
+                logger.info(
+                    "Loaded VLAN allocations for lab %s from %s: %d nodes, next_vlan=%s",
+                    lab_id,
+                    vlan_file.name,
+                    len(allocations),
+                    next_vlan,
+                )
+                return True
+            except Exception as e:
+                logger.warning(
+                    "Failed to load VLAN allocations for lab %s from %s: %s",
+                    lab_id,
+                    vlan_file,
+                    e,
+                )
 
-            logger.info(
-                f"Loaded VLAN allocations for lab {lab_id}: "
-                f"{len(allocations)} nodes, next_vlan={next_vlan}"
-            )
-            return True
-
-        except Exception as e:
-            logger.warning(f"Failed to load VLAN allocations for lab {lab_id}: {e}")
-            return False
+        return False
 
     def _remove_vlan_file(self, lab_id: str, workspace: Path) -> None:
         """Remove VLAN allocation file for a lab.
@@ -524,13 +543,15 @@ class VlanPersistenceMixin:
             lab_id: Lab identifier
             workspace: Lab workspace path
         """
-        vlans_dir = self._vlans_dir(workspace)
-        vlan_file = vlans_dir / f"{lab_id}.json"
-
-        if vlan_file.exists():
+        for vlan_file in (
+            self._provider_vlan_file(lab_id, workspace),
+            self._legacy_vlan_file(lab_id, workspace),
+        ):
+            if not vlan_file.exists():
+                continue
             try:
                 vlan_file.unlink()
-                logger.debug(f"Removed VLAN file for lab {lab_id}")
+                logger.debug(f"Removed VLAN file for lab {lab_id}: {vlan_file.name}")
             except Exception as e:
                 logger.warning(f"Failed to remove VLAN file for lab {lab_id}: {e}")
 

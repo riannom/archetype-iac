@@ -115,6 +115,36 @@ async def test_resolve_ovs_port_libvirt_vlan_fallback(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_resolve_ovs_port_skips_libvirt_port_lookup_for_non_libvirt_nodes(monkeypatch):
+    docker_provider = SimpleNamespace(
+        get_container_name=lambda *_args, **_kwargs: "ctr-1",
+    )
+    libvirt_provider = SimpleNamespace(
+        get_node_kind_async=AsyncMock(return_value=None),
+        get_vm_interface_port=AsyncMock(return_value="vnet7"),
+    )
+
+    def _get_provider(name: str):
+        if name == "docker":
+            return docker_provider
+        if name == "libvirt":
+            return libvirt_provider
+        return None
+
+    monkeypatch.setattr(helpers, "get_provider", _get_provider)
+    monkeypatch.setattr(helpers, "_resolve_ovs_port_via_ifindex", AsyncMock(return_value=None))
+    monkeypatch.setattr(helpers, "_get_docker_ovs_plugin", lambda: SimpleNamespace(
+        _discover_endpoint=AsyncMock(return_value=None),
+        endpoints={},
+    ))
+
+    result = await helpers._resolve_ovs_port("lab-1", "ceos_1", "eth1")
+
+    assert result is None
+    libvirt_provider.get_vm_interface_port.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_fix_running_interfaces_restart_and_error_paths(monkeypatch):
     async def _run_direct(fn, *args, **kwargs):
         return fn(*args, **kwargs)

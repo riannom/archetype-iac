@@ -2889,12 +2889,17 @@ class LibvirtProvider(Provider, VlanPersistenceMixin):
 
     def _get_node_kind_sync(self, lab_id: str, node_name: str) -> str | None:
         """Get device kind from domain metadata — libvirt thread."""
-        domain_name = self._domain_name(lab_id, node_name)
         try:
-            domain = self.conn.lookupByName(domain_name)
-            return self._get_domain_kind(domain)
+            for domain in self.conn.listAllDomains(0):
+                metadata = self._get_domain_metadata_values(domain)
+                if metadata.get("lab_id") != lab_id:
+                    continue
+                if metadata.get("node_name") != node_name:
+                    continue
+                return self._get_domain_kind(domain)
         except Exception:
             return None
+        return None
 
     def get_node_kind(self, lab_id: str, node_name: str) -> str | None:
         """Sync accessor — use get_node_kind_async from async contexts."""

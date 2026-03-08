@@ -445,20 +445,7 @@ async def _resolve_ovs_port(
     """
     libvirt_provider = get_provider("libvirt")
     libvirt_kind: str | None = None
-    if libvirt_provider is not None:
-        try:
-            libvirt_kind = await libvirt_provider.get_node_kind_async(lab_id, node_name)
-        except Exception:
-            libvirt_kind = None
-    is_libvirt_node = libvirt_kind is not None
-    logger.debug(
-        "Resolving OVS port for %s:%s in lab %s (libvirt_node=%s, libvirt_kind=%s)",
-        node_name,
-        interface_name,
-        lab_id,
-        is_libvirt_node,
-        libvirt_kind,
-    )
+    is_libvirt_node = False
 
     # --- Try Docker first, using ifindex verification to prevent port swap bugs ---
     docker_provider = get_provider("docker")
@@ -515,8 +502,24 @@ async def _resolve_ovs_port(
                 e,
             )
 
-    # --- Try libvirt (OVS/MAC introspection) ---
     if libvirt_provider is not None:
+        try:
+            libvirt_kind = await libvirt_provider.get_node_kind_async(lab_id, node_name)
+        except Exception:
+            libvirt_kind = None
+        is_libvirt_node = libvirt_kind is not None
+
+    logger.debug(
+        "Resolving OVS port for %s:%s in lab %s (libvirt_node=%s, libvirt_kind=%s)",
+        node_name,
+        interface_name,
+        lab_id,
+        is_libvirt_node,
+        libvirt_kind,
+    )
+
+    # --- Try libvirt (OVS/MAC introspection) ---
+    if libvirt_provider is not None and is_libvirt_node:
         try:
             intf_index = _interface_name_to_index(interface_name)
             port_name = await libvirt_provider.get_vm_interface_port(

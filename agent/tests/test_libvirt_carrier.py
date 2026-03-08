@@ -42,6 +42,7 @@ class TestResolveDataInterfaceMac:
         mock_conn.isAlive.return_value = True
         provider._conn = mock_conn
         provider._get_domain_kind = MagicMock(return_value=kind)
+        provider._node_uses_dedicated_mgmt_interface = MagicMock(return_value=has_mgmt)
         provider._domain_has_dedicated_mgmt_interface = MagicMock(return_value=has_mgmt)
         # Vendor config mock
         mock_config = MagicMock()

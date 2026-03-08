@@ -29,6 +29,7 @@ from pathlib import Path
 import docker
 import subprocess
 
+from agent.config import settings
 from agent.vendors import get_vendor_config, is_ceos_kind
 
 # Try to import libvirt - it's optional
@@ -879,7 +880,22 @@ async def run_post_boot_commands(container_name: str, kind: str) -> bool:
             logger.error(f"Error running post-boot commands on {container_name}: {e}")
             return False
 
-    success = await asyncio.to_thread(_sync_run_commands)
+    attempts = max(1, settings.docker_post_boot_retry_attempts)
+    delay_seconds = max(0.0, settings.docker_post_boot_retry_delay_seconds)
+    success = False
+    for attempt in range(1, attempts + 1):
+        success = await asyncio.to_thread(_sync_run_commands)
+        if success:
+            break
+        if attempt < attempts:
+            logger.info(
+                "Retrying post-boot commands for %s in %.1fs (%d/%d)",
+                container_name,
+                delay_seconds,
+                attempt + 1,
+                attempts,
+            )
+            await asyncio.sleep(delay_seconds)
     if success:
         _post_boot_completed.add(container_name)
         logger.info(f"Post-boot commands completed for {container_name}")
