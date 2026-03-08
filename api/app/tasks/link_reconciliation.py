@@ -29,7 +29,10 @@ from app.services.link_validator import verify_link_connected, is_vlan_mismatch
 from app.services.link_validator import ensure_link_interface_mappings
 from app.services.link_reservations import reconcile_link_endpoint_reservations
 from app.services.link_reservations import get_link_endpoint_reservation_drift_counts
-from app.metrics import set_link_endpoint_reservation_metrics
+from app.metrics import (
+    record_db_transaction_issue,
+    set_link_endpoint_reservation_metrics,
+)
 from app.utils.link import links_needing_reconciliation_filter
 from app.tasks.live_links import create_link_if_ready, teardown_link
 from app.agent_client import (
@@ -37,6 +40,7 @@ from app.agent_client import (
     declare_overlay_state_on_agent,
     declare_port_state_on_agent,
 )
+from app.tasks.jobs import _release_db_transaction_for_io as _release_db_tx_for_io
 
 # Re-export from extracted modules for backwards compatibility
 from app.tasks.link_repair import (
@@ -57,6 +61,27 @@ logger = logging.getLogger(__name__)
 RECONCILIATION_INTERVAL_SECONDS = 60
 RECONCILIATION_ENABLED = True
 RESERVATION_RECONCILE_INTERVAL_CYCLES = 5
+
+
+def _release_db_transaction_for_io(
+    session: Session,
+    *,
+    context: str,
+    table: str = "link_states",
+    lab_id: str | None = None,
+) -> None:
+    """Close any open transaction before awaited agent I/O.
+
+    Reconciliation helpers must not hold DB transactions across awaited RPCs.
+    Read state first, release the transaction, perform agent I/O, then reopen a
+    short write transaction for any DB updates.
+    """
+    _release_db_tx_for_io(
+        session,
+        context=context,
+        table=table,
+        lab_id=lab_id,
+    )
 
 
 def _sync_oper_state(session: Session, link_state: models.LinkState) -> None:
@@ -91,6 +116,38 @@ def _resolve_node_by_endpoint_name(
         )
         .first()
     )
+
+
+def _waiting_on_intentionally_absent_endpoint(
+    session: Session,
+    link: models.LinkState,
+) -> bool:
+    """Return True when link endpoints are intentionally absent or still starting.
+
+    Links targeting nodes that the operator intentionally stopped should stay
+    quietly pending/down instead of entering repeated repair/error churn.
+    The same applies while nodes are still legitimately pending/starting.
+    """
+    endpoint_states = (
+        session.query(models.NodeState)
+        .filter(
+            models.NodeState.lab_id == link.lab_id,
+            models.NodeState.node_name.in_([link.source_node, link.target_node]),
+        )
+        .all()
+    )
+    for node_state in endpoint_states:
+        if (
+            node_state.desired_state == "stopped"
+            and node_state.actual_state in {"undeployed", "stopped", "stopping"}
+        ):
+            return True
+        if (
+            node_state.desired_state == "running"
+            and node_state.actual_state in {"pending", "starting"}
+        ):
+            return True
+    return False
 
 
 async def reconcile_link_states(session: Session) -> dict:
@@ -158,6 +215,12 @@ async def reconcile_link_states(session: Session) -> dict:
         try:
             # Enforce desired state: create links that should be up
             if link.actual_state in ("down", "pending") and link.desired_state == "up":
+                _release_db_transaction_for_io(
+                    session,
+                    context=f"link creation enforcement for {link.link_name}",
+                    table="link_states",
+                    lab_id=link.lab_id,
+                )
                 created = await create_link_if_ready(
                     session, link.lab_id, link, host_to_agent,
                     skip_locked=True,
@@ -185,6 +248,12 @@ async def reconcile_link_states(session: Session) -> dict:
                     "source_interface": link.source_interface,
                     "target_interface": link.target_interface,
                 }
+                _release_db_transaction_for_io(
+                    session,
+                    context=f"link teardown enforcement for {link.link_name}",
+                    table="link_states",
+                    lab_id=link.lab_id,
+                )
                 torn_down = await teardown_link(
                     session, link.lab_id, link_info, host_to_agent,
                 )
@@ -202,6 +271,12 @@ async def reconcile_link_states(session: Session) -> dict:
                     f"(source_attached={link.source_vxlan_attached}, "
                     f"target_attached={link.target_vxlan_attached})"
                 )
+                _release_db_transaction_for_io(
+                    session,
+                    context=f"cross-host partial recovery for {link.link_name}",
+                    table="link_states",
+                    lab_id=link.lab_id,
+                )
                 recovered = await attempt_partial_recovery(session, link, host_to_agent)
                 if recovered:
                     results["recovered"] += 1
@@ -212,6 +287,12 @@ async def reconcile_link_states(session: Session) -> dict:
                 continue
 
             # For "up" links (desired="up"), verify connectivity
+            _release_db_transaction_for_io(
+                session,
+                context=f"link verification for {link.link_name}",
+                table="link_states",
+                lab_id=link.lab_id,
+            )
             is_valid, error = await verify_link_connected(session, link, host_to_agent)
 
             if is_valid:
@@ -225,6 +306,12 @@ async def reconcile_link_states(session: Session) -> dict:
 
                 # Try lightweight VLAN repair first if it's a VLAN mismatch
                 if is_vlan_mismatch(error):
+                    _release_db_transaction_for_io(
+                        session,
+                        context=f"vlan repair for {link.link_name}",
+                        table="link_states",
+                        lab_id=link.lab_id,
+                    )
                     vlan_repaired = await attempt_vlan_repair(session, link, host_to_agent)
                     if vlan_repaired:
                         # Trust the repair — skip immediate re-verification.
@@ -237,6 +324,12 @@ async def reconcile_link_states(session: Session) -> dict:
                         continue
 
                 # Fall through to full link repair
+                _release_db_transaction_for_io(
+                    session,
+                    context=f"full link repair for {link.link_name}",
+                    table="link_states",
+                    lab_id=link.lab_id,
+                )
                 repaired = await attempt_link_repair(session, link, host_to_agent)
                 if repaired:
                     results["repaired"] += 1
@@ -503,6 +596,12 @@ async def refresh_interface_mappings(
             continue
 
         try:
+            _release_db_transaction_for_io(
+                session,
+                context=f"interface mapping refresh port-state fetch for agent {host_id} lab {lab_id}",
+                table="interface_mappings",
+                lab_id=lab_id,
+            )
             ports = await agent_client.get_lab_port_state(agent, lab_id)
             if not ports:
                 continue
@@ -723,6 +822,8 @@ async def run_same_host_convergence(
     if not agent_pairings:
         return {}
 
+    release_lab_id = same_host_links[0].lab_id if len({ls.lab_id for ls in same_host_links}) == 1 else None
+
     # Call each agent in parallel
     all_results: dict[str, Any] = {}
 
@@ -759,6 +860,12 @@ async def run_same_host_convergence(
     ]
 
     if tasks:
+        _release_db_transaction_for_io(
+            session,
+            context="same-host convergence port-state declaration",
+            table="link_states",
+            lab_id=release_lab_id,
+        )
         await asyncio.gather(*tasks, return_exceptions=True)
 
     return all_results
@@ -884,6 +991,12 @@ async def run_cross_host_port_convergence(
             return
         for port_name, vlan_tag in corrections:
             try:
+                _release_db_transaction_for_io(
+                    session,
+                    context=f"cross-host port convergence vlan update for agent {agent_id}",
+                    table="link_states",
+                    lab_id=lab_id,
+                )
                 ok = await agent_client.set_port_vlan_on_agent(agent, port_name, vlan_tag)
                 if ok:
                     result["updated"] += 1
@@ -1134,8 +1247,21 @@ async def reconcile_lab_links(session: Session, lab_id: str) -> dict:
             continue
 
         try:
+            if link.desired_state == "up" and _waiting_on_intentionally_absent_endpoint(session, link):
+                link.actual_state = "pending"
+                link.error_message = None
+                _sync_oper_state(session, link)
+                results["skipped"] += 1
+                continue
+
             # Enforce desired state: create links that should be up
             if link.actual_state in ("down", "pending") and link.desired_state == "up":
+                _release_db_transaction_for_io(
+                    session,
+                    context=f"link creation enforcement for {link.link_name}",
+                    table="link_states",
+                    lab_id=lab_id,
+                )
                 created = await create_link_if_ready(
                     session, lab_id, link, host_to_agent,
                     skip_locked=True,
@@ -1163,6 +1289,12 @@ async def reconcile_lab_links(session: Session, lab_id: str) -> dict:
                     "source_interface": link.source_interface,
                     "target_interface": link.target_interface,
                 }
+                _release_db_transaction_for_io(
+                    session,
+                    context=f"link teardown enforcement for {link.link_name}",
+                    table="link_states",
+                    lab_id=lab_id,
+                )
                 torn_down = await teardown_link(
                     session, lab_id, link_info, host_to_agent,
                 )
@@ -1175,6 +1307,12 @@ async def reconcile_lab_links(session: Session, lab_id: str) -> dict:
 
             # Handle error links needing recovery
             if link.actual_state == "error" and link.is_cross_host:
+                _release_db_transaction_for_io(
+                    session,
+                    context=f"cross-host partial recovery for {link.link_name}",
+                    table="link_states",
+                    lab_id=lab_id,
+                )
                 recovered = await attempt_partial_recovery(session, link, host_to_agent)
                 if recovered:
                     results["recovered"] += 1
@@ -1183,6 +1321,12 @@ async def reconcile_lab_links(session: Session, lab_id: str) -> dict:
                 continue
 
             # For "up" links (desired="up"), verify connectivity
+            _release_db_transaction_for_io(
+                session,
+                context=f"link verification for {link.link_name}",
+                table="link_states",
+                lab_id=lab_id,
+            )
             is_valid, error = await verify_link_connected(session, link, host_to_agent)
 
             if is_valid:
@@ -1192,14 +1336,32 @@ async def reconcile_lab_links(session: Session, lab_id: str) -> dict:
 
                 # Try lightweight VLAN repair first if it's a VLAN mismatch
                 if is_vlan_mismatch(error):
+                    _release_db_transaction_for_io(
+                        session,
+                        context=f"vlan repair for {link.link_name}",
+                        table="link_states",
+                        lab_id=lab_id,
+                    )
                     vlan_repaired = await attempt_vlan_repair(session, link, host_to_agent)
                     if vlan_repaired:
+                        _release_db_transaction_for_io(
+                            session,
+                            context=f"post-vlan-repair verify for {link.link_name}",
+                            table="link_states",
+                            lab_id=lab_id,
+                        )
                         is_valid2, _ = await verify_link_connected(session, link, host_to_agent)
                         if is_valid2:
                             results["repaired"] += 1
                             continue
 
                 # Fall through to full link repair
+                _release_db_transaction_for_io(
+                    session,
+                    context=f"full link repair for {link.link_name}",
+                    table="link_states",
+                    lab_id=lab_id,
+                )
                 repaired = await attempt_link_repair(session, link, host_to_agent)
                 if repaired:
                     results["repaired"] += 1
@@ -1210,14 +1372,45 @@ async def reconcile_lab_links(session: Session, lab_id: str) -> dict:
                     results["errors"] += 1
 
         except Exception as e:
-            logger.error(f"Error reconciling link {link.link_name}: {e}")
+            logger.error(
+                "Error reconciling link %s: %s",
+                link.link_name,
+                e,
+                extra={
+                    "event": "db_transaction_issue" if "statement timeout" in str(e).lower() else "link_reconciliation_error",
+                    "issue": "statement_timeout" if "statement timeout" in str(e).lower() else "runtime_error",
+                    "phase": "link_reconciliation",
+                    "table": "link_states",
+                    "lab_id": link.lab_id,
+                    "link_name": link.link_name,
+                },
+            )
+            if "statement timeout" in str(e).lower():
+                record_db_transaction_issue(
+                    issue="statement_timeout",
+                    phase="link_reconciliation",
+                    table="link_states",
+                )
             try:
                 session.rollback()
             except Exception as rollback_error:
+                record_db_transaction_issue(
+                    issue="rollback_failed",
+                    phase="link_reconciliation",
+                    table="link_states",
+                )
                 logger.warning(
                     "Failed to rollback session after link %s reconciliation error: %s",
                     link.link_name,
                     rollback_error,
+                    extra={
+                        "event": "db_transaction_issue",
+                        "issue": "rollback_failed",
+                        "phase": "link_reconciliation",
+                        "table": "link_states",
+                        "lab_id": link.lab_id,
+                        "link_name": link.link_name,
+                    },
                 )
             results["errors"] += 1
 

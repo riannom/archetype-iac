@@ -38,6 +38,18 @@ def _sync_oper_state(session: Session, link_state: models.LinkState) -> None:
     recompute_link_oper_state(session, link_state)
 
 
+def _classify_link_readiness_issue(error: str | None) -> str | None:
+    """Classify deferrable readiness issues during link creation."""
+    if not error:
+        return None
+    lowered = error.lower()
+    if "cannot find ovs port" in lowered or "endpoint not found" in lowered:
+        return "interface_missing"
+    if "could not read vlan tag" in lowered:
+        return "vlan_missing"
+    return None
+
+
 def _mapping_present_for_endpoint(
     session: Session,
     *,
@@ -790,8 +802,14 @@ async def create_same_host_link(
         )
 
         if not result.get("success"):
-            link_state.actual_state = "error"
-            link_state.error_message = result.get("error", "hot_connect failed")
+            error_msg = result.get("error", "hot_connect failed")
+            readiness_issue = _classify_link_readiness_issue(error_msg)
+            if readiness_issue == "interface_missing":
+                link_state.actual_state = "pending"
+                link_state.error_message = f"Waiting for interface readiness: {error_msg}"
+            else:
+                link_state.actual_state = "error"
+                link_state.error_message = error_msg
             _sync_oper_state(session, link_state)
             log_parts.append(f"  {link_state.link_name}: FAILED - {link_state.error_message}")
             return False
@@ -820,8 +838,13 @@ async def create_same_host_link(
         if verify:
             is_valid, error = await verify_link_connected(session, link_state, host_to_agent)
             if not is_valid:
-                link_state.actual_state = "error"
-                link_state.error_message = f"Verification failed: {error}"
+                readiness_issue = _classify_link_readiness_issue(error)
+                if readiness_issue == "vlan_missing":
+                    link_state.actual_state = "pending"
+                    link_state.error_message = f"Waiting for VLAN/tag readiness: {error}"
+                else:
+                    link_state.actual_state = "error"
+                    link_state.error_message = f"Verification failed: {error}"
                 _sync_oper_state(session, link_state)
                 log_parts.append(f"  {link_state.link_name}: FAILED - {link_state.error_message}")
                 return False
@@ -947,11 +970,16 @@ async def create_cross_host_link(
         )
 
         if not result.get("success"):
-            link_state.actual_state = "error"
             error_msg = result.get("error", "Link tunnel setup failed")
+            readiness_issue = _classify_link_readiness_issue(error_msg)
             if result.get("partial_state"):
                 error_msg = f"PARTIAL_STATE: {error_msg}"
-            link_state.error_message = error_msg
+            if readiness_issue == "interface_missing" and not result.get("partial_state"):
+                link_state.actual_state = "pending"
+                link_state.error_message = f"Waiting for interface readiness: {error_msg}"
+            else:
+                link_state.actual_state = "error"
+                link_state.error_message = error_msg
             _sync_oper_state(session, link_state)
             log_parts.append(f"  {link_state.link_name}: FAILED - {link_state.error_message}")
             return False
@@ -967,8 +995,13 @@ async def create_cross_host_link(
         if verify:
             is_valid, error = await verify_link_connected(session, link_state, host_to_agent)
             if not is_valid:
-                link_state.actual_state = "error"
-                link_state.error_message = f"Verification failed: {error}"
+                readiness_issue = _classify_link_readiness_issue(error)
+                if readiness_issue == "vlan_missing":
+                    link_state.actual_state = "pending"
+                    link_state.error_message = f"Waiting for VLAN/tag readiness: {error}"
+                else:
+                    link_state.actual_state = "error"
+                    link_state.error_message = f"Verification failed: {error}"
                 _sync_oper_state(session, link_state)
                 log_parts.append(f"  {link_state.link_name}: FAILED - {link_state.error_message}")
                 return False

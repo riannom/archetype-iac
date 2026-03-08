@@ -14,6 +14,7 @@ import pytest
 
 from app import models
 from app.agent_client import AgentUnavailableError
+from app.schemas.lab import CrossHostLink
 from app.state import JobStatus, NodeActualState
 from app.tasks.node_lifecycle import LifecycleResult, NodeLifecycleManager, _get_container_name
 import app.tasks.node_lifecycle_deploy as nlc_deploy
@@ -686,6 +687,306 @@ class TestResolveAgents:
 
         assert result is True
         assert manager.agent.id == host.id
+
+
+# ---------------------------------------------------------------------------
+# Hard preflight gates
+# ---------------------------------------------------------------------------
+
+
+class TestHardPreflightGates:
+    def test_assigned_host_health_gate_fails_before_transitional_changes(self, test_db, test_user):
+        host = _make_host(test_db, "host-a", "Host A", status="offline")
+        lab = _make_lab(test_db, test_user)
+        job = _make_job(test_db, lab, test_user)
+        ns = _make_node_state(test_db, lab, "n1", "R1", desired="running", actual="undeployed")
+        node = _make_node_def(test_db, lab, "n1", "R1", "R1", host_id=host.id)
+
+        manager = _make_manager(test_db, lab, job, [ns.node_id])
+        manager.node_states = [ns]
+        manager.db_nodes_map = {"R1": node}
+        manager.db_nodes_by_gui_id = {"n1": node}
+
+        result = manager._check_assigned_host_health_gate()
+
+        assert result is False
+        assert job.status == JobStatus.FAILED.value
+        assert ns.actual_state == NodeActualState.ERROR.value
+        assert ns.error_message == "Assigned host unavailable: Host A"
+        assert "Assigned host availability check failed" in manager.log_parts[1]
+
+    @pytest.mark.asyncio
+    async def test_execute_stops_before_transitional_states_when_preflight_fails(self, test_db, test_user):
+        host = _make_host(test_db, "host-a", "Host A", status="offline")
+        lab = _make_lab(test_db, test_user)
+        job = _make_job(test_db, lab, test_user)
+        ns = _make_node_state(test_db, lab, "n1", "R1", desired="running", actual="undeployed")
+        _make_node_def(test_db, lab, "n1", "R1", "R1", host_id=host.id)
+
+        manager = _make_manager(test_db, lab, job, [ns.node_id])
+
+        with patch.object(manager, "_set_transitional_states", new_callable=AsyncMock) as mock_set_transitional:
+            result = await manager.execute()
+
+        test_db.refresh(ns)
+        assert result.success is False
+        mock_set_transitional.assert_not_awaited()
+        assert ns.actual_state == NodeActualState.ERROR.value
+        assert ns.error_message == "Assigned host unavailable: Host A"
+
+    @pytest.mark.asyncio
+    async def test_assigned_host_image_gate_fails_before_transitional_changes(self, test_db, test_user):
+        host = _make_host(test_db, "host-a", "Host A", status="online")
+        lab = _make_lab(test_db, test_user)
+        job = _make_job(test_db, lab, test_user)
+        ns = _make_node_state(test_db, lab, "n1", "R1", desired="running", actual="undeployed")
+        node = _make_node_def(test_db, lab, "n1", "R1", "R1", host_id=host.id, device="linux")
+
+        manager = _make_manager(test_db, lab, job, [ns.node_id])
+        manager.node_states = [ns]
+        manager.db_nodes_map = {"R1": node}
+        manager.db_nodes_by_gui_id = {"n1": node}
+
+        with patch("app.tasks.image_sync.ensure_images_for_deployment", new_callable=AsyncMock) as mock_ensure, \
+             patch("app.tasks.node_lifecycle.resolve_node_image", return_value="linux:latest"):
+            mock_ensure.return_value = (False, ["linux:latest"], ["Checking 1 image(s) on agent Host A..."])
+            result = await manager._check_assigned_host_image_gate()
+
+        assert result is False
+        assert job.status == JobStatus.FAILED.value
+        assert ns.actual_state == NodeActualState.ERROR.value
+        assert ns.error_message == "Required image not available on assigned host: Host A"
+
+    @pytest.mark.asyncio
+    async def test_execute_stops_before_transitional_states_when_image_preflight_fails(self, test_db, test_user):
+        host = _make_host(test_db, "host-a", "Host A", status="online")
+        lab = _make_lab(test_db, test_user)
+        job = _make_job(test_db, lab, test_user)
+        ns = _make_node_state(test_db, lab, "n1", "R1", desired="running", actual="undeployed")
+        _make_node_def(test_db, lab, "n1", "R1", "R1", host_id=host.id, device="linux")
+
+        manager = _make_manager(test_db, lab, job, [ns.node_id])
+
+        with patch.object(manager, "_set_transitional_states", new_callable=AsyncMock) as mock_set_transitional, \
+             patch("app.tasks.image_sync.ensure_images_for_deployment", new_callable=AsyncMock) as mock_ensure, \
+             patch("app.tasks.node_lifecycle.resolve_node_image", return_value="linux:latest"):
+            mock_ensure.return_value = (False, ["linux:latest"], ["Checking 1 image(s) on agent Host A..."])
+            result = await manager.execute()
+
+        test_db.refresh(ns)
+        assert result.success is False
+        mock_set_transitional.assert_not_awaited()
+        assert ns.actual_state == NodeActualState.ERROR.value
+        assert ns.error_message == "Required image not available on assigned host: Host A"
+
+    @pytest.mark.asyncio
+    async def test_runtime_conflict_gate_fails_before_transitional_changes(self, test_db, test_user):
+        host = _make_host(test_db, "host-a", "Host A", status="online")
+        lab = _make_lab(test_db, test_user)
+        job = _make_job(test_db, lab, test_user)
+        ns = _make_node_state(test_db, lab, "n1", "R1", desired="running", actual="undeployed")
+        node = _make_node_def(test_db, lab, "n1", "R1", "R1", host_id=host.id, device="linux")
+
+        manager = _make_manager(test_db, lab, job, [ns.node_id])
+        manager.agent = host
+        manager.node_states = [ns]
+        manager.db_nodes_map = {"R1": node}
+        manager.db_nodes_by_gui_id = {"n1": node}
+
+        with patch("app.tasks.node_lifecycle.agent_client.probe_runtime_conflict_on_agent", new_callable=AsyncMock) as mock_probe:
+            mock_probe.return_value = {
+                "available": False,
+                "classification": "foreign",
+                "error": "Container archetype-test-r1 is not managed by Archetype",
+            }
+            result = await manager._check_runtime_namespace_gate()
+
+        assert result is False
+        assert job.status == JobStatus.FAILED.value
+        assert ns.actual_state == NodeActualState.ERROR.value
+        assert ns.error_message == "Container archetype-test-r1 is not managed by Archetype"
+
+    @pytest.mark.asyncio
+    async def test_execute_stops_before_transitional_states_when_runtime_conflict_preflight_fails(self, test_db, test_user):
+        host = _make_host(test_db, "host-a", "Host A", status="online")
+        lab = _make_lab(test_db, test_user)
+        job = _make_job(test_db, lab, test_user)
+        ns = _make_node_state(test_db, lab, "n1", "R1", desired="running", actual="undeployed")
+        _make_node_def(test_db, lab, "n1", "R1", "R1", host_id=host.id, device="linux")
+
+        manager = _make_manager(test_db, lab, job, [ns.node_id])
+
+        with patch.object(manager, "_check_assigned_host_image_gate", new_callable=AsyncMock, return_value=True), \
+             patch.object(manager, "_set_transitional_states", new_callable=AsyncMock) as mock_set_transitional, \
+             patch("app.tasks.node_lifecycle.agent_client.probe_runtime_conflict_on_agent", new_callable=AsyncMock) as mock_probe:
+            mock_probe.return_value = {
+                "available": False,
+                "classification": "stale_managed",
+                "error": "Container archetype-test-r1 belongs to a different managed node identity",
+            }
+            result = await manager.execute()
+
+        test_db.refresh(ns)
+        assert result.success is False
+        mock_set_transitional.assert_not_awaited()
+        assert ns.actual_state == NodeActualState.ERROR.value
+        assert ns.error_message == "Container archetype-test-r1 belongs to a different managed node identity"
+
+    @pytest.mark.asyncio
+    async def test_cross_host_capacity_gate_fails_before_transitional_changes(self, test_db, test_user):
+        host_a = _make_host(test_db, "host-a", "Host A", status="online")
+        host_b = _make_host(test_db, "host-b", "Host B", status="online")
+        lab = _make_lab(test_db, test_user)
+        job = _make_job(test_db, lab, test_user)
+        ns = _make_node_state(test_db, lab, "n1", "R1", desired="running", actual="undeployed")
+        peer_ns = _make_node_state(test_db, lab, "n2", "R2", desired="running", actual="running")
+        node = _make_node_def(test_db, lab, "n1", "R1", "R1", host_id=host_a.id, device="linux")
+        _make_node_def(test_db, lab, "n2", "R2", "R2", host_id=host_b.id, device="linux")
+
+        manager = _make_manager(test_db, lab, job, [ns.node_id])
+        manager.node_states = [ns]
+        manager.db_nodes_map = {"R1": node}
+        manager.db_nodes_by_gui_id = {"n1": node}
+        manager.all_lab_states = {"R1": ns, "R2": peer_ns}
+
+        manager.topo_service.get_cross_host_links = MagicMock(return_value=[
+            CrossHostLink(
+                link_id="R1:eth1-R2:eth1",
+                node_a="R1",
+                interface_a="eth1",
+                host_a=host_a.id,
+                node_b="R2",
+                interface_b="eth1",
+                host_b=host_b.id,
+            )
+        ])
+
+        with patch("app.tasks.node_lifecycle.agent_client.get_ovs_status_from_agent", new_callable=AsyncMock) as mock_status:
+            mock_status.return_value = {"initialized": True, "vlan_allocations": 3901}
+            result = await manager._check_cross_host_link_capacity_gate()
+
+        assert result is False
+        assert job.status == JobStatus.FAILED.value
+        assert ns.actual_state == NodeActualState.ERROR.value
+        assert ns.error_message == "Cross-host link capacity unavailable"
+
+    @pytest.mark.asyncio
+    async def test_execute_stops_before_transitional_states_when_cross_host_capacity_preflight_fails(self, test_db, test_user):
+        host_a = _make_host(test_db, "host-a", "Host A", status="online")
+        host_b = _make_host(test_db, "host-b", "Host B", status="online")
+        lab = _make_lab(test_db, test_user)
+        job = _make_job(test_db, lab, test_user)
+        ns = _make_node_state(test_db, lab, "n1", "R1", desired="running", actual="undeployed")
+        peer_ns = _make_node_state(test_db, lab, "n2", "R2", desired="running", actual="running")
+        _make_node_def(test_db, lab, "n1", "R1", "R1", host_id=host_a.id, device="linux")
+        _make_node_def(test_db, lab, "n2", "R2", "R2", host_id=host_b.id, device="linux")
+
+        manager = _make_manager(test_db, lab, job, [ns.node_id])
+        manager.topo_service.get_cross_host_links = MagicMock(return_value=[
+            CrossHostLink(
+                link_id="R1:eth1-R2:eth1",
+                node_a="R1",
+                interface_a="eth1",
+                host_a=host_a.id,
+                node_b="R2",
+                interface_b="eth1",
+                host_b=host_b.id,
+            )
+        ])
+
+        with patch.object(manager, "_check_assigned_host_image_gate", new_callable=AsyncMock, return_value=True), \
+             patch("app.tasks.node_lifecycle.agent_client.probe_runtime_conflict_on_agent", new_callable=AsyncMock) as mock_probe, \
+             patch("app.tasks.node_lifecycle.agent_client.get_ovs_status_from_agent", new_callable=AsyncMock) as mock_status, \
+             patch.object(manager, "_set_transitional_states", new_callable=AsyncMock) as mock_set_transitional:
+            mock_probe.return_value = {"available": True, "classification": "absent"}
+            mock_status.return_value = {"initialized": True, "vlan_allocations": 3901}
+            result = await manager.execute()
+
+        test_db.refresh(ns)
+        assert result.success is False
+        mock_set_transitional.assert_not_awaited()
+        assert ns.actual_state == NodeActualState.ERROR.value
+        assert ns.error_message == "Cross-host link capacity unavailable"
+
+    @pytest.mark.asyncio
+    async def test_assigned_host_image_gate_reports_sync_disabled(self, test_db, test_user):
+        host = _make_host(test_db, "host-a", "Host A", status="online")
+        lab = _make_lab(test_db, test_user)
+        job = _make_job(test_db, lab, test_user)
+        ns = _make_node_state(test_db, lab, "n1", "R1", desired="running", actual="undeployed")
+        node = _make_node_def(test_db, lab, "n1", "R1", "R1", host_id=host.id, device="linux")
+
+        manager = _make_manager(test_db, lab, job, [ns.node_id])
+        manager.node_states = [ns]
+        manager.db_nodes_map = {"R1": node}
+        manager.db_nodes_by_gui_id = {"n1": node}
+
+        with patch("app.tasks.image_sync.ensure_images_for_deployment", new_callable=AsyncMock) as mock_ensure, \
+             patch("app.tasks.node_lifecycle.resolve_node_image", return_value="linux:latest"):
+            mock_ensure.return_value = (
+                False,
+                ["linux:latest"],
+                ["Image sync is disabled for this agent"],
+            )
+            result = await manager._check_assigned_host_image_gate()
+
+        assert result is False
+        assert ns.error_message == "Image sync disabled on assigned host: Host A"
+
+    @pytest.mark.asyncio
+    async def test_assigned_host_image_gate_reports_missing_library_entry(self, test_db, test_user):
+        host = _make_host(test_db, "host-a", "Host A", status="online")
+        lab = _make_lab(test_db, test_user)
+        job = _make_job(test_db, lab, test_user)
+        ns = _make_node_state(test_db, lab, "n1", "R1", desired="running", actual="undeployed")
+        node = _make_node_def(test_db, lab, "n1", "R1", "R1", host_id=host.id, device="linux")
+
+        manager = _make_manager(test_db, lab, job, [ns.node_id])
+        manager.node_states = [ns]
+        manager.db_nodes_map = {"R1": node}
+        manager.db_nodes_by_gui_id = {"n1": node}
+
+        with patch("app.tasks.image_sync.ensure_images_for_deployment", new_callable=AsyncMock) as mock_ensure, \
+             patch("app.tasks.node_lifecycle.resolve_node_image", return_value="linux:latest"):
+            mock_ensure.return_value = (
+                False,
+                ["linux:latest"],
+                ["Missing images not found in library - cannot sync"],
+            )
+            result = await manager._check_assigned_host_image_gate()
+
+        assert result is False
+        assert ns.error_message == "Required image not present in library for assigned host: Host A"
+
+    def test_assigned_host_capacity_gate_fails_before_transitional_changes(self, test_db, test_user, monkeypatch):
+        host = _make_host(test_db, "host-a", "Host A", status="online")
+        lab = _make_lab(test_db, test_user)
+        job = _make_job(test_db, lab, test_user)
+        ns = _make_node_state(test_db, lab, "n1", "R1", desired="running", actual="undeployed")
+        node = _make_node_def(test_db, lab, "n1", "R1", "R1", host_id=host.id, device="linux")
+
+        manager = _make_manager(test_db, lab, job, [ns.node_id])
+        manager.node_states = [ns]
+        manager.db_nodes_map = {"R1": node}
+        manager.db_nodes_by_gui_id = {"n1": node}
+
+        from app.tasks import node_lifecycle
+        monkeypatch.setattr(node_lifecycle.settings, "resource_validation_enabled", True)
+
+        mock_cap_result = MagicMock(
+            fits=False,
+            required_memory_mb=4096,
+            available_memory_mb=1024,
+            has_warnings=False,
+        )
+        with patch("app.services.resource_capacity.check_capacity", return_value=mock_cap_result), \
+             patch("app.services.resource_capacity.format_capacity_error", return_value="Host A: requires 4096MB RAM, 1024MB available"):
+            result = manager._check_assigned_host_capacity_gate()
+
+        assert result is False
+        assert job.status == JobStatus.FAILED.value
+        assert ns.actual_state == NodeActualState.ERROR.value
+        assert ns.error_message == "Insufficient resources on assigned host"
 
 
 # ---------------------------------------------------------------------------
@@ -1429,6 +1730,9 @@ class TestExecuteOrchestration:
         mock_ac.is_agent_online = MagicMock(return_value=True)
         mock_ac.ping_agent = AsyncMock(return_value=True)
         mock_ac.get_healthy_agent = AsyncMock(return_value=None)
+        mock_ac.probe_runtime_conflict_on_agent = AsyncMock(
+            return_value={"available": True, "classification": "absent"}
+        )
         mock_ac.deploy_to_agent = AsyncMock(return_value={"status": "completed"})
         mock_ac.get_lab_status_from_agent = AsyncMock(return_value={
             "nodes": [{"name": "R1", "node_definition_id": node_def.id, "runtime_id": "runtime-r1"}]
@@ -1538,6 +1842,9 @@ class TestExecuteOrchestration:
         mock_ac.is_agent_online = MagicMock(return_value=True)
         mock_ac.ping_agent = AsyncMock(return_value=True)
         mock_ac.get_healthy_agent = AsyncMock(return_value=None)
+        mock_ac.probe_runtime_conflict_on_agent = AsyncMock(
+            return_value={"available": True, "classification": "absent"}
+        )
         mock_ac.deploy_to_agent = AsyncMock(return_value={"status": "completed"})
         mock_ac.get_lab_status_from_agent = AsyncMock(return_value={
             "nodes": [{"name": "R1", "node_definition_id": node_def1.id, "runtime_id": "runtime-r1"}]
@@ -1600,6 +1907,9 @@ class TestExecuteOrchestration:
         mock_ac.is_agent_online = MagicMock(return_value=True)
         mock_ac.ping_agent = AsyncMock(return_value=True)
         mock_ac.get_healthy_agent = AsyncMock(return_value=None)
+        mock_ac.probe_runtime_conflict_on_agent = AsyncMock(
+            return_value={"available": True, "classification": "absent"}
+        )
         mock_settings = MagicMock()
         mock_settings.resource_validation_enabled = True
         mock_settings.image_sync_enabled = False
@@ -1655,6 +1965,9 @@ class TestExecuteOrchestration:
         mock_ac.is_agent_online = MagicMock(return_value=True)
         mock_ac.ping_agent = AsyncMock(return_value=True)
         mock_ac.get_healthy_agent = AsyncMock(return_value=None)
+        mock_ac.probe_runtime_conflict_on_agent = AsyncMock(
+            return_value={"available": True, "classification": "absent"}
+        )
         # Deploy fails
         mock_ac.deploy_to_agent = AsyncMock(
             return_value={"status": "failed", "error_message": "Deploy error"}
@@ -2934,6 +3247,31 @@ class TestActiveReadinessPolling:
             for line in manager.log_parts
         )
 
+    @pytest.mark.asyncio
+    async def test_readiness_triggers_same_host_link_connection_when_node_becomes_ready(self, test_db, test_user):
+        host = _make_host(test_db)
+        lab = _make_lab(test_db, test_user, agent_id=host.id)
+        job = _make_job(test_db, lab, test_user)
+        ns = _make_node_state(test_db, lab, "n1", "R1", desired="running", actual="running")
+        node_def = _make_node_def(test_db, lab, "n1", "R1", "R1", host_id=host.id)
+
+        manager = _make_manager(test_db, lab, job, [ns.node_id], agent=host)
+        manager.node_states = [ns]
+        manager.db_nodes_map = {"R1": node_def}
+        manager.placements_map = {}
+        manager.all_lab_states = {"R1": ns}
+        manager._connect_same_host_links = AsyncMock()
+
+        with patch("app.tasks.node_lifecycle.agent_client") as mock_ac, \
+             patch("app.tasks.node_lifecycle.asyncio.sleep", new_callable=AsyncMock), \
+             patch("app.tasks.node_lifecycle.asyncio.get_running_loop") as mock_loop:
+            times = iter([0, 6, 12])
+            mock_loop.return_value.time = lambda: next(times, 12)
+            mock_ac.check_node_readiness = AsyncMock(return_value={"is_ready": True})
+            await manager._wait_for_readiness(["R1"])
+
+        manager._connect_same_host_links.assert_awaited_once_with({"R1"})
+
 
 class TestPlacementFailover:
     """Tests for failed placement fallback to resource scoring."""
@@ -3073,6 +3411,47 @@ class TestPostOperationCleanup:
             for line in manager.log_parts
         )
         assert manager.post_operation_cleanup_failed is True
+
+    @pytest.mark.asyncio
+    async def test_releases_transaction_between_cleanup_phases(self, test_db, test_user):
+        host = _make_host(test_db)
+        lab = _make_lab(test_db, test_user, agent_id=host.id)
+        job = _make_job(test_db, lab, test_user)
+        manager = _make_manager(test_db, lab, job, [], agent=host)
+        manager.log_parts = []
+        manager._release_db_transaction_for_io = MagicMock()
+
+        with patch(
+            "app.tasks.jobs._create_cross_host_links_if_ready",
+            new_callable=AsyncMock,
+        ) as mock_cross_host, patch(
+            "app.tasks.link_reconciliation.reconcile_lab_links",
+            new_callable=AsyncMock,
+            return_value={"checked": 0, "created": 0, "repaired": 0, "errors": 0, "skipped": 0},
+        ), patch(
+            "app.tasks.link_reconciliation.run_overlay_convergence",
+            new_callable=AsyncMock,
+            return_value={},
+        ), patch(
+            "app.tasks.link_reconciliation.refresh_interface_mappings",
+            new_callable=AsyncMock,
+            return_value={"updated": 0, "created": 0},
+        ), patch(
+            "app.tasks.link_reconciliation.run_cross_host_port_convergence",
+            new_callable=AsyncMock,
+            return_value={"updated": 0, "errors": 0},
+        ):
+            await manager._post_operation_cleanup()
+
+        mock_cross_host.assert_awaited_once()
+        contexts = [call.args[0] for call in manager._release_db_transaction_for_io.call_args_list]
+        assert contexts == [
+            "cross-host link creation",
+            "post-op link reconciliation",
+            "post-op overlay convergence",
+            "post-op interface mapping refresh",
+            "post-op cross-host port convergence",
+        ]
 
 
 class TestFinalizePostOperationFailure:

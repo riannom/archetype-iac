@@ -95,6 +95,35 @@ class TestCreateNode:
         assert resp.status_code == 503
         client.close()
 
+    def test_runtime_conflict_probe_returns_classification(self) -> None:
+        """Runtime-conflict probe returns the provider classification payload."""
+        provider = MagicMock()
+        provider.probe_runtime_conflict = AsyncMock(
+            return_value=MagicMock(
+                available=False,
+                classification="foreign",
+                runtime_name="archetype-lab1-r1",
+                status="exited",
+                runtime_id="abc123def456",
+                error="Container archetype-lab1-r1 is not managed by Archetype",
+            )
+        )
+
+        client = TestClient(app, raise_server_exceptions=False)
+        with patch("agent.routers.nodes.get_provider_for_request", return_value=provider):
+            resp = client.post(
+                "/labs/lab1/nodes/r1/runtime-conflict?provider=docker",
+                json={"node_name": "r1"},
+            )
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["success"] is False
+        assert body["available"] is False
+        assert body["classification"] == "foreign"
+        assert body["runtime_name"] == "archetype-lab1-r1"
+        client.close()
+
 
 # ---------------------------------------------------------------------------
 # TestStartNode

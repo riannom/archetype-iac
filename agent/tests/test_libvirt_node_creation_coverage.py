@@ -12,6 +12,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
 
 # Ensure agent package is importable
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -67,7 +68,7 @@ class TestCreateNodePreSync:
     def test_already_running_returns_result(self):
         provider = _make_provider()
         provider._node_precheck_sync = MagicMock(
-            return_value=(True, "abc123", NodeStatus.RUNNING),
+            return_value=(True, "abc123", NodeStatus.RUNNING, "expected"),
         )
         provider._running_domain_identity_visible = MagicMock(return_value=True)
         provider._disks_dir = MagicMock(return_value=Path("/tmp/disks"))
@@ -86,7 +87,7 @@ class TestCreateNodePreSync:
     def test_already_running_without_metadata_visibility_returns_error(self):
         provider = _make_provider()
         provider._node_precheck_sync = MagicMock(
-            return_value=(True, "abc123", NodeStatus.RUNNING),
+            return_value=(True, "abc123", NodeStatus.RUNNING, "expected"),
         )
         provider._running_domain_identity_visible = MagicMock(return_value=False)
         provider._disks_dir = MagicMock(return_value=Path("/tmp/disks"))
@@ -103,7 +104,7 @@ class TestCreateNodePreSync:
     def test_not_running_returns_none(self):
         provider = _make_provider()
         provider._node_precheck_sync = MagicMock(
-            return_value=(False, None, None),
+            return_value=(False, None, None, None),
         )
         provider._disks_dir = MagicMock(return_value=Path("/tmp/disks"))
 
@@ -112,6 +113,72 @@ class TestCreateNodePreSync:
         )
 
         assert result is None
+
+    def test_existing_stopped_expected_domain_returns_stopped_result(self):
+        provider = _make_provider()
+        provider._node_precheck_sync = MagicMock(
+            return_value=(False, "abc123", NodeStatus.STOPPED, "expected"),
+        )
+        provider._disks_dir = MagicMock(return_value=Path("/tmp/disks"))
+
+        result = provider._create_node_pre_sync(
+            "lab1", "r1", "arch-lab1-r1", Path("/tmp/ws"),
+            node_definition_id="node-def-1",
+        )
+
+        assert result is not None
+        assert result.success is True
+        assert result.new_status == NodeStatus.STOPPED
+        assert "already exists" in (result.stdout or "")
+
+    def test_existing_stopped_foreign_domain_returns_error(self):
+        provider = _make_provider()
+        provider._node_precheck_sync = MagicMock(
+            return_value=(False, "abc123", NodeStatus.STOPPED, "foreign"),
+        )
+        provider._disks_dir = MagicMock(return_value=Path("/tmp/disks"))
+
+        result = provider._create_node_pre_sync(
+            "lab1", "r1", "arch-lab1-r1", Path("/tmp/ws"),
+        )
+
+        assert result is not None
+        assert result.success is False
+        assert "not managed by Archetype" in (result.error or "")
+
+    def test_existing_stopped_stale_managed_domain_returns_error(self):
+        provider = _make_provider()
+        provider._node_precheck_sync = MagicMock(
+            return_value=(False, "abc123", NodeStatus.STOPPED, "stale_managed"),
+        )
+        provider._disks_dir = MagicMock(return_value=Path("/tmp/disks"))
+
+        result = provider._create_node_pre_sync(
+            "lab1", "r1", "arch-lab1-r1", Path("/tmp/ws"),
+            node_definition_id="node-def-1",
+        )
+
+        assert result is not None
+        assert result.success is False
+        assert "different node identity" in (result.error or "")
+
+    @pytest.mark.asyncio
+    async def test_probe_runtime_conflict_reports_stale_managed_domain(self):
+        provider = _make_provider()
+        provider._run_libvirt = AsyncMock(
+            return_value=(False, "abc123", NodeStatus.STOPPED, "stale_managed"),
+        )
+
+        result = await provider.probe_runtime_conflict(
+            "lab1",
+            "r1",
+            node_definition_id="node-def-1",
+        )
+
+        assert result.available is False
+        assert result.classification == "stale_managed"
+        assert result.status == NodeStatus.STOPPED.value
+        assert "different managed node identity" in (result.error or "")
 
 
 # ---------------------------------------------------------------------------

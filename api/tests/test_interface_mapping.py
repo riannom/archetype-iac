@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from unittest.mock import MagicMock
+
 import pytest
 
 from app import models
@@ -172,3 +174,94 @@ async def test_populate_from_agent_uses_port_state_for_libvirt_nodes(
     assert mapping.ovs_port == "vnet306"
     assert mapping.vlan_tag == 256
     assert mapping.last_verified_at is not None
+
+
+@pytest.mark.asyncio
+async def test_populate_from_agent_releases_transaction_before_agent_queries(
+    test_db, sample_lab, sample_host, monkeypatch,
+) -> None:
+    node = models.Node(
+        lab_id=sample_lab.id,
+        gui_id="r1",
+        display_name="R1",
+        container_name="r1",
+        node_type="device",
+        device="linux",
+    )
+    test_db.add(node)
+    test_db.commit()
+
+    release_calls: list[dict] = []
+
+    def fake_release(database, *, lab_id, context):
+        release_calls.append({
+            "context": context,
+            "lab_id": lab_id,
+        })
+
+    async def fake_get_ports(agent, lab_id):
+        return []
+
+    async def fake_get_port_state(agent, lab_id):
+        return []
+
+    monkeypatch.setattr(interface_mapping, "_release_db_transaction_for_io", fake_release)
+    monkeypatch.setattr(
+        "app.services.interface_mapping.agent_client.get_lab_ports_from_agent",
+        fake_get_ports,
+    )
+    monkeypatch.setattr(
+        "app.services.interface_mapping.agent_client.get_lab_port_state",
+        fake_get_port_state,
+    )
+
+    await interface_mapping.populate_from_agent(test_db, sample_lab.id, sample_host)
+
+    assert release_calls == [{
+        "context": f"interface mapping sync for agent {sample_host.id}",
+        "lab_id": sample_lab.id,
+    }]
+
+
+@pytest.mark.asyncio
+async def test_populate_all_agents_recovers_session_after_agent_failure(
+    test_db, sample_lab, monkeypatch,
+) -> None:
+    host = models.Host(
+        id="agent-1",
+        name="Agent 1",
+        address="localhost:1",
+        status="online",
+        capabilities="{}",
+    )
+    test_db.add(host)
+    test_db.commit()
+    placement = models.NodePlacement(
+        lab_id=sample_lab.id,
+        node_name="r1",
+        host_id=host.id,
+        status="deployed",
+    )
+    test_db.add(placement)
+    test_db.commit()
+
+    rollback_marker = MagicMock()
+
+    def fake_reset(database, *, context, table="unknown", lab_id=None, job_id=None):
+        rollback_marker(context=context, table=table, lab_id=lab_id, job_id=job_id)
+
+    async def fake_populate(database, lab_id, agent, target_node=None):
+        raise RuntimeError("agent port-state failed")
+
+    monkeypatch.setattr(interface_mapping, "_reset_session_after_db_error", fake_reset)
+    monkeypatch.setattr(interface_mapping, "populate_from_agent", fake_populate)
+
+    result = await interface_mapping.populate_all_agents(test_db, sample_lab.id)
+
+    assert result["errors"] == 1
+    assert rollback_marker.call_args.kwargs == {
+        "context": f"interface mapping sync for agent {host.id}",
+        "table": "interface_mappings",
+        "lab_id": sample_lab.id,
+        "job_id": None,
+    }

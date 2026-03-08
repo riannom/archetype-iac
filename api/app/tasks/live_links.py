@@ -127,24 +127,30 @@ async def create_link_if_ready(
         .first()
     )
 
-    # Check if both nodes are running
+    # Check if both nodes are running and ready. A running-but-unready node is
+    # still in the normal initialization path; link creation should wait rather
+    # than letting reconciliation act as initialization glue.
     source_running = source_state and source_state.actual_state == NodeActualState.RUNNING
     target_running = target_state and target_state.actual_state == NodeActualState.RUNNING
+    source_ready = bool(source_state and source_state.is_ready)
+    target_ready = bool(target_state and target_state.is_ready)
 
-    if not source_running or not target_running:
-        # One or both nodes not running - mark link as pending for later auto-connect
+    if not source_running or not target_running or not source_ready or not target_ready:
+        # One or both nodes not yet fully ready - mark link as pending for later auto-connect
         link_state.actual_state = LinkActualState.PENDING
         link_state.error_message = None
         _sync_oper_state(session, link_state)
         src_status = source_state.actual_state if source_state else "unknown"
         tgt_status = target_state.actual_state if target_state else "unknown"
+        src_ready = source_state.is_ready if source_state else None
+        tgt_ready = target_state.is_ready if target_state else None
         log_parts.append(
             f"  {link_state.link_name}: PENDING - waiting for nodes "
-            f"(source={src_status}, target={tgt_status})"
+            f"(source={src_status}/ready={src_ready}, target={tgt_status}/ready={tgt_ready})"
         )
         logger.info(
             f"Link {link_state.link_name} queued - waiting for nodes "
-            f"(source={src_status}, target={tgt_status})"
+            f"(source={src_status}/ready={src_ready}, target={tgt_status}/ready={tgt_ready})"
         )
         return False
 

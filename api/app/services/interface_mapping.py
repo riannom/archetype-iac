@@ -21,8 +21,22 @@ from sqlalchemy.orm import Session
 
 from app import agent_client, models
 from app.services.interface_naming import normalize_interface, denormalize_interface
+from app.tasks.jobs import (
+    _release_db_transaction_for_io as _release_db_tx_for_io,
+    _reset_session_after_db_error,
+)
 
 logger = logging.getLogger(__name__)
+
+
+def _release_db_transaction_for_io(database: Session, *, lab_id: str, context: str) -> None:
+    """Release transaction boundaries before awaited agent port-state queries."""
+    _release_db_tx_for_io(
+        database,
+        context=context,
+        table="interface_mappings",
+        lab_id=lab_id,
+    )
 
 
 def _merge_agent_ports(
@@ -224,6 +238,11 @@ async def populate_from_agent(
     # Merge provider-specific and provider-agnostic feeds.
     # Docker OVS plugin inventory is useful for bridge/container naming, but
     # agent port-state is the authoritative source for live VM endpoint data.
+    _release_db_transaction_for_io(
+        database,
+        lab_id=lab_id,
+        context=f"interface mapping sync for agent {agent.id}",
+    )
     docker_ports = await agent_client.get_lab_ports_from_agent(agent, lab_id) or []
     port_state = await agent_client.get_lab_port_state(agent, lab_id) or []
 
@@ -306,7 +325,12 @@ async def populate_all_agents(
             result["errors"] += agent_result["errors"]
             result["agents_queried"] += 1
         except Exception as e:
-            database.rollback()
+            _reset_session_after_db_error(
+                database,
+                context=f"interface mapping sync for agent {agent.id}",
+                table="interface_mappings",
+                lab_id=lab_id,
+            )
             logger.error(f"Failed to populate mappings from agent {agent.name}: {e}")
             result["errors"] += 1
 

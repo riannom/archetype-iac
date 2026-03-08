@@ -721,6 +721,75 @@ class TestCreateSameHostLinkExtended:
         assert "Verification failed" in (link_state.error_message or "")
 
     @pytest.mark.asyncio
+    async def test_missing_ovs_port_keeps_same_host_link_pending(
+        self, test_db: Session, sample_lab: models.Lab, sample_host: models.Host
+    ):
+        """Missing OVS ports are treated as interface-readiness lag, not hard failure."""
+        from app.tasks.link_orchestration import create_same_host_link
+
+        link_state = _make_link_state(
+            test_db, sample_lab,
+            link_name="R1:eth1-R2:eth1",
+            source_node="r1", source_interface="eth1",
+            target_node="r2", target_interface="eth1",
+            source_host_id=sample_host.id,
+            target_host_id=sample_host.id,
+        )
+        test_db.commit()
+
+        host_to_agent = {sample_host.id: sample_host}
+
+        with patch("app.tasks.link_orchestration.agent_client") as mock_client:
+            mock_client.create_link_on_agent = AsyncMock(
+                return_value={"success": False, "error": "Cannot find OVS port for r1:eth1"}
+            )
+
+            result = await create_same_host_link(
+                test_db, sample_lab.id, link_state, host_to_agent, []
+            )
+
+        assert result is False
+        assert link_state.actual_state == "pending"
+        assert "Waiting for interface readiness" in (link_state.error_message or "")
+
+    @pytest.mark.asyncio
+    async def test_missing_vlan_tag_keeps_same_host_link_pending(
+        self, test_db: Session, sample_lab: models.Lab, sample_host: models.Host
+    ):
+        """Unreadable VLAN tags are treated as VLAN readiness lag, not hard failure."""
+        from app.tasks.link_orchestration import create_same_host_link
+
+        link_state = _make_link_state(
+            test_db, sample_lab,
+            link_name="R1:eth1-R2:eth1",
+            source_node="r1", source_interface="eth1",
+            target_node="r2", target_interface="eth1",
+            source_host_id=sample_host.id,
+            target_host_id=sample_host.id,
+        )
+        test_db.commit()
+
+        host_to_agent = {sample_host.id: sample_host}
+
+        with patch("app.tasks.link_orchestration.agent_client") as mock_client, \
+             patch(
+                 "app.tasks.link_orchestration.verify_link_connected",
+                 new_callable=AsyncMock,
+                 return_value=(False, "Could not read VLAN tag for r1:eth1"),
+             ):
+            mock_client.create_link_on_agent = AsyncMock(
+                return_value={"success": True, "vlan_tag": 99}
+            )
+
+            result = await create_same_host_link(
+                test_db, sample_lab.id, link_state, host_to_agent, []
+            )
+
+        assert result is False
+        assert link_state.actual_state == "pending"
+        assert "Waiting for VLAN/tag readiness" in (link_state.error_message or "")
+
+    @pytest.mark.asyncio
     async def test_logs_warning_when_agent_lacks_ovs_port_hints(
         self, test_db: Session, sample_lab: models.Lab, sample_host: models.Host
     ):
@@ -962,6 +1031,80 @@ class TestCreateCrossHostLinkExtended:
         assert result is False
         assert link_state.actual_state == "error"
         assert "PARTIAL_STATE" in (link_state.error_message or "")
+
+    @pytest.mark.asyncio
+    async def test_missing_ovs_port_keeps_cross_host_link_pending(
+        self, test_db: Session, sample_lab: models.Lab, multiple_hosts: list[models.Host]
+    ):
+        """Cross-host link setup waits when endpoint OVS ports are not yet discoverable."""
+        from app.tasks.link_orchestration import create_cross_host_link
+
+        host_a, host_b = multiple_hosts[:2]
+        link_state = _make_link_state(
+            test_db, sample_lab,
+            link_name="R1:eth1-R3:eth1",
+            source_node="r1", source_interface="eth1",
+            target_node="r3", target_interface="eth1",
+            source_host_id=host_a.id,
+            target_host_id=host_b.id,
+            is_cross_host=True,
+        )
+        test_db.commit()
+
+        host_to_agent = {h.id: h for h in multiple_hosts[:2]}
+
+        with patch("app.tasks.link_orchestration.agent_client") as mock_client:
+            mock_client.setup_cross_host_link_v2 = AsyncMock(
+                return_value={"success": False, "error": "Cannot find OVS port for r1:eth1"}
+            )
+
+            result = await create_cross_host_link(
+                test_db, sample_lab.id, link_state, host_to_agent, []
+            )
+
+        assert result is False
+        assert link_state.actual_state == "pending"
+        assert "Waiting for interface readiness" in (link_state.error_message or "")
+
+    @pytest.mark.asyncio
+    async def test_missing_vlan_tag_keeps_cross_host_link_pending(
+        self, test_db: Session, sample_lab: models.Lab, multiple_hosts: list[models.Host]
+    ):
+        """Cross-host verify should defer when tunnel exists but VLAN tags are not readable yet."""
+        from app.tasks.link_orchestration import create_cross_host_link
+
+        host_a, host_b = multiple_hosts[:2]
+        link_state = _make_link_state(
+            test_db, sample_lab,
+            link_name="R1:eth1-R3:eth1",
+            source_node="r1", source_interface="eth1",
+            target_node="r3", target_interface="eth1",
+            source_host_id=host_a.id,
+            target_host_id=host_b.id,
+            is_cross_host=True,
+        )
+        test_db.commit()
+
+        host_to_agent = {h.id: h for h in multiple_hosts[:2]}
+
+        with patch("app.tasks.link_orchestration.agent_client") as mock_client, \
+             patch("app.tasks.link_orchestration.verify_link_connected", new_callable=AsyncMock,
+                   return_value=(False, "Could not read VLAN tag for r1:eth1")), \
+             patch("app.tasks.link_orchestration.update_interface_mappings", new_callable=AsyncMock):
+            mock_client.setup_cross_host_link_v2 = AsyncMock(
+                return_value={"success": True, "vni": 7777}
+            )
+            mock_client.resolve_agent_ip = AsyncMock(
+                side_effect=lambda addr: addr.split(":")[0]
+            )
+
+            result = await create_cross_host_link(
+                test_db, sample_lab.id, link_state, host_to_agent, []
+            )
+
+        assert result is False
+        assert link_state.actual_state == "pending"
+        assert "Waiting for VLAN/tag readiness" in (link_state.error_message or "")
 
 
 # ---------------------------------------------------------------------------
