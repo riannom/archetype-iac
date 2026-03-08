@@ -877,7 +877,7 @@ class TestHardPreflightGates:
         lab = _make_lab(test_db, test_user)
         job = _make_job(test_db, lab, test_user)
         ns = _make_node_state(test_db, lab, "n1", "R1", desired="running", actual="undeployed")
-        peer_ns = _make_node_state(test_db, lab, "n2", "R2", desired="running", actual="running")
+        _make_node_state(test_db, lab, "n2", "R2", desired="running", actual="running")
         _make_node_def(test_db, lab, "n1", "R1", "R1", host_id=host_a.id, device="linux")
         _make_node_def(test_db, lab, "n2", "R2", "R2", host_id=host_b.id, device="linux")
 
