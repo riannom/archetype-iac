@@ -569,8 +569,7 @@ class PluginStateMixin:
 
             client = docker.from_env(timeout=30)
 
-            def _host_veth_exists(endpoint_id: str, tracked_host_veth: str | None) -> bool:
-                _ = endpoint_id
+            def _host_veth_exists(tracked_host_veth: str | None) -> bool:
                 if tracked_host_veth:
                     return os.path.exists(f"/sys/class/net/{tracked_host_veth}")
                 return False
@@ -592,7 +591,7 @@ class PluginStateMixin:
                     endpoint_id = info.get("EndpointID", "")
                     tracked_endpoint = self.endpoints.get(endpoint_id) if endpoint_id else None
                     tracked_host_veth = tracked_endpoint.host_veth if tracked_endpoint else None
-                    if endpoint_id and _host_veth_exists(endpoint_id, tracked_host_veth):
+                    if endpoint_id and _host_veth_exists(tracked_host_veth):
                         continue
 
                     try:
@@ -1010,6 +1009,9 @@ class PluginStateMixin:
                             container_name=container_name,
                             node_name=node_name,
                         )
+                    # Stamp node_name onto OVS external_ids if available
+                    if node_name:
+                        await self._stamp_node_name_on_ovs_port(port_name, node_name)
                     logger.debug(
                         f"Recovered endpoint from OVS metadata: {endpoint_id[:12]} "
                         f"-> {port_name} ({interface_name}, VLAN {vlan_tag})"
@@ -1047,6 +1049,8 @@ class PluginStateMixin:
                             existing.vlan_tag = vlan_tag
                             existing.container_name = container_name
                             existing.node_name = node_name or existing.node_name
+                            if node_name:
+                                await self._stamp_node_name_on_ovs_port(port_name, node_name)
                             logger.debug(
                                 f"Refreshed recovered endpoint: {container_name}:{interface_name} "
                                 f"-> {port_name} (VLAN {vlan_tag})"
@@ -1067,6 +1071,8 @@ class PluginStateMixin:
                             node_name=node_name,
                         )
                         self.endpoints[endpoint_id] = endpoint
+                        if node_name:
+                            await self._stamp_node_name_on_ovs_port(port_name, node_name)
                         logger.debug(
                             f"Recovered endpoint: {container_name}:{interface_name} "
                             f"-> {port_name} (VLAN {vlan_tag})"
@@ -1075,6 +1081,21 @@ class PluginStateMixin:
 
         except Exception as e:
             logger.warning(f"Error recovering endpoints: {e}")
+
+    async def _stamp_node_name_on_ovs_port(
+        self, port_name: str, node_name: str
+    ) -> None:
+        """Stamp archetype.node_name onto an existing OVS port's external_ids."""
+        code, _, stderr = await self._ovs_vsctl(
+            "set", "interface", port_name,
+            f"external_ids:archetype.node_name={node_name}",
+        )
+        if code != 0:
+            logger.debug(
+                "Failed to stamp node_name on OVS port %s: %s",
+                port_name,
+                stderr,
+            )
 
     async def _find_interface_in_container(
         self, pid: int, host_veth: str

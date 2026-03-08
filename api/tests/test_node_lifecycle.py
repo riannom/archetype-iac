@@ -3486,6 +3486,55 @@ class TestPostOperationCleanup:
         mock_cross_host.assert_awaited_once()
         mock_reconcile.assert_not_awaited()
 
+    @pytest.mark.asyncio
+    async def test_reconcile_fires_when_unresolved_links_exist(self, test_db, test_user):
+        """Post-op reconciliation IS called when unresolved LinkState rows exist."""
+        host = _make_host(test_db)
+        lab = _make_lab(test_db, test_user, agent_id=host.id)
+        job = _make_job(test_db, lab, test_user)
+        manager = _make_manager(test_db, lab, job, [], agent=host)
+        manager.log_parts = []
+        manager._release_db_transaction_for_io = MagicMock()
+
+        # Create a LinkState with desired=up, actual=pending (unresolved)
+        ls = models.LinkState(
+            lab_id=lab.id,
+            link_name="R1:eth1<->R2:eth1",
+            source_node="R1",
+            source_interface="eth1",
+            target_node="R2",
+            target_interface="eth1",
+            desired_state="up",
+            actual_state="pending",
+        )
+        test_db.add(ls)
+        test_db.commit()
+
+        with patch(
+            "app.tasks.jobs._create_cross_host_links_if_ready",
+            new_callable=AsyncMock,
+        ), patch(
+            "app.tasks.link_reconciliation.reconcile_lab_links",
+            new_callable=AsyncMock,
+            return_value={"checked": 1, "created": 1, "repaired": 0, "errors": 0, "skipped": 0},
+        ) as mock_reconcile, patch(
+            "app.tasks.link_reconciliation.run_overlay_convergence",
+            new_callable=AsyncMock,
+            return_value={},
+        ), patch(
+            "app.tasks.link_reconciliation.refresh_interface_mappings",
+            new_callable=AsyncMock,
+            return_value={"updated": 0, "created": 0},
+        ), patch(
+            "app.tasks.link_reconciliation.run_cross_host_port_convergence",
+            new_callable=AsyncMock,
+            return_value={"updated": 0, "errors": 0},
+        ):
+            await manager._post_operation_cleanup()
+
+        mock_reconcile.assert_awaited_once()
+        assert any("Post-op link reconciliation" in line for line in manager.log_parts)
+
 
 class TestFinalizePostOperationFailure:
     @pytest.mark.asyncio

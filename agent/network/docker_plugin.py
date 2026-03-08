@@ -1358,6 +1358,7 @@ class DockerOVSPlugin(PluginStateMixin, PluginHandlersMixin, PluginVlanMixin):
                         "archetype.interface_name": ep.interface_name,
                         "archetype.lab_id": network.lab_id if network else lab_id,
                         "archetype.network_id": ep.network_id,
+                        **({"archetype.node_name": ep.node_name} if ep.node_name else {}),
                     },
                 ):
                     await self._run_cmd(["ip", "link", "delete", host_veth])

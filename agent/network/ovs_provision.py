@@ -162,7 +162,7 @@ async def discover_existing_state(mgr: OVSNetworkManager) -> None:
     )
 
     # --- Build container interface map (same as before) ---
-    container_ifindex_map: dict[str, tuple[str, str, str]] = {}
+    container_ifindex_map: dict[str, tuple[str, str, str, str | None]] = {}
     try:
         def _get_containers():
             return mgr.docker.containers.list(
@@ -175,7 +175,9 @@ async def discover_existing_state(mgr: OVSNetworkManager) -> None:
             if not pid:
                 continue
 
-            lab_id = (container.labels or {}).get("archetype.lab_id", "_unknown")
+            labels = container.labels or {}
+            lab_id = labels.get("archetype.lab_id", "_unknown")
+            node_name = labels.get("archetype.node_name")
             code, ns_stdout, _ = await mgr._run_cmd([
                 "nsenter", "-t", str(pid), "-n",
                 "ip", "-o", "link", "show",
@@ -203,7 +205,7 @@ async def discover_existing_state(mgr: OVSNetworkManager) -> None:
                 if not peer_idx:
                     continue
 
-                container_ifindex_map[peer_idx] = (container.name, iface, lab_id)
+                container_ifindex_map[peer_idx] = (container.name, iface, lab_id, node_name)
     except Exception as e:
         logger.debug(f"Error building container interface map: {e}")
 
@@ -219,7 +221,7 @@ async def discover_existing_state(mgr: OVSNetworkManager) -> None:
 
         match = container_ifindex_map.get(ifindex)
         if match:
-            container_name, interface_name, lab_id = match
+            container_name, interface_name, lab_id, node_name = match
             port_key = f"{container_name}:{interface_name}"
 
             port = OVSPort(
@@ -228,6 +230,7 @@ async def discover_existing_state(mgr: OVSNetworkManager) -> None:
                 interface_name=interface_name,
                 vlan_tag=vlan_tag,
                 lab_id=lab_id,
+                node_name=node_name,
             )
             mgr._ports[port_key] = port
             mgr._vlan_allocator._allocated[port_key] = vlan_tag
@@ -271,6 +274,7 @@ async def provision_interface(
     container_name: str,
     interface_name: str,
     lab_id: str,
+    node_name: str | None = None,
 ) -> int:
     """Create veth pair and attach to OVS with isolated VLAN tag.
 
@@ -283,6 +287,7 @@ async def provision_interface(
         container_name: Docker container name
         interface_name: Interface name inside container (e.g., "eth1")
         lab_id: Lab identifier for tracking
+        node_name: Logical node name (optional, used for metadata tracking)
 
     Returns:
         Allocated VLAN tag
@@ -380,6 +385,7 @@ async def provision_interface(
             interface_name=interface_name,
             vlan_tag=vlan_tag,
             lab_id=lab_id,
+            node_name=node_name,
         )
         mgr._ports[port_key] = port
 

@@ -410,9 +410,6 @@ class LibvirtProvider(Provider, VlanPersistenceMixin):
         """Generate libvirt domain name for a node."""
         return _libvirt_name(lab_id, node_name)
 
-    def _lab_prefix(self, lab_id: str) -> str:
-        """Get domain name prefix for a lab."""
-        return f"arch-{sanitize_id(lab_id, max_len=20)}"
 
     @staticmethod
     def _canonical_kind(kind: str | None) -> str:
@@ -3594,18 +3591,21 @@ class LibvirtProvider(Provider, VlanPersistenceMixin):
     ) -> dict[str, list[str]]:
         """Remove orphan domains within a lab — libvirt thread."""
         removed: dict[str, list[str]] = {"domains": [], "disks": []}
+        # Track node_name per removed domain for disk cleanup
+        removed_node_names: list[str] = []
+        skipped_metadata = 0
         try:
-            lab_prefix = self._lab_prefix(lab_id)
             all_domains = self.conn.listAllDomains(0)
 
             for domain in all_domains:
                 name = domain.name()
-                if not name.startswith(lab_prefix + "-"):
+                metadata = self._get_domain_metadata_values(domain)
+                if metadata.get("lab_id") != lab_id:
                     continue
-                parts = name.split("-", 2)
-                if len(parts) < 3:
+                node_name = metadata.get("node_name")
+                if not node_name:
+                    skipped_metadata += 1
                     continue
-                node_name = parts[2]
                 if node_name in keep_node_names:
                     logger.debug(f"Keeping VM {name} (node {node_name} still in topology)")
                     continue
@@ -3619,6 +3619,7 @@ class LibvirtProvider(Provider, VlanPersistenceMixin):
                     self._clear_vm_post_boot_commands_cache(name)
                     self._teardown_n9kv_poap_network(lab_id, node_name)
                     removed["domains"].append(name)
+                    removed_node_names.append(node_name)
                     if lab_id in self._vlan_allocations:
                         if node_name in self._vlan_allocations[lab_id]:
                             del self._vlan_allocations[lab_id][node_name]
@@ -3626,15 +3627,23 @@ class LibvirtProvider(Provider, VlanPersistenceMixin):
                 except libvirt.libvirtError as e:
                     logger.warning(f"Error removing orphan domain {name}: {e}")
 
-            if workspace_base and removed["domains"]:
+            if skipped_metadata:
+                runtime_identity_skips.labels(
+                    resource_type="libvirt_domain",
+                    operation="orphan_cleanup",
+                    reason="missing_node_metadata",
+                ).inc(skipped_metadata)
+                logger.info(
+                    "Skipped %d libvirt domain(s) without node metadata during orphan cleanup for lab %s",
+                    skipped_metadata,
+                    lab_id,
+                )
+
+            if workspace_base and removed_node_names:
                 lab_workspace = workspace_base / lab_id
                 disks_dir = lab_workspace / "disks"
                 if disks_dir.exists():
-                    for dname in removed["domains"]:
-                        parts = dname.split("-", 2)
-                        if len(parts) < 3:
-                            continue
-                        nname = parts[2]
+                    for nname in removed_node_names:
                         for disk_file in disks_dir.iterdir():
                             if disk_file.name.startswith(nname):
                                 try:

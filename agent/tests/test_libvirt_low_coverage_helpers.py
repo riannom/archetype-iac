@@ -1806,3 +1806,309 @@ async def test_create_node_exception_wrappers(monkeypatch, tmp_path):
     out2 = await provider.create_node("lab1", "r1", "iosv", tmp_path)
     assert out2.success is False
     assert out2.error == "boom"
+
+
+# ---------------------------------------------------------------------------
+# _resolve_node_name_for_action_sync
+# ---------------------------------------------------------------------------
+
+
+class TestResolveNodeNameForActionSync:
+    """Unit tests for _resolve_node_name_for_action_sync."""
+
+    def _make_domain(self, name, metadata_values):
+        """Build a mock libvirt domain with metadata."""
+        domain = MagicMock()
+        domain.name.return_value = name
+        # Build minimal XML with metadata
+        meta_elems = ""
+        for k, v in metadata_values.items():
+            meta_elems += f"<arch:{k}>{v}</arch:{k}>"
+        xml = (
+            f'<domain><metadata>'
+            f'<arch:instance xmlns:arch="http://archetype.dev/ns/1">'
+            f'{meta_elems}'
+            f'</arch:instance></metadata></domain>'
+        )
+        domain.XMLDesc.return_value = xml
+        return domain
+
+    def test_uuid_lookup_returns_node_name(self):
+        """UUID-based lookup resolves via metadata."""
+        provider = _make_provider()
+        domain = self._make_domain(
+            "arch-lab1-router1",
+            {"lab_id": "lab1", "node_name": "router1"},
+        )
+        conn = MagicMock()
+        conn.lookupByUUIDString.return_value = domain
+        conn.lookupByName.side_effect = Exception("not found")
+        provider._conn = conn
+
+        result = provider._resolve_node_name_for_action_sync("lab1", "some-uuid-string")
+        assert result == "router1"
+
+    def test_hyphenated_node_name(self):
+        """Hyphenated identifiers resolve via direct name lookup."""
+        provider = _make_provider()
+        domain = self._make_domain(
+            "arch-lab1-my-router",
+            {"lab_id": "lab1", "node_name": "my-router"},
+        )
+        conn = MagicMock()
+        conn.lookupByUUIDString.side_effect = Exception("not uuid")
+        conn.lookupByName.return_value = domain
+        provider._conn = conn
+
+        result = provider._resolve_node_name_for_action_sync("lab1", "arch-lab1-my-router")
+        assert result == "my-router"
+
+    def test_metadata_lab_id_mismatch_skips_domain(self):
+        """Domain with wrong lab_id is not used."""
+        provider = _make_provider()
+        domain = self._make_domain(
+            "arch-lab2-r1",
+            {"lab_id": "lab2", "node_name": "r1"},
+        )
+        conn = MagicMock()
+        conn.lookupByUUIDString.side_effect = Exception("no")
+        conn.lookupByName.return_value = domain
+        provider._conn = conn
+
+        # "arch-lab2-r1" contains hyphen, so fallback returns None
+        result = provider._resolve_node_name_for_action_sync("lab1", "arch-lab2-r1")
+        assert result is None
+
+    def test_all_lookups_fail_simple_name(self):
+        """When all lookups fail, simple name (no hyphen) returns as-is."""
+        provider = _make_provider()
+        conn = MagicMock()
+        conn.lookupByUUIDString.side_effect = Exception("no")
+        conn.lookupByName.side_effect = Exception("no")
+        provider._conn = conn
+
+        result = provider._resolve_node_name_for_action_sync("lab1", "router1")
+        assert result == "router1"
+
+    def test_all_lookups_fail_hyphenated_returns_none(self):
+        """When all lookups fail, hyphenated identifier returns None."""
+        provider = _make_provider()
+        conn = MagicMock()
+        conn.lookupByUUIDString.side_effect = Exception("no")
+        conn.lookupByName.side_effect = Exception("no")
+        provider._conn = conn
+
+        result = provider._resolve_node_name_for_action_sync("lab1", "some-uuid-ish")
+        assert result is None
+
+    def test_empty_identifier_returns_none(self):
+        """Empty string returns None immediately."""
+        provider = _make_provider()
+        result = provider._resolve_node_name_for_action_sync("lab1", "")
+        assert result is None
+
+    def test_generated_domain_name_lookup(self):
+        """Simple identifier triggers generated domain name lookup."""
+        provider = _make_provider()
+        domain = self._make_domain(
+            "arch-lab1-r1",
+            {"lab_id": "lab1", "node_name": "r1"},
+        )
+        conn = MagicMock()
+        conn.lookupByUUIDString.side_effect = Exception("no")
+        # Direct lookup fails, generated name lookup succeeds
+        conn.lookupByName.side_effect = [Exception("no"), domain]
+        provider._conn = conn
+
+        result = provider._resolve_node_name_for_action_sync("lab1", "r1")
+        assert result == "r1"
+
+
+# ---------------------------------------------------------------------------
+# generate_ovs_interface_id determinism
+# ---------------------------------------------------------------------------
+
+
+class TestGenerateOvsInterfaceId:
+    """Property tests for generate_ovs_interface_id."""
+
+    def test_same_inputs_same_uuid(self):
+        """Same inputs always produce the same UUID5."""
+        from agent.providers.libvirt_xml import generate_ovs_interface_id
+
+        id1 = generate_ovs_interface_id("arch-lab1-r1", "data", 0)
+        id2 = generate_ovs_interface_id("arch-lab1-r1", "data", 0)
+        assert id1 == id2
+
+    def test_different_index_different_uuid(self):
+        """Different interface_index produces different UUID."""
+        from agent.providers.libvirt_xml import generate_ovs_interface_id
+
+        id1 = generate_ovs_interface_id("arch-lab1-r1", "data", 0)
+        id2 = generate_ovs_interface_id("arch-lab1-r1", "data", 1)
+        assert id1 != id2
+
+    def test_different_domain_different_uuid(self):
+        """Different domain_name produces different UUID."""
+        from agent.providers.libvirt_xml import generate_ovs_interface_id
+
+        id1 = generate_ovs_interface_id("arch-lab1-r1", "data", 0)
+        id2 = generate_ovs_interface_id("arch-lab1-r2", "data", 0)
+        assert id1 != id2
+
+    def test_different_role_different_uuid(self):
+        """Different interface_role produces different UUID."""
+        from agent.providers.libvirt_xml import generate_ovs_interface_id
+
+        id1 = generate_ovs_interface_id("arch-lab1-r1", "data", 0)
+        id2 = generate_ovs_interface_id("arch-lab1-r1", "mgmt", 0)
+        assert id1 != id2
+
+    def test_valid_uuid_format(self):
+        """Output is a valid UUID string."""
+        import uuid
+        from agent.providers.libvirt_xml import generate_ovs_interface_id
+
+        result = generate_ovs_interface_id("domain", "data", 5)
+        parsed = uuid.UUID(result)
+        assert parsed.version == 5
+
+
+# ---------------------------------------------------------------------------
+# _cleanup_lab_orphan_domains_sync (metadata-aware, after Gap 1 fix)
+# ---------------------------------------------------------------------------
+
+
+class TestCleanupLabOrphanDomains:
+    """Verify metadata-based orphan cleanup."""
+
+    @pytest.fixture(autouse=True)
+    def _mock_libvirt(self, monkeypatch):
+        monkeypatch.setattr(
+            libvirt_mod,
+            "libvirt",
+            SimpleNamespace(VIR_DOMAIN_RUNNING=1, libvirtError=Exception),
+        )
+
+    def _make_domain(self, name, metadata_values):
+        domain = MagicMock()
+        domain.name.return_value = name
+        meta_elems = ""
+        for k, v in metadata_values.items():
+            meta_elems += f"<arch:{k}>{v}</arch:{k}>"
+        xml = (
+            f'<domain><metadata>'
+            f'<arch:instance xmlns:arch="http://archetype.dev/ns/1">'
+            f'{meta_elems}'
+            f'</arch:instance></metadata></domain>'
+        )
+        domain.XMLDesc.return_value = xml
+        domain.state.return_value = (1, 0)  # VIR_DOMAIN_RUNNING
+        return domain
+
+    def test_orphan_with_metadata_removed(self, tmp_path):
+        """Domain with matching lab_id and node not in keep set is removed."""
+        provider = _make_provider()
+        orphan = self._make_domain(
+            "arch-lab1-old-node",
+            {"lab_id": "lab1", "node_name": "old-node"},
+        )
+        conn = MagicMock()
+        conn.listAllDomains.return_value = [orphan]
+        provider._conn = conn
+        provider._undefine_domain = MagicMock()
+        provider._clear_vm_post_boot_commands_cache = MagicMock()
+        provider._teardown_n9kv_poap_network = MagicMock()
+
+        result = provider._cleanup_lab_orphan_domains_sync(
+            "lab1", {"r1", "r2"}, tmp_path,
+        )
+
+        assert "arch-lab1-old-node" in result["domains"]
+        orphan.destroy.assert_called_once()
+        provider._undefine_domain.assert_called_once()
+
+    def test_domain_without_metadata_skipped(self, tmp_path):
+        """Domain with no metadata is skipped (metric incremented)."""
+        provider = _make_provider()
+        no_meta = MagicMock()
+        no_meta.name.return_value = "arch-lab1-mystery"
+        no_meta.XMLDesc.return_value = "<domain></domain>"
+        no_meta.state.return_value = (1, 0)
+
+        conn = MagicMock()
+        conn.listAllDomains.return_value = [no_meta]
+        provider._conn = conn
+
+        result = provider._cleanup_lab_orphan_domains_sync(
+            "lab1", {"r1"}, tmp_path,
+        )
+
+        # No domains removed (skipped due to missing metadata)
+        assert result["domains"] == []
+        no_meta.destroy.assert_not_called()
+
+    def test_domain_wrong_lab_id_excluded(self, tmp_path):
+        """Domain belonging to different lab is excluded."""
+        provider = _make_provider()
+        other_lab = self._make_domain(
+            "arch-lab2-r1",
+            {"lab_id": "lab2", "node_name": "r1"},
+        )
+        conn = MagicMock()
+        conn.listAllDomains.return_value = [other_lab]
+        provider._conn = conn
+
+        result = provider._cleanup_lab_orphan_domains_sync(
+            "lab1", set(), tmp_path,
+        )
+
+        assert result["domains"] == []
+        other_lab.destroy.assert_not_called()
+
+    def test_domain_in_keep_set_preserved(self, tmp_path):
+        """Domain whose node_name is in keep set is not removed."""
+        provider = _make_provider()
+        keeper = self._make_domain(
+            "arch-lab1-r1",
+            {"lab_id": "lab1", "node_name": "r1"},
+        )
+        conn = MagicMock()
+        conn.listAllDomains.return_value = [keeper]
+        provider._conn = conn
+
+        result = provider._cleanup_lab_orphan_domains_sync(
+            "lab1", {"r1"}, tmp_path,
+        )
+
+        assert result["domains"] == []
+        keeper.destroy.assert_not_called()
+
+    def test_disk_cleanup_uses_metadata_node_name(self, tmp_path):
+        """Disk cleanup uses node_name from metadata, not name parsing."""
+        provider = _make_provider()
+        orphan = self._make_domain(
+            "arch-lab1-mynode",
+            {"lab_id": "lab1", "node_name": "mynode"},
+        )
+        conn = MagicMock()
+        conn.listAllDomains.return_value = [orphan]
+        provider._conn = conn
+        provider._undefine_domain = MagicMock()
+        provider._clear_vm_post_boot_commands_cache = MagicMock()
+        provider._teardown_n9kv_poap_network = MagicMock()
+
+        # Create workspace with disk files
+        disks_dir = tmp_path / "lab1" / "disks"
+        disks_dir.mkdir(parents=True)
+        (disks_dir / "mynode.qcow2").touch()
+        (disks_dir / "other.qcow2").touch()
+
+        result = provider._cleanup_lab_orphan_domains_sync(
+            "lab1", set(), tmp_path,
+        )
+
+        assert len(result["disks"]) == 1
+        assert "mynode.qcow2" in result["disks"][0]
+        # "other.qcow2" should NOT be removed
+        assert (disks_dir / "other.qcow2").exists()
