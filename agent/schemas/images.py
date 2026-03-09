@@ -16,6 +16,7 @@ class DockerImageInfo(BaseModel):
     device_id: str | None = None  # From persistent metadata store
     kind: str = "docker"  # docker, qcow2, img, iol
     reference: str | None = None  # Absolute path for file-based images
+    in_use: bool = False  # Referenced by at least one running container on this agent
 
 
 class ImageInventoryResponse(BaseModel):

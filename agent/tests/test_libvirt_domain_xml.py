@@ -240,6 +240,10 @@ def _gen_xml(provider=None, **overrides):
     node_config = {
         "memory": 2048,
         "cpu": 1,
+        "lab_id": "test-lab-id",
+        "node_name": "test-node",
+        "node_definition_id": "test-node-def",
+        "provider": "libvirt",
         "machine_type": "pc-i440fx-6.2",
         "disk_driver": "virtio",
         "nic_driver": "virtio",
@@ -656,6 +660,33 @@ class TestMetadata:
         assert kind is not None
         assert kind.text == "cisco_iosv"
 
+    def test_identity_metadata_stored_with_logical_node_name(self):
+        xml = _gen_xml(
+            kind="cisco_iosv",
+            lab_id="52c138e7-de39-4b4a-8daa-d75014ffe2e0",
+            node_name="cat9000v_uadp_8",
+            node_definition_id="node-def-1",
+        )
+        root = ET.fromstring(xml)
+        ns = {"a": "http://archetype.io/libvirt/1"}
+        assert root.find(".//metadata/a:node/a:lab_id", ns).text == "52c138e7-de39-4b4a-8daa-d75014ffe2e0"
+        assert root.find(".//metadata/a:node/a:node_name", ns).text == "cat9000v_uadp_8"
+        assert root.find(".//metadata/a:node/a:node_definition_id", ns).text == "node-def-1"
+
+    def test_managed_domain_metadata_requires_identity_fields(self):
+        with pytest.raises(ValueError, match="requires lab_id, node_name, and node_definition_id"):
+            _gen_xml(kind="cisco_iosv", lab_id="lab-1", node_name="r1", node_definition_id=None)
+
+    def test_managed_domain_metadata_rejects_runtime_name_as_node_name(self):
+        with pytest.raises(ValueError, match="logical node_name"):
+            _gen_xml(
+                name="arch-lab-1-r1",
+                kind="cisco_iosv",
+                lab_id="lab-1",
+                node_name="arch-lab-1-r1",
+                node_definition_id="node-def-1",
+            )
+
     def test_readiness_override_stored(self, monkeypatch):
         """Readiness probe different from vendor default should be stored."""
         # cisco_iosv default is "log_pattern"; override to "none"
@@ -788,6 +819,10 @@ class TestVendorRoundTrip:
         node_config = {
             "memory": lc.memory_mb,
             "cpu": lc.cpu_count,
+            "lab_id": "test-lab-id",
+            "node_name": f"node-{vendor_key}",
+            "node_definition_id": f"node-def-{vendor_key}",
+            "provider": "libvirt",
             "machine_type": lc.machine_type,
             "disk_driver": lc.disk_driver,
             "nic_driver": lc.nic_driver,

@@ -178,6 +178,33 @@ describe('HostCard', () => {
     expect(warningIcon).toBeInTheDocument();
   });
 
+  it('uses memory totals as the display source of truth when percent is stale', () => {
+    const props = defaultProps();
+    props.host = makeHost({
+      resource_usage: {
+        cpu_percent: 25,
+        memory_percent: 94,
+        memory_used_gb: 8,
+        memory_total_gb: 16,
+        storage_percent: 60,
+        storage_used_gb: 120,
+        storage_total_gb: 200,
+        containers_running: 5,
+        containers_total: 10,
+        vms_running: 0,
+        vms_total: 0,
+        container_details: [],
+        vm_details: [],
+      },
+    });
+    const { container } = renderWithRouter(<HostCard {...props} />);
+    const warningIcon = container.querySelector('i[title="Memory high - consider distributing nodes across agents"]');
+    const criticalIcon = container.querySelector('i[title="Memory critical - deployment will likely fail"]');
+    expect(screen.getByText('8.0GB / 16.0GB')).toBeInTheDocument();
+    expect(warningIcon).not.toBeInTheDocument();
+    expect(criticalIcon).not.toBeInTheDocument();
+  });
+
   // ── Error Alert ──
 
   it('shows error alert when host has last_error', () => {

@@ -1185,6 +1185,8 @@ def test_node_precheck_sync_running_and_stale_cleanup_paths(monkeypatch, tmp_pat
     provider._conn = SimpleNamespace(isAlive=lambda: True, lookupByName=lambda _name: domain_running)
     provider._get_domain_status = lambda _domain: libvirt_mod.NodeStatus.RUNNING
 
+    provider._classify_existing_domain_identity = lambda *_args, **_kwargs: None
+
     running = provider._node_precheck_sync(
         "lab1",
         "node1",
@@ -1192,7 +1194,7 @@ def test_node_precheck_sync_running_and_stale_cleanup_paths(monkeypatch, tmp_pat
         tmp_path,
         tmp_path / "disks",
     )
-    assert running == (True, "abcdef123456", libvirt_mod.NodeStatus.RUNNING)
+    assert running == (True, "abcdef123456", libvirt_mod.NodeStatus.RUNNING, None)
 
     disks = tmp_path / "disks"
     disks.mkdir(parents=True, exist_ok=True)
@@ -1215,11 +1217,7 @@ def test_node_precheck_sync_running_and_stale_cleanup_paths(monkeypatch, tmp_pat
         tmp_path,
         disks,
     )
-    assert stale == (False, None, None)
-    assert not (disks / "node1.qcow2").exists()
-    assert not (disks / "node1-data.qcow2").exists()
-    assert "node1" not in provider._vlan_allocations["lab1"]
-    provider._save_vlan_allocations.assert_called_once()
+    assert stale == (False, "deadbeef", libvirt_mod.NodeStatus.STOPPED, None)
 
 
 def test_node_precheck_sync_handles_recovery_and_lookup_errors(monkeypatch, tmp_path):
@@ -1242,7 +1240,7 @@ def test_node_precheck_sync_handles_recovery_and_lookup_errors(monkeypatch, tmp_
         tmp_path,
         tmp_path / "disks",
     )
-    assert res == (False, None, None)
+    assert res == (False, None, None, None)
 
 
 def test_deploy_node_pre_sync_and_define_start_sync(monkeypatch):
@@ -1251,13 +1249,17 @@ def test_deploy_node_pre_sync_and_define_start_sync(monkeypatch):
     monkeypatch.setattr(
         provider,
         "_node_precheck_sync",
-        lambda *_args, **_kwargs: (True, "abc123", libvirt_mod.NodeStatus.RUNNING),
+        lambda *_args, **_kwargs: (True, "abc123", libvirt_mod.NodeStatus.RUNNING, None),
     )
     existing = provider._deploy_node_pre_sync("lab1", "r1", "arch-lab1-r1", Path("/tmp/disks"))
     assert existing is not None
     assert existing.name == "r1"
 
-    monkeypatch.setattr(provider, "_node_precheck_sync", lambda *_args, **_kwargs: (False, None, None))
+    monkeypatch.setattr(
+        provider,
+        "_node_precheck_sync",
+        lambda *_args, **_kwargs: (False, None, None, None),
+    )
     assert provider._deploy_node_pre_sync("lab1", "r1", "arch-lab1-r1", Path("/tmp/disks")) is None
 
     domain = SimpleNamespace(create=MagicMock(), UUIDString=lambda: "uuid-1234567890")
@@ -1652,12 +1654,16 @@ def test_create_node_pre_and_define_sync(monkeypatch, tmp_path):
     monkeypatch.setattr(
         provider,
         "_node_precheck_sync",
-        lambda *_args, **_kwargs: (True, "abc", libvirt_mod.NodeStatus.RUNNING),
+        lambda *_args, **_kwargs: (True, "abc", libvirt_mod.NodeStatus.RUNNING, None),
     )
     pre = provider._create_node_pre_sync("lab1", "r1", "arch-lab1-r1", tmp_path)
     assert pre is not None and pre.success is True
 
-    monkeypatch.setattr(provider, "_node_precheck_sync", lambda *_args, **_kwargs: (False, None, None))
+    monkeypatch.setattr(
+        provider,
+        "_node_precheck_sync",
+        lambda *_args, **_kwargs: (False, None, None, None),
+    )
     assert provider._create_node_pre_sync("lab1", "r1", "arch-lab1-r1", tmp_path) is None
 
     provider._conn = SimpleNamespace(isAlive=lambda: True, defineXML=lambda _xml: object())
@@ -1845,7 +1851,10 @@ class TestResolveNodeNameForActionSync:
         conn.lookupByName.side_effect = Exception("not found")
         provider._conn = conn
 
-        result = provider._resolve_node_name_for_action_sync("lab1", "some-uuid-string")
+        result = provider._resolve_node_name_for_action_sync(
+            "lab1",
+            "12345678-1234-1234-1234-1234567890ab",
+        )
         assert result == "router1"
 
     def test_hyphenated_node_name(self):
@@ -1900,6 +1909,18 @@ class TestResolveNodeNameForActionSync:
 
         result = provider._resolve_node_name_for_action_sync("lab1", "some-uuid-ish")
         assert result is None
+
+    def test_non_uuid_identifier_skips_uuid_lookup(self):
+        """Non-UUID identifiers should not invoke libvirt UUID lookup."""
+        provider = _make_provider()
+        conn = MagicMock()
+        conn.lookupByName.side_effect = Exception("no")
+        provider._conn = conn
+
+        result = provider._resolve_node_name_for_action_sync("lab1", "some-uuid-ish")
+
+        assert result is None
+        conn.lookupByUUIDString.assert_not_called()
 
     def test_empty_identifier_returns_none(self):
         """Empty string returns None immediately."""

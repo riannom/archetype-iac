@@ -846,7 +846,16 @@ async def run_post_boot_commands(container_name: str, kind: str) -> bool:
         _post_boot_completed.add(container_name)
         return True
 
-    def _sync_run_commands() -> bool:
+    def _is_transient_failure(output: str) -> bool:
+        if not is_ceos_kind(kind):
+            return False
+        lowered = output.lower()
+        return (
+            "authorization denied" in lowered
+            or "default authorization provider rejects all commands" in lowered
+        )
+
+    def _sync_run_commands(*, final_attempt: bool) -> bool:
         try:
             client = docker.from_env()
             container = client.containers.get(container_name)
@@ -865,9 +874,16 @@ async def run_post_boot_commands(container_name: str, kind: str) -> bool:
                 output_str = output.decode("utf-8", errors="replace") if output else ""
                 if exit_code != 0:
                     all_succeeded = False
-                    logger.warning(
-                        f"Post-boot command returned {exit_code} on {container_name}: {cmd}\n{output_str}"
-                    )
+                    if _is_transient_failure(output_str) and not final_attempt:
+                        logger.info(
+                            "Transient post-boot failure on %s; will retry: %s",
+                            container_name,
+                            cmd,
+                        )
+                    else:
+                        logger.warning(
+                            f"Post-boot command returned {exit_code} on {container_name}: {cmd}\n{output_str}"
+                        )
                 else:
                     logger.debug(f"Post-boot command succeeded on {container_name}: {cmd}")
 
@@ -884,7 +900,7 @@ async def run_post_boot_commands(container_name: str, kind: str) -> bool:
     delay_seconds = max(0.0, settings.docker_post_boot_retry_delay_seconds)
     success = False
     for attempt in range(1, attempts + 1):
-        success = await asyncio.to_thread(_sync_run_commands)
+        success = await asyncio.to_thread(_sync_run_commands, final_attempt=(attempt == attempts))
         if success:
             break
         if attempt < attempts:

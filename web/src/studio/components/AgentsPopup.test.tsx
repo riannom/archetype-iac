@@ -210,7 +210,7 @@ describe("AgentsPopup", () => {
       await waitFor(() => {
         // Each agent shows Memory, so there are 3 Memory labels
         expect(screen.getAllByText("Memory").length).toBe(3);
-        expect(screen.getByText("62%")).toBeInTheDocument(); // primary-agent
+        expect(screen.getByText("50%")).toBeInTheDocument(); // primary-agent
         expect(screen.getByText("90%")).toBeInTheDocument(); // high-load-agent
       });
     });

@@ -240,6 +240,39 @@ class TestCheckReadinessForNodes:
         assert ns.is_ready is True
 
     @pytest.mark.asyncio
+    async def test_releases_transaction_before_readiness_probe(self, test_db: Session, test_user):
+        """Readiness checks should not hold node_state transactions across agent I/O."""
+        from app.tasks.reconciliation_refresh import _check_readiness_for_nodes
+
+        host = _make_host(test_db, "host-b1")
+        lab = _make_lab(test_db, test_user, state="running", agent_id=host.id)
+        _make_node_def(test_db, lab.id, container_name="R1", device="ceos")
+        ns = _make_node_state(
+            test_db, lab.id, node_name="R1",
+            actual_state="running", desired_state="running",
+            is_ready=False,
+        )
+        _make_placement(test_db, lab.id, "R1", host.id)
+
+        with patch(
+            "app.tasks.reconciliation_refresh._release_db_transaction_for_io",
+        ) as mock_release:
+            with patch(
+                "app.tasks.reconciliation_refresh.agent_client.check_node_readiness",
+                new_callable=AsyncMock,
+                return_value={"is_ready": False},
+            ):
+                with patch("app.tasks.reconciliation_refresh.agent_client.is_agent_online", return_value=True):
+                    with patch("app.utils.lab.get_lab_provider", return_value="docker"):
+                        with patch("app.utils.lab.get_node_provider", return_value="docker"):
+                            await _check_readiness_for_nodes(test_db, [ns])
+
+        assert any(
+            call.kwargs.get("context") == "readiness probe for R1"
+            for call in mock_release.call_args_list
+        )
+
+    @pytest.mark.asyncio
     async def test_skips_missing_lab(self, test_db: Session):
         """Should handle missing lab gracefully."""
         from app.tasks.reconciliation_refresh import _check_readiness_for_nodes

@@ -3,6 +3,7 @@ import DetailPopup from './DetailPopup';
 import { formatTimestamp, formatUptimeFromBoot, formatMemorySize } from '../../utils/format';
 import { getCpuColor, getMemoryColor, getStorageColor } from '../../utils/status';
 import { apiRequest } from '../../api';
+import { getMemoryUsageDisplay } from '../../utils/resourceUsage';
 
 interface AgentDetail {
   id: string;
@@ -66,7 +67,9 @@ const AgentsPopup: React.FC<AgentsPopupProps> = ({ isOpen, onClose }) => {
         </div>
       ) : agents.length > 0 ? (
         <div className="space-y-4">
-          {agents.map(agent => (
+          {agents.map(agent => {
+            const memoryUsage = getMemoryUsageDisplay(agent.resource_usage);
+            return (
             <div
               key={agent.id}
               className="border border-stone-200 dark:border-stone-700 rounded-lg p-4"
@@ -142,18 +145,18 @@ const AgentsPopup: React.FC<AgentsPopupProps> = ({ isOpen, onClose }) => {
                   <div className="flex items-center justify-between text-xs mb-1">
                     <span className="text-stone-500 dark:text-stone-400">Memory</span>
                     <span className="font-medium text-stone-700 dark:text-stone-300">
-                      {agent.resource_usage.memory_percent.toFixed(0)}%
+                      {memoryUsage.percent.toFixed(0)}%
                     </span>
                   </div>
                   <div className="h-2 bg-stone-200 dark:bg-stone-700 rounded-full overflow-hidden">
                     <div
-                      className={`h-full ${getMemoryColor(agent.resource_usage.memory_percent)} transition-all`}
-                      style={{ width: `${Math.min(agent.resource_usage.memory_percent, 100)}%` }}
+                      className={`h-full ${getMemoryColor(memoryUsage.percent)} transition-all`}
+                      style={{ width: `${Math.min(memoryUsage.percent, 100)}%` }}
                     />
                   </div>
-                  {agent.resource_usage.memory_total_gb > 0 && (
+                  {memoryUsage.hasTotals && (
                     <span className="text-[10px] text-stone-400 dark:text-stone-500">
-                      {formatMemorySize(agent.resource_usage.memory_used_gb)}/{formatMemorySize(agent.resource_usage.memory_total_gb)}
+                      {formatMemorySize(memoryUsage.usedGb)}/{formatMemorySize(memoryUsage.totalGb)}
                     </span>
                   )}
                 </div>
@@ -192,7 +195,8 @@ const AgentsPopup: React.FC<AgentsPopupProps> = ({ isOpen, onClose }) => {
                 </span>
               </div>
             </div>
-          ))}
+            );
+          })}
         </div>
       ) : (
         <div className="text-center py-8 text-stone-500 dark:text-stone-400">

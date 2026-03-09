@@ -627,6 +627,35 @@ class TestPostBootCommands:
         assert result is True
         assert mock_container.exec_run.call_count == 4
 
+    @pytest.mark.asyncio
+    async def test_transient_ceos_auth_failure_logs_info_until_final_retry(self):
+        """cEOS AAA-not-ready should not warn on intermediate retry attempts."""
+        mock_container = MagicMock()
+        mock_container.status = "running"
+        mock_container.exec_run.side_effect = [
+            (1, b"% Authorization denied for command 'configure'"),
+            (1, b"% Authorization denied for command 'configure'"),
+            (0, b"OK"),
+            (0, b"OK"),
+        ]
+
+        mock_client = MagicMock()
+        mock_client.containers.get.return_value = mock_container
+
+        with patch("agent.readiness.docker.from_env", return_value=mock_client):
+            with patch("agent.readiness.settings.docker_post_boot_retry_attempts", 2), \
+                 patch("agent.readiness.settings.docker_post_boot_retry_delay_seconds", 0), \
+                 patch("agent.readiness.logger.info") as mock_info, \
+                 patch("agent.readiness.logger.warning") as mock_warning:
+                result = await run_post_boot_commands("test-container", "ceos")
+
+        assert result is True
+        assert any(
+            call.args[:2] == ("Transient post-boot failure on %s; will retry: %s", "test-container")
+            for call in mock_info.call_args_list
+        )
+        assert not any("Post-boot command returned" in str(call.args[0]) for call in mock_warning.call_args_list)
+
 
 # --- State Management Tests ---
 

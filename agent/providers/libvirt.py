@@ -16,6 +16,7 @@ import os
 import subprocess
 import xml.etree.ElementTree as ET
 from pathlib import Path
+import re
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -2940,7 +2941,17 @@ class LibvirtProvider(Provider, VlanPersistenceMixin):
             candidates.append(domain)
 
         lookup_by_uuid = getattr(self.conn, "lookupByUUIDString", None)
-        if callable(lookup_by_uuid):
+        is_uuid_identifier = bool(
+            re.fullmatch(
+                r"[0-9a-fA-F]{8}-"
+                r"[0-9a-fA-F]{4}-"
+                r"[0-9a-fA-F]{4}-"
+                r"[0-9a-fA-F]{4}-"
+                r"[0-9a-fA-F]{12}",
+                identifier,
+            )
+        )
+        if callable(lookup_by_uuid) and is_uuid_identifier:
             try:
                 _add_candidate(lookup_by_uuid(identifier))
             except Exception:
