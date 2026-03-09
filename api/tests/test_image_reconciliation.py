@@ -300,6 +300,49 @@ async def test_cleanup_unused_agent_images_deletes_stale_docker_tags(test_db, mo
 
 
 @pytest.mark.asyncio
+async def test_cleanup_unused_agent_images_skips_in_use_docker_images(test_db, monkeypatch) -> None:
+    host = models.Host(
+        id="host-1",
+        name="Host 1",
+        address="localhost:3",
+        status="online",
+        capabilities=json.dumps({"providers": ["docker"]}),
+        version="1.0.0",
+    )
+    test_db.add(host)
+    test_db.commit()
+
+    monkeypatch.setattr(image_reconciliation, "load_manifest", lambda: {"images": []})
+    monkeypatch.setattr(image_reconciliation, "get_session", lambda: _session_ctx(test_db))
+    monkeypatch.setattr(image_reconciliation.agent_client, "is_agent_online", lambda h: True)
+
+    async def fake_get_agent_images(host):
+        return {
+            "images": [
+                {"tags": ["archetype-iac-agent:latest"], "kind": "docker", "in_use": True},
+            ]
+        }
+
+    async def fake_delete_image_on_agent(host, reference):
+        raise AssertionError("delete_image_on_agent should not be called for in-use images")
+
+    monkeypatch.setattr(
+        image_reconciliation.agent_client,
+        "get_agent_images",
+        fake_get_agent_images,
+    )
+    monkeypatch.setattr(
+        image_reconciliation.agent_client,
+        "delete_image_on_agent",
+        fake_delete_image_on_agent,
+    )
+
+    result = await image_reconciliation.cleanup_unused_agent_images()
+
+    assert result.remote_deletions == 0
+
+
+@pytest.mark.asyncio
 async def test_cleanup_unused_agent_images_deletes_stale_file_reference(test_db, monkeypatch) -> None:
     host = models.Host(
         id="host-1",

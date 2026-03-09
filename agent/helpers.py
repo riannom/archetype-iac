@@ -688,6 +688,16 @@ def _get_docker_images() -> list[DockerImageInfo]:
 
         client = get_docker_client()
         images = []
+        in_use_image_ids: set[str] = set()
+
+        for container in client.containers.list():
+            try:
+                image = getattr(container, "image", None)
+                image_id = getattr(image, "id", None)
+                if image_id:
+                    in_use_image_ids.add(image_id)
+            except Exception:
+                continue
 
         for img in client.images.list():
             image_id = img.id
@@ -703,6 +713,7 @@ def _get_docker_images() -> list[DockerImageInfo]:
                 created=created,
                 device_id=device_id,
                 kind="docker",
+                in_use=image_id in in_use_image_ids,
             ))
 
         return images

@@ -166,6 +166,8 @@ async def cleanup_unused_agent_images() -> ImageReconciliationResult:
                 continue
 
             for img_info in images_response.get("images", []):
+                if img_info.get("kind") == "docker" and img_info.get("in_use"):
+                    continue
                 candidate_refs: list[str] = []
                 reference = img_info.get("reference")
                 if reference:
