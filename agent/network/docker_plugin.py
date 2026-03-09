@@ -1265,12 +1265,28 @@ class DockerOVSPlugin(PluginStateMixin, PluginHandlersMixin, PluginVlanMixin):
         # Pre-repair: remove stale OVS ports from previous container incarnation
         await self._cleanup_stale_ovs_ports(container_name)
 
+        pid = await self._get_container_pid(container_name)
+
+        async def _binding_matches(ep: EndpointState) -> bool:
+            if not pid or not ep.host_veth:
+                return False
+            mapped_if = await self._find_interface_in_container(pid, ep.host_veth)
+            return mapped_if == ep.interface_name
+
         # Collect stale endpoints for this container
         stale_eps: list[EndpointState] = []
         for ep in self.endpoints.values():
             if ep.container_name == container_name:
                 if not await self._validate_endpoint_exists(ep):
                     stale_eps.append(ep)
+                elif not await _binding_matches(ep):
+                    stale_eps.append(ep)
+                    logger.info(
+                        "Repairing endpoint binding drift for %s:%s (tracked host veth %s)",
+                        container_name,
+                        ep.interface_name,
+                        ep.host_veth,
+                    )
                 else:
                     results.append({
                         "interface": ep.interface_name,
@@ -1314,8 +1330,6 @@ class DockerOVSPlugin(PluginStateMixin, PluginHandlersMixin, PluginVlanMixin):
         if not stale_eps:
             return results
 
-        # Get container PID for namespace operations
-        pid = await self._get_container_pid(container_name)
         if not pid:
             for ep in stale_eps:
                 results.append({

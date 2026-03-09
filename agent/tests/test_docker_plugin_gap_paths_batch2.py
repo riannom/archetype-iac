@@ -222,6 +222,8 @@ async def test_repair_endpoints_locked_no_stale_and_pid_missing(plugin, monkeypa
     plugin.endpoints["e1"] = _ep("e1", "n1", "eth1", "vh1", 200, "c1")
     plugin._cleanup_stale_ovs_ports = AsyncMock()
     plugin._validate_endpoint_exists = AsyncMock(return_value=True)
+    plugin._get_container_pid = AsyncMock(return_value=1234)
+    plugin._find_interface_in_container = AsyncMock(return_value="eth1")
 
     async def _to_thread_raises(func, *args, **kwargs):
         raise RuntimeError("inspect failed")
@@ -236,6 +238,35 @@ async def test_repair_endpoints_locked_no_stale_and_pid_missing(plugin, monkeypa
     out_pid = await plugin._repair_endpoints_locked("lab1", "c1")
     assert out_pid[0]["status"] == "error"
     assert "no PID" in out_pid[0]["message"]
+
+
+@pytest.mark.asyncio
+async def test_repair_endpoints_locked_repairs_binding_drift(plugin):
+    ep = _ep("e1", "n1", "eth1", "vh-old", 200, "c1")
+    plugin.endpoints["e1"] = ep
+    plugin.networks["n1"] = NetworkState("n1", "lab1", "eth1", "arch-ovs")
+    plugin._cleanup_stale_ovs_ports = AsyncMock()
+    plugin._validate_endpoint_exists = AsyncMock(return_value=True)
+    plugin._get_container_pid = AsyncMock(return_value=1234)
+    plugin._find_interface_in_container = AsyncMock(return_value="eth9")
+    plugin._mark_dirty_and_save = AsyncMock()
+    plugin._ovs_vsctl = AsyncMock(return_value=(0, "", ""))
+    plugin._generate_veth_names = lambda endpoint_id: ("vh-new", "vc-new")
+    plugin._create_veth_pair = AsyncMock(return_value=True)
+    plugin._attach_to_ovs = AsyncMock(return_value=True)
+    plugin._run_cmd = AsyncMock(return_value=(0, "", ""))
+
+    out = await plugin._repair_endpoints_locked("lab1", "c1")
+
+    assert out == [{
+        "interface": "eth1",
+        "status": "repaired",
+        "host_veth": "vh-new",
+        "vlan_tag": 200,
+    }]
+    assert ep.host_veth == "vh-new"
+    plugin._create_veth_pair.assert_awaited_once_with("vh-new", "vc-new")
+    plugin._attach_to_ovs.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -266,7 +297,7 @@ async def test_repair_endpoints_locked_repair_branches(plugin):
     async def _create_veth_pair(host_veth: str, cont_veth: str):
         return host_veth != "vh-a"
 
-    async def _attach_to_ovs(bridge: str, host_veth: str, vlan: int):
+    async def _attach_to_ovs(bridge: str, host_veth: str, vlan: int, **kwargs):
         return host_veth != "vh-b"
 
     async def _run_cmd(cmd: list[str]):
