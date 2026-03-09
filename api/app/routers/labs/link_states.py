@@ -116,6 +116,37 @@ def _sync_link_oper_state(database: Session, link_state: models.LinkState) -> No
     _pkg().recompute_link_oper_state(database, link_state)
 
 
+def _apply_link_state_canonical_fields(
+    state: models.LinkState,
+    *,
+    link_def_id: str,
+    link_name: str,
+    src_n: str,
+    src_i: str,
+    tgt_n: str,
+    tgt_i: str,
+) -> bool:
+    """Align a LinkState row with the canonical topology representation."""
+    changed = (
+        state.link_name != link_name
+        or state.source_node != src_n
+        or state.source_interface != src_i
+        or state.target_node != tgt_n
+        or state.target_interface != tgt_i
+        or state.link_definition_id != link_def_id
+    )
+    state.link_name = link_name
+    state.source_node = src_n
+    state.source_interface = src_i
+    state.target_node = tgt_n
+    state.target_interface = tgt_i
+    state.link_definition_id = link_def_id
+    if state.desired_state == "deleted":
+        state.desired_state = LinkDesiredState.UP
+        changed = True
+    return changed
+
+
 def _get_or_create_link_definition(
     database: Session,
     lab_id: str,
@@ -382,24 +413,15 @@ def _upsert_link_states(
 
         if existing:
             # Update existing link state to canonical storage
-            existing_changed = (
-                existing.link_name != link_name
-                or existing.source_node != src_n
-                or existing.source_interface != src_i
-                or existing.target_node != tgt_n
-                or existing.target_interface != tgt_i
-                or existing.link_definition_id != link_def.id
+            existing_changed = _apply_link_state_canonical_fields(
+                existing,
+                link_def_id=link_def.id,
+                link_name=link_name,
+                src_n=src_n,
+                src_i=src_i,
+                tgt_n=tgt_n,
+                tgt_i=tgt_i,
             )
-            existing.link_name = link_name
-            existing.source_node = src_n
-            existing.source_interface = src_i
-            existing.target_node = tgt_n
-            existing.target_interface = tgt_i
-            existing.link_definition_id = link_def.id
-            # If this was previously a stale duplicate row, re-activate.
-            if existing.desired_state == "deleted":
-                existing.desired_state = LinkDesiredState.UP
-                existing_changed = True
             if existing_changed:
                 mutated_states.append(existing)
             updated_count += 1
@@ -428,11 +450,51 @@ def _upsert_link_states(
                 desired_state=LinkDesiredState.UP,
                 actual_state=LinkActualState.UNKNOWN,
             )
-            database.add(new_state)
-            existing_states.append(new_state)
-            mutated_states.append(new_state)
-            added_link_names.append(link_name)
-            created_count += 1
+            savepoint = database.begin_nested()
+            try:
+                database.add(new_state)
+                database.flush()
+                savepoint.commit()
+                existing_states.append(new_state)
+                mutated_states.append(new_state)
+                added_link_names.append(link_name)
+                created_count += 1
+            except IntegrityError:
+                savepoint.rollback()
+                existing = (
+                    database.query(models.LinkState)
+                    .filter(
+                        models.LinkState.lab_id == lab_id,
+                        models.LinkState.link_name == link_name,
+                    )
+                    .first()
+                )
+                if not existing:
+                    existing, _ = _find_matching_link_state(
+                        (
+                            database.query(models.LinkState)
+                            .filter(models.LinkState.lab_id == lab_id)
+                            .all()
+                        ),
+                        link_def.id,
+                        node_name_to_device,
+                    )
+                if not existing:
+                    raise
+                if all(state.id != existing.id for state in existing_states):
+                    existing_states.append(existing)
+                existing_changed = _apply_link_state_canonical_fields(
+                    existing,
+                    link_def_id=link_def.id,
+                    link_name=link_name,
+                    src_n=src_n,
+                    src_i=src_i,
+                    tgt_n=tgt_n,
+                    tgt_i=tgt_i,
+                )
+                if existing_changed:
+                    mutated_states.append(existing)
+                updated_count += 1
 
     # Collect info about links to remove (for teardown) before deleting
     for existing_state in existing_states:

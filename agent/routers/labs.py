@@ -136,16 +136,33 @@ async def _reconcile_single_node(
                 )
 
         elif desired == "stopped":
-            from agent.readiness import clear_post_boot_state
-            # Unified lifecycle: stop = remove container entirely
-            if current_status == "running":
-                await asyncio.to_thread(container.stop, timeout=settings.container_stop_timeout)
-            await asyncio.to_thread(container.remove, force=True, v=True)
-            clear_post_boot_state(container_name)
-            logger.info(f"Stopped and removed container {container_name}")
+            docker_provider = get_provider("docker")
+            node_name = (container.labels or {}).get("archetype.node_name")
+
+            if docker_provider and node_name and hasattr(docker_provider, "stop_node"):
+                result = await docker_provider.stop_node(
+                    lab_id=lab_id,
+                    node_name=node_name,
+                    workspace=workspace,
+                )
+                if not result.success:
+                    return NodeReconcileResult(
+                        container_name=container_name,
+                        action="error",
+                        success=False,
+                        error=result.error or f"Failed to stop {container_name}",
+                    )
+                logger.info(f"Stopped and removed container {container_name}")
+            else:
+                from agent.readiness import clear_post_boot_state
+                # Fallback for unmanaged or unlabeled containers recovered by name.
+                if current_status == "running":
+                    await asyncio.to_thread(container.stop, timeout=settings.container_stop_timeout)
+                await asyncio.to_thread(container.remove, force=True, v=True)
+                clear_post_boot_state(container_name)
+                logger.info(f"Stopped and removed container {container_name}")
 
             # Clean up lab-level resources if this was the last container.
-            docker_provider = get_provider("docker")
             cleanup_if_empty = getattr(docker_provider, "cleanup_lab_resources_if_empty", None)
             if docker_provider and callable(cleanup_if_empty):
                 try:
