@@ -291,6 +291,34 @@ class TestBuildVmMonitoredPorts:
 
         assert "tap0" in result
 
+    def test_discovers_domains_when_allocations_missing(self):
+        """Live libvirt domains backfill monitored ports after agent restart."""
+        p = _make_provider()
+        p._vlan_allocations = {}
+
+        domain = MagicMock()
+        p._conn = MagicMock()
+        p._conn.listAllDomains.return_value = [domain]
+        p._get_domain_metadata_values = MagicMock(return_value={
+            "lab_id": "lab1",
+            "node_name": "r1",
+        })
+        p._extract_domain_vlan_tags = MagicMock(return_value=[2000])
+        p._get_domain_kind = MagicMock(return_value=None)
+        p._domain_has_dedicated_mgmt_interface = MagicMock(return_value=False)
+
+        domain_name = p._domain_name("lab1", "r1")
+        expected_mac = _mac(domain_name, 0)
+        ovs_json = self._make_ovs_json([("vnet0", expected_mac)])
+
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout=ovs_json)
+            result = p._build_vm_monitored_ports_sync()
+
+        assert "vnet0" in result
+        assert result["vnet0"].node_name == "r1"
+        assert p._vlan_allocations["lab1"]["r1"] == [2000]
+
     def test_ovs_failure_returns_empty(self):
         """OVS batch query failure → empty dict (no crash)."""
         p = _make_provider()
