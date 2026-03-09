@@ -115,12 +115,12 @@ const SidebarFilters: React.FC<SidebarFiltersProps> = ({
     return counts;
   }, [devices, imageLibrary]);
 
-  // 'has_image' is the default - any deviation counts as an active filter
+  // 'all' means no image filter active; any other value is an active filter
   const hasActiveFilters =
     searchQuery.length > 0 ||
     selectedVendors.size > 0 ||
     selectedTypes.size > 0 ||
-    imageStatus !== 'has_image';
+    imageStatus !== 'all';
 
   const typeLabels: Record<string, string> = {
     router: 'Routers',
@@ -171,7 +171,7 @@ const SidebarFilters: React.FC<SidebarFiltersProps> = ({
           <span>Filters</span>
           {hasActiveFilters && (
             <span className="px-1.5 py-0.5 bg-sage-500 text-white rounded text-[9px]">
-              {(searchQuery.length > 0 ? 1 : 0) + selectedVendors.size + selectedTypes.size + (imageStatus !== 'has_image' ? 1 : 0)}
+              {(searchQuery.length > 0 ? 1 : 0) + selectedVendors.size + selectedTypes.size + (imageStatus !== 'all' ? 1 : 0)}
             </span>
           )}
           <i className={`fa-solid fa-chevron-down text-[8px] transition-transform ${isExpanded ? '' : '-rotate-90'}`} />

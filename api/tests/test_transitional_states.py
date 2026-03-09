@@ -462,7 +462,7 @@ class TestCategorizationMatchesTransitionalStates:
 
         # Node should now be stopped (the stop action was performed)
         assert node_state.actual_state == "stopped"
-        assert node_state.stopping_started_at is None  # Cleared on success
+        assert node_state.stopping_started_at is not None  # Kept for graceful shutdown guard
 
     @pytest.mark.asyncio
     async def test_node_in_starting_state_categorized_for_start(

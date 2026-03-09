@@ -594,7 +594,10 @@ describe("PropertiesPanel", () => {
         );
 
         expect(screen.getByText("Default Credentials")).toBeInTheDocument();
-        expect(screen.getByText("admin / YourPaSsWoRd")).toBeInTheDocument();
+        expect(screen.getByText("user")).toBeInTheDocument();
+        expect(screen.getByText("admin")).toBeInTheDocument();
+        expect(screen.getByText("pass")).toBeInTheDocument();
+        expect(screen.getByText("YourPaSsWoRd")).toBeInTheDocument();
       });
     });
 

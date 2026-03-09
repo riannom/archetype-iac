@@ -148,6 +148,31 @@ def _apply_runtime_identity_decision(
     return True
 
 
+def _is_libvirt_node_image(image: str | None) -> bool:
+    """Return True when the node image implies a libvirt-backed runtime."""
+    return bool(image and image.endswith((".qcow2", ".img")))
+
+
+def _remove_stale_placement(
+    session,
+    placement: models.NodePlacement | None,
+    *,
+    placements_by_node_definition_id: dict[str, models.NodePlacement],
+    node_expected_agent_by_node_definition_id: dict[str, str],
+    node_expected_agent_by_name: dict[str, str],
+    runtime_node_name: str,
+) -> None:
+    """Delete a placement and clear reconciliation caches tied to it."""
+    if not placement:
+        return
+
+    if placement.node_definition_id:
+        placements_by_node_definition_id.pop(placement.node_definition_id, None)
+        node_expected_agent_by_node_definition_id.pop(placement.node_definition_id, None)
+    node_expected_agent_by_name.pop(runtime_node_name, None)
+    session.delete(placement)
+
+
 def _ensure_link_states_for_lab(session, lab_id: str) -> int:
     """Ensure LinkState records exist for all links in a lab's topology.
 
@@ -868,6 +893,13 @@ async def _do_reconcile_lab(session, lab, lab_id: str) -> int:
                 ns.node_definition_id,
                 ns.node_name,
             )
+            node_image = node_images_by_id.get(ns.node_definition_id)
+            is_libvirt_node = _is_libvirt_node_image(node_image)
+            placement = (
+                placements_by_node_definition_id.get(ns.node_definition_id)
+                if ns.node_definition_id
+                else None
+            )
             if ns.node_definition_id and ns.node_definition_id not in nodes_by_id:
                 logger.warning(
                     "NodeState %s in lab %s references missing Node definition %s",
@@ -961,6 +993,60 @@ async def _do_reconcile_lab(session, lab, lab_id: str) -> int:
             old_is_ready = ns.is_ready
 
             if container_status:
+                container_agent_id = (
+                    container_agent_map.get(runtime_node_name)
+                    or node_expected_agent_by_node_definition_id.get(ns.node_definition_id)
+                    or node_expected_agent_by_name.get(runtime_node_name)
+                )
+                if (
+                    is_libvirt_node
+                    and ns.desired_state == NodeDesiredState.STOPPED.value
+                    and not active_job
+                    and container_agent_id in agents_successfully_queried
+                ):
+                    stale_agent = host_to_agent.get(container_agent_id) if container_agent_id else None
+                    if stale_agent:
+                        destroy_result = await agent_client.destroy_container_on_agent(
+                            stale_agent,
+                            lab_id,
+                            runtime_node_name,
+                        )
+                        if destroy_result.get("success"):
+                            logger.info(
+                                "Destroyed stale libvirt runtime %s for stopped node %s in lab %s",
+                                runtime_node_name,
+                                ns.node_name,
+                                lab_id,
+                            )
+                            _remove_stale_placement(
+                                session,
+                                placement,
+                                placements_by_node_definition_id=placements_by_node_definition_id,
+                                node_expected_agent_by_node_definition_id=node_expected_agent_by_node_definition_id,
+                                node_expected_agent_by_name=node_expected_agent_by_name,
+                                runtime_node_name=runtime_node_name,
+                            )
+                            container_status_map.pop(runtime_node_name, None)
+                            container_agent_map.pop(runtime_node_name, None)
+                            container_runtime_id_map.pop(runtime_node_name, None)
+                            container_node_definition_id_map.pop(runtime_node_name, None)
+                            container_status = None
+                            placement = None
+                            ns.actual_state = NodeActualState.UNDEPLOYED.value
+                            ns.stopping_started_at = None
+                            ns.starting_started_at = None
+                            ns.error_message = None
+                            ns.is_ready = False
+                            ns.boot_started_at = None
+                            undeployed_count += 1
+                        else:
+                            logger.warning(
+                            "Failed to destroy stale libvirt runtime %s for stopped node %s in lab %s: %s",
+                            runtime_node_name,
+                            ns.node_name,
+                            lab_id,
+                            destroy_result.get("error", "unknown error"),
+                            )
                 if container_status == "running":
                     ns.actual_state = NodeActualState.RUNNING.value
                     ns.stopping_started_at = None  # Clear if recovering from stuck stopping
@@ -1067,6 +1153,14 @@ async def _do_reconcile_lab(session, lab, lab_id: str) -> int:
                     if ns.actual_state != "undeployed":
                         ns.actual_state = NodeActualState.UNDEPLOYED.value
                         ns.error_message = None
+                    _remove_stale_placement(
+                        session,
+                        placement,
+                        placements_by_node_definition_id=placements_by_node_definition_id,
+                        node_expected_agent_by_node_definition_id=node_expected_agent_by_node_definition_id,
+                        node_expected_agent_by_name=node_expected_agent_by_name,
+                        runtime_node_name=runtime_node_name,
+                    )
                     ns.stopping_started_at = None
                     ns.starting_started_at = None
                     ns.is_ready = False
