@@ -478,7 +478,7 @@ async def declare_overlay_state(request: DeclareOverlayStateRequest):
 
 @router.get("/labs/{lab_id}/port-state")
 async def get_lab_port_state(lab_id: str) -> PortStateResponse:
-    """Get OVS port state for all container interfaces in a lab.
+    """Get OVS port state for all container and VM interfaces in a lab.
 
     Uses ifindex matching to verify correct veth-to-interface mapping,
     bypassing stale Docker plugin state that can have swapped mappings
@@ -486,12 +486,13 @@ async def get_lab_port_state(lab_id: str) -> PortStateResponse:
     """
     try:
         docker_provider = get_provider("docker")
-        if docker_provider is None:
-            return PortStateResponse(ports=[])
+        libvirt_provider = get_provider("libvirt")
 
         # Step 1: Collect per-container interface->iflink data via Docker SDK
         # in a worker thread so we do not block the asyncio event loop.
         def _collect_container_iflinks() -> list[tuple[str, str, str]]:
+            if docker_provider is None:
+                return []
             client = docker.from_env(timeout=settings.docker_client_timeout)
             containers = client.containers.list(
                 filters={"label": f"archetype.lab_id={lab_id}"},
@@ -526,43 +527,50 @@ async def get_lab_port_state(lab_id: str) -> PortStateResponse:
             return results
 
         container_iflinks = await asyncio.to_thread(_collect_container_iflinks)
-        if not container_iflinks:
+        if not container_iflinks and libvirt_provider is None:
             return PortStateResponse(ports=[])
 
-        # Step 2: Build ifindex -> ovs_port_name map from OVS
+        # Step 2: Build OVS port lookup maps from live bridge state.
         bridge = settings.ovs_bridge_name or "arch-ovs"
         proc = await asyncio.create_subprocess_exec(
             "ovs-vsctl", "list-ports", bridge,
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
         )
         stdout, _ = await proc.communicate()
-        ovs_ports = [
-            p.strip() for p in stdout.decode().strip().split("\n")
-            if p.strip() and p.strip().startswith("vh")
-        ]
+        ovs_ports = [p.strip() for p in stdout.decode().strip().split("\n") if p.strip()]
 
         ifindex_to_port: dict[int, tuple[str, int]] = {}  # ifindex -> (name, tag)
+        tag_by_port: dict[str, int] = {}
         for port_name in ovs_ports:
-            proc = await asyncio.create_subprocess_exec(
-                "ovs-vsctl", "get", "interface", port_name, "ifindex",
-                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
-            )
-            idx_out, _ = await proc.communicate()
             proc2 = await asyncio.create_subprocess_exec(
                 "ovs-vsctl", "get", "port", port_name, "tag",
                 stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
             )
             tag_out, _ = await proc2.communicate()
             try:
-                ifidx = int(idx_out.decode().strip())
                 tag_str = tag_out.decode().strip()
                 tag = int(tag_str) if tag_str and tag_str != "[]" else 0
+            except (ValueError, TypeError):
+                tag = 0
+            tag_by_port[port_name] = tag
+
+            if not port_name.startswith("vh"):
+                continue
+
+            proc = await asyncio.create_subprocess_exec(
+                "ovs-vsctl", "get", "interface", port_name, "ifindex",
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+            )
+            idx_out, _ = await proc.communicate()
+            try:
+                ifidx = int(idx_out.decode().strip())
                 ifindex_to_port[ifidx] = (port_name, tag)
             except (ValueError, TypeError):
                 continue
 
-        # Step 3: For each container, read interface iflinks and match
-        ports = []
+        # Step 3: For each container, read interface iflinks and match.
+        ports: list[PortInfo] = []
+        seen_ports: set[tuple[str, str]] = set()
         for node_name, _cname, iface_output in container_iflinks:
             for line in iface_output.strip().split("\n"):
                 if ":" not in line:
@@ -578,12 +586,42 @@ async def get_lab_port_state(lab_id: str) -> PortStateResponse:
                 port_info = ifindex_to_port.get(peer_ifindex)
                 if port_info:
                     ovs_port_name, vlan_tag = port_info
+                    port_key = (node_name, iface_name)
+                    if port_key in seen_ports:
+                        continue
+                    seen_ports.add(port_key)
                     ports.append(PortInfo(
                         node_name=node_name,
                         interface_name=iface_name,
                         ovs_port_name=ovs_port_name,
                         vlan_tag=vlan_tag,
                     ))
+
+        # Step 4: Supplement with libvirt VM OVS ports so InterfaceMapping
+        # refresh can repair stale VM tap names after restart.
+        if libvirt_provider is not None:
+            try:
+                await libvirt_provider.refresh_vm_monitored_ports()
+                for monitored in libvirt_provider.get_vm_monitored_ports().values():
+                    if getattr(monitored, "lab_id", None) != lab_id:
+                        continue
+                    ovs_port_name = getattr(monitored, "port_name", "")
+                    node_name = getattr(monitored, "node_name", "") or getattr(monitored, "container_name", "")
+                    interface_name = getattr(monitored, "interface_name", "")
+                    if not ovs_port_name or not node_name or not interface_name:
+                        continue
+                    port_key = (node_name, interface_name)
+                    if port_key in seen_ports:
+                        continue
+                    seen_ports.add(port_key)
+                    ports.append(PortInfo(
+                        node_name=node_name,
+                        interface_name=interface_name,
+                        ovs_port_name=ovs_port_name,
+                        vlan_tag=tag_by_port.get(ovs_port_name, 0),
+                    ))
+            except Exception as e:
+                logger.warning(f"Failed to collect libvirt port state for lab {lab_id}: {e}")
 
         return PortStateResponse(ports=ports)
     except Exception as e:
