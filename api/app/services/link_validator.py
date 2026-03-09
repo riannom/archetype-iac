@@ -22,6 +22,7 @@ from sqlalchemy.orm import Session
 from app import agent_client, models
 from app.services import interface_mapping as mapping_service
 from app.services.interface_naming import normalize_for_node
+from app.utils.link import lookup_endpoint_hosts
 
 logger = logging.getLogger(__name__)
 
@@ -169,6 +170,27 @@ def is_vlan_mismatch(error: str | None) -> bool:
     return error is not None and error.startswith(VLAN_MISMATCH)
 
 
+def _ensure_link_host_placement(
+    session: Session,
+    link_state: models.LinkState,
+) -> tuple[str | None, str | None]:
+    """Resolve and backfill endpoint host placement for existing LinkState rows."""
+    source_host_id = link_state.source_host_id
+    target_host_id = link_state.target_host_id
+    if source_host_id and target_host_id:
+        return source_host_id, target_host_id
+
+    resolved_source, resolved_target = lookup_endpoint_hosts(session, link_state)
+    if not source_host_id and resolved_source:
+        link_state.source_host_id = resolved_source
+        source_host_id = resolved_source
+    if not target_host_id and resolved_target:
+        link_state.target_host_id = resolved_target
+        target_host_id = resolved_target
+
+    return source_host_id, target_host_id
+
+
 async def verify_link_connected(
     session: Session,
     link_state: models.LinkState,
@@ -209,9 +231,10 @@ async def verify_same_host_link(
     Returns:
         (is_valid, error_message) tuple
     """
-    agent = host_to_agent.get(link_state.source_host_id)
+    source_host_id, target_host_id = _ensure_link_host_placement(session, link_state)
+    agent = host_to_agent.get(source_host_id or target_host_id)
     if not agent:
-        return False, f"Agent not found for host {link_state.source_host_id}"
+        return False, f"Agent not found for host {source_host_id or target_host_id}"
 
     # Normalize interface names (Ethernet1 -> eth1) for agent queries
     source_iface = normalize_for_node(session, link_state.lab_id, link_state.source_node, link_state.source_interface or "")
@@ -280,14 +303,15 @@ async def verify_cross_host_link(
     Returns:
         (is_valid, error_message) tuple
     """
-    source_agent = host_to_agent.get(link_state.source_host_id)
-    target_agent = host_to_agent.get(link_state.target_host_id)
+    source_host_id, target_host_id = _ensure_link_host_placement(session, link_state)
+    source_agent = host_to_agent.get(source_host_id)
+    target_agent = host_to_agent.get(target_host_id)
 
     if not source_agent:
-        return False, f"Source agent not found for host {link_state.source_host_id}"
+        return False, f"Source agent not found for host {source_host_id}"
 
     if not target_agent:
-        return False, f"Target agent not found for host {link_state.target_host_id}"
+        return False, f"Target agent not found for host {target_host_id}"
 
     # Normalize interface names (Ethernet1 -> eth1) for agent queries
     source_iface = normalize_for_node(session, link_state.lab_id, link_state.source_node, link_state.source_interface or "")

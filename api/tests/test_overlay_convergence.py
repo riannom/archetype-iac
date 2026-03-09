@@ -617,6 +617,13 @@ async def test_convergence_protects_in_progress_links(test_db, sample_lab, multi
             all_port_names.add(t["port_name"])
 
     assert in_progress_port in all_port_names
+    for tunnels in declared_payloads.values():
+        placeholder = next((t for t in tunnels if t["port_name"] == in_progress_port), None)
+        if placeholder:
+            assert placeholder["placeholder"] is True
+            assert placeholder["local_ip"] == ""
+            assert placeholder["remote_ip"] == ""
+            assert placeholder["expected_vlan"] == 0
 
 
 @pytest.mark.asyncio

@@ -450,6 +450,7 @@ async def run_overlay_convergence(
                         "expected_vlan": 0,
                         "port_name": port_name,
                         "mtu": overlay_mtu,
+                        "placeholder": True,
                     })
                 agent_declared_labs[host_id].add(ls_lab_id)
 
