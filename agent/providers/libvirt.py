@@ -2962,12 +2962,6 @@ class LibvirtProvider(Provider, VlanPersistenceMixin):
         except Exception:
             pass
 
-        if "-" not in identifier:
-            try:
-                _add_candidate(self.conn.lookupByName(self._domain_name(lab_id, identifier)))
-            except Exception:
-                pass
-
         for domain in candidates:
             metadata = self._get_domain_metadata_values(domain)
             if metadata.get("lab_id") != lab_id:

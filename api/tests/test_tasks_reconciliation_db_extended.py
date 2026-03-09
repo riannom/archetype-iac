@@ -526,7 +526,7 @@ class TestDoReconcileLabContainerMapping:
     async def test_container_not_found_marks_undeployed_when_agent_queried(
         self, test_db, test_user
     ):
-        """Container absent from queried agent should become undeployed."""
+        """Container absent from queried agent should become undeployed and clear placement."""
         from app.tasks.reconciliation_db import _do_reconcile_lab
 
         host = _make_host(test_db, "host-undeployed")
@@ -547,6 +547,73 @@ class TestDoReconcileLabContainerMapping:
         assert ns.actual_state == NodeActualState.UNDEPLOYED.value
         assert ns.is_ready is False
         assert ns.boot_started_at is None
+        placement = (
+            test_db.query(models.NodePlacement)
+            .filter(models.NodePlacement.lab_id == lab.id)
+            .one_or_none()
+        )
+        assert placement is None
+
+    @pytest.mark.asyncio
+    async def test_stopped_libvirt_runtime_is_destroyed_and_cleared(
+        self, test_db, test_user
+    ):
+        """Stopped libvirt nodes should not keep stale runtimes or placements."""
+        from app.tasks.reconciliation_db import _do_reconcile_lab
+
+        host = _make_host(test_db, "host-libvirt-stale")
+        lab = _make_lab(test_db, test_user, state="running", agent_id=host.id)
+        node_def = _make_node(
+            test_db,
+            lab.id,
+            "R1",
+            host_id=host.id,
+            image="device.qcow2",
+        )
+        ns = _make_node_state(
+            test_db,
+            lab.id,
+            "R1",
+            actual="running",
+            desired="stopped",
+            node_definition_id=node_def.id,
+            is_ready=True,
+        )
+        _make_placement(
+            test_db,
+            lab.id,
+            "R1",
+            host.id,
+            node_definition_id=node_def.id,
+            status="deployed",
+            runtime_id="runtime-stale",
+        )
+
+        with _ReconcileContext(
+            agent_status_nodes=[{
+                "name": "R1",
+                "status": "running",
+                "node_definition_id": node_def.id,
+                "runtime_id": "runtime-stale",
+            }],
+            destroy_container=patch(
+                "app.tasks.reconciliation_db.agent_client.destroy_container_on_agent",
+                new_callable=AsyncMock,
+                return_value={"success": True},
+            ),
+        ) as mocks:
+            await _do_reconcile_lab(test_db, lab, lab.id)
+
+        mocks["destroy_container"].assert_awaited_once()
+        test_db.refresh(ns)
+        assert ns.actual_state == NodeActualState.UNDEPLOYED.value
+        assert ns.is_ready is False
+        placement = (
+            test_db.query(models.NodePlacement)
+            .filter(models.NodePlacement.lab_id == lab.id)
+            .one_or_none()
+        )
+        assert placement is None
 
     @pytest.mark.asyncio
     async def test_running_container_backfills_boot_started_at(self, test_db, test_user):

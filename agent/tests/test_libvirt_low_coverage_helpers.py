@@ -1928,21 +1928,17 @@ class TestResolveNodeNameForActionSync:
         result = provider._resolve_node_name_for_action_sync("lab1", "")
         assert result is None
 
-    def test_generated_domain_name_lookup(self):
-        """Simple identifier triggers generated domain name lookup."""
+    def test_simple_identifier_does_not_try_generated_domain_name(self):
+        """Simple identifiers should not synthesize domain-name lookups."""
         provider = _make_provider()
-        domain = self._make_domain(
-            "arch-lab1-r1",
-            {"lab_id": "lab1", "node_name": "r1"},
-        )
         conn = MagicMock()
         conn.lookupByUUIDString.side_effect = Exception("no")
-        # Direct lookup fails, generated name lookup succeeds
-        conn.lookupByName.side_effect = [Exception("no"), domain]
+        conn.lookupByName.side_effect = Exception("no")
         provider._conn = conn
 
         result = provider._resolve_node_name_for_action_sync("lab1", "r1")
         assert result == "r1"
+        conn.lookupByName.assert_called_once_with("r1")
 
 
 # ---------------------------------------------------------------------------
