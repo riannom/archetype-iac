@@ -1067,6 +1067,8 @@ async def _do_reconcile_lab(session, lab, lab_id: str) -> int:
                     if ns.actual_state != "undeployed":
                         ns.actual_state = NodeActualState.UNDEPLOYED.value
                         ns.error_message = None
+                    ns.stopping_started_at = None
+                    ns.starting_started_at = None
                     ns.is_ready = False
                     ns.boot_started_at = None
                     undeployed_count += 1

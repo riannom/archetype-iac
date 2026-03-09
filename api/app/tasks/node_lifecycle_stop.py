@@ -353,7 +353,9 @@ class StopMixin:
         if result.get("success"):
             old_state = ns.actual_state
             ns.actual_state = NodeActualState.STOPPED.value
-            ns.stopping_started_at = None
+            # Keep stopping_started_at set — the agent acknowledged the stop
+            # but VMs may still be in graceful shutdown (ACPI poweroff).
+            # Reconciliation will clear it when it confirms the VM is stopped.
             ns.error_message = None
             ns.boot_started_at = None
             ns.is_ready = False
