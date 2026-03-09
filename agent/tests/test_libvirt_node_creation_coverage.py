@@ -342,6 +342,10 @@ class TestCreateNode:
         assert result.success is True
         assert result.new_status == NodeStatus.STOPPED
         assert "Defined domain" in result.stdout
+        node_config = provider._generate_domain_xml.call_args.args[1]
+        assert node_config["lab_id"] == "lab1"
+        assert node_config["node_name"] == "r1"
+        assert node_config["provider"] == "libvirt"
 
     @patch("agent.providers.libvirt.get_libvirt_config")
     @patch("agent.providers.libvirt.get_vendor_config")

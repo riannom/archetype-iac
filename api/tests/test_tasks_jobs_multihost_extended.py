@@ -704,6 +704,64 @@ class TestMultihostDeployRollbackFailure:
         assert job.status == JobStatus.FAILED.value
         assert "no hosts to rollback" in job.log_path.lower()
 
+    @pytest.mark.asyncio
+    async def test_mixed_provider_host_rolls_back_only_successful_provider(
+        self, test_db: Session, test_user
+    ):
+        """Mixed-provider deploy rollback should target only successful provider groups."""
+        lab = _make_lab(test_db, test_user)
+        job = _make_job(test_db, lab, test_user)
+        host = _make_host(test_db, "host-mixed-rb", name="HostMixed")
+        _make_node(test_db, lab.id, "ceos_1", host_id=host.id, device="ceos")
+        _make_node(test_db, lab.id, "n9kv_1", host_id=host.id, device="cisco_n9kv")
+
+        analysis = _FakeAnalysis(
+            placements={host.id: [{"node_name": "ceos_1"}, {"node_name": "n9kv_1"}]},
+            cross_host_links=[],
+        )
+
+        patches = _build_standard_patches(test_db)
+        with patches["get_session"], patches["record_started"], patches["record_failed"], \
+             patches["record_completed"], patches["broadcast"], patches["update_lab_state"], \
+             patches["release_tx"], patches["dispatch_webhook"], patches["emit_deploy"], \
+             patches["capture_ips"], patches["update_placements"], patches["resource_validation"]:
+            with patch(f"{MODULE}.TopologyService") as mock_ts_cls:
+                mock_ts = MagicMock()
+                mock_ts.get_nodes.return_value = [
+                    MagicMock(host_id=host.id, container_name="ceos_1", device="ceos"),
+                    MagicMock(host_id=host.id, container_name="n9kv_1", device="cisco_n9kv"),
+                ]
+                mock_ts.analyze_placements.return_value = analysis
+                mock_ts.build_deploy_topology.return_value = {
+                    "nodes": [{"name": "ceos_1"}, {"name": "n9kv_1"}],
+                    "links": [],
+                }
+                mock_ts_cls.return_value = mock_ts
+
+                with patch(f"{MODULE}.get_node_provider") as mock_get_provider:
+                    mock_get_provider.side_effect = lambda node, session: (
+                        "libvirt" if node.container_name == "n9kv_1" else "docker"
+                    )
+                    with patch(f"{MODULE}.agent_client") as mock_ac:
+                        mock_ac.is_agent_online.return_value = True
+                        mock_ac.get_lab_status_from_agent = AsyncMock(return_value={})
+                        mock_ac.deploy_to_agent = AsyncMock(
+                            side_effect=[
+                                {"status": "completed"},
+                                RuntimeError("libvirt deploy failed"),
+                            ]
+                        )
+                        mock_ac.destroy_on_agent = AsyncMock(
+                            return_value={"status": "completed"}
+                        )
+
+                        await run_multihost_deploy(job.id, lab.id)
+
+        test_db.refresh(job)
+        assert job.status == JobStatus.FAILED.value
+        mock_ac.destroy_on_agent.assert_awaited_once()
+        assert mock_ac.destroy_on_agent.await_args.kwargs["provider"] == "libvirt"
+
 
 # ---------------------------------------------------------------------------
 # Tests: Deploy - deploy result logging
@@ -931,6 +989,132 @@ class TestMultihostDestroyHappyPath:
         # Link state should be deleted
         remaining = test_db.get(models.LinkState, ls_id)
         assert remaining is None
+
+    @pytest.mark.asyncio
+    async def test_mixed_provider_host_destroys_each_provider(
+        self, test_db: Session, test_user
+    ):
+        """Mixed Docker/libvirt hosts should destroy both provider runtime sets."""
+        lab = _make_lab(test_db, test_user, state="running")
+        job = _make_job(test_db, lab, test_user, action="down")
+        host = _make_host(test_db, "host-mixed-destroy")
+        _make_node(test_db, lab.id, "ceos_1", host_id=host.id, device="ceos")
+        _make_node(test_db, lab.id, "n9kv_1", host_id=host.id, device="cisco_n9kv")
+
+        analysis = _FakeAnalysis(
+            placements={host.id: [{"node_name": "ceos_1"}, {"node_name": "n9kv_1"}]},
+            cross_host_links=[],
+        )
+
+        patches = _build_standard_patches(test_db)
+        with patches["get_session"], patches["record_started"], patches["record_failed"], \
+             patches["record_completed"], patches["broadcast"], patches["update_lab_state"], \
+             patches["release_tx"], patches["dispatch_webhook"], patches["emit_destroy"], \
+             patches["emit_job_failed"], patches["capture_ips"], patches["update_placements"]:
+            with patch(f"{MODULE}.TopologyService") as mock_ts_cls:
+                mock_ts = MagicMock()
+                mock_ts.analyze_placements.return_value = analysis
+                mock_ts_cls.return_value = mock_ts
+
+                with patch(f"{MODULE}.get_node_provider") as mock_get_provider:
+                    mock_get_provider.side_effect = lambda node, session: (
+                        "libvirt" if node.container_name == "n9kv_1" else "docker"
+                    )
+                    with patch(f"{MODULE}.agent_client") as mock_ac:
+                        mock_ac.is_agent_online.return_value = True
+                        mock_ac.destroy_on_agent = AsyncMock(
+                            return_value={"status": "completed"}
+                        )
+
+                        with patch(
+                            "app.tasks.link_orchestration.teardown_deployment_links",
+                            new_callable=AsyncMock,
+                            return_value=(0, 0),
+                        ):
+                            await run_multihost_destroy(job.id, lab.id)
+
+        providers = {call.kwargs["provider"] for call in mock_ac.destroy_on_agent.await_args_list}
+        assert providers == {"docker", "libvirt"}
+        assert mock_ac.destroy_on_agent.await_count == 2
+
+
+# ---------------------------------------------------------------------------
+# Tests: Deploy - mixed provider dispatch
+# ---------------------------------------------------------------------------
+
+class TestMultihostDeployMixedProviders:
+    """Tests for mixed-provider deploy dispatch on a single host."""
+
+    @pytest.mark.asyncio
+    async def test_mixed_provider_host_deploys_each_provider(
+        self, test_db: Session, test_user
+    ):
+        """Mixed Docker/libvirt hosts should deploy each provider with a filtered topology."""
+        lab = _make_lab(test_db, test_user)
+        job = _make_job(test_db, lab, test_user)
+        host = _make_host(test_db, "host-mixed-deploy", name="HostMixed")
+        _make_node(test_db, lab.id, "ceos_1", host_id=host.id, device="ceos")
+        _make_node(test_db, lab.id, "n9kv_1", host_id=host.id, device="cisco_n9kv")
+
+        analysis = _FakeAnalysis(
+            placements={host.id: [{"node_name": "ceos_1"}, {"node_name": "n9kv_1"}]},
+            cross_host_links=[],
+        )
+
+        patches = _build_standard_patches(test_db)
+        with patches["get_session"], patches["record_started"], patches["record_failed"], \
+             patches["record_completed"], patches["broadcast"], patches["update_lab_state"], \
+             patches["release_tx"], patches["dispatch_webhook"], patches["emit_deploy"], \
+             patches["capture_ips"], patches["update_placements"], patches["resource_validation"]:
+            with patch(f"{MODULE}.TopologyService") as mock_ts_cls:
+                mock_ts = MagicMock()
+                mock_ts.get_nodes.return_value = [
+                    MagicMock(host_id=host.id, container_name="ceos_1", device="ceos"),
+                    MagicMock(host_id=host.id, container_name="n9kv_1", device="cisco_n9kv"),
+                ]
+                mock_ts.analyze_placements.return_value = analysis
+                mock_ts.build_deploy_topology.return_value = {
+                    "nodes": [{"name": "ceos_1"}, {"name": "n9kv_1"}],
+                    "links": [
+                        {
+                            "source_node": "ceos_1",
+                            "target_node": "n9kv_1",
+                        }
+                    ],
+                }
+                mock_ts_cls.return_value = mock_ts
+
+                with patch(f"{MODULE}.get_node_provider") as mock_get_provider:
+                    mock_get_provider.side_effect = lambda node, session: (
+                        "libvirt" if node.container_name == "n9kv_1" else "docker"
+                    )
+                    with patch(f"{MODULE}.agent_client") as mock_ac:
+                        mock_ac.is_agent_online.return_value = True
+                        mock_ac.get_lab_status_from_agent = AsyncMock(return_value={})
+                        mock_ac.deploy_to_agent = AsyncMock(
+                            return_value={"status": "completed"}
+                        )
+
+                        with patch(
+                            "app.tasks.link_orchestration.create_deployment_links",
+                            new_callable=AsyncMock,
+                            return_value=(0, 0),
+                        ):
+                            await run_multihost_deploy(job.id, lab.id)
+
+        calls = mock_ac.deploy_to_agent.await_args_list
+        providers = [call.kwargs["provider"] for call in calls]
+        assert providers == ["libvirt", "docker"]
+        assert mock_ac.deploy_to_agent.await_count == 2
+
+        topologies_by_provider = {
+            call.kwargs["provider"]: call.kwargs["topology"]
+            for call in calls
+        }
+        assert topologies_by_provider["docker"]["nodes"] == [{"name": "ceos_1"}]
+        assert topologies_by_provider["libvirt"]["nodes"] == [{"name": "n9kv_1"}]
+        assert topologies_by_provider["docker"]["links"] == []
+        assert topologies_by_provider["libvirt"]["links"] == []
 
 
 # ---------------------------------------------------------------------------

@@ -107,16 +107,18 @@ async def destroy_on_agent(
     agent: models.Host,
     job_id: str,
     lab_id: str,
+    *,
+    provider: str = "docker",
 ) -> dict:
     """Send destroy request to agent with retry logic."""
     url = f"{get_agent_url(agent)}/jobs/destroy"
-    logger.info(f"Destroying lab {lab_id} via agent {agent.id}")
+    logger.info(f"Destroying lab {lab_id} via agent {agent.id} (provider={provider})")
 
     try:
         result = await _agent_request(
             "POST",
             url,
-            json_body={"job_id": job_id, "lab_id": lab_id},
+            json_body={"job_id": job_id, "lab_id": lab_id, "provider": provider},
             timeout=settings.agent_destroy_timeout,
         )
         logger.info(f"Destroy completed for lab {lab_id}: {result.get('status')}")
