@@ -203,9 +203,18 @@ async def declare_state(
         expected_vlan = t["expected_vlan"]
         port_name = t["port_name"]
         mtu = t.get("mtu", 0)
+        is_placeholder = bool(t.get("placeholder"))
 
         declared_labs_set.add(lab_id)
         declared_port_names.add(port_name)
+
+        if is_placeholder or not local_ip or not remote_ip or not vni:
+            results.append({
+                "link_id": link_id,
+                "lab_id": lab_id,
+                "status": "protected",
+            })
+            continue
 
         try:
             port_info = ovs_ports.get(port_name)
@@ -359,7 +368,11 @@ async def declare_state(
             except Exception as e:
                 logger.warning(f"Failed to remove orphan {port_name}: {e}")
 
-    await manager._write_declared_state_cache(tunnels)
+    cacheable_tunnels = [
+        t for t in tunnels
+        if t.get("local_ip") and t.get("remote_ip") and t.get("vni") and not t.get("placeholder")
+    ]
+    await manager._write_declared_state_cache(cacheable_tunnels)
 
     return {"results": results, "orphans_removed": orphans_removed}
 

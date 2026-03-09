@@ -627,6 +627,21 @@ async def test_declare_state_writes_cache(tmp_path):
     manager._write_declared_state_cache.assert_called_once_with(tunnels)
 
 
+@pytest.mark.asyncio
+async def test_declare_state_skips_placeholder_entries(tmp_path):
+    """Placeholder entries protect ports without creating invalid VXLAN devices."""
+    manager = _make_manager(tmp_path)
+    manager._batch_read_ovs_ports = AsyncMock(return_value={})
+
+    tunnel = _tunnel_dict(local_ip="", remote_ip="", expected_vlan=0, vni=0)
+    tunnel["placeholder"] = True
+    result = await declare_state(manager, [tunnel], declared_labs=["lab-1"])
+
+    assert result["results"] == [{"link_id": "link-1", "lab_id": "lab-1", "status": "protected"}]
+    manager._create_vxlan_device.assert_not_called()
+    manager._write_declared_state_cache.assert_called_once_with([])
+
+
 # ===================================================================
 # recover_link_tunnels
 # ===================================================================
