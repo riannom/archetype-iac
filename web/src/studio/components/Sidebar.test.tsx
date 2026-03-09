@@ -350,7 +350,7 @@ describe("Sidebar", () => {
       expect(screen.queryByText("Cisco IOL XE")).not.toBeInTheDocument();
 
       // Toggle has_image -> all so the device is visible.
-      await user.click(screen.getByRole("button", { name: /^filters$/i }));
+      await user.click(screen.getByRole("button", { name: /filters 1/i }));
       await user.click(screen.getByRole("button", { name: /has image/i }));
 
       const iolLabel = screen.getByText("Cisco IOL XE");

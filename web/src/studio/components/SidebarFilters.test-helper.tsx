@@ -100,7 +100,7 @@ export function registerSidebarFiltersTests() {
       onVendorToggle: vi.fn(),
       selectedTypes: new Set<string>(),
       onTypeToggle: vi.fn(),
-      imageStatus: "has_image" as ImageStatus,
+      imageStatus: "all" as ImageStatus,
       onImageStatusChange: vi.fn(),
       onClearAll: vi.fn(),
     };
@@ -211,19 +211,19 @@ export function registerSidebarFiltersTests() {
           <SidebarFilters {...defaultProps} selectedVendors={new Set(["Arista"])} />
         );
 
-        expect(screen.getByText("1")).toBeInTheDocument();
+        expect(screen.getByRole("button", { name: /filters 1/i })).toBeInTheDocument();
       });
 
       it("shows filter count when types are selected", () => {
         render(
           <SidebarFilters {...defaultProps} selectedTypes={new Set(["router"])} />
         );
-        expect(screen.getByText("1")).toBeInTheDocument();
+        expect(screen.getByRole("button", { name: /filters 1/i })).toBeInTheDocument();
       });
 
       it("shows filter count when image status is not default", () => {
         render(<SidebarFilters {...defaultProps} imageStatus="no_image" />);
-        expect(screen.getByText("1")).toBeInTheDocument();
+        expect(screen.getByRole("button", { name: /filters 1/i })).toBeInTheDocument();
       });
 
       it("shows combined filter count", () => {
@@ -235,13 +235,12 @@ export function registerSidebarFiltersTests() {
             imageStatus="has_default"
           />
         );
-        expect(screen.getByText("4")).toBeInTheDocument();
+        expect(screen.getByRole("button", { name: /filters 4/i })).toBeInTheDocument();
       });
 
       it("does not show filter count when no filters active", () => {
         render(<SidebarFilters {...defaultProps} />);
-        const filterButton = screen.getByText("Filters").closest("button");
-        expect(filterButton?.textContent).not.toMatch(/^\\d+$/);
+        expect(screen.getByRole("button", { name: /^filters$/i })).toBeInTheDocument();
       });
     });
 
