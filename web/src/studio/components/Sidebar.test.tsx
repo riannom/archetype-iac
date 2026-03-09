@@ -1,23 +1,10 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import Sidebar from "./Sidebar";
 import { DeviceModel, DeviceType, CanvasTool } from "../types";
+import { registerSidebarFiltersTests } from "./SidebarFilters.test-helper";
 
-// Mock FontAwesome icons
-vi.mock("@fortawesome/react-fontawesome", () => ({
-  FontAwesomeIcon: () => null,
-}));
-
-// Mock useNotifications to avoid needing NotificationProvider
-vi.mock("../../contexts/NotificationContext", () => ({
-  useNotifications: () => ({
-    notifications: [],
-    addNotification: vi.fn(),
-    dismissNotification: vi.fn(),
-    dismissAllNotifications: vi.fn(),
-  }),
-}));
+let Sidebar: typeof import("./Sidebar").default;
 
 const mockDeviceModels: DeviceModel[] = [
   {
@@ -77,8 +64,31 @@ describe("Sidebar", () => {
   const mockOnSelectTool = vi.fn();
   const mockOnAddExternalNetwork = vi.fn();
 
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.clearAllMocks();
+    vi.resetModules();
+    vi.doUnmock("./Sidebar");
+    vi.doUnmock("../../contexts/NotificationContext");
+    const notificationContextModule = await import("../../contexts/NotificationContext");
+    vi.spyOn(notificationContextModule, "useNotifications").mockReturnValue({
+      notifications: [],
+      unreadCount: 0,
+      addNotification: vi.fn(),
+      markAsRead: vi.fn(),
+      markAllAsRead: vi.fn(),
+      clearNotifications: vi.fn(),
+      toasts: [],
+      dismissToast: vi.fn(),
+      preferences: null,
+      updateNotificationSettings: vi.fn(),
+      updateCanvasSettings: vi.fn(),
+      loading: false,
+    });
+    ({ default: Sidebar } = await vi.importActual("./Sidebar"));
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
   it("renders the sidebar with library header", () => {
@@ -582,3 +592,5 @@ describe("Sidebar", () => {
     });
   });
 });
+
+registerSidebarFiltersTests();
