@@ -24,7 +24,12 @@ if TYPE_CHECKING:
 
 
 from agent.config import settings
-from agent.providers.naming import libvirt_domain_name as _libvirt_name, sanitize_id
+from agent.providers.naming import (
+    DOCKER_PREFIX,
+    LIBVIRT_PREFIX,
+    libvirt_domain_name as _libvirt_name,
+    sanitize_id,
+)
 from agent.providers.base import (
     DeployResult,
     DestroyResult,
@@ -2996,6 +3001,18 @@ class LibvirtProvider(Provider, VlanPersistenceMixin):
             node_name = metadata.get("node_name")
             if node_name:
                 return node_name
+
+        # Controller stop/reconcile paths may still pass generated runtime names.
+        # Recover the logical node name so libvirt stop/start actions target the
+        # real domain instead of synthesizing a second generated name.
+        safe_lab_id = sanitize_id(lab_id, max_len=20)
+        generated_prefixes = (
+            f"{DOCKER_PREFIX}-{safe_lab_id}-",
+            f"{LIBVIRT_PREFIX}-{safe_lab_id}-",
+        )
+        for prefix in generated_prefixes:
+            if identifier.startswith(prefix) and len(identifier) > len(prefix):
+                return identifier[len(prefix):]
 
         return identifier if "-" not in identifier else None
 

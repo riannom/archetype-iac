@@ -194,6 +194,31 @@ def test_get_used_vlan_tags_on_ovs_bridge_handles_failures(monkeypatch):
     assert provider._get_used_vlan_tags_on_ovs_bridge() == set()
 
 
+def test_resolve_node_name_for_action_sync_recovers_generated_runtime_names():
+    provider = _make_provider()
+    provider._conn = SimpleNamespace(
+        isAlive=lambda: True,
+        lookupByName=lambda _name: (_ for _ in ()).throw(RuntimeError("missing")),
+    )
+
+    lab_id = "52c138e7-de39-4b4a-8daa-d75014ffe2e0"
+
+    assert (
+        provider._resolve_node_name_for_action_sync(
+            lab_id,
+            "archetype-52c138e7-de39-4b4a-8-cat9000v_q200_9",
+        )
+        == "cat9000v_q200_9"
+    )
+    assert (
+        provider._resolve_node_name_for_action_sync(
+            lab_id,
+            "arch-52c138e7-de39-4b4a-8-sonic_vs_11",
+        )
+        == "sonic_vs_11"
+    )
+
+
 def test_extract_domain_vlan_tags_parses_valid_and_skips_invalid():
     provider = _make_provider()
     domain = SimpleNamespace(
