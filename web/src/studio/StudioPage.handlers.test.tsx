@@ -6,7 +6,7 @@
  * StudioPage.extract-config.test.tsx with heavy component mocking.
  */
 import React from 'react';
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { BrowserRouter } from 'react-router-dom';
@@ -302,6 +302,37 @@ describe('StudioPage Handlers', () => {
 
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  afterAll(() => {
+    [
+      './components/Dashboard',
+      './components/Canvas',
+      './components/TopBar',
+      './components/RuntimeControl',
+      './components/VerificationPanel',
+      './components/Sidebar',
+      './components/PropertiesPanel',
+      './components/StatusBar',
+      './components/ConsoleManager',
+      './components/AgentAlertBanner',
+      './components/SystemStatusStrip',
+      './components/ConfigsView',
+      './components/LogsView',
+      './components/ConfigViewerModal',
+      './components/JobLogModal',
+      './components/TaskLogEntryModal',
+      './components/ScenarioPanel',
+      './components/InfraView',
+      './components/TaskLogPanel',
+      './hooks/useLabStateWS',
+      '../contexts/NotificationContext',
+      '../contexts/UserContext',
+      '../contexts/ImageLibraryContext',
+      '../contexts/DeviceCatalogContext',
+      '../theme/index',
+    ].forEach((modulePath) => vi.doUnmock(modulePath));
+    vi.resetModules();
   });
 
   // -------------------------------------------------------------------------
