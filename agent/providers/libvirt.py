@@ -2637,8 +2637,35 @@ class LibvirtProvider(Provider, VlanPersistenceMixin):
             if isinstance(port_name, str) and isinstance(mac, str) and mac:
                 mac_to_port[mac.lower().strip('"')] = port_name
 
+        effective_allocations: dict[str, dict[str, list[int]]] = {
+            lab_id: {
+                node_name: list(vlans)
+                for node_name, vlans in lab_allocs.items()
+            }
+            for lab_id, lab_allocs in self._vlan_allocations.items()
+        }
+        try:
+            for domain in self.conn.listAllDomains(0):
+                metadata = self._get_domain_metadata_values(domain)
+                lab_id = metadata.get("lab_id")
+                node_name = metadata.get("node_name")
+                if not lab_id or not node_name:
+                    continue
+                tags = self._extract_domain_vlan_tags(domain)
+                if not tags:
+                    continue
+                effective_allocations.setdefault(lab_id, {})[node_name] = tags
+        except Exception:
+            logger.debug(
+                "Failed to discover live libvirt domains while rebuilding VM port cache",
+                exc_info=True,
+            )
+
+        if effective_allocations:
+            self._vlan_allocations.update(effective_allocations)
+
         ports: dict = {}
-        for lab_id, lab_allocs in self._vlan_allocations.items():
+        for lab_id, lab_allocs in effective_allocations.items():
             for node_name, vlans in lab_allocs.items():
                 domain_name = self._domain_name(lab_id, node_name)
                 for iface_idx in range(len(vlans)):
