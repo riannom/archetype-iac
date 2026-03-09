@@ -5,6 +5,7 @@ from uuid import uuid4
 from unittest.mock import AsyncMock, patch
 
 from fastapi.testclient import TestClient
+from sqlalchemy.orm import sessionmaker
 from sqlalchemy.orm import Session
 
 from app import models, schemas
@@ -131,3 +132,97 @@ def test_links_reconcile_endpoint_uses_db_session_dependency(
     data = response.json()
     assert data["checked"] == 1
     assert data["errors"] == 0
+
+
+def test_upsert_link_states_recovers_when_concurrent_insert_wins(
+    test_db: Session,
+    test_engine,
+    sample_lab: models.Lab,
+    sample_host: models.Host,
+) -> None:
+    node1 = models.Node(
+        id=str(uuid4()),
+        lab_id=sample_lab.id,
+        gui_id="node-r1",
+        display_name="R1",
+        container_name="r1",
+        device="ceos",
+        host_id=sample_host.id,
+    )
+    node2 = models.Node(
+        id=str(uuid4()),
+        lab_id=sample_lab.id,
+        gui_id="node-r2",
+        display_name="R2",
+        container_name="r2",
+        device="ceos",
+        host_id=sample_host.id,
+    )
+    test_db.add_all([node1, node2])
+    test_db.commit()
+
+    graph = schemas.TopologyGraph(
+        nodes=[
+            schemas.GraphNode(id="node-r1", name="R1", container_name="r1", device="ceos"),
+            schemas.GraphNode(id="node-r2", name="R2", container_name="r2", device="ceos"),
+        ],
+        links=[
+            schemas.GraphLink(
+                endpoints=[
+                    schemas.GraphEndpoint(node="node-r1", ifname="eth1"),
+                    schemas.GraphEndpoint(node="node-r2", ifname="eth1"),
+                ]
+            )
+        ],
+    )
+
+    original_get_or_create = _upsert_link_states.__globals__["_get_or_create_link_definition"]
+    injected = {"done": False}
+
+    def _inject_concurrent_insert(*args, **kwargs):
+        link_def = original_get_or_create(*args, **kwargs)
+        if not injected["done"]:
+            injected["done"] = True
+            competing_session = sessionmaker(
+                bind=test_engine, autoflush=False, autocommit=False
+            )()
+            try:
+                competing_session.add(
+                    models.LinkState(
+                        id=str(uuid4()),
+                        lab_id=sample_lab.id,
+                        link_definition_id=link_def.id,
+                        link_name="r1:eth1-r2:eth1",
+                        source_node="r1",
+                        source_interface="eth1",
+                        target_node="r2",
+                        target_interface="eth1",
+                        source_host_id=sample_host.id,
+                        target_host_id=sample_host.id,
+                        desired_state="up",
+                        actual_state="unknown",
+                    )
+                )
+                competing_session.commit()
+            finally:
+                competing_session.close()
+        return link_def
+
+    with patch.dict(
+        _upsert_link_states.__globals__,
+        {"_get_or_create_link_definition": _inject_concurrent_insert},
+    ):
+        created, updated, _, _ = _upsert_link_states(test_db, sample_lab.id, graph)
+        test_db.commit()
+
+    assert created == 0
+    assert updated >= 1
+
+    states = (
+        test_db.query(models.LinkState)
+        .filter(models.LinkState.lab_id == sample_lab.id)
+        .all()
+    )
+    assert len(states) == 1
+    assert states[0].link_name == "r1:eth1-r2:eth1"
+    assert states[0].link_definition_id is not None

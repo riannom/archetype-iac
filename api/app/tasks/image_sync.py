@@ -10,10 +10,12 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from uuid import uuid4
 
 import httpx
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app import models
@@ -22,6 +24,19 @@ from app.db import get_session
 from app.image_store import find_image_by_id, load_manifest
 
 logger = logging.getLogger(__name__)
+ACTIVE_IMAGE_SYNC_JOB_STATUSES = ("pending", "transferring", "loading")
+
+
+@dataclass
+class QueueImageSyncJobResult:
+    """Result from attempting to queue an image sync job."""
+
+    status: str
+    image: dict | None = None
+    host: models.Host | None = None
+    job_id: str | None = None
+    was_created: bool = False
+    message: str | None = None
 
 
 def _is_file_reference(reference: str) -> bool:
@@ -34,6 +49,140 @@ def _required_provider_for_reference(reference: str) -> str | None:
     if reference.endswith((".qcow2", ".img")):
         return "libvirt"
     return None
+
+
+def queue_image_sync_job(
+    image_id: str,
+    host_id: str,
+    database: Session,
+    image: dict | None = None,
+    *,
+    start_task: bool = False,
+) -> QueueImageSyncJobResult:
+    """Queue an image sync job if the host and image are eligible.
+
+    This is the shared job-creation path used by manual push and auto-resync.
+    It applies duplicate-job detection and per-host concurrency limits before
+    creating a new pending ImageSyncJob.
+    """
+    if image is None:
+        manifest = load_manifest()
+        image = find_image_by_id(manifest, image_id)
+    if not image:
+        return QueueImageSyncJobResult(status="image_not_found", message="Image not found in library")
+
+    reference = image.get("reference", "")
+    if image.get("kind") != "docker" and not _is_file_reference(reference):
+        return QueueImageSyncJobResult(
+            status="image_not_syncable",
+            image=image,
+            message=f"Image kind '{image.get('kind')}' is not syncable",
+        )
+
+    host = database.get(models.Host, host_id)
+    if not host:
+        return QueueImageSyncJobResult(status="host_not_found", image=image, message="Host not found")
+    if host.status != "online":
+        return QueueImageSyncJobResult(
+            status="host_not_online",
+            image=image,
+            host=host,
+            message="Host is not online",
+        )
+    if host.image_sync_strategy == "disabled":
+        return QueueImageSyncJobResult(
+            status="sync_disabled",
+            image=image,
+            host=host,
+            message="Image sync is disabled for host",
+        )
+
+    image_host = database.query(models.ImageHost).filter(
+        models.ImageHost.image_id == image_id,
+        models.ImageHost.host_id == host_id,
+    ).first()
+    if image_host and image_host.status == "synced":
+        return QueueImageSyncJobResult(
+            status="already_synced",
+            image=image,
+            host=host,
+            message="Image already synced",
+        )
+
+    existing_job = (
+        database.query(models.ImageSyncJob)
+        .filter(
+            models.ImageSyncJob.image_id == image_id,
+            models.ImageSyncJob.host_id == host_id,
+            models.ImageSyncJob.status.in_(ACTIVE_IMAGE_SYNC_JOB_STATUSES),
+        )
+        .with_for_update(skip_locked=True)
+        .first()
+    )
+    if existing_job:
+        return QueueImageSyncJobResult(
+            status="existing",
+            image=image,
+            host=host,
+            job_id=existing_job.id,
+            message="Sync job already in progress",
+        )
+
+    active_count = (
+        database.query(func.count(models.ImageSyncJob.id))
+        .filter(
+            models.ImageSyncJob.host_id == host_id,
+            models.ImageSyncJob.status.in_(ACTIVE_IMAGE_SYNC_JOB_STATUSES),
+        )
+        .scalar()
+    )
+    if active_count >= settings.image_sync_max_concurrent:
+        return QueueImageSyncJobResult(
+            status="host_busy",
+            image=image,
+            host=host,
+            message="Host already at max concurrent sync jobs",
+        )
+
+    if not image_host:
+        image_host = models.ImageHost(
+            id=str(uuid4()),
+            image_id=image_id,
+            host_id=host_id,
+            reference=reference,
+            status="syncing",
+        )
+        database.add(image_host)
+    else:
+        image_host.status = "syncing"
+        image_host.error_message = None
+
+    job = models.ImageSyncJob(
+        id=str(uuid4()),
+        image_id=image_id,
+        host_id=host_id,
+        status="pending",
+    )
+    database.add(job)
+    database.commit()
+
+    if start_task:
+        start_queued_image_sync_job(job.id, image_id, image, host.id)
+
+    return QueueImageSyncJobResult(
+        status="queued",
+        image=image,
+        host=host,
+        job_id=job.id,
+        was_created=True,
+    )
+
+
+def start_queued_image_sync_job(job_id: str, image_id: str, image: dict, host_id: str) -> None:
+    """Start execution for a queued image sync job."""
+    from app.routers.images import _execute_sync_job
+
+    asyncio.create_task(_execute_sync_job(job_id, image_id, image, host_id))
 
 
 async def sync_image_to_agent(
@@ -65,65 +214,23 @@ async def _sync_image_to_agent_impl(
 ) -> tuple[bool, str | None]:
     """Implementation of sync_image_to_agent."""
     try:
-        # Get image from manifest
-        manifest = load_manifest()
-        image = find_image_by_id(manifest, image_id)
-        if not image:
-            return False, "Image not found in library"
-
-        reference = image.get("reference", "")
-        if image.get("kind") != "docker" and not _is_file_reference(reference):
-            return False, f"Image kind '{image.get('kind')}' is not syncable"
-
-        # Get target host
-        host = database.get(models.Host, host_id)
-        if not host:
-            return False, "Host not found"
-
-        if host.status != "online":
-            return False, "Host is not online"
-
-        # Check if already synced
-        image_host = database.query(models.ImageHost).filter(
-            models.ImageHost.image_id == image_id,
-            models.ImageHost.host_id == host_id
-        ).first()
-
-        if image_host and image_host.status == "synced":
+        queue_result = queue_image_sync_job(image_id, host_id, database)
+        if queue_result.status == "already_synced":
             return True, None
+        if queue_result.status != "queued":
+            return False, queue_result.message
 
-        # Create or update ImageHost record
-        if not image_host:
-            image_host = models.ImageHost(
-                id=str(uuid4()),
-                image_id=image_id,
-                host_id=host_id,
-                reference=image.get("reference", ""),
-                status="syncing",
-            )
-            database.add(image_host)
-        else:
-            image_host.status = "syncing"
-            image_host.error_message = None
-
-        # Create sync job
-        job = models.ImageSyncJob(
-            id=str(uuid4()),
-            image_id=image_id,
-            host_id=host_id,
-            status="pending",
-        )
-        database.add(job)
-        database.commit()
-
-        # Import the sync execution function
+        # Execute sync synchronously for direct task callers.
         from app.routers.images import _execute_sync_job
-
-        # Execute sync
-        await _execute_sync_job(job.id, image_id, image, host)
+        await _execute_sync_job(
+            queue_result.job_id,
+            image_id,
+            queue_result.image,
+            queue_result.host.id,
+        )
 
         # Check result
-        job = database.get(models.ImageSyncJob, job.id)
+        job = database.get(models.ImageSyncJob, queue_result.job_id)
         database.refresh(job)
 
         if job and job.status == "completed":

@@ -29,6 +29,7 @@ class AgentInfo(BaseModel):
     deployment_mode: str = "unknown"  # systemd, docker, unknown - for update strategy
     # Separate data plane IP for VXLAN tunnels (when transport config is active)
     data_plane_ip: str | None = None
+    docker_snapshotter_mode: str | None = None
 
 
 class RegistrationRequest(BaseModel):
@@ -50,6 +51,8 @@ class HeartbeatRequest(BaseModel):
     status: AgentStatus = AgentStatus.ONLINE
     active_jobs: int = 0
     resource_usage: dict[str, Any] = Field(default_factory=dict)  # cpu, memory, etc.
+    data_plane_ip: str | None = None
+    docker_snapshotter_mode: str | None = None
 
 
 class HeartbeatResponse(BaseModel):

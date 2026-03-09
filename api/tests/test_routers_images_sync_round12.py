@@ -207,6 +207,44 @@ class TestExecuteSyncJobDocker:
         assert "docker save" in (job.error_message or "").lower()
 
     @pytest.mark.asyncio
+    async def test_docker_sync_prefers_ready_archive(self, test_db: Session, sample_host, tmp_path):
+        """Ready archive metadata bypasses docker save and streams archive file."""
+        from app.routers.images.sync import _execute_sync_job
+
+        job = _make_sync_job(test_db, sample_host.id, job_id="docker-archive-ok")
+        archive_path = tmp_path / "ceos.tar"
+        archive_path.write_bytes(b"archive-bytes")
+        image = {
+            **MOCK_MANIFEST[0],
+            "archive_status": "ready",
+            "archive_path": str(archive_path),
+        }
+
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.raise_for_status = MagicMock()
+        mock_response.json.return_value = {"success": True}
+
+        mock_client = AsyncMock()
+        mock_client.post = AsyncMock(return_value=mock_response)
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+
+        with (
+            patch("app.db.get_session", lambda: _fake_session_ctx(test_db)),
+            patch("httpx.AsyncClient", return_value=mock_client),
+            patch("app.agent_client._get_agent_auth_headers", return_value={}),
+            patch("app.agent_client.http._get_agent_auth_headers", return_value={}),
+            patch("asyncio.create_subprocess_exec") as mock_subprocess,
+        ):
+            await _execute_sync_job("docker-archive-ok", image["id"], image, sample_host)
+
+        test_db.refresh(job)
+        assert job.status == "completed"
+        assert job.total_bytes == len(b"archive-bytes")
+        mock_subprocess.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_no_reference_marks_job_failed(self, test_db: Session, sample_host):
         """Image with empty reference raises ValueError, job marked failed."""
         from app.routers.images.sync import _execute_sync_job
@@ -558,6 +596,85 @@ class TestStreamImageDeep:
         assert resp.headers["content-type"] == "application/octet-stream"
         assert resp.headers["content-length"] == str(len(b"qcow2-stream"))
         assert resp.content == b"qcow2-stream"
+
+    def test_stream_prefers_ready_archive(self, test_client: TestClient, auth_headers: dict, tmp_path):
+        """Docker stream uses ready archive file instead of docker save."""
+        archive_path = tmp_path / "docker-ceos.tar"
+        archive_path.write_bytes(b"archive-stream")
+        manifest = [
+            {
+                "id": "docker:ceos:4.28.0F",
+                "reference": "ceos:4.28.0F",
+                "kind": "docker",
+                "archive_status": "ready",
+                "archive_path": str(archive_path),
+            }
+        ]
+
+        with (
+            patch("app.routers.images.sync.load_manifest", return_value=manifest),
+            patch("app.routers.images.sync.find_image_by_id", side_effect=lambda _m, _i: manifest[0]),
+            patch("asyncio.create_subprocess_exec") as mock_subprocess,
+        ):
+            resp = test_client.get(
+                "/images/library/docker:ceos:4.28.0F/stream",
+                headers=auth_headers,
+            )
+
+        assert resp.status_code == 200
+        assert resp.headers["content-type"] == "application/x-tar"
+        assert resp.headers["content-length"] == str(len(b"archive-stream"))
+        assert resp.content == b"archive-stream"
+        mock_subprocess.assert_not_called()
+
+    def test_stream_missing_archive_falls_back_to_docker_save(
+        self, test_client: TestClient, auth_headers: dict
+    ):
+        """Missing archive path falls back to docker inspect/save behavior."""
+        manifest = [
+            {
+                "id": "docker:ceos:4.28.0F",
+                "reference": "ceos:4.28.0F",
+                "kind": "docker",
+                "archive_status": "ready",
+                "archive_path": "/nonexistent/archive.tar",
+            }
+        ]
+        inspect_proc = AsyncMock()
+        inspect_proc.communicate = AsyncMock(return_value=(b"111\n", b""))
+        inspect_proc.returncode = 0
+
+        save_proc = AsyncMock()
+        save_proc.stdout = AsyncMock()
+        save_proc.stdout.read = AsyncMock(side_effect=[b"fallback-data", b""])
+        save_proc.communicate = AsyncMock(return_value=(b"", b""))
+        save_proc.returncode = 0
+
+        call_count = {"n": 0}
+
+        async def fake_subprocess(*args, **kwargs):
+            call_count["n"] += 1
+            if call_count["n"] == 1:
+                return inspect_proc
+            return save_proc
+
+        async def fake_wait_for(coro, timeout):
+            return await coro
+
+        with (
+            patch("app.routers.images.sync.load_manifest", return_value=manifest),
+            patch("app.routers.images.sync.find_image_by_id", side_effect=lambda _m, _i: manifest[0]),
+            patch("asyncio.create_subprocess_exec", side_effect=fake_subprocess),
+            patch("asyncio.wait_for", side_effect=fake_wait_for),
+        ):
+            resp = test_client.get(
+                "/images/library/docker:ceos:4.28.0F/stream",
+                headers=auth_headers,
+            )
+
+        assert resp.status_code == 200
+        assert resp.content == b"fallback-data"
+        assert call_count["n"] == 2
 
     def test_stream_allows_agent_secret_auth(self, test_client: TestClient, monkeypatch, tmp_path):
         """Agents should be allowed to stream images using the shared agent secret."""

@@ -8,6 +8,9 @@ from __future__ import annotations
 from .paths import (
     image_store_root,
     ensure_image_store,
+    docker_archive_root,
+    ensure_docker_archive_root,
+    docker_archive_path,
     qcow2_path,
     iol_path,
     manifest_path,
@@ -108,6 +111,9 @@ __all__ = [
     # paths
     "image_store_root",
     "ensure_image_store",
+    "docker_archive_root",
+    "ensure_docker_archive_root",
+    "docker_archive_path",
     "qcow2_path",
     "iol_path",
     "manifest_path",

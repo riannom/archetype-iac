@@ -22,13 +22,15 @@ async def test_lab_status_and_reconcile_nodes(monkeypatch, tmp_path):
         status=AsyncMock(
             return_value=SimpleNamespace(
                 nodes=[
-                    SimpleNamespace(
-                        name="r1",
-                        status=ProviderNodeStatus.RUNNING,
-                        container_id="cid1",
-                        image="img",
-                        ip_addresses=["10.0.0.1"],
-                    )
+                        SimpleNamespace(
+                            name="r1",
+                            status=ProviderNodeStatus.RUNNING,
+                            container_id="cid1",
+                            runtime_id="runtime-cid1",
+                            node_definition_id="node-def-r1",
+                            image="img",
+                            ip_addresses=["10.0.0.1"],
+                        )
                 ],
                 error=None,
             )
@@ -38,13 +40,15 @@ async def test_lab_status_and_reconcile_nodes(monkeypatch, tmp_path):
         status=AsyncMock(
             return_value=SimpleNamespace(
                 nodes=[
-                    SimpleNamespace(
-                        name="vm1",
-                        status=ProviderNodeStatus.STOPPED,
-                        container_id="dom1",
-                        image="qcow2",
-                        ip_addresses=[],
-                    )
+                        SimpleNamespace(
+                            name="vm1",
+                            status=ProviderNodeStatus.STOPPED,
+                            container_id="dom1",
+                            runtime_id="runtime-dom1",
+                            node_definition_id="node-def-vm1",
+                            image="qcow2",
+                            ip_addresses=[],
+                        )
                 ],
                 error="minor warning",
             )
@@ -82,6 +86,7 @@ async def test_reconcile_single_node_docker_stop_and_fallback_paths(monkeypatch,
     monkeypatch.setattr(labs.asyncio, "to_thread", _run_direct)
     container = SimpleNamespace(
         status="running",
+        labels={"archetype.node_name": "r2"},
         stop=Mock(),
         remove=Mock(),
     )
@@ -89,14 +94,23 @@ async def test_reconcile_single_node_docker_stop_and_fallback_paths(monkeypatch,
     monkeypatch.setattr(labs, "get_docker_client", lambda: client)
 
     cleanup = AsyncMock(return_value={"cleaned": True, "networks_deleted": 1})
-    docker_provider = SimpleNamespace(cleanup_lab_resources_if_empty=cleanup)
+    stop_node = AsyncMock(return_value=SimpleNamespace(success=True, error=None))
+    docker_provider = SimpleNamespace(
+        stop_node=stop_node,
+        cleanup_lab_resources_if_empty=cleanup,
+    )
     monkeypatch.setattr(labs, "get_provider", lambda name: docker_provider if name == "docker" else None)
 
     target = SimpleNamespace(container_name="archetype-lab-1-r2", desired_state="stopped")
     stopped = await labs._reconcile_single_node("lab-1", target, tmp_path)
     assert stopped.action == "removed"
-    container.stop.assert_called_once()
-    container.remove.assert_called_once()
+    stop_node.assert_awaited_once_with(
+        lab_id="lab-1",
+        node_name="r2",
+        workspace=tmp_path,
+    )
+    container.stop.assert_not_called()
+    container.remove.assert_not_called()
 
     missing_client = SimpleNamespace(containers=SimpleNamespace(get=Mock(side_effect=docker.errors.NotFound("x"))))
     monkeypatch.setattr(labs, "get_docker_client", lambda: missing_client)
@@ -219,7 +233,7 @@ async def test_remove_container_for_lab_discover_and_cleanup(monkeypatch, tmp_pa
     assert not_found["success"] is True
 
     provider_ok = SimpleNamespace(
-        discover_labs=AsyncMock(return_value={"lab-1": [SimpleNamespace(name="r1", status=ProviderNodeStatus.RUNNING, container_id="c1", image="img", ip_addresses=[])]}),
+        discover_labs=AsyncMock(return_value={"lab-1": [SimpleNamespace(name="r1", status=ProviderNodeStatus.RUNNING, container_id="c1", runtime_id="runtime-c1", node_definition_id="node-def-r1", image="img", ip_addresses=[])]}),
         cleanup_orphan_containers=AsyncMock(return_value=["archetype-old"]),
     )
     provider_fail = SimpleNamespace(

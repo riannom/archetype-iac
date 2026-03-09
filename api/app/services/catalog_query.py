@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 import os
 from collections import defaultdict
+from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
 
@@ -36,6 +37,39 @@ log = logging.getLogger(__name__)
 
 # File extensions that represent file-based images (not container images)
 _FILE_BASED_EXTENSIONS = frozenset({".qcow2", ".img", ".iol", ".bin"})
+
+def _serialize_timestamp(value: datetime | None) -> str | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=UTC)
+    return value.isoformat().replace("+00:00", "Z")
+
+
+def _archive_metadata_from_row(row: models.CatalogImage) -> dict[str, Any]:
+    metadata: dict[str, Any] = {
+        "archive_status": row.archive_status or "none",
+        "archive_size_bytes": row.archive_size_bytes,
+        "archive_error": row.archive_error,
+    }
+    if row.archive_path:
+        metadata["archive_path"] = row.archive_path
+    if row.archive_sha256:
+        metadata["archive_sha256"] = row.archive_sha256
+    archive_created_at = _serialize_timestamp(row.archive_created_at)
+    if archive_created_at:
+        metadata["archive_created_at"] = archive_created_at
+    archive_verified_at = _serialize_timestamp(row.archive_verified_at)
+    if archive_verified_at:
+        metadata["archive_verified_at"] = archive_verified_at
+    return metadata
+
+
+def _serialize_catalog_image_metadata(image: dict[str, Any], row: models.CatalogImage) -> str:
+    payload = dict(image)
+    for key, value in _archive_metadata_from_row(row).items():
+        payload[key] = value
+    return _json_dump(payload)
 
 
 def _build_index_stamp(session: Session) -> tuple[Any, ...]:
@@ -128,8 +162,27 @@ def _project_catalog_images(session: Session) -> ImageIndexCache:
         image["vendor"] = row.vendor_name
         image["version"] = row.version
         image["source"] = row.source
-        if row.imported_at:
-            image["imported_at"] = row.imported_at.isoformat().replace("+00:00", "Z")
+        imported_at = _serialize_timestamp(row.imported_at)
+        if imported_at:
+            image["imported_at"] = imported_at
+        image["archive_status"] = row.archive_status or "none"
+        image["archive_size_bytes"] = row.archive_size_bytes
+        image["archive_error"] = row.archive_error
+        if row.archive_sha256:
+            image["archive_sha256"] = row.archive_sha256
+        else:
+            image.pop("archive_sha256", None)
+        archive_created_at = _serialize_timestamp(row.archive_created_at)
+        if archive_created_at:
+            image["archive_created_at"] = archive_created_at
+        else:
+            image.pop("archive_created_at", None)
+        archive_verified_at = _serialize_timestamp(row.archive_verified_at)
+        if archive_verified_at:
+            image["archive_verified_at"] = archive_verified_at
+        else:
+            image.pop("archive_verified_at", None)
+        image.pop("archive_path", None)
 
         compatible = sorted(compat_by_image_dbid.get(row.id, set()))
         raw_primary = _normalize_token(image.get("device_id"))
@@ -351,7 +404,7 @@ def _persist_catalog_snapshot(
                 external_id=external_id,
                 kind=str(image.get("kind") or "").lower() or "unknown",
                 source=str(image.get("source") or "api"),
-                metadata_json=_json_dump(image),
+                metadata_json="{}",
             )
             session.add(row)
             session.flush()
@@ -366,13 +419,30 @@ def _persist_catalog_snapshot(
             or image.get("content_hash")
         )
         row.size_bytes = _to_int(image.get("size_bytes"))
+        if "archive_path" in image:
+            row.archive_path = image.get("archive_path")
+        archive_status = image.get("archive_status")
+        if archive_status is not None:
+            row.archive_status = str(archive_status).strip().lower() or "none"
+        elif row.archive_status is None:
+            row.archive_status = "none"
+        if "archive_sha256" in image:
+            row.archive_sha256 = image.get("archive_sha256")
+        if "archive_size_bytes" in image:
+            row.archive_size_bytes = _to_int(image.get("archive_size_bytes"))
+        if "archive_error" in image:
+            row.archive_error = image.get("archive_error")
+        if "archive_created_at" in image:
+            row.archive_created_at = _parse_timestamp(image.get("archive_created_at"))
+        if "archive_verified_at" in image:
+            row.archive_verified_at = _parse_timestamp(image.get("archive_verified_at"))
         row.vendor_name = image.get("vendor")
         row.version = image.get("version")
         row.source = str(image.get("source") or row.source or "api")
         imported_at = _parse_timestamp(image.get("uploaded_at") or image.get("imported_at"))
         if imported_at:
             row.imported_at = imported_at
-        row.metadata_json = _json_dump(image)
+        row.metadata_json = _serialize_catalog_image_metadata(image, row)
 
         desired_compat: set[str] = set()
         primary = _resolve_writable_canonical_device_id(session, image.get("device_id"))

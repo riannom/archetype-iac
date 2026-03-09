@@ -12,6 +12,7 @@ import logging
 import re
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import docker
 from fastapi import HTTPException
@@ -91,6 +92,49 @@ def provider_status_to_schema(status: ProviderNodeStatus) -> NodeStatus:
 # =========================================================================
 # Agent Info & Capabilities
 # =========================================================================
+
+
+def parse_docker_driver_status(driver_status: Any) -> dict[str, str]:
+    """Normalize Docker DriverStatus into a key-value dict."""
+    status: dict[str, str] = {}
+    if not isinstance(driver_status, list):
+        return status
+
+    for item in driver_status:
+        if isinstance(item, (list, tuple)) and len(item) == 2:
+            key, value = item
+            status[str(key)] = str(value)
+    return status
+
+
+def classify_docker_snapshotter_mode(
+    driver: str,
+    driver_type: str | None,
+) -> str:
+    """Classify Docker image-store mode for drift detection."""
+    if driver_type and "io.containerd.snapshotter.v1" in driver_type:
+        return "containerd"
+    if not driver_type:
+        return "legacy"
+    if driver in {"overlay2", "overlayfs"} and "snapshotter" not in driver_type:
+        return "legacy"
+    return "unknown"
+
+
+def get_docker_snapshotter_mode() -> str | None:
+    """Inspect Docker and return the current snapshotter mode."""
+    if not settings.enable_docker:
+        return None
+    try:
+        client = get_docker_client()
+        info = client.info()
+        driver = str(info.get("Driver") or "unknown")
+        driver_status = parse_docker_driver_status(info.get("DriverStatus"))
+        driver_type = driver_status.get("driver-type")
+        return classify_docker_snapshotter_mode(driver, driver_type)
+    except Exception as e:
+        logger.warning(f"Failed to inspect Docker snapshotter mode: {e}")
+        return None
 
 def get_capabilities() -> AgentCapabilities:
     """Determine agent capabilities based on config and available tools."""
@@ -275,6 +319,7 @@ def get_agent_info() -> AgentInfo:
         is_local=settings.is_local,
         deployment_mode=detect_deployment_mode().value,
         data_plane_ip=dp_ip,
+        docker_snapshotter_mode=get_docker_snapshotter_mode(),
     )
 
 

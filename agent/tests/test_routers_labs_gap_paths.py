@@ -152,30 +152,58 @@ async def test_reconcile_single_node_running_already_running(tmp_path):
 @pytest.mark.asyncio
 async def test_reconcile_single_node_stop_removes_and_logs_cleanup_error(tmp_path):
     target = SimpleNamespace(container_name="archetype-lab1-r1", desired_state="stopped")
-    c = _container(status="exited")
+    c = _container(status="exited", labels={"archetype.node_name": "r1"})
     client = _docker_client_for_get(c)
     docker_provider = MagicMock()
+    docker_provider.stop_node = AsyncMock(return_value=SimpleNamespace(success=True, error=None))
     docker_provider.cleanup_lab_resources_if_empty = AsyncMock(return_value={"error": "in use"})
 
     with patch.object(labs_mod, "get_docker_client", return_value=client):
         with patch.object(labs_mod, "get_provider", return_value=docker_provider):
-            with patch("agent.readiness.clear_post_boot_state"):
-                result = await labs_mod._reconcile_single_node("lab1", target, tmp_path)
+            result = await labs_mod._reconcile_single_node("lab1", target, tmp_path)
 
     assert result.success is True
     assert result.action == "removed"
+    docker_provider.stop_node.assert_awaited_once_with(
+        lab_id="lab1",
+        node_name="r1",
+        workspace=tmp_path,
+    )
     c.stop.assert_not_called()
-    c.remove.assert_called_once_with(force=True, v=True)
+    c.remove.assert_not_called()
     docker_provider.cleanup_lab_resources_if_empty.assert_awaited_once_with("lab1", tmp_path)
 
 
 @pytest.mark.asyncio
 async def test_reconcile_single_node_stop_cleanup_exception_still_succeeds(tmp_path):
     target = SimpleNamespace(container_name="archetype-lab1-r1", desired_state="stopped")
-    c = _container(status="running")
+    c = _container(status="running", labels={"archetype.node_name": "r1"})
     client = _docker_client_for_get(c)
     docker_provider = MagicMock()
+    docker_provider.stop_node = AsyncMock(return_value=SimpleNamespace(success=True, error=None))
     docker_provider.cleanup_lab_resources_if_empty = AsyncMock(side_effect=RuntimeError("cleanup boom"))
+
+    with patch.object(labs_mod, "get_docker_client", return_value=client):
+        with patch.object(labs_mod, "get_provider", return_value=docker_provider):
+            result = await labs_mod._reconcile_single_node("lab1", target, tmp_path)
+
+    assert result.success is True
+    assert result.action == "removed"
+    docker_provider.stop_node.assert_awaited_once_with(
+        lab_id="lab1",
+        node_name="r1",
+        workspace=tmp_path,
+    )
+    c.stop.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_reconcile_single_node_stop_falls_back_when_node_label_missing(tmp_path):
+    target = SimpleNamespace(container_name="archetype-lab1-r1", desired_state="stopped")
+    c = _container(status="running", labels={})
+    client = _docker_client_for_get(c)
+    docker_provider = MagicMock()
+    docker_provider.cleanup_lab_resources_if_empty = AsyncMock(return_value={"cleaned": False})
 
     with patch.object(labs_mod, "get_docker_client", return_value=client):
         with patch.object(labs_mod, "get_provider", return_value=docker_provider):
@@ -185,6 +213,7 @@ async def test_reconcile_single_node_stop_cleanup_exception_still_succeeds(tmp_p
     assert result.success is True
     assert result.action == "removed"
     c.stop.assert_called_once()
+    c.remove.assert_called_once_with(force=True, v=True)
 
 
 @pytest.mark.asyncio
