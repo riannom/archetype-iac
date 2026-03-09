@@ -447,7 +447,14 @@ async def _resolve_ovs_port(
     libvirt_kind: str | None = None
     is_libvirt_node = False
 
-    # --- Try Docker first, using ifindex verification to prevent port swap bugs ---
+    if libvirt_provider is not None:
+        try:
+            libvirt_kind = await libvirt_provider.get_node_kind_async(lab_id, node_name)
+        except Exception:
+            libvirt_kind = None
+        is_libvirt_node = libvirt_kind is not None
+
+    # --- Try Docker first, but only for nodes that are not libvirt-backed ---
     docker_provider = get_provider("docker")
     if docker_provider is not None and not is_libvirt_node:
         try:
@@ -501,13 +508,6 @@ async def _resolve_ovs_port(
                 lab_id,
                 e,
             )
-
-    if libvirt_provider is not None:
-        try:
-            libvirt_kind = await libvirt_provider.get_node_kind_async(lab_id, node_name)
-        except Exception:
-            libvirt_kind = None
-        is_libvirt_node = libvirt_kind is not None
 
     logger.debug(
         "Resolving OVS port for %s:%s in lab %s (libvirt_node=%s, libvirt_kind=%s)",
