@@ -9,7 +9,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from datetime import timedelta
+from datetime import timedelta, timezone
 
 from app import agent_client, models
 from app.config import settings
@@ -23,6 +23,7 @@ from app.state import (
     NodeActualState,
     NodeDesiredState,
 )
+from app.tasks.jobs import _release_db_transaction_for_io
 from app.utils.time import utcnow
 
 logger = logging.getLogger(__name__)
@@ -328,21 +329,58 @@ async def _check_readiness_for_nodes(session, nodes: list):
                     "falling back to dynamic agent lookup"
                 )
 
+            pending_boot_started_update = False
+            node_snapshots: list[dict[str, object]] = []
             for ns in lab_nodes:
                 # Set boot_started_at if not already set
                 if not ns.boot_started_at:
                     ns.boot_started_at = utcnow()
+                    pending_boot_started_update = True
+                node_snapshots.append(
+                    {
+                        "node_state_id": ns.id,
+                        "node_id": ns.node_id,
+                        "node_name": ns.node_name,
+                        "desired_state": ns.desired_state,
+                        "actual_state": ns.actual_state,
+                        "error_message": ns.error_message,
+                        "boot_started_at": ns.boot_started_at,
+                        "host_id": placement_by_node.get(ns.node_name) or lab.agent_id,
+                    }
+                )
 
-                host_id = placement_by_node.get(ns.node_name) or lab.agent_id
+            if pending_boot_started_update:
+                _release_db_transaction_for_io(
+                    session,
+                    context=f"readiness boot timestamp backfill for lab {lab_id}",
+                    table="node_states",
+                    lab_id=lab_id,
+                )
+
+            for node in node_snapshots:
+                node_name = str(node["node_name"])
+                host_id = node["host_id"]
                 agent = agents_by_id.get(host_id) if host_id else None
                 if not agent:
+                    _release_db_transaction_for_io(
+                        session,
+                        context=f"readiness agent lookup for {node_name}",
+                        table="node_states",
+                        lab_id=lab_id,
+                    )
                     agent = await agent_client.get_agent_for_node(
                         session,
                         lab_id,
-                        ns.node_name,
+                        node_name,
                         required_provider=lab_provider,
                     )
                 if not agent:
+                    _release_db_transaction_for_io(
+                        session,
+                        context=f"readiness lab agent lookup for {node_name}",
+                        table="node_states",
+                        lab_id=lab_id,
+                    )
                     agent = await agent_client.get_agent_for_lab(
                         session,
                         lab,
@@ -350,57 +388,70 @@ async def _check_readiness_for_nodes(session, nodes: list):
                     )
                 if not agent:
                     logger.debug(
-                        f"No reachable agent for {ns.node_name} in lab {lab_id}, "
+                        f"No reachable agent for {node_name} in lab {lab_id}, "
                         "skipping readiness check"
                     )
                     continue
 
                 try:
+                    _release_db_transaction_for_io(
+                        session,
+                        context=f"readiness probe for {node_name}",
+                        table="node_states",
+                        lab_id=lab_id,
+                    )
                     # Get the device kind and determine provider type for this node
-                    device_kind = node_devices.get(ns.node_name)
+                    device_kind = node_devices.get(node_name)
                     provider_type = None
                     if device_kind:
                         # Look up the Node to determine provider from image
                         db_node = next(
-                            (n for n in db_nodes if n.container_name == ns.node_name),
+                            (n for n in db_nodes if n.container_name == node_name),
                             None,
                         )
                         if db_node and db_node.image:
                             provider_type = get_node_provider(db_node)
 
                     readiness = await agent_client.check_node_readiness(
-                        agent, lab_id, ns.node_name,
+                        agent, lab_id, node_name,
                         kind=device_kind,
                         provider_type=provider_type,
                     )
                     if readiness.get("is_ready", False):
-                        ns.is_ready = True
+                        tracked_ns = session.get(models.NodeState, str(node["node_state_id"]))
+                        if tracked_ns is None:
+                            continue
+                        tracked_ns.is_ready = True
                         # Record boot-wait duration metric
-                        if ns.boot_started_at:
-                            boot_secs = (utcnow() - ns.boot_started_at).total_seconds()
-                            _boot_device = (node_devices.get(ns.node_name) or "linux").lower()
+                        boot_started_at = tracked_ns.boot_started_at or node["boot_started_at"]
+                        if boot_started_at:
+                            if boot_started_at.tzinfo is None:
+                                boot_started_at = boot_started_at.replace(tzinfo=timezone.utc)
+                            else:
+                                boot_started_at = boot_started_at.astimezone(timezone.utc)
+                            boot_secs = (utcnow() - boot_started_at).total_seconds()
+                            _boot_device = (node_devices.get(node_name) or "linux").lower()
                             nlm_phase_duration.labels(
                                 phase="boot_wait", device_type=_boot_device, status="success",
                             ).observe(boot_secs)
-                        logger.info(f"Node {ns.node_name} in lab {lab_id} is now ready")
+                        logger.info(f"Node {node_name} in lab {lab_id} is now ready")
+                        session.commit()
                         # Broadcast readiness change to frontend via WebSocket
                         asyncio.create_task(
                             broadcast_node_state_change(
                                 lab_id=lab_id,
-                                node_id=ns.node_id,
-                                node_name=ns.node_name,
-                                desired_state=ns.desired_state,
-                                actual_state=ns.actual_state,
+                                node_id=str(node["node_id"]),
+                                node_name=node_name,
+                                desired_state=str(node["desired_state"]),
+                                actual_state=str(node["actual_state"]),
                                 is_ready=True,
-                                error_message=ns.error_message,
+                                error_message=str(node["error_message"]) if node["error_message"] else None,
                                 host_id=agent.id,
                                 host_name=agent.name,
                             )
                         )
                 except Exception as e:
-                    logger.debug(f"Readiness check failed for {ns.node_name}: {e}")
-
-            session.commit()
+                    logger.debug(f"Readiness check failed for {node_name}: {e}")
 
         except Exception as e:
             logger.error(f"Error checking readiness for lab {lab_id}: {e}")

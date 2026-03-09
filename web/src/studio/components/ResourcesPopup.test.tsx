@@ -166,8 +166,8 @@ describe("ResourcesPopup", () => {
       render(<ResourcesPopup isOpen={true} onClose={mockOnClose} type="memory" />);
 
       await waitFor(() => {
-        expect(screen.getByText(/62\.3%/)).toBeInTheDocument();
-        expect(screen.getByText(/80\.0%/)).toBeInTheDocument();
+        expect(screen.getByText(/50\.0%/)).toBeInTheDocument();
+        expect(screen.getByText(/75\.0%/)).toBeInTheDocument();
         expect(screen.getByText(/95\.0%/)).toBeInTheDocument();
       });
     });

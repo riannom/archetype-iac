@@ -335,6 +335,28 @@ describe("SystemStatusStrip", () => {
       expect(screen.getByText("8.5 GB/16.0 GB")).toBeInTheDocument();
     });
 
+    it("uses memory totals instead of a stale reported percent", () => {
+      render(
+        <TestWrapper>
+          <SystemStatusStrip
+            metrics={{
+              ...metricsWithMemoryAndStorage,
+              memory_percent: 94,
+              memory: {
+                used_gb: 8,
+                total_gb: 16,
+                percent: 50,
+              },
+            }}
+          />
+        </TestWrapper>
+      );
+
+      expect(screen.getByText("50%")).toBeInTheDocument();
+      expect(screen.getByText("8.0 GB/16.0 GB")).toBeInTheDocument();
+      expect(screen.queryByText("94%")).not.toBeInTheDocument();
+    });
+
     it("opens memory resources popup when clicked", async () => {
       const user = userEvent.setup();
 

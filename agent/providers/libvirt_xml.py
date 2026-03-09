@@ -558,8 +558,18 @@ def generate_domain_xml(
     if kind:
         lab_id = node_config.get("lab_id")
         node_definition_id = node_config.get("node_definition_id")
-        node_name = node_config.get("node_name") or name
+        node_name = node_config.get("node_name")
         provider_name = node_config.get("provider", "libvirt")
+        if not lab_id or not node_definition_id or not node_name:
+            raise ValueError(
+                "Managed libvirt domain metadata requires lab_id, "
+                "node_name, and node_definition_id"
+            )
+        if node_name == name:
+            raise ValueError(
+                "Managed libvirt domain metadata requires the logical node_name, "
+                "not the generated runtime name"
+            )
         readiness_probe = node_config.get("readiness_probe")
         readiness_pattern = node_config.get("readiness_pattern")
         readiness_timeout = node_config.get("readiness_timeout")

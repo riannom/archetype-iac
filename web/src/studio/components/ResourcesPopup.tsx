@@ -3,6 +3,7 @@ import DetailPopup from './DetailPopup';
 import { getCpuColor, getMemoryColor } from '../../utils/status';
 import { apiRequest } from '../../api';
 import { formatMemorySize } from '../../utils/format';
+import { getMemoryUsageDisplay } from '../../utils/resourceUsage';
 
 interface AgentResource {
   id: string;
@@ -68,9 +69,10 @@ const ResourcesPopup: React.FC<ResourcesPopupProps> = ({ isOpen, onClose, type }
             {data.by_agent.length > 0 ? (
               <div className="space-y-3">
                 {data.by_agent.map(agent => {
-                  const percent = agent[metricKey];
-                  const memoryInfo = type === 'memory' && agent.memory_total_gb > 0
-                    ? ` · ${formatMemorySize(agent.memory_used_gb)}/${formatMemorySize(agent.memory_total_gb)}`
+                  const memoryUsage = getMemoryUsageDisplay(agent);
+                  const percent = type === 'cpu' ? agent[metricKey] : memoryUsage.percent;
+                  const memoryInfo = type === 'memory' && memoryUsage.hasTotals
+                    ? ` · ${formatMemorySize(memoryUsage.usedGb)}/${formatMemorySize(memoryUsage.totalGb)}`
                     : '';
                   return (
                     <div key={agent.id}>

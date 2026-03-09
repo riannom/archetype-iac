@@ -6,6 +6,7 @@ import ResourcesPopup from './ResourcesPopup';
 import StoragePopup from './StoragePopup';
 import { getCpuColor, getMemoryColor, getStorageColor } from '../../utils/status';
 import { formatUptimeFromBoot, formatMemorySize } from '../../utils/format';
+import { getMemoryUsageDisplay } from '../../utils/resourceUsage';
 import { useNotifications } from '../../contexts/NotificationContext';
 import { useTheme } from '../../theme';
 import type { SystemMetrics } from '../types';
@@ -79,6 +80,13 @@ const SystemStatusStrip: React.FC<SystemStatusStripProps> = ({ metrics }) => {
   const progressTrackClass = isLightStrip ? 'bg-black/20' : 'bg-stone-700';
   const subProgressTrackClass = isLightStrip ? 'bg-black/20' : 'bg-stone-700';
   const dividerClass = isLightStrip ? 'bg-white/30' : 'bg-stone-600';
+  const aggregateMemoryUsage = metrics.memory
+    ? getMemoryUsageDisplay({
+        memory_percent: metrics.memory_percent,
+        memory_used_gb: metrics.memory.used_gb,
+        memory_total_gb: metrics.memory.total_gb,
+      })
+    : null;
 
   return (
     <>
@@ -172,16 +180,16 @@ const SystemStatusStrip: React.FC<SystemStatusStripProps> = ({ metrics }) => {
           <span className={`text-xs ${labelTextClass} w-8`}>MEM</span>
           <div className={`w-24 h-2 ${progressTrackClass} rounded-full overflow-hidden`}>
             <div
-              className={`h-full ${getMemoryColor(metrics.memory_percent)} transition-all duration-500`}
-              style={{ width: `${Math.min(metrics.memory_percent, 100)}%` }}
+              className={`h-full ${getMemoryColor(aggregateMemoryUsage?.percent ?? metrics.memory_percent)} transition-all duration-500`}
+              style={{ width: `${Math.min(aggregateMemoryUsage?.percent ?? metrics.memory_percent, 100)}%` }}
             ></div>
           </div>
           <span className={`text-xs font-bold ${strongTextClass} w-10 text-right`}>
-            {metrics.memory_percent.toFixed(0)}%
+            {(aggregateMemoryUsage?.percent ?? metrics.memory_percent).toFixed(0)}%
           </span>
-          {metrics.memory && (
+          {aggregateMemoryUsage && (
             <span className={`text-[10px] ${mutedTextClass}`}>
-              {formatMemorySize(metrics.memory.used_gb)}/{formatMemorySize(metrics.memory.total_gb)}
+              {formatMemorySize(aggregateMemoryUsage.usedGb)}/{formatMemorySize(aggregateMemoryUsage.totalGb)}
             </span>
           )}
         </button>
@@ -241,7 +249,9 @@ const SystemStatusStrip: React.FC<SystemStatusStripProps> = ({ metrics }) => {
               isExpanded ? 'max-h-[500px] opacity-100' : 'max-h-0 opacity-0'
             }`}
           >
-            {metrics.per_host.map((host) => (
+            {metrics.per_host.map((host) => {
+              const hostMemoryUsage = getMemoryUsageDisplay(host);
+              return (
               <div
                 key={host.id}
                 className={`h-10 flex items-center px-10 gap-6 border-t ${isLightStrip ? 'border-stone-200/50' : 'border-stone-600/30'}`}
@@ -311,16 +321,16 @@ const SystemStatusStrip: React.FC<SystemStatusStripProps> = ({ metrics }) => {
                   <span className={`text-[10px] ${labelTextClass} w-6`}>MEM</span>
                   <div className={`w-16 h-1.5 ${subProgressTrackClass} rounded-full overflow-hidden`}>
                     <div
-                      className={`h-full ${getMemoryColor(host.memory_percent)} transition-all duration-500`}
-                      style={{ width: `${Math.min(host.memory_percent, 100)}%` }}
+                      className={`h-full ${getMemoryColor(hostMemoryUsage.percent)} transition-all duration-500`}
+                      style={{ width: `${Math.min(hostMemoryUsage.percent, 100)}%` }}
                     ></div>
                   </div>
                   <span className={`text-[10px] font-medium ${textClass} w-8 text-right`}>
-                    {host.memory_percent.toFixed(0)}%
+                    {hostMemoryUsage.percent.toFixed(0)}%
                   </span>
-                  {host.memory_used_gb > 0 && (
+                  {hostMemoryUsage.hasTotals && (
                     <span className={`text-[9px] ${mutedTextClass}`}>
-                      {formatMemorySize(host.memory_used_gb)}/{formatMemorySize(host.memory_total_gb)}
+                      {formatMemorySize(hostMemoryUsage.usedGb)}/{formatMemorySize(hostMemoryUsage.totalGb)}
                     </span>
                   )}
                 </div>
@@ -358,7 +368,8 @@ const SystemStatusStrip: React.FC<SystemStatusStripProps> = ({ metrics }) => {
                   </div>
                 )}
               </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </div>
