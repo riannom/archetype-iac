@@ -824,7 +824,7 @@ class TestApplyStopResultDetailed:
         manager._apply_stop_result(ns, {"success": True}, host)
 
         assert ns.actual_state == NodeActualState.STOPPED.value
-        assert ns.stopping_started_at is None
+        assert ns.stopping_started_at is not None  # Kept for graceful shutdown guard
         assert ns.boot_started_at is None
         assert ns.error_message is None
         assert ns.is_ready is False

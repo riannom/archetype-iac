@@ -174,7 +174,7 @@ class TestStopNodesSequencing:
         assert ns.error_message is None
         assert ns.is_ready is False
         assert ns.boot_started_at is None
-        assert ns.stopping_started_at is None
+        assert ns.stopping_started_at is not None  # Kept for graceful shutdown guard
 
     @pytest.mark.asyncio
     async def test_stop_multiple_nodes_same_agent(self, test_db, test_user):
@@ -301,7 +301,7 @@ class TestStopStateTransitions:
         assert ns.actual_state == NodeActualState.STOPPED.value
         assert ns.is_ready is False
         assert ns.boot_started_at is None
-        assert ns.stopping_started_at is None
+        assert ns.stopping_started_at is not None  # Kept for graceful shutdown guard
         assert ns.error_message is None
 
     @pytest.mark.asyncio
@@ -673,7 +673,7 @@ class TestApplyStopResult:
         assert ns.error_message is None
         assert ns.is_ready is False
         assert ns.boot_started_at is None
-        assert ns.stopping_started_at is None
+        assert ns.stopping_started_at is not None  # Kept for graceful shutdown guard
         manager._broadcast_state.assert_called_once_with(ns, name_suffix="stopped")
 
     def test_failure_result_sets_error(self, test_db, test_user):
