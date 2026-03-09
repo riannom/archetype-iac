@@ -50,6 +50,7 @@ from agent.agent_state import (  # noqa: F401
 from agent.helpers import (  # noqa: F401
     get_workspace, get_provider_for_request, provider_status_to_schema,
     get_capabilities, get_resource_usage, get_agent_info,
+    parse_docker_driver_status, classify_docker_snapshotter_mode,
     _sync_get_resource_usage,
     _validate_port_name, _validate_container_name,
     _get_allocated_resources, DEFAULT_CONTAINER_MEMORY_MB,
@@ -82,15 +83,7 @@ AGENT_STARTED_AT = _state.AGENT_STARTED_AT
 
 def _parse_driver_status(driver_status: Any) -> dict[str, str]:
     """Normalize Docker DriverStatus into a key-value dict."""
-    status: dict[str, str] = {}
-    if not isinstance(driver_status, list):
-        return status
-
-    for item in driver_status:
-        if isinstance(item, (list, tuple)) and len(item) == 2:
-            key, value = item
-            status[str(key)] = str(value)
-    return status
+    return parse_docker_driver_status(driver_status)
 
 
 def _classify_docker_snapshotter_mode(
@@ -98,14 +91,7 @@ def _classify_docker_snapshotter_mode(
     driver_type: str | None,
 ) -> str:
     """Classify Docker image-store mode for drift detection."""
-    if driver_type and "io.containerd.snapshotter.v1" in driver_type:
-        return "containerd"
-    if not driver_type:
-        # Legacy Docker image store typically reports no driver-type metadata.
-        return "legacy"
-    if driver in {"overlay2", "overlayfs"} and "snapshotter" not in driver_type:
-        return "legacy"
-    return "unknown"
+    return classify_docker_snapshotter_mode(driver, driver_type)
 
 
 async def _log_docker_snapshotter_mode_at_startup() -> None:

@@ -11,6 +11,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from app.routers import images as img
+from app.config import settings
 from app.routers.images._shared import (
     _chunk_upload_lock,
     _chunk_upload_sessions,
@@ -18,6 +19,7 @@ from app.routers.images._shared import (
     _update_progress,
 )
 from app.routers.images.upload_docker import (
+    _archive_docker_image,
     _load_image_background,
     _load_image_background_from_archive,
     _run_docker_with_progress,
@@ -52,8 +54,9 @@ def _make_tar_file(path: Path, names: list[str]):
 
 
 @pytest.fixture(autouse=True)
-def _clear_chunk_state():
+def _clear_chunk_state(monkeypatch):
     """Clear chunk upload sessions before and after each test."""
+    monkeypatch.setattr(settings, "image_archive_docker_images", False)
     with _chunk_upload_lock:
         _chunk_upload_sessions.clear()
     yield
@@ -423,3 +426,103 @@ class TestLoadImageBackgroundFromArchive:
         assert progress["phase"] == "error"
         with _chunk_upload_lock:
             assert _chunk_upload_sessions["arc-fail"]["status"] == "failed"
+
+    def test_success_queues_archive_creation(self, tmp_path, monkeypatch):
+        """Successful archive processing queues Docker archive creation."""
+        tar_path = tmp_path / "good.tar"
+        _make_tar_file(tar_path, ["manifest.json"])
+
+        queued: list[list[str]] = []
+        with _chunk_upload_lock:
+            _chunk_upload_sessions["arc-ok"] = {"status": "processing"}
+
+        monkeypatch.setattr(
+            "app.routers.images.upload_docker._is_docker_image_tar", lambda p: True,
+        )
+        monkeypatch.setattr(
+            subprocess,
+            "run",
+            lambda *a, **kw: MagicMock(returncode=0, stdout="Loaded image: ceos:4.28.0F\n", stderr=""),
+        )
+        monkeypatch.setattr(
+            "app.routers.images.upload_docker.load_manifest", lambda: {"images": []},
+        )
+        monkeypatch.setattr(
+            "app.routers.images.upload_docker.find_image_by_id", lambda m, i: None,
+        )
+        monkeypatch.setattr(
+            "app.routers.images.upload_docker.detect_device_from_filename",
+            lambda r: ("ceos", "4.28.0F"),
+        )
+        monkeypatch.setattr(
+            "app.routers.images.upload_docker.create_image_entry",
+            lambda **kw: {"id": kw["image_id"]},
+        )
+        monkeypatch.setattr(
+            "app.routers.images.upload_docker.save_manifest", lambda m: None,
+        )
+        monkeypatch.setattr(
+            "app.routers.images.upload_docker._queue_docker_archive_creation",
+            lambda refs: queued.append(list(refs)),
+        )
+
+        _load_image_background_from_archive("arc-ok", "good.tar", str(tar_path), cleanup_archive=False)
+
+        assert queued == [["ceos:4.28.0F"]]
+
+
+class TestArchiveDockerImage:
+    """Unit tests for Docker archive creation helper."""
+
+    def test_archive_creation_success_persists_ready_metadata(self, tmp_path, monkeypatch):
+        archive_target = tmp_path / "archives" / "docker_ceos_4_28_0F.tar"
+        updates: list[dict[str, object]] = []
+
+        def fake_run(cmd, **kwargs):
+            Path(cmd[3]).write_bytes(b"docker-archive")
+            return MagicMock(returncode=0, stdout="", stderr="")
+
+        monkeypatch.setattr(
+            "app.routers.images.upload_docker.docker_archive_path",
+            lambda image_id: archive_target,
+        )
+        monkeypatch.setattr(
+            "app.routers.images.upload_docker._persist_docker_archive_metadata",
+            lambda image_id, payload: updates.append(dict(payload)),
+        )
+        monkeypatch.setattr(
+            "app.routers.images.upload_docker.compute_sha256",
+            lambda path: "sha256-ready",
+        )
+        monkeypatch.setattr(subprocess, "run", fake_run)
+
+        _archive_docker_image("docker:ceos:4.28.0F", "ceos:4.28.0F")
+
+        assert archive_target.exists()
+        assert [item["archive_status"] for item in updates] == ["pending", "ready"]
+        assert updates[-1]["archive_sha256"] == "sha256-ready"
+        assert updates[-1]["archive_size_bytes"] == len(b"docker-archive")
+
+    def test_archive_creation_failure_persists_failed_metadata(self, tmp_path, monkeypatch):
+        archive_target = tmp_path / "archives" / "docker_ceos_fail.tar"
+        updates: list[dict[str, object]] = []
+
+        monkeypatch.setattr(
+            "app.routers.images.upload_docker.docker_archive_path",
+            lambda image_id: archive_target,
+        )
+        monkeypatch.setattr(
+            "app.routers.images.upload_docker._persist_docker_archive_metadata",
+            lambda image_id, payload: updates.append(dict(payload)),
+        )
+        monkeypatch.setattr(
+            subprocess,
+            "run",
+            lambda *a, **kw: MagicMock(returncode=1, stdout="", stderr="docker save failed"),
+        )
+
+        _archive_docker_image("docker:ceos:fail", "ceos:fail")
+
+        assert not archive_target.exists()
+        assert [item["archive_status"] for item in updates] == ["pending", "failed"]
+        assert updates[-1]["archive_error"] == "docker save failed"

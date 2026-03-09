@@ -729,6 +729,80 @@ class TestImageHostsAndSync:
         assert response.status_code == 400
         assert "no online hosts" in response.json()["detail"].lower()
 
+    def test_backfill_docker_archive_queues_creation(
+        self,
+        test_client: TestClient,
+        admin_auth_headers: dict,
+        monkeypatch,
+    ):
+        from app.routers import images as images_router
+
+        manifest = {
+            "images": [
+                {
+                    "id": "docker:test:1.0",
+                    "kind": "docker",
+                    "reference": "test:1.0",
+                    "archive_status": "none",
+                }
+            ]
+        }
+
+        monkeypatch.setattr(images_router, "load_manifest", lambda: manifest)
+        monkeypatch.setattr(
+            images_router,
+            "find_image_by_id",
+            lambda m, image_id: manifest["images"][0] if image_id == "docker:test:1.0" else None,
+        )
+        monkeypatch.setattr(
+            images_router,
+            "request_docker_archive_creation",
+            lambda image_id, reference, force=False: True,
+        )
+
+        response = test_client.post(
+            "/images/library/docker:test:1.0/archive",
+            headers=admin_auth_headers,
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["queued"] is True
+        assert data["image"]["id"] == "docker:test:1.0"
+
+    def test_backfill_docker_archive_rejects_non_docker(
+        self,
+        test_client: TestClient,
+        admin_auth_headers: dict,
+        monkeypatch,
+    ):
+        from app.routers import images as images_router
+
+        manifest = {
+            "images": [
+                {
+                    "id": "qcow2:test.qcow2",
+                    "kind": "qcow2",
+                    "reference": "/images/test.qcow2",
+                }
+            ]
+        }
+
+        monkeypatch.setattr(images_router, "load_manifest", lambda: manifest)
+        monkeypatch.setattr(
+            images_router,
+            "find_image_by_id",
+            lambda m, image_id: manifest["images"][0] if image_id == "qcow2:test.qcow2" else None,
+        )
+
+        response = test_client.post(
+            "/images/library/qcow2:test.qcow2/archive",
+            headers=admin_auth_headers,
+        )
+
+        assert response.status_code == 400
+        assert "docker images" in response.json()["detail"].lower()
+
 
 class TestSyncJobs:
     """Tests for sync job listing endpoints."""

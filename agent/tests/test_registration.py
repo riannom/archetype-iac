@@ -56,6 +56,7 @@ def _make_agent_info(agent_id: str = "test-agent-id") -> AgentInfo:
         name="test-agent",
         address="127.0.0.1:8001",
         capabilities=AgentCapabilities(providers=[], features=[]),
+        docker_snapshotter_mode="legacy",
     )
 
 
@@ -99,6 +100,30 @@ class TestRegisterWithController:
 
         assert result is True
         assert _state._registered is True
+
+    @pytest.mark.asyncio
+    async def test_register_includes_snapshotter_mode(self, monkeypatch):
+        """Registration payload should include snapshotter mode."""
+        captured_kwargs = {}
+        client = FakeHttpClient()
+
+        async def capture_post(url, **kwargs):
+            captured_kwargs.update(kwargs)
+            return FakeResponse(200, {
+                "success": True,
+                "message": "Registered",
+                "assigned_id": None,
+            })
+
+        client.post = capture_post
+        monkeypatch.setattr("agent.registration.get_http_client", lambda: client)
+        monkeypatch.setattr("agent.registration.get_controller_auth_headers", lambda: {})
+        monkeypatch.setattr("agent.registration.get_agent_info", _make_agent_info)
+
+        result = await register_with_controller()
+
+        assert result is True
+        assert captured_kwargs["json"]["agent"]["docker_snapshotter_mode"] == "legacy"
 
     @pytest.mark.asyncio
     async def test_register_uses_assigned_id(self, monkeypatch):
@@ -210,6 +235,7 @@ class TestSendHeartbeat:
             "agent.network.transport.get_data_plane_ip",
             lambda: "10.0.0.5",
         )
+        monkeypatch.setattr("agent.registration.get_docker_snapshotter_mode", lambda: "legacy")
         _state.set_agent_id("hb-test-agent")
 
         response = await send_heartbeat()
@@ -219,6 +245,7 @@ class TestSendHeartbeat:
         payload = captured_kwargs["json"]
         assert payload["agent_id"] == "hb-test-agent"
         assert payload["status"] == AgentStatus.ONLINE
+        assert payload["docker_snapshotter_mode"] == "legacy"
 
     @pytest.mark.asyncio
     async def test_heartbeat_network_error_returns_none(self, monkeypatch):
@@ -235,6 +262,7 @@ class TestSendHeartbeat:
             "agent.network.transport.get_data_plane_ip",
             lambda: None,
         )
+        monkeypatch.setattr("agent.registration.get_docker_snapshotter_mode", lambda: None)
 
         response = await send_heartbeat()
 
@@ -258,6 +286,7 @@ class TestSendHeartbeat:
             "agent.network.transport.get_data_plane_ip",
             lambda: None,
         )
+        monkeypatch.setattr("agent.registration.get_docker_snapshotter_mode", lambda: "containerd")
 
         response = await send_heartbeat()
 

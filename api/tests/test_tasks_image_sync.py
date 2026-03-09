@@ -8,6 +8,7 @@ import pytest
 from sqlalchemy.orm import Session
 
 from app import models
+from app.config import settings
 
 
 class TestSyncImageToAgent:
@@ -87,6 +88,48 @@ class TestSyncImageToAgent:
 
                 assert success is True
                 assert error is None
+
+
+class TestQueueImageSyncJob:
+    """Tests for the shared sync job queue helper."""
+
+    def test_reuses_existing_active_job(self, test_db: Session, sample_host: models.Host):
+        """Queueing should reuse an existing active job instead of duplicating it."""
+        from app.tasks.image_sync import queue_image_sync_job
+
+        image = {"id": "docker:test:1.0", "kind": "docker", "reference": "test:1.0"}
+        existing = models.ImageSyncJob(
+            image_id=image["id"],
+            host_id=sample_host.id,
+            status="pending",
+        )
+        test_db.add(existing)
+        test_db.commit()
+
+        result = queue_image_sync_job(image["id"], sample_host.id, test_db, image=image)
+
+        assert result.status == "existing"
+        assert result.job_id == existing.id
+        assert test_db.query(models.ImageSyncJob).count() == 1
+
+    def test_skips_host_at_concurrency_limit(self, test_db: Session, sample_host: models.Host, monkeypatch):
+        """Queueing should respect image_sync_max_concurrent per host."""
+        from app.tasks.image_sync import queue_image_sync_job
+
+        monkeypatch.setattr(settings, "image_sync_max_concurrent", 1)
+        image = {"id": "docker:test:1.0", "kind": "docker", "reference": "test:1.0"}
+        active = models.ImageSyncJob(
+            image_id="docker:other:1.0",
+            host_id=sample_host.id,
+            status="transferring",
+        )
+        test_db.add(active)
+        test_db.commit()
+
+        result = queue_image_sync_job(image["id"], sample_host.id, test_db, image=image)
+
+        assert result.status == "host_busy"
+        assert test_db.query(models.ImageSyncJob).count() == 1
 
 
 class TestCheckAgentHasImage:

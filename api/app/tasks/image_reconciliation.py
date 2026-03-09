@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import datetime, timezone
+from pathlib import Path
 
 from app import agent_client, models
 from app.config import settings
@@ -24,6 +25,7 @@ from app.image_store import (
     load_manifest,
     save_manifest,
 )
+from app.utils.image_integrity import compute_sha256
 
 logger = logging.getLogger(__name__)
 
@@ -610,6 +612,97 @@ async def verify_image_status_on_agents(run_sha256_check: bool = False) -> Image
     return result
 
 
+async def _resync_missing_images() -> int:
+    """Queue sync jobs for missing images on eligible online hosts."""
+    from app.tasks.image_sync import queue_image_sync_job
+
+    max_per_cycle = max(0, getattr(settings, "image_sync_resync_max_per_cycle", 4))
+    if max_per_cycle == 0:
+        return 0
+
+    queued = 0
+    with get_session() as session:
+        candidates = (
+            session.query(models.ImageHost, models.Host)
+            .join(models.Host, models.Host.id == models.ImageHost.host_id)
+            .filter(
+                models.ImageHost.status == "missing",
+                models.Host.status == "online",
+                models.Host.image_sync_strategy != "disabled",
+            )
+            .order_by(models.ImageHost.updated_at.asc(), models.ImageHost.created_at.asc())
+            .all()
+        )
+
+        for image_host, host in candidates:
+            if queued >= max_per_cycle:
+                break
+            if not agent_client.is_agent_online(host):
+                continue
+
+            queue_result = queue_image_sync_job(
+                image_host.image_id,
+                host.id,
+                session,
+                start_task=True,
+            )
+            if queue_result.status != "queued":
+                continue
+
+            queued += 1
+            logger.info(
+                "image_resync_triggered: image=%s host=%s reason=drift job=%s",
+                image_host.image_id,
+                host.name,
+                queue_result.job_id,
+            )
+
+    return queued
+
+
+def _verify_docker_archives() -> int:
+    """Verify on-disk Docker archives tracked in the catalog."""
+    verified = 0
+    with get_session() as session:
+        rows = (
+            session.query(models.CatalogImage)
+            .filter(
+                models.CatalogImage.kind == "docker",
+                models.CatalogImage.archive_status == "ready",
+            )
+            .all()
+        )
+
+        for row in rows:
+            archive_path = Path(row.archive_path or "")
+            error: str | None = None
+            if not archive_path.exists() or not archive_path.is_file():
+                error = "Archive file not found"
+            else:
+                actual_size = archive_path.stat().st_size
+                if row.archive_size_bytes is not None and actual_size != row.archive_size_bytes:
+                    error = f"Archive size mismatch: expected {row.archive_size_bytes}, got {actual_size}"
+                elif row.archive_sha256:
+                    actual_sha256 = compute_sha256(archive_path)
+                    if actual_sha256 != row.archive_sha256:
+                        error = "Archive SHA256 mismatch"
+
+            if error:
+                row.archive_status = "failed"
+                row.archive_error = error
+                row.archive_verified_at = None
+                logger.warning("Archive verification failed for %s: %s", row.external_id, error)
+                continue
+
+            row.archive_verified_at = datetime.now(timezone.utc)
+            row.archive_error = None
+            verified += 1
+
+        session.commit()
+
+    return verified
+
+
 async def full_image_reconciliation() -> ImageReconciliationResult:
     """Run full image reconciliation: host records and status verification.
 
@@ -715,9 +808,11 @@ async def image_reconciliation_monitor():
     """
     interval = getattr(settings, "image_reconciliation_interval", 300)  # 5 minutes default
     sha256_interval = getattr(settings, "image_sha256_check_interval_cycles", 6)
+    archive_verify_interval = getattr(settings, "image_archive_verify_interval_cycles", 6)
     logger.info(
         f"Image reconciliation monitor started "
-        f"(interval: {interval}s, SHA256 check every {sha256_interval} cycles)"
+        f"(interval: {interval}s, SHA256 check every {sha256_interval} cycles, "
+        f"archive verify every {archive_verify_interval} cycles)"
     )
 
     cycle = 0
@@ -746,6 +841,14 @@ async def image_reconciliation_monitor():
             status_result = await verify_image_status_on_agents(run_sha256_check=run_sha256)
             if status_result.status_updates > 0:
                 logger.info(f"Image status verification: {status_result.status_updates} update(s)")
+            if archive_verify_interval > 0 and cycle % archive_verify_interval == 0:
+                verified_archives = await asyncio.to_thread(_verify_docker_archives)
+                if verified_archives > 0:
+                    logger.info("Docker archive verification: verified %s archive(s)", verified_archives)
+            if getattr(settings, "image_sync_auto_resync_on_drift", True):
+                resynced = await _resync_missing_images()
+                if resynced > 0:
+                    logger.info("Image drift recovery: queued %s re-sync(s)", resynced)
 
             # Backfill metadata for images agents have but lack device_id for
             try:

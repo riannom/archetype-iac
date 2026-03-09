@@ -33,6 +33,7 @@ from app.services.catalog_service import (
     resolve_catalog_device_id,
 )
 from app.utils.image_integrity import compute_sha256
+from .upload_docker import request_docker_archive_creation
 
 router = APIRouter(tags=["images"])
 
@@ -469,3 +470,41 @@ def get_images_for_device(
     images = [img for img in manifest.get("images", [])
               if image_matches_device(img, device_id)]
     return {"images": images}
+
+
+@router.post("/library/{image_id}/archive")
+def backfill_docker_archive(
+    image_id: str,
+    database: Session = Depends(db.get_db),
+    current_user: models.User = Depends(get_current_admin),
+) -> dict[str, object]:
+    """Queue or report Docker archive creation for an existing library image."""
+    manifest = load_manifest()
+    image = find_image_by_id(manifest, image_id)
+    if not image:
+        raise HTTPException(status_code=404, detail="Image not found")
+    if image.get("kind") != "docker":
+        raise HTTPException(status_code=400, detail="Only Docker images support archives")
+
+    reference = str(image.get("reference") or "").strip()
+    if not reference:
+        raise HTTPException(status_code=400, detail="Image has no reference")
+
+    archive_status = str(image.get("archive_status") or "none").lower()
+    if archive_status == "pending":
+        return {"queued": False, "image": image}
+    if archive_status == "ready":
+        archive_path = str(image.get("archive_path") or "").strip()
+        if archive_path and Path(archive_path).exists():
+            return {"queued": False, "image": image}
+
+    queued = request_docker_archive_creation(image_id, reference, force=True)
+
+    refreshed_image = image
+    if catalog_is_seeded(database):
+        refreshed_image = get_catalog_library_image(database, image_id, force_refresh=True) or image
+    else:
+        refreshed_manifest = load_manifest()
+        refreshed_image = find_image_by_id(refreshed_manifest, image_id) or image
+
+    return {"queued": queued, "image": refreshed_image}

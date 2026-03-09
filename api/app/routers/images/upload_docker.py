@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import lzma
+import logging
 import os
 import shutil
 import subprocess
@@ -16,14 +17,24 @@ from fastapi.responses import StreamingResponse
 
 from app import models
 from app.auth import get_current_admin, get_current_user
+from app.config import settings
+from app.db import get_session
 from app.image_store import (
     create_image_entry,
     detect_device_from_filename,
+    docker_archive_path,
     find_image_by_id,
     load_manifest,
     save_manifest,
+    update_image_entry,
+)
+from app.services.catalog_service import (
+    CatalogImageNotFoundError,
+    apply_manifest_style_image_update,
+    catalog_is_seeded,
 )
 from app.services.resource_monitor import PressureLevel, ResourceMonitor
+from app.utils.image_integrity import compute_sha256
 
 from ._shared import (
     DEFAULT_CHUNK_SIZE,
@@ -52,6 +63,137 @@ from ._shared import (
 )
 
 router = APIRouter(tags=["images"])
+logger = logging.getLogger(__name__)
+
+
+def _persist_docker_archive_metadata(image_id: str, updates: dict[str, object]) -> None:
+    try:
+        with get_session() as session:
+            if catalog_is_seeded(session):
+                try:
+                    apply_manifest_style_image_update(
+                        session,
+                        image_id,
+                        updates,
+                        event_type="image_archive_update",
+                        summary=f"Updated Docker archive metadata for '{image_id}'",
+                        source="api.images.upload_docker",
+                    )
+                except CatalogImageNotFoundError:
+                    session.rollback()
+                    return
+                session.commit()
+                return
+    except Exception:
+        logger.warning("Failed to persist Docker archive metadata for %s", image_id, exc_info=True)
+        return
+
+    manifest = load_manifest()
+    updated = update_image_entry(manifest, image_id, updates)
+    if updated:
+        save_manifest(manifest)
+
+
+def _archive_docker_image(image_id: str, reference: str) -> None:
+    archive_path = docker_archive_path(image_id)
+    partial_path = archive_path.with_suffix(f"{archive_path.suffix}.partial")
+    archive_started_at = datetime.now(timezone.utc)
+    _persist_docker_archive_metadata(
+        image_id,
+        {
+            "archive_path": str(archive_path),
+            "archive_status": "pending",
+            "archive_sha256": None,
+            "archive_size_bytes": None,
+            "archive_created_at": None,
+            "archive_verified_at": None,
+            "archive_error": None,
+        },
+    )
+
+    try:
+        archive_path.parent.mkdir(parents=True, exist_ok=True)
+        if partial_path.exists():
+            partial_path.unlink()
+
+        result = subprocess.run(
+            ["docker", "save", "-o", str(partial_path), reference],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=600,
+        )
+        output = ((result.stdout or "") + (result.stderr or "")).strip()
+        if result.returncode != 0:
+            raise RuntimeError(output or "docker save failed")
+
+        archive_size_bytes = partial_path.stat().st_size
+        archive_sha256 = compute_sha256(partial_path)
+        os.replace(partial_path, archive_path)
+        archive_timestamp = archive_started_at.isoformat()
+        _persist_docker_archive_metadata(
+            image_id,
+            {
+                "archive_path": str(archive_path),
+                "archive_status": "ready",
+                "archive_sha256": archive_sha256,
+                "archive_size_bytes": archive_size_bytes,
+                "archive_created_at": archive_timestamp,
+                "archive_verified_at": archive_timestamp,
+                "archive_error": None,
+            },
+        )
+    except Exception as exc:
+        if partial_path.exists():
+            partial_path.unlink()
+        _persist_docker_archive_metadata(
+            image_id,
+            {
+                "archive_path": str(archive_path),
+                "archive_status": "failed",
+                "archive_error": str(exc),
+                "archive_verified_at": None,
+            },
+        )
+        logger.warning("Failed to create Docker archive for %s (%s)", image_id, reference, exc_info=True)
+
+
+def _queue_docker_archive_creation(image_refs: list[str]) -> None:
+    for image_ref in image_refs:
+        request_docker_archive_creation(f"docker:{image_ref}", image_ref)
+
+
+def request_docker_archive_creation(image_id: str, reference: str, *, force: bool = False) -> bool:
+    if not force and not settings.image_archive_docker_images:
+        return False
+
+    manifest = load_manifest()
+    image = find_image_by_id(manifest, image_id)
+    if image is None:
+        return False
+
+    archive_status = str(image.get("archive_status") or "none").lower()
+    if archive_status == "pending":
+        return False
+    if archive_status == "ready":
+        archive_path = str(image.get("archive_path") or "").strip()
+        if archive_path and Path(archive_path).exists():
+            return False
+
+    _persist_docker_archive_metadata(
+        image_id,
+        {
+            "archive_status": "pending",
+            "archive_error": None,
+        },
+    )
+    thread = threading.Thread(
+        target=_archive_docker_image,
+        args=(image_id, reference),
+        daemon=True,
+    )
+    thread.start()
+    return True
 
 
 def _run_docker_with_progress(
@@ -679,6 +821,7 @@ def _load_image_background(upload_id: str, filename: str, content: bytes):
             )
             manifest["images"].append(entry)
         save_manifest(manifest)
+        _queue_docker_archive_creation(loaded_images)
 
         print(f"[UPLOAD {upload_id}] Complete! Setting progress to 100%")
         _update_progress(upload_id, "complete", output or "Image loaded successfully", 100,
@@ -866,6 +1009,7 @@ def _load_image_background_from_archive(
             )
             manifest["images"].append(entry)
         save_manifest(manifest)
+        _queue_docker_archive_creation(loaded_images)
 
         _update_progress(
             upload_id,
@@ -1102,6 +1246,7 @@ async def _load_image_streaming(filename: str, content: bytes):
             )
             manifest["images"].append(entry)
         save_manifest(manifest)
+        _queue_docker_archive_creation(loaded_images)
 
         # Final success event - add small delay to ensure proper flushing
         await asyncio.sleep(0.1)
@@ -1226,6 +1371,7 @@ def _load_image_sync(file: UploadFile) -> dict:
             )
             manifest["images"].append(entry)
         save_manifest(manifest)
+        _queue_docker_archive_creation(loaded_images)
         return {"output": output.strip() or "Image loaded", "images": loaded_images}
     finally:
         file.file.close()

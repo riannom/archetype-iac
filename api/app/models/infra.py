@@ -40,6 +40,8 @@ class Host(Base):
     error_since: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     # Separate data plane address for VXLAN tunnels (vs management address)
     data_plane_address: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # Last reported Docker image-store mode (legacy/containerd/unknown)
+    docker_snapshotter_mode: Mapped[str | None] = mapped_column(String(32), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     def _parse_json_field(self, value: str | None) -> dict:

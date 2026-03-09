@@ -3,16 +3,15 @@ from __future__ import annotations
 
 import asyncio
 import hmac
+import logging
 import os
 from datetime import datetime, timezone
 from pathlib import Path
-from uuid import uuid4
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
-from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app import db, models
@@ -22,8 +21,10 @@ from app.image_store import (
     find_image_by_id,
     load_manifest,
 )
+from app.tasks.image_sync import queue_image_sync_job
 
 router = APIRouter(tags=["images"])
+logger = logging.getLogger(__name__)
 
 
 # --- Pydantic models ---
@@ -63,6 +64,20 @@ class SyncJobOut(BaseModel):
     started_at: datetime | None = None
     completed_at: datetime | None = None
     created_at: datetime
+
+
+def _resolve_ready_docker_archive(image: dict) -> Path | None:
+    if image.get("kind") != "docker":
+        return None
+    if image.get("archive_status") != "ready":
+        return None
+    archive_path = str(image.get("archive_path") or "").strip()
+    if not archive_path:
+        return None
+    path = Path(archive_path)
+    if not path.exists() or not path.is_file():
+        return None
+    return path
 
 
 async def _authorize_library_stream(
@@ -180,95 +195,33 @@ async def push_image_to_hosts(
     if not hosts:
         raise HTTPException(status_code=400, detail="No online hosts to sync to")
 
-    # Create sync jobs
     job_ids = []
     for host in hosts:
-        # Atomic dedup: SELECT FOR UPDATE prevents concurrent requests from
-        # creating duplicate jobs for the same image+host combination
-        existing_job = (
-            database.query(models.ImageSyncJob)
-            .filter(
-                models.ImageSyncJob.image_id == image_id,
-                models.ImageSyncJob.host_id == host.id,
-                models.ImageSyncJob.status.in_(["pending", "transferring", "loading"]),
-            )
-            .with_for_update(skip_locked=True)
-            .first()
+        queue_result = queue_image_sync_job(
+            image_id,
+            host.id,
+            database,
+            image=image,
+            start_task=True,
         )
-
-        if existing_job:
-            job_ids.append(existing_job.id)
-            continue
-
-        # Enforce image_sync_max_concurrent: skip this host if it already
-        # has too many active sync jobs
-        active_count = (
-            database.query(func.count(models.ImageSyncJob.id))
-            .filter(
-                models.ImageSyncJob.host_id == host.id,
-                models.ImageSyncJob.status.in_(["pending", "transferring", "loading"]),
-            )
-            .scalar()
-        )
-        if active_count >= settings.image_sync_max_concurrent:
-            continue
-
-        # Create new job
-        job = models.ImageSyncJob(
-            id=str(uuid4()),
-            image_id=image_id,
-            host_id=host.id,
-            status="pending",
-        )
-        database.add(job)
-        job_ids.append(job.id)
-
-        # Update or create ImageHost record
-        image_host = database.query(models.ImageHost).filter(
-            models.ImageHost.image_id == image_id,
-            models.ImageHost.host_id == host.id
-        ).first()
-
-        if image_host:
-            image_host.status = "syncing"
-            image_host.error_message = None
-        else:
-            image_host = models.ImageHost(
-                id=str(uuid4()),
-                image_id=image_id,
-                host_id=host.id,
-                reference=image.get("reference", ""),
-                status="syncing",
-            )
-            database.add(image_host)
-
-    database.commit()
-
-    # Start sync tasks in background
-    for job_id in job_ids:
-        job = database.get(models.ImageSyncJob, job_id)
-        if job and job.status == "pending":
-            host = database.get(models.Host, job.host_id)
-            if host:
-                asyncio.create_task(_execute_sync_job(job_id, image_id, image, host))
+        if queue_result.job_id and queue_result.status in {"queued", "existing"}:
+            job_ids.append(queue_result.job_id)
 
     return {"jobs": job_ids, "count": len(job_ids)}
 
 
-async def _execute_sync_job(job_id: str, image_id: str, image: dict, host: models.Host):
+async def _execute_sync_job(job_id: str, image_id: str, image: dict, host: models.Host | str):
     """Execute a sync job in the background.
 
     Streams Docker or file-based images to the agent and updates job progress.
     Uses structured error handling for better error messages.
     """
-    import logging
     from app.db import get_session
     from app.errors import categorize_httpx_error
 
-    logger = logging.getLogger(__name__)
-
-    # Capture host ID before session closes -- re-fetch inside our own session
-    host_id = host.id
+    # The task boundary should pass a host_id string, but keep host objects
+    # supported for direct callers and older tests.
+    host_id = host if isinstance(host, str) else host.id
 
     with get_session() as session:
         try:
@@ -296,6 +249,7 @@ async def _execute_sync_job(job_id: str, image_id: str, image: dict, host: model
 
             image_kind = image.get("kind", "docker")
             is_file_based = reference.startswith("/") or reference.endswith((".qcow2", ".img", ".iol"))
+            archive_source_path = _resolve_ready_docker_archive(image)
 
             # Build agent URL once
             agent_url = f"http://{host.address}/images/receive"
@@ -347,59 +301,66 @@ async def _execute_sync_job(job_id: str, image_id: str, image: dict, host: model
                             raise ValueError("Timed out waiting for agent pull to complete")
                         await asyncio.sleep(2)
                 elif image_kind == "docker":
-                    # Get image size from Docker
-                    try:
-                        proc = await asyncio.create_subprocess_exec(
-                            "docker", "inspect", "--format", "{{.Size}}", reference,
-                            stdout=asyncio.subprocess.PIPE,
-                            stderr=asyncio.subprocess.PIPE,
-                        )
-                        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=30)
-                        if proc.returncode == 0:
-                            job.total_bytes = int(stdout.decode().strip())
-                            session.commit()
-                    except Exception as e:
-                        logger.warning(f"Could not get image size for {reference}: {e}")
-
-                    # Stream docker save to temp file to avoid loading
-                    # the entire image into memory
-                    import tempfile as _tempfile
-                    tmp_fd, _docker_tmp_path = _tempfile.mkstemp(suffix=".tar")
-                    try:
-                        proc = await asyncio.create_subprocess_exec(
-                            "docker", "save", reference,
-                            stdout=asyncio.subprocess.PIPE,
-                            stderr=asyncio.subprocess.PIPE,
-                        )
-                        saved_bytes = 0
-                        chunk_size = settings.image_sync_chunk_size
-                        with os.fdopen(tmp_fd, "wb") as tmp_out:
-                            while True:
-                                chunk = await proc.stdout.read(chunk_size)
-                                if not chunk:
-                                    break
-                                tmp_out.write(chunk)
-                                saved_bytes += len(chunk)
-                        # Wait for process to finish (stdout already consumed)
-                        _, stderr = await proc.communicate()
-                        if proc.returncode != 0:
-                            error_msg = stderr.decode() if stderr else "docker save failed"
-                            raise ValueError(error_msg)
-                    except BaseException:
-                        # Clean up on any error during docker save
+                    if archive_source_path is not None:
+                        saved_bytes = archive_source_path.stat().st_size
+                        job.total_bytes = saved_bytes
+                        job.bytes_transferred = saved_bytes
+                        job.progress_percent = 50
+                        session.commit()
+                        tmp_file_obj = open(archive_source_path, "rb")
+                    else:
+                        # Get image size from Docker
                         try:
-                            os.unlink(_docker_tmp_path)
-                        except OSError:
-                            pass
-                        _docker_tmp_path = None
-                        raise
+                            proc = await asyncio.create_subprocess_exec(
+                                "docker", "inspect", "--format", "{{.Size}}", reference,
+                                stdout=asyncio.subprocess.PIPE,
+                                stderr=asyncio.subprocess.PIPE,
+                            )
+                            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=30)
+                            if proc.returncode == 0:
+                                job.total_bytes = int(stdout.decode().strip())
+                                session.commit()
+                        except Exception as e:
+                            logger.warning(f"Could not get image size for {reference}: {e}")
 
-                    # Update progress while upload begins
-                    job.bytes_transferred = saved_bytes
-                    job.progress_percent = 50
-                    session.commit()
+                        # Stream docker save to temp file to avoid loading
+                        # the entire image into memory
+                        import tempfile as _tempfile
+                        tmp_fd, _docker_tmp_path = _tempfile.mkstemp(suffix=".tar")
+                        try:
+                            proc = await asyncio.create_subprocess_exec(
+                                "docker", "save", reference,
+                                stdout=asyncio.subprocess.PIPE,
+                                stderr=asyncio.subprocess.PIPE,
+                            )
+                            saved_bytes = 0
+                            chunk_size = settings.image_sync_chunk_size
+                            with os.fdopen(tmp_fd, "wb") as tmp_out:
+                                while True:
+                                    chunk = await proc.stdout.read(chunk_size)
+                                    if not chunk:
+                                        break
+                                    tmp_out.write(chunk)
+                                    saved_bytes += len(chunk)
+                            # Wait for process to finish (stdout already consumed)
+                            _, stderr = await proc.communicate()
+                            if proc.returncode != 0:
+                                error_msg = stderr.decode() if stderr else "docker save failed"
+                                raise ValueError(error_msg)
+                        except BaseException:
+                            # Clean up on any error during docker save
+                            try:
+                                os.unlink(_docker_tmp_path)
+                            except OSError:
+                                pass
+                            _docker_tmp_path = None
+                            raise
 
-                    tmp_file_obj = open(_docker_tmp_path, "rb")
+                        # Update progress while upload begins
+                        job.bytes_transferred = saved_bytes
+                        job.progress_percent = 50
+                        session.commit()
+                        tmp_file_obj = open(_docker_tmp_path, "rb")
                     files = {"file": ("image.tar", tmp_file_obj, "application/x-tar")}
                     params = {
                         "image_id": image_id,
@@ -533,6 +494,25 @@ async def stream_image(
             headers={
                 "Content-Type": "application/octet-stream",
                 "Content-Length": str(source_path.stat().st_size),
+            },
+        )
+
+    archive_source_path = _resolve_ready_docker_archive(image)
+    if archive_source_path is not None:
+        def generate_archive_file():
+            with archive_source_path.open("rb") as f:
+                while True:
+                    chunk = f.read(settings.image_sync_chunk_size)
+                    if not chunk:
+                        break
+                    yield chunk
+
+        return StreamingResponse(
+            generate_archive_file(),
+            media_type="application/x-tar",
+            headers={
+                "Content-Type": "application/x-tar",
+                "Content-Length": str(archive_source_path.stat().st_size),
             },
         )
 

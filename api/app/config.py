@@ -160,8 +160,16 @@ class Settings(BaseSettings):
     image_sync_timeout: int = 600
     # Maximum concurrent sync operations per agent
     image_sync_max_concurrent: int = 2
+    # Automatically queue a new sync when reconciliation finds drift
+    image_sync_auto_resync_on_drift: bool = True
+    # Cap automatic re-sync fanout per reconciliation cycle
+    image_sync_resync_max_per_cycle: int = 4
     # Chunk size for streaming image data (1MB default)
     image_sync_chunk_size: int = 1048576
+    # Persist Docker image archives on disk after successful upload/import
+    image_archive_docker_images: bool = True
+    # Run archive verification every N image reconciliation cycles
+    image_archive_verify_interval_cycles: int = 6
 
     # Catalog cutover controls
     # Keep manifest.json mirrored from DB catalog for legacy tooling.

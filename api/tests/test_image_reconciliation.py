@@ -6,6 +6,7 @@ import json
 import pytest
 
 from app import models
+from app.config import settings
 import app.tasks.image_reconciliation as image_reconciliation
 
 
@@ -452,3 +453,127 @@ async def test_cleanup_deleted_image_from_agents_skips_host_when_reference_still
 
     assert result.orphaned_hosts_removed == 0
     assert test_db.query(models.ImageHost).count() == 1
+
+
+@pytest.mark.asyncio
+async def test_resync_missing_images_queues_limited_jobs(test_db, monkeypatch) -> None:
+    host_a = models.Host(
+        id="host-a",
+        name="Host A",
+        address="localhost:10",
+        status="online",
+        capabilities=json.dumps({"providers": ["docker"]}),
+        version="1.0.0",
+    )
+    host_b = models.Host(
+        id="host-b",
+        name="Host B",
+        address="localhost:11",
+        status="online",
+        capabilities=json.dumps({"providers": ["docker"]}),
+        version="1.0.0",
+    )
+    test_db.add_all([host_a, host_b])
+    test_db.add_all([
+        models.ImageHost(
+            image_id="docker:img-1",
+            host_id=host_a.id,
+            reference="img-1:1",
+            status="missing",
+        ),
+        models.ImageHost(
+            image_id="docker:img-2",
+            host_id=host_b.id,
+            reference="img-2:1",
+            status="missing",
+        ),
+    ])
+    test_db.commit()
+
+    manifest = {
+        "images": [
+            {"id": "docker:img-1", "reference": "img-1:1", "kind": "docker"},
+            {"id": "docker:img-2", "reference": "img-2:1", "kind": "docker"},
+        ]
+    }
+
+    monkeypatch.setattr(image_reconciliation, "load_manifest", lambda: manifest)
+    monkeypatch.setattr(image_reconciliation, "get_session", lambda: _session_ctx(test_db))
+    monkeypatch.setattr(image_reconciliation.agent_client, "is_agent_online", lambda h: True)
+    monkeypatch.setattr("app.tasks.image_sync.load_manifest", lambda: manifest)
+    monkeypatch.setattr(settings, "image_sync_resync_max_per_cycle", 1)
+
+    started_jobs: list[tuple[str, str]] = []
+
+    def fake_start(job_id: str, image_id: str, image: dict, host_id: str) -> None:
+        started_jobs.append((image_id, host_id))
+
+    monkeypatch.setattr("app.tasks.image_sync.start_queued_image_sync_job", fake_start)
+
+    queued = await image_reconciliation._resync_missing_images()
+
+    assert queued == 1
+    assert len(started_jobs) == 1
+    assert test_db.query(models.ImageSyncJob).count() == 1
+
+    image_hosts = test_db.query(models.ImageHost).order_by(models.ImageHost.host_id.asc()).all()
+    statuses = {(row.image_id, row.host_id): row.status for row in image_hosts}
+    assert list(statuses.values()).count("syncing") == 1
+    assert list(statuses.values()).count("missing") == 1
+
+
+def test_verify_docker_archives_marks_missing_file_failed(test_db, monkeypatch) -> None:
+    image = models.CatalogImage(
+        id="catalog-image-1",
+        external_id="docker:ceos:missing-archive",
+        kind="docker",
+        reference="ceos:missing-archive",
+        source="api",
+        metadata_json="{}",
+        archive_path="/nonexistent/archive.tar",
+        archive_status="ready",
+        archive_sha256="deadbeef",
+        archive_size_bytes=123,
+    )
+    test_db.add(image)
+    test_db.commit()
+
+    monkeypatch.setattr(image_reconciliation, "get_session", lambda: _session_ctx(test_db))
+
+    verified = image_reconciliation._verify_docker_archives()
+
+    assert verified == 0
+    test_db.refresh(image)
+    assert image.archive_status == "failed"
+    assert image.archive_error == "Archive file not found"
+    assert image.archive_verified_at is None
+
+
+def test_verify_docker_archives_updates_verified_timestamp(test_db, monkeypatch, tmp_path) -> None:
+    archive_path = tmp_path / "archive.tar"
+    archive_path.write_bytes(b"archive-bytes")
+    image = models.CatalogImage(
+        id="catalog-image-2",
+        external_id="docker:ceos:ready-archive",
+        kind="docker",
+        reference="ceos:ready-archive",
+        source="api",
+        metadata_json="{}",
+        archive_path=str(archive_path),
+        archive_status="ready",
+        archive_sha256="abc123",
+        archive_size_bytes=len(b"archive-bytes"),
+    )
+    test_db.add(image)
+    test_db.commit()
+
+    monkeypatch.setattr(image_reconciliation, "get_session", lambda: _session_ctx(test_db))
+    monkeypatch.setattr(image_reconciliation, "compute_sha256", lambda path: "abc123")
+
+    verified = image_reconciliation._verify_docker_archives()
+
+    assert verified == 1
+    test_db.refresh(image)
+    assert image.archive_status == "ready"
+    assert image.archive_error is None
+    assert image.archive_verified_at is not None

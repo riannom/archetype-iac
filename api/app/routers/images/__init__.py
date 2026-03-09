@@ -81,6 +81,7 @@ from .upload_docker import (  # noqa: F401
     _load_image_background_from_archive,
     _load_image_streaming,
     _load_image_sync,
+    request_docker_archive_creation,
     router as upload_docker_router,
     upload_chunk,
 )

@@ -2,11 +2,13 @@
 from __future__ import annotations
 
 import logging
+import re
 from pathlib import Path
 
 from app.config import settings
 
 logger = logging.getLogger(__name__)
+_NON_ALNUM_RE = re.compile(r"[^A-Za-z0-9]+")
 
 
 def image_store_root() -> Path:
@@ -19,6 +21,21 @@ def ensure_image_store() -> Path:
     path = image_store_root()
     path.mkdir(parents=True, exist_ok=True)
     return path
+
+
+def docker_archive_root() -> Path:
+    return image_store_root() / "archives"
+
+
+def ensure_docker_archive_root() -> Path:
+    path = docker_archive_root()
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def docker_archive_path(image_id: str) -> Path:
+    slug = _NON_ALNUM_RE.sub("_", image_id).strip("_") or "image"
+    return ensure_docker_archive_root() / f"{slug}.tar"
 
 
 def qcow2_path(filename: str) -> Path:

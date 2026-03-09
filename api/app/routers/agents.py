@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
@@ -25,6 +26,7 @@ from app.utils.http import require_admin
 
 
 router = APIRouter(prefix="/agents", tags=["agents"])
+logger = logging.getLogger(__name__)
 
 
 async def verify_agent_secret_required(request: Request) -> None:
@@ -77,6 +79,8 @@ class AgentInfo(BaseModel):
     deployment_mode: str = "unknown"
     started_at: datetime | None = None  # When the agent process started
     is_local: bool = False  # True if co-located with controller (enables rebuild)
+    data_plane_ip: str | None = None
+    docker_snapshotter_mode: str | None = None
 
 
 class RegistrationRequest(BaseModel):
@@ -99,6 +103,7 @@ class HeartbeatRequest(BaseModel):
     active_jobs: int = 0
     resource_usage: dict = Field(default_factory=dict)
     data_plane_ip: str | None = None
+    docker_snapshotter_mode: str | None = None
 
 
 class HeartbeatResponse(BaseModel):
@@ -123,6 +128,7 @@ class HostOut(BaseModel):
     error_since: datetime | None = None
     # Data plane address for VXLAN tunnels (separate from management address)
     data_plane_address: str | None = None
+    docker_snapshotter_mode: str | None = None
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
@@ -136,6 +142,44 @@ class DashboardMetrics(BaseModel):
     memory_percent: float
     labs_running: int
     labs_total: int
+
+
+def _invalidate_host_images_for_snapshotter_change(
+    database: Session,
+    host: models.Host,
+    previous_mode: str | None,
+    new_mode: str | None,
+) -> int:
+    """Mark host image presence missing when Docker image-store mode changes."""
+    if not new_mode or previous_mode == new_mode:
+        return 0
+
+    updated = (
+        database.query(models.ImageHost)
+        .filter(
+            models.ImageHost.host_id == host.id,
+            models.ImageHost.status != "syncing",
+            models.ImageHost.status != "missing",
+        )
+        .update(
+            {
+                models.ImageHost.status: "missing",
+                models.ImageHost.error_message: (
+                    f"Docker snapshotter mode changed: {previous_mode or 'unknown'} -> {new_mode}"
+                ),
+            },
+            synchronize_session=False,
+        )
+    )
+    if updated:
+        logger.warning(
+            "Host %s snapshotter mode changed: %s -> %s; invalidated %s image record(s)",
+            host.name,
+            previous_mode or "unknown",
+            new_mode,
+            updated,
+        )
+    return int(updated)
 
 
 # --- Endpoints ---
@@ -172,6 +216,7 @@ async def register_agent(
             existing = database.get(models.Host, agent.agent_id)
 
             if existing:
+                previous_snapshotter_mode = existing.docker_snapshotter_mode
                 if existing.started_at and agent.started_at:
                     if agent.started_at > existing.started_at:
                         is_restart = True
@@ -187,6 +232,13 @@ async def register_agent(
                 existing.deployment_mode = agent.deployment_mode or existing.deployment_mode
                 existing.last_heartbeat = datetime.now(timezone.utc)
                 existing.data_plane_address = getattr(agent, "data_plane_ip", None)
+                existing.docker_snapshotter_mode = getattr(agent, "docker_snapshotter_mode", None)
+                _invalidate_host_images_for_snapshotter_change(
+                    database,
+                    existing,
+                    previous_snapshotter_mode,
+                    existing.docker_snapshotter_mode,
+                )
                 database.commit()
                 host_id = agent.agent_id
 
@@ -209,6 +261,7 @@ async def register_agent(
                 existing_duplicate = existing_by_name or existing_by_address
 
                 if existing_duplicate:
+                    previous_snapshotter_mode = existing_duplicate.docker_snapshotter_mode
                     existing_duplicate.name = agent.name
                     existing_duplicate.address = agent.address
                     existing_duplicate.status = HostStatus.ONLINE
@@ -220,6 +273,13 @@ async def register_agent(
                     existing_duplicate.deployment_mode = agent.deployment_mode or existing_duplicate.deployment_mode
                     existing_duplicate.last_heartbeat = datetime.now(timezone.utc)
                     existing_duplicate.data_plane_address = getattr(agent, "data_plane_ip", None)
+                    existing_duplicate.docker_snapshotter_mode = getattr(agent, "docker_snapshotter_mode", None)
+                    _invalidate_host_images_for_snapshotter_change(
+                        database,
+                        existing_duplicate,
+                        previous_snapshotter_mode,
+                        existing_duplicate.docker_snapshotter_mode,
+                    )
                     database.commit()
                     host_id = existing_duplicate.id
 
@@ -242,6 +302,7 @@ async def register_agent(
                         deployment_mode=agent.deployment_mode or "unknown",
                         last_heartbeat=datetime.now(timezone.utc),
                         data_plane_address=getattr(agent, "data_plane_ip", None),
+                        docker_snapshotter_mode=getattr(agent, "docker_snapshotter_mode", None),
                     )
                     database.add(host)
                     database.commit()
@@ -505,6 +566,15 @@ def heartbeat(
     # Update data plane address if agent reports one
     if request.data_plane_ip is not None:
         host.data_plane_address = request.data_plane_ip or None
+    previous_snapshotter_mode = host.docker_snapshotter_mode
+    if request.docker_snapshotter_mode is not None:
+        host.docker_snapshotter_mode = request.docker_snapshotter_mode or None
+    _invalidate_host_images_for_snapshotter_change(
+        database,
+        host,
+        previous_snapshotter_mode,
+        host.docker_snapshotter_mode,
+    )
     database.commit()
 
     # TODO: Check for pending jobs to dispatch
@@ -540,6 +610,8 @@ def list_agents(
             last_heartbeat=host.last_heartbeat,
             last_error=host.last_error,
             error_since=host.error_since,
+            data_plane_address=host.data_plane_address,
+            docker_snapshotter_mode=host.docker_snapshotter_mode,
             created_at=host.created_at,
         ))
 
@@ -704,6 +776,8 @@ def get_agent(
         last_heartbeat=host.last_heartbeat,
         last_error=host.last_error,
         error_since=host.error_since,
+        data_plane_address=host.data_plane_address,
+        docker_snapshotter_mode=host.docker_snapshotter_mode,
         created_at=host.created_at,
     )
 

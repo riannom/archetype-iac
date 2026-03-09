@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -42,7 +43,10 @@ def _fake_image_row(external_id: str, kind: str = "docker", metadata_json: str =
                      reference: str | None = None, filename: str | None = None,
                      vendor_name: str | None = None, version: str | None = None,
                      source: str = "api", digest_sha256: str | None = None,
-                     size_bytes: int | None = None, imported_at=None):
+                     size_bytes: int | None = None, imported_at=None,
+                     archive_path: str | None = None, archive_status: str = "none",
+                     archive_sha256: str | None = None, archive_size_bytes: int | None = None,
+                     archive_created_at=None, archive_verified_at=None, archive_error: str | None = None):
     row = SimpleNamespace(
         id=f"db-{external_id}",
         external_id=external_id,
@@ -56,6 +60,13 @@ def _fake_image_row(external_id: str, kind: str = "docker", metadata_json: str =
         digest_sha256=digest_sha256,
         size_bytes=size_bytes,
         imported_at=imported_at,
+        archive_path=archive_path,
+        archive_status=archive_status,
+        archive_sha256=archive_sha256,
+        archive_size_bytes=archive_size_bytes,
+        archive_created_at=archive_created_at,
+        archive_verified_at=archive_verified_at,
+        archive_error=archive_error,
     )
     return row
 
@@ -230,6 +241,37 @@ class TestListAndGetCatalogImages:
         assert result["kind"] == "docker"
         assert result["reference"] == "ceos:4.28"
         assert result["filename"] == "ceos.tar"
+
+    def test_get_projects_archive_metadata_without_archive_path(self, test_db) -> None:
+        from app.services.catalog_query import get_catalog_library_image
+        from app import models
+        from uuid import uuid4
+        from datetime import datetime, UTC
+
+        test_db.add(models.CatalogImage(
+            id=str(uuid4()),
+            external_id="archived-image",
+            kind="docker",
+            source="api",
+            metadata_json='{"archive_path":"/var/lib/archetype/images/archives/archived-image.tar"}',
+            archive_path="/var/lib/archetype/images/archives/archived-image.tar",
+            archive_status="ready",
+            archive_sha256="deadbeef",
+            archive_size_bytes=4096,
+            archive_created_at=datetime(2026, 3, 9, 12, 0, tzinfo=UTC),
+            archive_verified_at=datetime(2026, 3, 9, 13, 0, tzinfo=UTC),
+            archive_error=None,
+        ))
+        test_db.flush()
+
+        result = get_catalog_library_image(test_db, "archived-image", force_refresh=True)
+        assert result is not None
+        assert result["archive_status"] == "ready"
+        assert result["archive_sha256"] == "deadbeef"
+        assert result["archive_size_bytes"] == 4096
+        assert result["archive_created_at"] == "2026-03-09T12:00:00Z"
+        assert result["archive_verified_at"] == "2026-03-09T13:00:00Z"
+        assert "archive_path" not in result
 
 
 # ---------------------------------------------------------------------------
@@ -633,6 +675,92 @@ class TestSyncCatalogFromManifest:
         assert len(rows) == 1
         assert rows[0].reference == "ceos:2.0"
         assert rows[0].filename == "new.tar"
+
+    def test_sync_persists_archive_metadata_to_columns_and_metadata_json(self, test_db) -> None:
+        from app.services.catalog_query import sync_catalog_from_manifest
+        from app import models
+
+        sync_catalog_from_manifest(
+            test_db,
+            {
+                "images": [
+                    {
+                        "id": "docker:ceos:archive",
+                        "kind": "docker",
+                        "source": "manifest",
+                        "archive_path": "/var/lib/archetype/images/archives/docker__ceos__archive.tar",
+                        "archive_status": "ready",
+                        "archive_sha256": "abc123",
+                        "archive_size_bytes": 2048,
+                        "archive_created_at": "2026-03-09T14:00:00Z",
+                        "archive_verified_at": "2026-03-09T15:00:00Z",
+                        "archive_error": None,
+                    }
+                ]
+            },
+            prune_missing=False,
+        )
+        test_db.flush()
+
+        row = test_db.query(models.CatalogImage).filter(
+            models.CatalogImage.external_id == "docker:ceos:archive"
+        ).one()
+        assert row.archive_path == "/var/lib/archetype/images/archives/docker__ceos__archive.tar"
+        assert row.archive_status == "ready"
+        assert row.archive_sha256 == "abc123"
+        assert row.archive_size_bytes == 2048
+        metadata = json.loads(row.metadata_json)
+        assert metadata["archive_path"] == row.archive_path
+        assert metadata["archive_status"] == "ready"
+        assert metadata["archive_sha256"] == "abc123"
+
+    def test_sync_without_archive_keys_preserves_existing_archive_metadata(self, test_db) -> None:
+        from app.services.catalog_query import sync_catalog_from_manifest
+        from app import models
+        from uuid import uuid4
+        from datetime import datetime, UTC
+
+        existing = models.CatalogImage(
+            id=str(uuid4()),
+            external_id="docker:ceos:preserve",
+            kind="docker",
+            source="api",
+            metadata_json="{}",
+            archive_path="/var/lib/archetype/images/archives/docker__ceos__preserve.tar",
+            archive_status="ready",
+            archive_sha256="preserved",
+            archive_size_bytes=8192,
+            archive_created_at=datetime(2026, 3, 9, 10, 0, tzinfo=UTC),
+            archive_verified_at=datetime(2026, 3, 9, 11, 0, tzinfo=UTC),
+            archive_error=None,
+        )
+        test_db.add(existing)
+        test_db.flush()
+
+        sync_catalog_from_manifest(
+            test_db,
+            {
+                "images": [
+                    {
+                        "id": "docker:ceos:preserve",
+                        "kind": "docker",
+                        "reference": "ceos:3.0",
+                        "source": "manifest",
+                    }
+                ]
+            },
+            prune_missing=False,
+        )
+        test_db.flush()
+
+        row = test_db.query(models.CatalogImage).filter(
+            models.CatalogImage.external_id == "docker:ceos:preserve"
+        ).one()
+        assert row.reference == "ceos:3.0"
+        assert row.archive_path == "/var/lib/archetype/images/archives/docker__ceos__preserve.tar"
+        assert row.archive_status == "ready"
+        assert row.archive_sha256 == "preserved"
+        assert row.archive_size_bytes == 8192
 
 
 # ---------------------------------------------------------------------------

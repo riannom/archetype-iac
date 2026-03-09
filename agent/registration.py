@@ -13,7 +13,7 @@ import httpx
 
 import agent.agent_state as _state
 from agent.config import settings
-from agent.helpers import get_agent_info, get_resource_usage
+from agent.helpers import get_agent_info, get_resource_usage, get_docker_snapshotter_mode
 from agent.http_client import get_controller_auth_headers, get_http_client
 from agent.network.backends.registry import get_network_backend
 from agent.schemas import (
@@ -236,6 +236,7 @@ async def send_heartbeat() -> HeartbeatResponse | None:
         active_jobs=_state.get_active_jobs(),
         resource_usage=await get_resource_usage(),
         data_plane_ip=get_data_plane_ip(),
+        docker_snapshotter_mode=get_docker_snapshotter_mode(),
     )
 
     try:

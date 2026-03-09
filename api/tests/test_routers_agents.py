@@ -35,7 +35,8 @@ class TestAgentRegistration:
                         "max_concurrent_jobs": 4,
                         "features": ["vxlan"]
                     },
-                    "version": "1.0.0"
+                    "version": "1.0.0",
+                    "docker_snapshotter_mode": "legacy",
                 }
             },
             headers=agent_auth_headers,
@@ -51,6 +52,7 @@ class TestAgentRegistration:
         assert host is not None
         assert host.name == "Test Agent"
         assert host.status == "online"
+        assert host.docker_snapshotter_mode == "legacy"
 
     def test_reregister_existing_agent(self, test_client: TestClient, test_db: Session, sample_host: models.Host, agent_auth_headers: dict):
         """Re-registering existing agent updates record."""
@@ -143,6 +145,46 @@ class TestAgentHeartbeat:
         )
 
         assert response.status_code == 404
+
+    def test_heartbeat_snapshotter_change_invalidates_image_hosts(
+        self, test_client: TestClient, test_db: Session, sample_host: models.Host, agent_auth_headers: dict
+    ):
+        """Heartbeat mode changes should invalidate image presence for that host."""
+        sample_host.docker_snapshotter_mode = "legacy"
+        synced = models.ImageHost(
+            image_id="docker:test:1.0",
+            host_id=sample_host.id,
+            reference="test:1.0",
+            status="synced",
+        )
+        syncing = models.ImageHost(
+            image_id="docker:test:2.0",
+            host_id=sample_host.id,
+            reference="test:2.0",
+            status="syncing",
+        )
+        test_db.add_all([synced, syncing])
+        test_db.commit()
+
+        response = test_client.post(
+            f"/agents/{sample_host.id}/heartbeat",
+            json={
+                "agent_id": sample_host.id,
+                "status": "online",
+                "docker_snapshotter_mode": "containerd",
+                "resource_usage": {},
+            },
+            headers=agent_auth_headers,
+        )
+
+        assert response.status_code == 200
+        test_db.refresh(sample_host)
+        assert sample_host.docker_snapshotter_mode == "containerd"
+        test_db.refresh(synced)
+        test_db.refresh(syncing)
+        assert synced.status == "missing"
+        assert "snapshotter mode changed" in (synced.error_message or "").lower()
+        assert syncing.status == "syncing"
 
 
 class TestListAgents:

@@ -15,6 +15,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from app.config import settings
 from app.routers.images._shared import (
     _chunk_upload_lock,
     _chunk_upload_sessions,
@@ -54,8 +55,9 @@ def _make_tar_file(path: Path, names: list[str]):
 
 
 @pytest.fixture(autouse=True)
-def _clear_chunk_state():
+def _clear_chunk_state(monkeypatch):
     """Clear chunk upload sessions before and after each test."""
+    monkeypatch.setattr(settings, "image_archive_docker_images", False)
     with _chunk_upload_lock:
         _chunk_upload_sessions.clear()
     yield
