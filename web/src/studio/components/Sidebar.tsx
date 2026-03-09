@@ -305,7 +305,7 @@ const Sidebar: React.FC<SidebarProps> = ({
     setSearchQuery('');
     setSelectedVendors(new Set());
     setSelectedTypes(new Set());
-    setImageStatus('all');
+    setImageStatus('has_image');
   };
 
   const getImageStatusIndicator = (status: { hasImage: boolean; hasDefault: boolean } | undefined) => {

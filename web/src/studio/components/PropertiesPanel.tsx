@@ -533,17 +533,45 @@ const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
                 <i className="fa-solid fa-terminal opacity-50"></i>
               </button>
             </div>
-            {model?.defaultCredentials && (
-              <div className="flex flex-col gap-1.5 p-3 rounded-lg border border-stone-600/40 dark:border-stone-600/50 bg-stone-500/10 dark:bg-stone-800/50 backdrop-blur-md">
-                <div className="flex items-center gap-2 text-[10px] font-bold text-sage-600 dark:text-sage-400 uppercase tracking-tight">
-                  <i className="fa-solid fa-key"></i>
-                  <span>Default Credentials</span>
+            {model?.defaultCredentials && (() => {
+              const parts = model.defaultCredentials.split(' / ');
+              const username = parts[0]?.trim() || '';
+              const password = parts.length > 1 ? parts.slice(1).join(' / ').trim() : '';
+              return (
+                <div className="flex flex-col gap-1.5 p-3 rounded-lg border border-stone-600/40 dark:border-stone-600/50 bg-stone-500/10 dark:bg-stone-800/50 backdrop-blur-md">
+                  <div className="flex items-center gap-2 text-[10px] font-bold text-sage-600 dark:text-sage-400 uppercase tracking-tight">
+                    <i className="fa-solid fa-key"></i>
+                    <span>Default Credentials</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-1 flex-1 min-w-0">
+                      <span className="text-[10px] text-stone-500 dark:text-stone-500 shrink-0">user</span>
+                      <code className="text-[11px] text-stone-700 dark:text-stone-300 font-mono truncate">{username}</code>
+                      <button
+                        onClick={() => navigator.clipboard.writeText(username)}
+                        className="shrink-0 p-0.5 text-stone-400 hover:text-sage-500 transition-colors"
+                        title="Copy username"
+                      >
+                        <i className="fa-regular fa-copy text-[10px]"></i>
+                      </button>
+                    </div>
+                    {password && (
+                      <div className="flex items-center gap-1 flex-1 min-w-0">
+                        <span className="text-[10px] text-stone-500 dark:text-stone-500 shrink-0">pass</span>
+                        <code className="text-[11px] text-stone-700 dark:text-stone-300 font-mono truncate">{password}</code>
+                        <button
+                          onClick={() => navigator.clipboard.writeText(password)}
+                          className="shrink-0 p-0.5 text-stone-400 hover:text-sage-500 transition-colors"
+                          title="Copy password"
+                        >
+                          <i className="fa-regular fa-copy text-[10px]"></i>
+                        </button>
+                      </div>
+                    )}
+                  </div>
                 </div>
-                <p className="text-[11px] text-stone-700 dark:text-stone-400 leading-relaxed font-mono">
-                  {model.defaultCredentials}
-                </p>
-              </div>
-            )}
+              );
+            })()}
           </div>
         )}
 
