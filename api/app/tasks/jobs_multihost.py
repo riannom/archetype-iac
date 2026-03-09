@@ -32,11 +32,64 @@ from app.tasks.jobs import (
     _release_db_transaction_for_io,
     _update_node_placements,
 )
+from app.utils.lab import get_node_provider
 from app.utils.job import broadcast_job_progress as _broadcast_job_progress
 from app.utils.lab import update_lab_state
 from app.utils.time import utcnow
 
 logger = logging.getLogger(__name__)
+
+
+async def _deploy_host_provider_groups(
+    agent: models.Host,
+    job_id: str,
+    lab_id: str,
+    provider_specs: list[tuple[str, list[str], dict]],
+) -> list[tuple[str, list[str], dict | Exception]]:
+    """Deploy provider groups sequentially on one host.
+
+    Agents serialize deploys with a per-lab lock, so same-host provider
+    groups must not be dispatched concurrently.
+    """
+    host_results: list[tuple[str, list[str], dict | Exception]] = []
+    for index, (provider_name, provider_node_names, provider_topology) in enumerate(provider_specs):
+        try:
+            result = await agent_client.deploy_to_agent(
+                agent,
+                job_id,
+                lab_id,
+                topology=provider_topology,
+                provider=provider_name,
+            )
+        except Exception as exc:
+            host_results.append((provider_name, provider_node_names, exc))
+            for skipped_provider_name, skipped_node_names, _skipped_topology in provider_specs[index + 1:]:
+                host_results.append(
+                    (
+                        skipped_provider_name,
+                        skipped_node_names,
+                        RuntimeError(
+                            f"skipped after earlier provider failure on host {agent.name}"
+                        ),
+                    )
+                )
+            break
+
+        host_results.append((provider_name, provider_node_names, result))
+        if result.get("status") != "completed":
+            for skipped_provider_name, skipped_node_names, _skipped_topology in provider_specs[index + 1:]:
+                host_results.append(
+                    (
+                        skipped_provider_name,
+                        skipped_node_names,
+                        RuntimeError(
+                            f"skipped after {provider_name} returned status {result.get('status', 'unknown')}"
+                        ),
+                    )
+                )
+            break
+
+    return host_results
 
 
 async def run_multihost_deploy(
@@ -213,10 +266,17 @@ async def run_multihost_deploy(
                         logger.warning(f"Job {job_id}: Resource warning: {w}")
                         log_parts.append(f"WARNING: {w}")
 
-            # Deploy to each host in parallel using JSON topology from database
+            # Deploy to each host in parallel, but run provider groups
+            # sequentially on the same host because each agent enforces a
+            # per-lab deploy lock.
             deploy_tasks = []
-            deploy_results: dict[str, dict] = {}
-            host_node_names: dict[str, list[str]] = {}  # For logging
+            deploy_task_meta: list[tuple[str, models.Host, list[tuple[str, list[str], dict]]]] = []
+            deploy_results: dict[tuple[str, str], dict] = {}
+            host_node_names: dict[str, list[str]] = {}  # For placement updates
+            nodes_by_host: dict[str, list[models.Node]] = {}
+            for node in nodes:
+                if node.host_id:
+                    nodes_by_host.setdefault(node.host_id, []).append(node)
 
             for host_id, node_placements in analysis.placements.items():
                 agent = host_to_agent[host_id]
@@ -225,21 +285,64 @@ async def run_multihost_deploy(
                 topology_json = topo_service.build_deploy_topology(lab_id, host_id)
                 node_names = [n["name"] for n in topology_json.get("nodes", [])]
                 host_node_names[host_id] = node_names
+                host_nodes = nodes_by_host.get(host_id, [])
+                provider_to_names: dict[str, list[str]] = {}
+                for node in host_nodes:
+                    runtime_name = None
+                    for attr_name in ("container_name", "display_name", "name", "gui_id"):
+                        attr_value = getattr(node, attr_name, None)
+                        if isinstance(attr_value, str) and attr_value:
+                            runtime_name = attr_value
+                            break
+                    if not runtime_name:
+                        continue
+                    provider_name = get_node_provider(node, session)
+                    provider_to_names.setdefault(provider_name, []).append(runtime_name)
+
+                if not provider_to_names and node_names:
+                    provider_to_names[provider] = list(node_names)
 
                 logger.info(
                     f"Deploying to host {agent.name} ({host_id}): "
-                    f"{len(node_names)} nodes"
+                    f"{len(node_names)} nodes across {len(provider_to_names)} provider group(s)"
                 )
                 log_parts.append(f"=== Host: {agent.name} ({host_id}) ===")
                 log_parts.append(f"Nodes: {', '.join(node_names)}")
 
-                # Use JSON topology format
+                provider_specs: list[tuple[str, list[str], dict]] = []
+                for provider_name, provider_node_names in sorted(
+                    provider_to_names.items(),
+                    key=lambda item: (item[0] != "libvirt", item[0]),
+                ):
+                    provider_node_set = set(provider_node_names)
+                    provider_topology = {
+                        "nodes": [
+                            node_def
+                            for node_def in topology_json.get("nodes", [])
+                            if node_def.get("name") in provider_node_set
+                        ],
+                        "links": [
+                            link_def
+                            for link_def in topology_json.get("links", [])
+                            if link_def.get("source_node") in provider_node_set
+                            and link_def.get("target_node") in provider_node_set
+                        ],
+                    }
+                    log_parts.append(
+                        f"  Provider {provider_name}: {', '.join(provider_node_names)}"
+                    )
+                    provider_specs.append(
+                        (provider_name, list(provider_node_names), provider_topology)
+                    )
                 deploy_tasks.append(
-                    agent_client.deploy_to_agent(
-                        agent, job_id, lab_id,
-                        topology=topology_json,  # New: structured JSON
+                    _deploy_host_provider_groups(
+                        agent,
+                        job_id,
+                        lab_id,
+                        provider_specs,
                     )
                 )
+                deploy_task_meta.append((host_id, agent, provider_specs))
 
             # Wait for all deployments
             _release_db_transaction_for_io(
@@ -249,21 +352,25 @@ async def run_multihost_deploy(
             results = await asyncio.gather(*deploy_tasks, return_exceptions=True)
 
             deploy_success = True
-            for host_id, result in zip(analysis.placements.keys(), results):
-                agent = host_to_agent[host_id]
-                if isinstance(result, Exception):
-                    log_parts.append(f"\nDeploy to {agent.name} FAILED: {result}")
+            for (host_id, agent, provider_specs), host_results in zip(deploy_task_meta, results):
+                if isinstance(host_results, Exception):
+                    log_parts.append(f"\nDeploy to {agent.name} FAILED: {host_results}")
                     deploy_success = False
-                else:
-                    deploy_results[host_id] = result
-                    status = result.get("status", "unknown")
-                    log_parts.append(f"\nDeploy to {agent.name}: {status}")
-                    if result.get("stdout"):
-                        log_parts.append(f"STDOUT:\n{result['stdout']}")
-                    if result.get("stderr"):
-                        log_parts.append(f"STDERR:\n{result['stderr']}")
-                    if status != "completed":
+                    continue
+                for provider_name, provider_node_names, result in host_results:
+                    if isinstance(result, Exception):
+                        log_parts.append(f"\nDeploy to {agent.name}/{provider_name} FAILED: {result}")
                         deploy_success = False
+                    else:
+                        deploy_results[(host_id, provider_name)] = result
+                        status = result.get("status", "unknown")
+                        log_parts.append(f"\nDeploy to {agent.name}/{provider_name}: {status}")
+                        if result.get("stdout"):
+                            log_parts.append(f"STDOUT:\n{result['stdout']}")
+                        if result.get("stderr"):
+                            log_parts.append(f"STDERR:\n{result['stderr']}")
+                        if status != "completed":
+                            deploy_success = False
 
             if not deploy_success:
                 # Rollback: destroy containers on hosts that succeeded to prevent orphans
@@ -271,31 +378,38 @@ async def run_multihost_deploy(
                 log_parts.append("\n=== Rollback: Cleaning up partially deployed hosts ===")
 
                 rollback_tasks = []
-                rollback_hosts = []
-                for host_id, result in zip(analysis.placements.keys(), results):
-                    # Only rollback hosts where deploy succeeded
-                    if not isinstance(result, Exception) and result.get("status") == "completed":
-                        agent = host_to_agent.get(host_id)
-                        if agent:
+                rollback_targets = []
+                for (host_id, agent, provider_specs), host_results in zip(deploy_task_meta, results):
+                    if isinstance(host_results, Exception):
+                        continue
+                    for provider_name, _provider_node_names, result in host_results:
+                        if isinstance(result, Exception):
+                            continue
+                        if result.get("status") == "completed":
                             rollback_tasks.append(
-                                agent_client.destroy_on_agent(agent, job_id, lab_id)
+                                agent_client.destroy_on_agent(
+                                    agent,
+                                    job_id,
+                                    lab_id,
+                                    provider=provider_name,
+                                )
                             )
-                            rollback_hosts.append(agent.name)
+                            rollback_targets.append(f"{agent.name}/{provider_name}")
 
                 if rollback_tasks:
-                    log_parts.append(f"Rolling back hosts: {', '.join(rollback_hosts)}")
+                    log_parts.append(f"Rolling back providers: {', '.join(rollback_targets)}")
                     _release_db_transaction_for_io(
                         session,
                         context=f"multihost rollback gather for job {job_id}",
                     )
                     rollback_results = await asyncio.gather(*rollback_tasks, return_exceptions=True)
 
-                    for agent_name, rb_result in zip(rollback_hosts, rollback_results):
+                    for target_name, rb_result in zip(rollback_targets, rollback_results):
                         if isinstance(rb_result, Exception):
-                            log_parts.append(f"  {agent_name}: rollback FAILED - {rb_result}")
+                            log_parts.append(f"  {target_name}: rollback FAILED - {rb_result}")
                         else:
                             status = rb_result.get("status", "unknown")
-                            log_parts.append(f"  {agent_name}: rollback {status}")
+                            log_parts.append(f"  {target_name}: rollback {status}")
                 else:
                     log_parts.append("No hosts to rollback (all failed)")
 
@@ -506,15 +620,49 @@ async def run_multihost_destroy(
                 session, lab_id, host_to_agent, log_parts
             )
 
-            # Destroy containers on each host in parallel
-            log_parts.append("\n=== Destroying containers ===")
+            # Destroy node runtimes on each host, grouped by provider so mixed
+            # Docker/libvirt labs are fully torn down.
+            log_parts.append("\n=== Destroying node runtimes ===")
             destroy_tasks = []
+            destroy_meta: list[tuple[str, models.Host, str]] = []
+            nodes = (
+                session.query(models.Node)
+                .filter(models.Node.lab_id == lab_id)
+                .all()
+            )
+            nodes_by_host: dict[str, list[models.Node]] = {}
+            for node in nodes:
+                if not node.host_id or node.node_type == "external":
+                    continue
+                nodes_by_host.setdefault(node.host_id, []).append(node)
 
             for host_id, agent in host_to_agent.items():
-                logger.info(f"Destroying on host {agent.name} (agent {agent.id})")
-                destroy_tasks.append(
-                    agent_client.destroy_on_agent(agent, job_id, lab_id)
+                host_nodes = nodes_by_host.get(host_id, [])
+                provider_names = sorted({
+                    get_node_provider(node, session)
+                    for node in host_nodes
+                    if node.container_name
+                })
+                if not provider_names:
+                    log_parts.append(f"{agent.name}: completed")
+                    log_parts.append("  STDOUT: No node runtimes assigned")
+                    continue
+                logger.info(
+                    "Destroying lab %s on host %s across providers: %s",
+                    lab_id,
+                    agent.name,
+                    ", ".join(provider_names),
                 )
+                for provider_name in provider_names:
+                    destroy_tasks.append(
+                        agent_client.destroy_on_agent(
+                            agent,
+                            job_id,
+                            lab_id,
+                            provider=provider_name,
+                        )
+                    )
+                    destroy_meta.append((host_id, agent, provider_name))
 
             # Wait for all destroys
             _release_db_transaction_for_io(
@@ -537,13 +685,13 @@ async def run_multihost_destroy(
                     f"WARNING: Offline/unreachable agents: {', '.join(unavailable_hosts)}"
                 )
 
-            for (host_id, agent), result in zip(host_to_agent.items(), results):
+            for (host_id, agent, provider_name), result in zip(destroy_meta, results):
                 if isinstance(result, Exception):
-                    log_parts.append(f"{agent.name}: FAILED - {result}")
+                    log_parts.append(f"{agent.name}/{provider_name}: FAILED - {result}")
                     all_success = False
                 else:
                     status = result.get("status", "unknown")
-                    log_parts.append(f"{agent.name}: {status}")
+                    log_parts.append(f"{agent.name}/{provider_name}: {status}")
                     if result.get("stdout"):
                         log_parts.append(f"  STDOUT: {result['stdout'][:200]}")
                     if result.get("stderr"):

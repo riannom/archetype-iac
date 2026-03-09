@@ -1897,7 +1897,10 @@ class LibvirtProvider(Provider, VlanPersistenceMixin):
             # Build node_config from vendor registry, with API-resolved overrides
             libvirt_config = get_libvirt_config(kind)
             node_config: dict[str, Any] = {
+                "lab_id": lab_id,
+                "node_name": node_name,
                 "node_definition_id": node_definition_id,
+                "provider": self.name,
                 "image": image,
                 "memory": memory or libvirt_config.memory_mb,
                 "cpu": cpu or libvirt_config.cpu_count,
