@@ -33,6 +33,10 @@ class TestDiskCacheSettings:
         node_config = {
             "memory": 2048,
             "cpu": 1,
+            "lab_id": "test-lab-id",
+            "node_name": "test-node",
+            "node_definition_id": "test-node-def",
+            "provider": "libvirt",
             "machine_type": "pc-i440fx-6.2",
             "disk_driver": "virtio",
             "nic_driver": "virtio",
@@ -89,6 +93,10 @@ class TestDeviceDefaults:
         node_config = {
             "memory": 2048,
             "cpu": 1,
+            "lab_id": "test-lab-id",
+            "node_name": "test-node",
+            "node_definition_id": "test-node-def",
+            "provider": "libvirt",
             "machine_type": "pc-i440fx-6.2",
             "disk_driver": "virtio",
             "nic_driver": "virtio",

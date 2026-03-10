@@ -198,6 +198,7 @@ def test_node_from_container_requires_name_label_and_handles_image_fallback():
         labels={LABEL_NODE_NAME: "r1"},
         status="running",
         short_id="abc123",
+        id="container-id-abc123",
         image=SimpleNamespace(tags=["vendor/image:1"], id="sha256:1234567890abcdef"),
         attrs={"NetworkSettings": {"Networks": {"n1": {"IPAddress": "192.0.2.10"}}}},
     )
@@ -211,6 +212,7 @@ def test_node_from_container_requires_name_label_and_handles_image_fallback():
         labels={LABEL_NODE_NAME: "r2"},
         status="running",
         short_id="def456",
+        id="container-id-def456",
         image=SimpleNamespace(tags=[], id="sha256:1234567890abcdef"),
         attrs={"NetworkSettings": {"Networks": {}}},
     )

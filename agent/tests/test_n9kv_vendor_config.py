@@ -96,6 +96,10 @@ def _generate_xml(provider, *, nic_driver="virtio", efi_boot=False, interface_co
     node_config = {
         "memory": 8192,
         "cpu": 2,
+        "lab_id": "test-lab-id",
+        "node_name": "test-node",
+        "node_definition_id": "test-node-def",
+        "provider": "libvirt",
         "machine_type": "pc-i440fx-6.2",
         "disk_driver": "virtio",
         "nic_driver": nic_driver,

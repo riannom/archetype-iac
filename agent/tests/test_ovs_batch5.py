@@ -32,6 +32,15 @@ def _reset_singleton():
     OVSNetworkManager._instance = None
 
 
+@pytest.fixture(autouse=True)
+def _mock_provision_pid(monkeypatch):
+    """Mock get_container_pid in ovs_provision to avoid Docker dependency."""
+    monkeypatch.setattr(
+        "agent.network.ovs_provision.get_container_pid",
+        AsyncMock(return_value=42),
+    )
+
+
 def _make_allocator(tmp_path, start=100, end=4000):
     return VlanAllocator(start=start, end=end, persistence_path=tmp_path / "v.json")
 
@@ -264,14 +273,19 @@ class TestHandleContainerRestart:
         mgr = _make_manager(tmp_path)
         _add_port(mgr, "r1", "eth1", "lab1", vlan=100, port_name="vh-r1-e1")
 
-        mgr.is_port_stale = AsyncMock(return_value=True)
-        mgr._cleanup_stale_port = AsyncMock()
-        mgr.provision_interface = AsyncMock(return_value=200)
+        mock_is_stale = AsyncMock(return_value=True)
+        mock_cleanup = AsyncMock()
+        mock_provision = AsyncMock(return_value=200)
 
-        result = await mgr.handle_container_restart("r1", "lab1")
+        with (
+            patch("agent.network.ovs_provision.is_port_stale", mock_is_stale),
+            patch("agent.network.ovs_provision.cleanup_stale_port", mock_cleanup),
+            patch("agent.network.ovs_provision.provision_interface", mock_provision),
+        ):
+            result = await mgr.handle_container_restart("r1", "lab1")
         assert result["ports_reprovisioned"] >= 1
-        mgr._cleanup_stale_port.assert_called_once()
-        mgr.provision_interface.assert_called_once()
+        mock_cleanup.assert_called_once()
+        mock_provision.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_no_stale_ports(self, tmp_path):

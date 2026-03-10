@@ -210,7 +210,9 @@ async def test_console_websocket_docker_read_loop_and_write_error_paths(monkeypa
 
     monkeypatch.setattr(console_mod, "_get_container_boot_logs", AsyncMock(return_value=None))
     monkeypatch.setattr(console_mod, "DockerConsole", lambda *_args, **_kwargs: fake_console)
-    monkeypatch.setattr(console_mod.asyncio, "get_event_loop", lambda: fake_loop)
+
+    # Production code now uses asyncio.get_running_loop() (not get_event_loop)
+    monkeypatch.setattr(console_mod.asyncio, "get_running_loop", lambda: fake_loop)
 
     await console_mod._console_websocket_docker(ws, "c1", "r1", "/bin/sh")
 
@@ -273,7 +275,8 @@ async def test_console_websocket_libvirt_virsh_streaming_and_cleanup(monkeypatch
     monkeypatch.setattr(console_mod.asyncio, "to_thread", lambda fn, *a, **k: _awaitable(fn(*a, **k)))
     monkeypatch.setattr(console_mod.asyncio, "sleep", AsyncMock(return_value=None))
     monkeypatch.setattr(console_mod.asyncio, "create_subprocess_exec", AsyncMock(return_value=process))
-    monkeypatch.setattr(console_mod.asyncio, "get_event_loop", lambda: fake_loop)
+    # Production code now uses asyncio.get_running_loop() (not get_event_loop)
+    monkeypatch.setattr(console_mod.asyncio, "get_running_loop", lambda: fake_loop)
     monkeypatch.setattr(console_mod, "_reset_tcp_chardev", AsyncMock(return_value=None))
     monkeypatch.setattr("pty.openpty", lambda: os.pipe())
     monkeypatch.setattr("fcntl.ioctl", lambda *_args, **_kwargs: None)

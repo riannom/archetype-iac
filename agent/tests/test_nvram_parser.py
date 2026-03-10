@@ -11,19 +11,19 @@ class TestParseIolNvram:
 
     def test_returns_none_for_empty_data(self):
         """Should return None for empty bytes."""
-        from agent.providers.docker import _parse_iol_nvram
+        from agent.providers.docker_config_extract import _parse_iol_nvram
 
         assert _parse_iol_nvram(b"") is None
 
     def test_returns_none_for_too_small(self):
         """Should return None for data smaller than minimum header."""
-        from agent.providers.docker import _parse_iol_nvram
+        from agent.providers.docker_config_extract import _parse_iol_nvram
 
         assert _parse_iol_nvram(b"\x00" * 32) is None
 
     def test_returns_none_for_no_config_markers(self):
         """Should return None when no IOS config markers found."""
-        from agent.providers.docker import _parse_iol_nvram
+        from agent.providers.docker_config_extract import _parse_iol_nvram
 
         # 100 bytes of binary noise with no config patterns
         data = bytes(range(100))
@@ -31,7 +31,7 @@ class TestParseIolNvram:
 
     def test_extracts_simple_config(self):
         """Should extract config text after binary header."""
-        from agent.providers.docker import _parse_iol_nvram
+        from agent.providers.docker_config_extract import _parse_iol_nvram
 
         # Simulate NVRAM: binary header + config text + null padding
         header = b"\x00" * 76
@@ -48,7 +48,7 @@ class TestParseIolNvram:
 
     def test_extracts_config_with_version_marker(self):
         """Should find config starting with 'version' line."""
-        from agent.providers.docker import _parse_iol_nvram
+        from agent.providers.docker_config_extract import _parse_iol_nvram
 
         header = b"\xff" * 80
         config = b"\nversion 15.6\nhostname TestRouter\n!\nend"
@@ -62,7 +62,7 @@ class TestParseIolNvram:
 
     def test_extracts_config_with_service_marker(self):
         """Should find config starting with 'service' or 'no service' line."""
-        from agent.providers.docker import _parse_iol_nvram
+        from agent.providers.docker_config_extract import _parse_iol_nvram
 
         header = b"\xab" * 100
         config = b"\nno service pad\nservice timestamps\nhostname R1\n!\nend"
@@ -75,7 +75,7 @@ class TestParseIolNvram:
 
     def test_trims_at_null_byte(self):
         """Should stop extraction at null byte (binary data after config)."""
-        from agent.providers.docker import _parse_iol_nvram
+        from agent.providers.docker_config_extract import _parse_iol_nvram
 
         header = b"\x00" * 80
         config = b"\nhostname R1\n!\nend"
@@ -90,7 +90,7 @@ class TestParseIolNvram:
 
     def test_trims_to_last_end_statement(self):
         """Should trim config to the last 'end' statement."""
-        from agent.providers.docker import _parse_iol_nvram
+        from agent.providers.docker_config_extract import _parse_iol_nvram
 
         header = b"\x00" * 80
         config = b"\nhostname R1\n!\nend\nsome trailing garbage before null"
@@ -104,7 +104,7 @@ class TestParseIolNvram:
 
     def test_handles_large_config(self):
         """Should handle large configs without issues."""
-        from agent.providers.docker import _parse_iol_nvram
+        from agent.providers.docker_config_extract import _parse_iol_nvram
 
         header = b"\x00" * 80
         # Generate a large config
@@ -126,7 +126,7 @@ class TestParseIolNvram:
 
     def test_returns_none_for_tiny_config(self):
         """Should return None when extracted text is too small (<10 chars)."""
-        from agent.providers.docker import _parse_iol_nvram
+        from agent.providers.docker_config_extract import _parse_iol_nvram
 
         header = b"\x00" * 80
         config = b"\n!\n!\n"  # Just delimiters, no real config
@@ -138,7 +138,7 @@ class TestParseIolNvram:
 
     def test_handles_binary_in_config_gracefully(self):
         """Should ignore non-ASCII bytes in config section."""
-        from agent.providers.docker import _parse_iol_nvram
+        from agent.providers.docker_config_extract import _parse_iol_nvram
 
         header = b"\x00" * 80
         config = b"\nhostname R1\n\x80\x81!\nend"

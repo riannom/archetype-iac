@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -23,18 +23,28 @@ def _port() -> OVSPort:
 async def test_is_port_stale_uses_host_peer_fallback_when_pid_missing():
     manager = OVSNetworkManager.__new__(OVSNetworkManager)
     manager._ip_link_exists = AsyncMock(return_value=True)
-    manager._get_container_pid = AsyncMock(return_value=None)
-    manager._host_veth_peer_missing = AsyncMock(return_value=True)
+    manager._docker = MagicMock()
 
-    assert await manager.is_port_stale(_port()) is True
-    manager._host_veth_peer_missing.assert_awaited_once_with("vh-abcd")
+    mock_host_veth_peer_missing = AsyncMock(return_value=True)
+
+    with (
+        patch("agent.network.ovs_provision.get_container_pid", AsyncMock(return_value=None)),
+        patch("agent.network.ovs_provision.host_veth_peer_missing", mock_host_veth_peer_missing),
+    ):
+        assert await manager.is_port_stale(_port()) is True
+    mock_host_veth_peer_missing.assert_awaited_once_with("vh-abcd")
 
 
 @pytest.mark.asyncio
 async def test_is_port_stale_pid_missing_not_stale_when_peer_present():
     manager = OVSNetworkManager.__new__(OVSNetworkManager)
     manager._ip_link_exists = AsyncMock(return_value=True)
-    manager._get_container_pid = AsyncMock(return_value=None)
-    manager._host_veth_peer_missing = AsyncMock(return_value=False)
+    manager._docker = MagicMock()
 
-    assert await manager.is_port_stale(_port()) is False
+    mock_host_veth_peer_missing = AsyncMock(return_value=False)
+
+    with (
+        patch("agent.network.ovs_provision.get_container_pid", AsyncMock(return_value=None)),
+        patch("agent.network.ovs_provision.host_veth_peer_missing", mock_host_veth_peer_missing),
+    ):
+        assert await manager.is_port_stale(_port()) is False
