@@ -213,8 +213,11 @@ class TestCreateLinkIfReady:
     ):
         from app.tasks.live_links import create_link_if_ready
 
-        _make_node_state(test_db, sample_lab.id, "R1", NodeActualState.RUNNING)
-        _make_node_state(test_db, sample_lab.id, "R2", NodeActualState.RUNNING)
+        ns1 = _make_node_state(test_db, sample_lab.id, "R1", NodeActualState.RUNNING)
+        ns2 = _make_node_state(test_db, sample_lab.id, "R2", NodeActualState.RUNNING)
+        ns1.is_ready = True
+        ns2.is_ready = True
+        test_db.commit()
 
         log_parts = []
         with (

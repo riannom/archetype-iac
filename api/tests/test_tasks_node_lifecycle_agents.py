@@ -429,6 +429,10 @@ class TestResolveAutoPlacements:
             new_callable=AsyncMock,
             side_effect=AgentUnavailableError("offline"),
         ), patch(
+            "app.agent_client.get_agent_for_node",
+            new_callable=AsyncMock,
+            return_value=fallback,
+        ), patch(
             "app.tasks.node_lifecycle_agents.settings",
         ) as mock_settings:
             mock_settings.agent_stale_timeout = 90
