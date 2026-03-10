@@ -113,7 +113,7 @@ function defaultProps(overrides: Partial<Record<string, unknown>> = {}) {
 
 // ─── Tests ──────────────────────────────────────────────────────────
 
-describe('DeviceConfigManager — round 12', () => {
+describe('DeviceConfigManager - interactions', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vendorSet = new Set();

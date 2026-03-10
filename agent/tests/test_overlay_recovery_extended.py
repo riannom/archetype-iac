@@ -178,7 +178,7 @@ class TestRecoverLinkTunnelsFromCache:
             return (0, "", "")
 
         # Patch the module-level import in overlay_state
-        monkeypatch.setattr(overlay_state_mod, "_shared_ovs_vsctl", fake_ovs_vsctl)
+        monkeypatch.setattr("agent.network.cmd.ovs_vsctl", fake_ovs_vsctl)
 
         from agent.network import overlay_vxlan
         monkeypatch.setattr(
@@ -412,8 +412,7 @@ class TestBatchReadOvsPorts:
     async def test_empty_bridge(self, monkeypatch):
         import agent.network.overlay_state as mod
 
-        monkeypatch.setattr(
-            mod, "_shared_ovs_vsctl",
+        monkeypatch.setattr("agent.network.cmd.ovs_vsctl",
             AsyncMock(return_value=(0, "", "")),
         )
 
@@ -424,8 +423,7 @@ class TestBatchReadOvsPorts:
     async def test_ovs_failure_returns_none(self, monkeypatch):
         import agent.network.overlay_state as mod
 
-        monkeypatch.setattr(
-            mod, "_shared_ovs_vsctl",
+        monkeypatch.setattr("agent.network.cmd.ovs_vsctl",
             AsyncMock(return_value=(1, "", "not found")),
         )
 
@@ -446,7 +444,7 @@ class TestBatchReadOvsPorts:
             # For batch reads, return empty JSON
             return (0, '{"data": []}', "")
 
-        monkeypatch.setattr(mod, "_shared_ovs_vsctl", fake_ovs_vsctl)
+        monkeypatch.setattr("agent.network.cmd.ovs_vsctl", fake_ovs_vsctl)
 
         result = await mod.batch_read_ovs_ports("arch-ovs")
         # Only vxlan ports should be included (but data was empty)

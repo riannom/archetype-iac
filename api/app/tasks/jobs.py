@@ -16,8 +16,6 @@ import asyncio
 import json
 import logging
 from datetime import datetime, timezone
-from time import perf_counter
-
 import redis
 
 from app import agent_client, models, webhooks
@@ -35,11 +33,13 @@ from app.events.publisher import (
     emit_node_placement_changed,
 )
 from app.metrics import (
-    record_db_transaction_issue,
-    record_db_transaction_release_duration,
     record_job_completed,
     record_job_failed,
     record_job_started,
+)
+from app.utils.db import (
+    release_db_transaction_for_io as _release_db_tx_for_io_impl,
+    reset_session_after_db_error as _reset_session_after_db_error_impl,
 )
 from app.state import (
     JobStatus,
@@ -121,94 +121,9 @@ def _record_failed(
     )
 
 
-def _reset_session_after_db_error(
-    session,
-    *,
-    context: str,
-    table: str = "unknown",
-    lab_id: str | None = None,
-    job_id: str | None = None,
-) -> None:
-    """Best-effort rollback to recover a failed SQLAlchemy session."""
-    try:
-        session.rollback()
-    except Exception as rollback_error:
-        record_db_transaction_issue(
-            issue="rollback_failed",
-            phase=context,
-            table=table,
-        )
-        logger.warning(
-            "Failed to rollback DB session after %s: %s",
-            context,
-            rollback_error,
-            extra={
-                "event": "db_transaction_issue",
-                "issue": "rollback_failed",
-                "phase": context,
-                "table": table,
-                "lab_id": lab_id,
-                "job_id": job_id,
-            },
-        )
-
-
-def _release_db_transaction_for_io(
-    session,
-    *,
-    context: str,
-    table: str = "unknown",
-    lab_id: str | None = None,
-    job_id: str | None = None,
-) -> None:
-    """Close open transaction boundaries before long external awaits."""
-    has_pending_writes = bool(session.new or session.dirty or session.deleted)
-    started = perf_counter()
-    try:
-        if has_pending_writes:
-            session.commit()
-        else:
-            session.rollback()
-        record_db_transaction_release_duration(
-            duration_seconds=perf_counter() - started,
-            phase=context,
-            table=table,
-            result="success",
-        )
-    except Exception as exc:
-        issue = "statement_timeout" if "statement timeout" in str(exc).lower() else "release_failed"
-        record_db_transaction_release_duration(
-            duration_seconds=perf_counter() - started,
-            phase=context,
-            table=table,
-            result=issue,
-        )
-        record_db_transaction_issue(
-            issue=issue,
-            phase=context,
-            table=table,
-        )
-        logger.warning(
-            "Failed to release DB transaction before %s: %s",
-            context,
-            exc,
-            extra={
-                "event": "db_transaction_issue",
-                "issue": issue,
-                "phase": context,
-                "table": table,
-                "lab_id": lab_id,
-                "job_id": job_id,
-            },
-        )
-        _reset_session_after_db_error(
-            session,
-            context=context,
-            table=table,
-            lab_id=lab_id,
-            job_id=job_id,
-        )
-        raise
+# Delegate to shared utility; keep underscored aliases for backward compatibility.
+_reset_session_after_db_error = _reset_session_after_db_error_impl
+_release_db_transaction_for_io = _release_db_tx_for_io_impl
 
 
 async def _run_job_preflight_checks(

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { apiRequest, rawApiRequest } from '../../../api';
 import { ImageLibraryEntry } from '../../types';
 import type { ISOImportLogEvent } from '../../../components/ISOImportModal';
+import { useModalState } from '../../../hooks/useModalState';
 import {
   ImageChunkUploadCompleteResponse,
   ImageChunkUploadChunkResponse,
@@ -37,7 +38,7 @@ export function useImageUpload({
   const [pendingQcow2Uploads, setPendingQcow2Uploads] = useState<PendingQcow2Upload[]>([]);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const qcow2InputRef = useRef<HTMLInputElement | null>(null);
-  const [showISOModal, setShowISOModal] = useState(false);
+  const isoModal = useModalState();
   // Two-phase qcow2 upload confirmation state
   const [qcow2Confirm, setQcow2Confirm] = useState<Qcow2ConfirmState | null>(null);
 
@@ -470,8 +471,8 @@ export function useImageUpload({
     pendingQcow2Uploads,
     fileInputRef,
     qcow2InputRef,
-    showISOModal,
-    setShowISOModal,
+    showISOModal: isoModal.isOpen,
+    setShowISOModal: (show: boolean) => show ? isoModal.open() : isoModal.close(),
     qcow2Confirm,
     setQcow2Confirm,
     handleIsoLogEvent,

@@ -11,11 +11,7 @@ import asyncio
 import logging
 
 from agent.config import settings
-from agent.network.cmd import (
-    run_cmd as _shared_run_cmd,
-    ovs_vsctl as _shared_ovs_vsctl,
-    ip_link_exists as _shared_ip_link_exists,
-)
+from agent.network import cmd as _cmd
 
 logger = logging.getLogger(__name__)
 
@@ -51,15 +47,15 @@ async def create_vxlan_device(
     Raises:
         RuntimeError: If device creation fails
     """
-    code, _, stderr = await _shared_run_cmd([
+    code, _, stderr = await _cmd.run_cmd([
         "ip", "link", "add", name, "type", "vxlan",
         "id", str(vni), "local", local_ip, "remote", remote_ip,
         "dstport", str(VXLAN_PORT), "df", "unset",
     ])
     if code != 0 and "already exists" in (stderr or ""):
         logger.warning(f"VXLAN device {name} already exists, deleting stale device and retrying")
-        await _shared_run_cmd(["ip", "link", "delete", name])
-        code, _, stderr = await _shared_run_cmd([
+        await _cmd.run_cmd(["ip", "link", "delete", name])
+        code, _, stderr = await _cmd.run_cmd([
             "ip", "link", "add", name, "type", "vxlan",
             "id", str(vni), "local", local_ip, "remote", remote_ip,
             "dstport", str(VXLAN_PORT), "df", "unset",
@@ -68,22 +64,22 @@ async def create_vxlan_device(
         raise RuntimeError(f"Failed to create VXLAN device {name}: {stderr}")
 
     vxlan_mtu = tenant_mtu if tenant_mtu > 0 else (settings.overlay_mtu if settings.overlay_mtu > 0 else 1500)
-    await _shared_run_cmd(["ip", "link", "set", name, "mtu", str(vxlan_mtu)])
+    await _cmd.run_cmd(["ip", "link", "set", name, "mtu", str(vxlan_mtu)])
 
     # Bring device up
-    await _shared_run_cmd(["ip", "link", "set", name, "up"])
+    await _cmd.run_cmd(["ip", "link", "set", name, "up"])
 
     # Add to OVS bridge as a system port
     if vlan_tag is not None:
-        code, _, stderr = await _shared_ovs_vsctl(
+        code, _, stderr = await _cmd.ovs_vsctl(
             "add-port", bridge, name, f"tag={vlan_tag}",
         )
     else:
-        code, _, stderr = await _shared_ovs_vsctl(
+        code, _, stderr = await _cmd.ovs_vsctl(
             "add-port", bridge, name,
         )
     if code != 0:
-        await _shared_run_cmd(["ip", "link", "delete", name])
+        await _cmd.run_cmd(["ip", "link", "delete", name])
         raise RuntimeError(f"Failed to add VXLAN device {name} to OVS: {stderr}")
 
     logger.info(
@@ -99,8 +95,8 @@ async def delete_vxlan_device(name: str, bridge: str) -> None:
         name: Interface name of the VXLAN device
         bridge: OVS bridge name to remove the port from
     """
-    ovs_code, _, ovs_err = await _shared_ovs_vsctl("--if-exists", "del-port", bridge, name)
-    link_code, _, link_err = await _shared_run_cmd(["ip", "link", "delete", name])
+    ovs_code, _, ovs_err = await _cmd.ovs_vsctl("--if-exists", "del-port", bridge, name)
+    link_code, _, link_err = await _cmd.run_cmd(["ip", "link", "delete", name])
 
     if ovs_code == 0 and link_code == 0:
         logger.info(f"VXLAN device deleted: name={name} bridge={bridge}")
@@ -200,7 +196,7 @@ async def read_vxlan_link_info(interface_name: str) -> tuple[int, str, str]:
 
     Returns (vni, remote_ip, local_ip). Zero/empty values on failure.
     """
-    code, link_out, _ = await _shared_run_cmd([
+    code, link_out, _ = await _cmd.run_cmd([
         "ip", "-d", "link", "show", interface_name
     ])
     if code != 0:
@@ -226,4 +222,4 @@ async def read_vxlan_link_info(interface_name: str) -> tuple[int, str, str]:
 
 async def ip_link_exists(name: str) -> bool:
     """Check if a network interface exists."""
-    return await _shared_ip_link_exists(name)
+    return await _cmd.ip_link_exists(name)

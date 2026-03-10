@@ -29,9 +29,9 @@ from app.tasks.jobs import (
     _job_duration_seconds,
     _record_failed,
     _record_started,
-    _release_db_transaction_for_io,
     _update_node_placements,
 )
+from app.utils.db import release_db_transaction_for_io as _release_db_transaction_for_io
 from app.utils.lab import get_node_provider
 from app.utils.job import broadcast_job_progress as _broadcast_job_progress
 from app.utils.lab import update_lab_state

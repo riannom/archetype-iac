@@ -237,7 +237,7 @@ async function openLab() {
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
-describe('StudioPage Round 11', () => {
+describe('StudioPage - integration', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     localStorage.clear();

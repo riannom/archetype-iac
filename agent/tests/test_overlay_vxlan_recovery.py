@@ -348,7 +348,7 @@ class TestRecoverLinkTunnels:
             return 0, "", ""
 
         monkeypatch.setattr(
-            "agent.network.overlay_state._shared_ovs_vsctl", _ovs_vsctl
+            "agent.network.cmd.ovs_vsctl", _ovs_vsctl
         )
         monkeypatch.setattr(
             "agent.network.overlay_vxlan.read_vxlan_link_info",
@@ -376,7 +376,7 @@ class TestRecoverLinkTunnels:
             return 0, "", ""
 
         monkeypatch.setattr(
-            "agent.network.overlay_state._shared_ovs_vsctl", _ovs_vsctl
+            "agent.network.cmd.ovs_vsctl", _ovs_vsctl
         )
         monkeypatch.setattr(
             "agent.network.overlay_vxlan.read_vxlan_link_info",
@@ -411,7 +411,7 @@ class TestRecoverLinkTunnels:
             return 0, "", ""
 
         monkeypatch.setattr(
-            "agent.network.overlay_state._shared_ovs_vsctl", _ovs_vsctl
+            "agent.network.cmd.ovs_vsctl", _ovs_vsctl
         )
 
         recovered = await mgr.recover_link_tunnels()
@@ -565,8 +565,8 @@ class TestVxlanDeviceCreation:
         async def mock_ovs_vsctl(*args):
             return 0, "", ""
 
-        with patch("agent.network.overlay_vxlan._shared_run_cmd", mock_run_cmd), \
-             patch("agent.network.overlay_vxlan._shared_ovs_vsctl", mock_ovs_vsctl):
+        with patch("agent.network.cmd.run_cmd", mock_run_cmd), \
+             patch("agent.network.cmd.ovs_vsctl", mock_ovs_vsctl):
             from agent.network.overlay_vxlan import create_vxlan_device
             await create_vxlan_device(
                 name="vxlan-test1",
@@ -593,8 +593,8 @@ class TestVxlanDeviceCreation:
         async def mock_ovs_vsctl(*args):
             return 0, "", ""
 
-        with patch("agent.network.overlay_vxlan._shared_run_cmd", mock_run_cmd), \
-             patch("agent.network.overlay_vxlan._shared_ovs_vsctl", mock_ovs_vsctl):
+        with patch("agent.network.cmd.run_cmd", mock_run_cmd), \
+             patch("agent.network.cmd.ovs_vsctl", mock_ovs_vsctl):
             from agent.network.overlay_vxlan import create_vxlan_device
             with pytest.raises(RuntimeError, match="Failed to create VXLAN device"):
                 await create_vxlan_device(
@@ -617,8 +617,8 @@ class TestVxlanDeviceCreation:
         async def mock_ovs_vsctl(*args):
             return 0, "", ""
 
-        with patch("agent.network.overlay_vxlan._shared_run_cmd", mock_run_cmd), \
-             patch("agent.network.overlay_vxlan._shared_ovs_vsctl", mock_ovs_vsctl):
+        with patch("agent.network.cmd.run_cmd", mock_run_cmd), \
+             patch("agent.network.cmd.ovs_vsctl", mock_ovs_vsctl):
             from agent.network.overlay_vxlan import create_vxlan_device
             await create_vxlan_device(
                 name="vxlan-clean",
@@ -646,8 +646,8 @@ class TestVxlanDeviceCreation:
                 return 1, "", "ovs error"
             return 0, "", ""
 
-        with patch("agent.network.overlay_vxlan._shared_run_cmd", mock_run_cmd), \
-             patch("agent.network.overlay_vxlan._shared_ovs_vsctl", mock_ovs_vsctl):
+        with patch("agent.network.cmd.run_cmd", mock_run_cmd), \
+             patch("agent.network.cmd.ovs_vsctl", mock_ovs_vsctl):
             from agent.network.overlay_vxlan import create_vxlan_device
             with pytest.raises(RuntimeError, match="Failed to add VXLAN device"):
                 await create_vxlan_device(

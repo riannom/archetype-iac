@@ -34,7 +34,7 @@ from typing import Any
 import docker
 from docker.errors import NotFound
 
-from agent.network.cmd import run_cmd as _shared_run_cmd, ip_link_exists as _shared_ip_link_exists
+from agent.network.cmd import run_cmd as _run_cmd, ip_link_exists as _ip_link_exists
 
 
 logger = logging.getLogger(__name__)
@@ -89,6 +89,10 @@ class LocalNetworkManager:
         await manager.cleanup_lab("lab123")
     """
 
+    # Delegate to shared cmd utilities; instance-level overrides for testing.
+    _run_cmd = staticmethod(_run_cmd)
+    _ip_link_exists = staticmethod(_ip_link_exists)
+
     _instance: LocalNetworkManager | None = None
 
     def __new__(cls) -> LocalNetworkManager:
@@ -109,14 +113,6 @@ class LocalNetworkManager:
         if self._docker is None:
             self._docker = docker.from_env()
         return self._docker
-
-    async def _run_cmd(self, cmd: list[str]) -> tuple[int, str, str]:
-        """Run a shell command asynchronously."""
-        return await _shared_run_cmd(cmd)
-
-    async def _ip_link_exists(self, name: str) -> bool:
-        """Check if a network interface exists."""
-        return await _shared_ip_link_exists(name)
 
     async def _get_container_pid(self, container_name: str) -> int | None:
         """Get the PID of a container's init process.

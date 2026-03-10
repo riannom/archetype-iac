@@ -161,7 +161,7 @@ function setupMocks(overrides: Record<string, unknown> = {}) {
   });
 }
 
-describe('InfrastructurePage — Batch 8', () => {
+describe('InfrastructurePage - hosts and updates', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.useFakeTimers({ shouldAdvanceTime: true });

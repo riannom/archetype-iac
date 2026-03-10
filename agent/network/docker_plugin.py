@@ -56,7 +56,7 @@ from typing import Any
 from aiohttp import web
 
 from agent.config import settings
-from agent.network.cmd import run_cmd as _shared_run_cmd
+from agent.network.cmd import run_cmd as _run_cmd
 from agent.network.ovs_vlan_tags import used_vlan_tags_on_bridge_from_ovs_outputs
 
 logger = logging.getLogger(__name__)
@@ -163,6 +163,9 @@ class DockerOVSPlugin(PluginStateMixin, PluginHandlersMixin, PluginVlanMixin):
         - OVS restarts (bridges recreated, need reprovisioning)
     """
 
+    # Delegate to shared cmd utility; instance-level override for testing.
+    _run_cmd = staticmethod(_run_cmd)
+
     def __init__(self):
         self.lab_bridges: dict[str, LabBridge] = {}  # lab_id -> LabBridge
         self.networks: dict[str, NetworkState] = {}  # network_id -> NetworkState
@@ -212,10 +215,6 @@ class DockerOVSPlugin(PluginStateMixin, PluginHandlersMixin, PluginVlanMixin):
     # =========================================================================
     # OVS Operations
     # =========================================================================
-
-    async def _run_cmd(self, cmd: list[str]) -> tuple[int, str, str]:
-        """Run a shell command asynchronously."""
-        return await _shared_run_cmd(cmd)
 
     async def _ovs_vsctl(self, *args: str) -> tuple[int, str, str]:
         """Run ovs-vsctl command."""

@@ -81,27 +81,6 @@ class TestRunOnHost:
 
 
 # ---------------------------------------------------------------------------
-# _host_path_exists
-# ---------------------------------------------------------------------------
-
-
-class TestHostPathExists:
-    def test_native_path_check(self):
-        with patch("agent.network.interface_config._is_in_container", return_value=False):
-            with patch.object(Path, "exists", return_value=True):
-                assert ic._host_path_exists("/etc/hosts") is True
-
-    def test_nsenter_path_check(self):
-        with patch("agent.network.interface_config._is_in_container", return_value=True):
-            with patch("agent.network.interface_config._run_on_host") as mock_run:
-                mock_run.return_value = SimpleNamespace(returncode=0)
-                assert ic._host_path_exists("/etc/hosts") is True
-
-                mock_run.return_value = SimpleNamespace(returncode=1)
-                assert ic._host_path_exists("/nonexistent") is False
-
-
-# ---------------------------------------------------------------------------
 # _host_glob
 # ---------------------------------------------------------------------------
 

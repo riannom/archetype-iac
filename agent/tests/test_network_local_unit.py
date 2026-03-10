@@ -29,7 +29,7 @@ async def test_ip_link_exists(monkeypatch):
     async def fake_ip_link_exists(name: str):
         return name == "exists"
 
-    monkeypatch.setattr(local_mod, "_shared_ip_link_exists", fake_ip_link_exists)
+    mgr._ip_link_exists = fake_ip_link_exists
 
     assert await mgr._ip_link_exists("exists") is True
     assert await mgr._ip_link_exists("missing") is False

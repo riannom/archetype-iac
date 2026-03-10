@@ -81,7 +81,7 @@ def _tunnel_dict(
 async def test_batch_read_no_vxlan_ports():
     """Returns empty dict when bridge has no vxlan-* ports."""
     with patch(
-        "agent.network.overlay_state._shared_ovs_vsctl",
+        "agent.network.cmd.ovs_vsctl",
         new_callable=AsyncMock,
         return_value=(0, "eth0\nbr-int\n", ""),
     ):
@@ -93,7 +93,7 @@ async def test_batch_read_no_vxlan_ports():
 async def test_batch_read_list_ports_failure():
     """Returns None when list-ports command fails."""
     with patch(
-        "agent.network.overlay_state._shared_ovs_vsctl",
+        "agent.network.cmd.ovs_vsctl",
         new_callable=AsyncMock,
         return_value=(1, "", "ovs-vsctl: error"),
     ):
@@ -130,7 +130,7 @@ async def test_batch_read_parses_ports_and_interfaces():
         return (0, "", "")
 
     with patch(
-        "agent.network.overlay_state._shared_ovs_vsctl",
+        "agent.network.cmd.ovs_vsctl",
         new_callable=AsyncMock,
         side_effect=_mock_ovs,
     ):
@@ -161,7 +161,7 @@ async def test_batch_read_zero_tag_for_non_int():
         return (0, "", "")
 
     with patch(
-        "agent.network.overlay_state._shared_ovs_vsctl",
+        "agent.network.cmd.ovs_vsctl",
         new_callable=AsyncMock,
         side_effect=_mock_ovs,
     ):
@@ -188,7 +188,7 @@ async def test_batch_read_missing_interface_info():
         return (0, "", "")
 
     with patch(
-        "agent.network.overlay_state._shared_ovs_vsctl",
+        "agent.network.cmd.ovs_vsctl",
         new_callable=AsyncMock,
         side_effect=_mock_ovs,
     ):
@@ -210,7 +210,7 @@ async def test_batch_read_malformed_json():
         return (0, "", "")
 
     with patch(
-        "agent.network.overlay_state._shared_ovs_vsctl",
+        "agent.network.cmd.ovs_vsctl",
         new_callable=AsyncMock,
         side_effect=_mock_ovs,
     ):
@@ -224,7 +224,7 @@ async def test_batch_read_malformed_json():
 async def test_batch_read_empty_bridge_output():
     """Returns empty dict when bridge output is empty (no ports at all)."""
     with patch(
-        "agent.network.overlay_state._shared_ovs_vsctl",
+        "agent.network.cmd.ovs_vsctl",
         new_callable=AsyncMock,
         return_value=(0, "", ""),
     ):
@@ -700,7 +700,7 @@ async def test_recover_cache_failure_falls_back_to_ovs(tmp_path, monkeypatch):
 
     # OVS fallback scan
     with patch(
-        "agent.network.overlay_state._shared_ovs_vsctl",
+        "agent.network.cmd.ovs_vsctl",
         new_callable=AsyncMock,
     ) as mock_ovs, patch(
         "agent.network.overlay_vxlan.read_vxlan_link_info",
@@ -725,7 +725,7 @@ async def test_recover_no_cache_no_known_mappings(tmp_path, monkeypatch):
     manager = _make_manager(tmp_path)
 
     with patch(
-        "agent.network.overlay_state._shared_ovs_vsctl",
+        "agent.network.cmd.ovs_vsctl",
         new_callable=AsyncMock,
         return_value=(0, "vxlan-unknown1\n", ""),
     ), patch(
@@ -748,7 +748,7 @@ async def test_recover_ovs_scan_failure(tmp_path, monkeypatch):
     manager = _make_manager(tmp_path)
 
     with patch(
-        "agent.network.overlay_state._shared_ovs_vsctl",
+        "agent.network.cmd.ovs_vsctl",
         new_callable=AsyncMock,
         return_value=(1, "", "ovs error"),
     ):
@@ -775,7 +775,7 @@ async def test_recover_skips_zero_vni(tmp_path, monkeypatch):
     )
 
     with patch(
-        "agent.network.overlay_state._shared_ovs_vsctl",
+        "agent.network.cmd.ovs_vsctl",
         new_callable=AsyncMock,
     ) as mock_ovs, patch(
         "agent.network.overlay_vxlan.read_vxlan_link_info",
@@ -809,7 +809,7 @@ async def test_recover_tag_parsing_non_integer(tmp_path, monkeypatch):
     )
 
     with patch(
-        "agent.network.overlay_state._shared_ovs_vsctl",
+        "agent.network.cmd.ovs_vsctl",
         new_callable=AsyncMock,
     ) as mock_ovs, patch(
         "agent.network.overlay_vxlan.read_vxlan_link_info",
@@ -845,7 +845,7 @@ async def test_recover_preserves_existing_lab_id(tmp_path, monkeypatch):
     )
 
     with patch(
-        "agent.network.overlay_state._shared_ovs_vsctl",
+        "agent.network.cmd.ovs_vsctl",
         new_callable=AsyncMock,
     ) as mock_ovs, patch(
         "agent.network.overlay_vxlan.read_vxlan_link_info",

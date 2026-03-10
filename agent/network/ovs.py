@@ -48,7 +48,7 @@ from typing import Any
 import docker
 
 from agent.config import settings
-from agent.network.cmd import run_cmd as _shared_run_cmd, ovs_vsctl as _shared_ovs_vsctl, ip_link_exists as _shared_ip_link_exists
+from agent.network.cmd import run_cmd as _run_cmd, ovs_vsctl as _ovs_vsctl, ip_link_exists as _ip_link_exists
 from agent.network.ovs_provision import (
     cleanup_stale_port as _cleanup_stale_port_impl,
     delete_port as _delete_port_impl,
@@ -410,6 +410,11 @@ class OVSNetworkManager:
         await manager.cleanup_lab("lab123")
     """
 
+    # Delegate to shared cmd utilities; instance-level overrides for testing.
+    _run_cmd = staticmethod(_run_cmd)
+    _ovs_vsctl = staticmethod(_ovs_vsctl)
+    _ip_link_exists = staticmethod(_ip_link_exists)
+
     _instance: OVSNetworkManager | None = None
 
     def __new__(cls) -> OVSNetworkManager:
@@ -439,18 +444,6 @@ class OVSNetworkManager:
     def bridge_name(self) -> str:
         """Get OVS bridge name."""
         return self._bridge_name
-
-    async def _run_cmd(self, cmd: list[str]) -> tuple[int, str, str]:
-        """Run a shell command asynchronously."""
-        return await _shared_run_cmd(cmd)
-
-    async def _ovs_vsctl(self, *args: str) -> tuple[int, str, str]:
-        """Run ovs-vsctl command."""
-        return await _shared_ovs_vsctl(*args)
-
-    async def _ip_link_exists(self, name: str) -> bool:
-        """Check if a network interface exists."""
-        return await _shared_ip_link_exists(name)
 
     async def _get_container_pid(self, container_name: str) -> int | None:
         """Get the PID of a container's init process.

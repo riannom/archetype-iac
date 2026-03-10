@@ -71,8 +71,8 @@ async def test_create_vxlan_device_basic():
         calls.append(list(args))
         return (0, "", "")
 
-    with patch("agent.network.overlay_vxlan._shared_run_cmd", side_effect=_run_cmd), \
-         patch("agent.network.overlay_vxlan._shared_ovs_vsctl", side_effect=_ovs_vsctl), \
+    with patch("agent.network.cmd.run_cmd", side_effect=_run_cmd), \
+         patch("agent.network.cmd.ovs_vsctl", side_effect=_ovs_vsctl), \
          patch.object(settings, "overlay_mtu", 1400):
 
         await create_vxlan_device(
@@ -120,8 +120,8 @@ async def test_create_vxlan_device_no_vlan_tag():
         ovs_calls.append(list(args))
         return (0, "", "")
 
-    with patch("agent.network.overlay_vxlan._shared_run_cmd", side_effect=_run_cmd), \
-         patch("agent.network.overlay_vxlan._shared_ovs_vsctl", side_effect=_ovs_vsctl):
+    with patch("agent.network.cmd.run_cmd", side_effect=_run_cmd), \
+         patch("agent.network.cmd.ovs_vsctl", side_effect=_ovs_vsctl):
 
         await create_vxlan_device(
             name="vxlan-trunk",
@@ -155,8 +155,8 @@ async def test_create_vxlan_device_retry_on_already_exists():
     async def _ovs_vsctl(*args):
         return (0, "", "")
 
-    with patch("agent.network.overlay_vxlan._shared_run_cmd", side_effect=_run_cmd), \
-         patch("agent.network.overlay_vxlan._shared_ovs_vsctl", side_effect=_ovs_vsctl):
+    with patch("agent.network.cmd.run_cmd", side_effect=_run_cmd), \
+         patch("agent.network.cmd.ovs_vsctl", side_effect=_ovs_vsctl):
 
         await create_vxlan_device(
             name="vxlan-retry",
@@ -182,7 +182,7 @@ async def test_create_vxlan_device_fails_after_retry():
             return (0, "", "")
         return (0, "", "")
 
-    with patch("agent.network.overlay_vxlan._shared_run_cmd", side_effect=_run_cmd):
+    with patch("agent.network.cmd.run_cmd", side_effect=_run_cmd):
         with pytest.raises(RuntimeError, match="Failed to create VXLAN device"):
             await create_vxlan_device(
                 name="vxlan-fail",
@@ -208,8 +208,8 @@ async def test_create_vxlan_device_ovs_add_port_failure_cleans_up():
             return (1, "", "OVS error: cannot add port")
         return (0, "", "")
 
-    with patch("agent.network.overlay_vxlan._shared_run_cmd", side_effect=_run_cmd), \
-         patch("agent.network.overlay_vxlan._shared_ovs_vsctl", side_effect=_ovs_vsctl):
+    with patch("agent.network.cmd.run_cmd", side_effect=_run_cmd), \
+         patch("agent.network.cmd.ovs_vsctl", side_effect=_ovs_vsctl):
 
         with pytest.raises(RuntimeError, match="Failed to add VXLAN device"):
             await create_vxlan_device(
@@ -237,8 +237,8 @@ async def test_create_vxlan_device_default_mtu_from_settings():
     async def _ovs_vsctl(*args):
         return (0, "", "")
 
-    with patch("agent.network.overlay_vxlan._shared_run_cmd", side_effect=_run_cmd), \
-         patch("agent.network.overlay_vxlan._shared_ovs_vsctl", side_effect=_ovs_vsctl), \
+    with patch("agent.network.cmd.run_cmd", side_effect=_run_cmd), \
+         patch("agent.network.cmd.ovs_vsctl", side_effect=_ovs_vsctl), \
          patch.object(settings, "overlay_mtu", 1450):
 
         await create_vxlan_device(
@@ -266,8 +266,8 @@ async def test_create_vxlan_device_fallback_mtu_1500():
     async def _ovs_vsctl(*args):
         return (0, "", "")
 
-    with patch("agent.network.overlay_vxlan._shared_run_cmd", side_effect=_run_cmd), \
-         patch("agent.network.overlay_vxlan._shared_ovs_vsctl", side_effect=_ovs_vsctl), \
+    with patch("agent.network.cmd.run_cmd", side_effect=_run_cmd), \
+         patch("agent.network.cmd.ovs_vsctl", side_effect=_ovs_vsctl), \
          patch.object(settings, "overlay_mtu", 0):
 
         await create_vxlan_device(
@@ -291,7 +291,7 @@ async def test_create_vxlan_non_retry_failure():
             return (1, "", "some other error")
         return (0, "", "")
 
-    with patch("agent.network.overlay_vxlan._shared_run_cmd", side_effect=_run_cmd):
+    with patch("agent.network.cmd.run_cmd", side_effect=_run_cmd):
         with pytest.raises(RuntimeError, match="Failed to create VXLAN device"):
             await create_vxlan_device(
                 name="vxlan-err",
@@ -310,8 +310,8 @@ async def test_create_vxlan_non_retry_failure():
 @pytest.mark.asyncio
 async def test_delete_vxlan_device_success():
     """Deletes OVS port and Linux device cleanly."""
-    with patch("agent.network.overlay_vxlan._shared_ovs_vsctl", new_callable=AsyncMock, return_value=(0, "", "")) as mock_ovs, \
-         patch("agent.network.overlay_vxlan._shared_run_cmd", new_callable=AsyncMock, return_value=(0, "", "")) as mock_cmd:
+    with patch("agent.network.cmd.ovs_vsctl", new_callable=AsyncMock, return_value=(0, "", "")) as mock_ovs, \
+         patch("agent.network.cmd.run_cmd", new_callable=AsyncMock, return_value=(0, "", "")) as mock_cmd:
 
         await delete_vxlan_device("vxlan-test", "arch-ovs")
 
@@ -322,8 +322,8 @@ async def test_delete_vxlan_device_success():
 @pytest.mark.asyncio
 async def test_delete_vxlan_device_partial_failure():
     """Logs warning when one of the delete operations fails."""
-    with patch("agent.network.overlay_vxlan._shared_ovs_vsctl", new_callable=AsyncMock, return_value=(0, "", "")), \
-         patch("agent.network.overlay_vxlan._shared_run_cmd", new_callable=AsyncMock, return_value=(1, "", "No such device")):
+    with patch("agent.network.cmd.ovs_vsctl", new_callable=AsyncMock, return_value=(0, "", "")), \
+         patch("agent.network.cmd.run_cmd", new_callable=AsyncMock, return_value=(1, "", "No such device")):
 
         # Should not raise
         await delete_vxlan_device("vxlan-gone", "arch-ovs")
@@ -332,8 +332,8 @@ async def test_delete_vxlan_device_partial_failure():
 @pytest.mark.asyncio
 async def test_delete_vxlan_device_both_fail():
     """Does not raise even when both operations fail."""
-    with patch("agent.network.overlay_vxlan._shared_ovs_vsctl", new_callable=AsyncMock, return_value=(1, "", "error")), \
-         patch("agent.network.overlay_vxlan._shared_run_cmd", new_callable=AsyncMock, return_value=(1, "", "error")):
+    with patch("agent.network.cmd.ovs_vsctl", new_callable=AsyncMock, return_value=(1, "", "error")), \
+         patch("agent.network.cmd.run_cmd", new_callable=AsyncMock, return_value=(1, "", "error")):
 
         await delete_vxlan_device("vxlan-none", "arch-ovs")
 
@@ -353,7 +353,7 @@ async def test_read_vxlan_link_info_success():
     )
 
     with patch(
-        "agent.network.overlay_vxlan._shared_run_cmd",
+        "agent.network.cmd.run_cmd",
         new_callable=AsyncMock,
         return_value=(0, ip_output, ""),
     ):
@@ -368,7 +368,7 @@ async def test_read_vxlan_link_info_success():
 async def test_read_vxlan_link_info_device_not_found():
     """Returns zeros/empty when device does not exist."""
     with patch(
-        "agent.network.overlay_vxlan._shared_run_cmd",
+        "agent.network.cmd.run_cmd",
         new_callable=AsyncMock,
         return_value=(1, "", "Device not found"),
     ):
@@ -385,7 +385,7 @@ async def test_read_vxlan_link_info_partial_output():
     ip_output = "vxlan id 12345 dstport 4789\n"
 
     with patch(
-        "agent.network.overlay_vxlan._shared_run_cmd",
+        "agent.network.cmd.run_cmd",
         new_callable=AsyncMock,
         return_value=(0, ip_output, ""),
     ):
@@ -402,7 +402,7 @@ async def test_read_vxlan_link_info_non_integer_vni():
     ip_output = "vxlan id notanum remote 10.0.0.2 local 10.0.0.1\n"
 
     with patch(
-        "agent.network.overlay_vxlan._shared_run_cmd",
+        "agent.network.cmd.run_cmd",
         new_callable=AsyncMock,
         return_value=(0, ip_output, ""),
     ):
@@ -422,7 +422,7 @@ async def test_read_vxlan_link_info_non_integer_vni():
 async def test_ip_link_exists_delegates():
     """ip_link_exists delegates to shared implementation."""
     with patch(
-        "agent.network.overlay_vxlan._shared_ip_link_exists",
+        "agent.network.cmd.ip_link_exists",
         new_callable=AsyncMock,
         return_value=True,
     ):
@@ -434,7 +434,7 @@ async def test_ip_link_exists_delegates():
 async def test_ip_link_exists_not_found():
     """ip_link_exists returns False when device is missing."""
     with patch(
-        "agent.network.overlay_vxlan._shared_ip_link_exists",
+        "agent.network.cmd.ip_link_exists",
         new_callable=AsyncMock,
         return_value=False,
     ):

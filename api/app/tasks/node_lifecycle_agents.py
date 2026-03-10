@@ -15,7 +15,7 @@ from datetime import timedelta
 from app import agent_client, models
 from app.agent_client import AgentUnavailableError
 from app.config import settings
-from app.tasks.jobs import _release_db_transaction_for_io as _release_db_tx_for_io
+from app.utils.db import release_db_transaction_for_io as _release_db_tx_for_io
 from app.state import (
     JobStatus,
     NodeActualState,

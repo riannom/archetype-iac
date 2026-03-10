@@ -10,13 +10,6 @@ from docker.errors import NotFound, APIError
 
 from agent.config import settings
 
-
-async def _run_in_thread(func, *args, **kwargs):
-    """Run a blocking function in a thread pool."""
-    import functools
-    return await asyncio.to_thread(functools.partial(func, *args, **kwargs))
-
-
 class DockerConsole:
     """Manage an interactive console session to a Docker container.
 

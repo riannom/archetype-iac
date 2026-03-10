@@ -53,7 +53,7 @@ const defaultLogsResponse = {
   has_more: false,
 };
 
-describe('LogsView extended', () => {
+describe('LogsView - filters and actions', () => {
   beforeEach(() => {
     studioRequest.mockReset();
     Object.assign(navigator, {

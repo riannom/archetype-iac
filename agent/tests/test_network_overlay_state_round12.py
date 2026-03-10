@@ -138,7 +138,7 @@ async def test_recover_multiple_ports_mixed_known_unknown(tmp_path, monkeypatch)
         return (0, "", "")
 
     with patch(
-        "agent.network.overlay_state._shared_ovs_vsctl",
+        "agent.network.cmd.ovs_vsctl",
         new_callable=AsyncMock,
         side_effect=_mock_ovs,
     ), patch(
@@ -177,7 +177,7 @@ async def test_recover_cache_returns_zero_results(tmp_path, monkeypatch):
     )
 
     with patch(
-        "agent.network.overlay_state._shared_ovs_vsctl",
+        "agent.network.cmd.ovs_vsctl",
         new_callable=AsyncMock,
     ) as mock_ovs, patch(
         "agent.network.overlay_vxlan.read_vxlan_link_info",
@@ -203,7 +203,7 @@ async def test_recover_fallback_exception_returns_zero(tmp_path, monkeypatch):
     manager = _make_manager()
 
     with patch(
-        "agent.network.overlay_state._shared_ovs_vsctl",
+        "agent.network.cmd.ovs_vsctl",
         new_callable=AsyncMock,
         side_effect=RuntimeError("unexpected OVS failure"),
     ):
@@ -223,7 +223,7 @@ async def test_recover_fallback_port_without_remote_ip_skipped(tmp_path, monkeyp
     )
 
     with patch(
-        "agent.network.overlay_state._shared_ovs_vsctl",
+        "agent.network.cmd.ovs_vsctl",
         new_callable=AsyncMock,
     ) as mock_ovs, patch(
         "agent.network.overlay_vxlan.read_vxlan_link_info",
@@ -265,7 +265,7 @@ async def test_recover_fallback_uses_recovered_lab_id_when_no_existing(
     # is preserved when it IS in _link_tunnels.
 
     with patch(
-        "agent.network.overlay_state._shared_ovs_vsctl",
+        "agent.network.cmd.ovs_vsctl",
         new_callable=AsyncMock,
     ) as mock_ovs, patch(
         "agent.network.overlay_vxlan.read_vxlan_link_info",
@@ -528,7 +528,7 @@ async def test_batch_read_interface_json_parse_failure_returns_partial():
         return (0, "", "")
 
     with patch(
-        "agent.network.overlay_state._shared_ovs_vsctl",
+        "agent.network.cmd.ovs_vsctl",
         new_callable=AsyncMock,
         side_effect=_mock_ovs,
     ):
@@ -559,7 +559,7 @@ async def test_batch_read_port_json_failure_returns_empty():
         return (0, "", "")
 
     with patch(
-        "agent.network.overlay_state._shared_ovs_vsctl",
+        "agent.network.cmd.ovs_vsctl",
         new_callable=AsyncMock,
         side_effect=_mock_ovs,
     ):

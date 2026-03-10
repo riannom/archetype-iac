@@ -40,7 +40,7 @@ from app.agent_client import (
     declare_overlay_state_on_agent,
     declare_port_state_on_agent,
 )
-from app.tasks.jobs import _release_db_transaction_for_io as _release_db_tx_for_io
+from app.utils.db import release_db_transaction_for_io as _release_db_tx_for_io
 
 # Re-export from extracted modules for backwards compatibility
 from app.tasks.link_repair import (

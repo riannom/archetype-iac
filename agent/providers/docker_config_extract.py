@@ -20,11 +20,12 @@ from agent.vendors import (
 
 logger = logging.getLogger(__name__)
 
-# Import label constants from docker.py (lazily to avoid circular imports)
-LABEL_NODE_NAME = "archetype.node_name"
-LABEL_NODE_KIND = "archetype.node_kind"
-LABEL_NODE_DISPLAY_NAME = "archetype.node_display_name"
-LABEL_PROVIDER = "archetype.provider"
+from agent.labels import (
+    LABEL_NODE_DISPLAY_NAME,
+    LABEL_NODE_KIND,
+    LABEL_NODE_NAME,
+    LABEL_PROVIDER,
+)
 
 _TRANSIENT_CLI_FAILURE_MARKERS = (
     "authorization denied",

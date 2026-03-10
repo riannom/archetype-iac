@@ -85,22 +85,6 @@ def _run_on_host(cmd: list[str], timeout: int = 10) -> subprocess.CompletedProce
         )
 
 
-def _host_path_exists(path: str) -> bool:
-    """Check if a path exists on the host filesystem.
-
-    Args:
-        path: Path to check
-
-    Returns:
-        True if path exists on host
-    """
-    if _is_in_container():
-        result = _run_on_host(["test", "-e", path], timeout=5)
-        return result.returncode == 0
-    else:
-        return Path(path).exists()
-
-
 def _host_glob(directory: str, pattern: str) -> list[str]:
     """Glob files in a directory on the host filesystem.
 

@@ -96,7 +96,7 @@ async function selectScenario(
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
-describe('ScenarioPanel — round 12', () => {
+describe('ScenarioPanel - execution flows', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockApiRequest.mockResolvedValue([]);

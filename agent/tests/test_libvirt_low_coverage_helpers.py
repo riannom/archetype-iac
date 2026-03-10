@@ -31,12 +31,6 @@ def test_coalesce_prefers_non_none_value():
     assert libvirt_mod._coalesce(None, "y") == "y"
 
 
-def test_log_name_uses_display_name_when_present():
-    assert libvirt_mod._log_name("r1", {"_display_name": "R1"}) == "R1(r1)"
-    assert libvirt_mod._log_name("r1", {"_display_name": "r1"}) == "r1"
-    assert libvirt_mod._log_name("r1", {}) == "r1"
-
-
 def test_init_raises_when_libvirt_not_available(monkeypatch):
     monkeypatch.setattr(libvirt_mod, "LIBVIRT_AVAILABLE", False)
     with pytest.raises(ImportError, match="libvirt-python"):

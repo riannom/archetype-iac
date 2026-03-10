@@ -12,19 +12,6 @@ def test_is_in_container_with_env(monkeypatch):
     assert iface._is_in_container() is True
 
 
-def test_host_path_exists_calls_nsenter_when_container(monkeypatch):
-    monkeypatch.setattr(iface, "_is_in_container", lambda: True)
-
-    class Result:
-        def __init__(self, returncode: int = 0):
-            self.returncode = returncode
-            self.stdout = ""
-            self.stderr = ""
-
-    monkeypatch.setattr(iface, "_run_on_host", lambda *_args, **_kwargs: Result(0))
-    assert iface._host_path_exists("/etc/hosts") is True
-
-
 @pytest.mark.asyncio
 async def test_set_mtu_runtime_success(monkeypatch):
     class Result:

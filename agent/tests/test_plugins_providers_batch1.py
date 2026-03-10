@@ -328,12 +328,6 @@ async def test_libvirt_start_node_marks_post_boot_console_pending(monkeypatch, t
     assert mark_calls == [("arch-lab-node1", "cisco_n9kv")]
 
 
-def test_libvirt_log_name() -> None:
-    assert libvirt_provider._log_name("node1", {"_display_name": "Node 1"}) == "Node 1(node1)"
-    assert libvirt_provider._log_name("node1", {"_display_name": "node1"}) == "node1"
-    assert libvirt_provider._log_name("node1", None) == "node1"
-
-
 def test_libvirt_domain_name_and_prefix() -> None:
     provider = _make_libvirt_provider()
     domain_name = provider._domain_name("lab!@#", "node$%")

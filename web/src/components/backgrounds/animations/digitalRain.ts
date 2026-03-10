@@ -3,7 +3,8 @@
  * Matrix-style falling characters with Bitcoin theme
  */
 
-import { useRef, useEffect, useCallback } from 'react';
+import { useRef, useCallback } from 'react';
+import { useCanvasAnimation } from './useCanvasAnimation';
 
 interface RainDrop {
   x: number;
@@ -22,7 +23,6 @@ export function useDigitalRain(
   active: boolean
 ) {
   const dropsRef = useRef<RainDrop[]>([]);
-  const animationRef = useRef<number | undefined>(undefined);
 
   const chars = '01₿₿₿SATOSHI'.split('');
 
@@ -39,80 +39,59 @@ export function useDigitalRain(
     };
   }, [chars]);
 
-  useEffect(() => {
-    if (!active) return;
+  useCanvasAnimation(
+    canvasRef,
+    active,
+    {
+      onInit: (_ctx, canvas) => {
+        const dropCount = Math.floor(canvas.width / 50);
+        dropsRef.current = Array.from({ length: dropCount }, () =>
+          createDrop(canvas, false)
+        );
+      },
 
-    const canvas = canvasRef.current;
-    if (!canvas) return;
+      onFrame: (ctx, canvas) => {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
+        const opacityMultiplier = opacity / 50;
 
-    const resizeCanvas = () => {
-      canvas.width = window.innerWidth;
-      canvas.height = window.innerHeight;
-    };
-    resizeCanvas();
-    window.addEventListener('resize', resizeCanvas);
+        ctx.font = '14px monospace';
 
-    const dropCount = Math.floor(canvas.width / 50);
-    dropsRef.current = Array.from({ length: dropCount }, () =>
-      createDrop(canvas, false)
-    );
+        dropsRef.current.forEach((drop, index) => {
+          for (let i = 0; i < drop.length; i++) {
+            const charY = drop.y - i * 16;
+            if (charY < 0 || charY > canvas.height) continue;
 
-    const animate = () => {
-      if (!canvas || !ctx) return;
+            const fadeRatio = 1 - i / drop.length;
+            const alpha = drop.opacity * fadeRatio * opacityMultiplier;
 
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
+            if (i === 0) {
+              // Lead character is brighter
+              ctx.fillStyle = darkMode
+                ? `rgba(180, 220, 180, ${alpha * 1.5})`
+                : `rgba(60, 140, 60, ${alpha * 1.5})`;
+            } else {
+              ctx.fillStyle = darkMode
+                ? `rgba(140, 180, 140, ${alpha})`
+                : `rgba(50, 120, 50, ${alpha})`;
+            }
 
-      const opacityMultiplier = opacity / 50;
-
-      ctx.font = '14px monospace';
-
-      dropsRef.current.forEach((drop, index) => {
-        for (let i = 0; i < drop.length; i++) {
-          const charY = drop.y - i * 16;
-          if (charY < 0 || charY > canvas.height) continue;
-
-          const fadeRatio = 1 - i / drop.length;
-          const alpha = drop.opacity * fadeRatio * opacityMultiplier;
-
-          if (i === 0) {
-            // Lead character is brighter
-            ctx.fillStyle = darkMode
-              ? `rgba(180, 220, 180, ${alpha * 1.5})`
-              : `rgba(60, 140, 60, ${alpha * 1.5})`;
-          } else {
-            ctx.fillStyle = darkMode
-              ? `rgba(140, 180, 140, ${alpha})`
-              : `rgba(50, 120, 50, ${alpha})`;
+            ctx.fillText(drop.chars[i], drop.x, charY);
           }
 
-          ctx.fillText(drop.chars[i], drop.x, charY);
-        }
+          drop.y += drop.speed;
 
-        drop.y += drop.speed;
+          if (Math.random() < 0.01) {
+            const changeIndex = Math.floor(Math.random() * drop.length);
+            drop.chars[changeIndex] = chars[Math.floor(Math.random() * chars.length)];
+          }
 
-        if (Math.random() < 0.01) {
-          const changeIndex = Math.floor(Math.random() * drop.length);
-          drop.chars[changeIndex] = chars[Math.floor(Math.random() * chars.length)];
-        }
-
-        if (drop.y > canvas.height + drop.length * 16) {
-          dropsRef.current[index] = createDrop(canvas, true);
-        }
-      });
-
-      animationRef.current = requestAnimationFrame(animate);
-    };
-
-    animate();
-
-    return () => {
-      window.removeEventListener('resize', resizeCanvas);
-      if (animationRef.current) {
-        cancelAnimationFrame(animationRef.current);
-      }
-    };
-  }, [canvasRef, darkMode, opacity, createDrop, chars, active]);
+          if (drop.y > canvas.height + drop.length * 16) {
+            dropsRef.current[index] = createDrop(canvas, true);
+          }
+        });
+      },
+    },
+    [darkMode, opacity, createDrop, chars]
+  );
 }
