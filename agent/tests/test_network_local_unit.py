@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import pytest
 
-import agent.network.local as local_mod
 from agent.network.local import LocalNetworkManager, get_local_manager, LocalLink
 
 

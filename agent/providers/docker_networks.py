@@ -25,7 +25,6 @@ from agent.labels import (
     LABEL_LAB_ID,
     LABEL_NODE_INTERFACE_COUNT,
     LABEL_NODE_KIND,
-    LABEL_PROVIDER,
 )
 from agent.network.docker_plugin import get_docker_ovs_plugin
 

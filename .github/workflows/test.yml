@@ -339,10 +339,10 @@ jobs:
           path: reports/confidence-gate/optional.json
           if-no-files-found: warn
 
-  backend-tests:
-    name: Backend Tests
+  api-tests:
+    name: API Tests
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 45
 
     steps:
       - uses: actions/checkout@v4
@@ -352,17 +352,12 @@ jobs:
         with:
           python-version: '3.14'
           cache: 'pip'
-          cache-dependency-path: |
-            api/requirements.txt
-            agent/requirements.txt
+          cache-dependency-path: api/requirements.txt
 
-      - name: Install API dependencies
+      - name: Install dependencies
         run: |
           cd api
           pip install -r requirements.txt
-
-      - name: Install test tooling
-        run: |
           pip install pytest-cov pytest-timeout
 
       - name: Run API tests with coverage
@@ -374,22 +369,46 @@ jobs:
           cd api
           PYTHONPATH="${PYTHONPATH}:$(pwd)/.." pytest tests/ -q --tb=short --timeout=60 --cov=app --cov-report=term-missing --cov-report=xml:../reports/api-coverage.xml --cov-fail-under=55
 
-      - name: Install Agent dependencies
+      - name: Upload API coverage
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: api-coverage
+          path: reports/api-coverage.xml
+          if-no-files-found: warn
+
+  agent-tests:
+    name: Agent Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+          cache: 'pip'
+          cache-dependency-path: agent/requirements.txt
+
+      - name: Install dependencies
         run: |
           cd agent
           pip install -r requirements.txt
+          pip install pytest-cov pytest-timeout
 
       - name: Run Agent tests with coverage
         run: |
           cd agent
-          pytest tests/ -q --tb=short --cov=agent --cov-report=term-missing --cov-report=xml:../reports/agent-coverage.xml --cov-fail-under=50
+          pytest tests/ -q --tb=short --timeout=60 --cov=agent --cov-report=term-missing --cov-report=xml:../reports/agent-coverage.xml --cov-fail-under=50
 
-      - name: Upload coverage reports
+      - name: Upload Agent coverage
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: coverage-reports
-          path: reports/*-coverage.xml
+          name: agent-coverage
+          path: reports/agent-coverage.xml
           if-no-files-found: warn
 
   catalog-regression-tests:

@@ -14,17 +14,6 @@ import shutil
 from pathlib import Path
 from typing import Any, TYPE_CHECKING
 
-from agent.vendors import (
-    get_config_by_device,
-    get_container_config,
-    is_ceos_kind,
-)
-
-if TYPE_CHECKING:
-    from agent.providers.docker import ParsedTopology, TopologyNode
-
-logger = logging.getLogger(__name__)
-
 from agent.labels import (
     LABEL_LAB_ID,
     LABEL_NODE_DEFINITION_ID,
@@ -37,6 +26,16 @@ from agent.labels import (
     LABEL_NODE_READINESS_TIMEOUT,
     LABEL_PROVIDER,
 )
+from agent.vendors import (
+    get_config_by_device,
+    get_container_config,
+    is_ceos_kind,
+)
+
+if TYPE_CHECKING:
+    from agent.providers.docker import ParsedTopology, TopologyNode
+
+logger = logging.getLogger(__name__)
 
 # Interface wait script for cEOS (imported from docker.py at call site)
 # We import it lazily to avoid circular dependencies.

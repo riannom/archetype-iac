@@ -13,19 +13,18 @@ from pathlib import Path
 from typing import Any
 
 from agent.config import settings
-from agent.vendors import (
-    get_config_extraction_settings,
-    get_console_credentials,
-)
-
-logger = logging.getLogger(__name__)
-
 from agent.labels import (
     LABEL_NODE_DISPLAY_NAME,
     LABEL_NODE_KIND,
     LABEL_NODE_NAME,
     LABEL_PROVIDER,
 )
+from agent.vendors import (
+    get_config_extraction_settings,
+    get_console_credentials,
+)
+
+logger = logging.getLogger(__name__)
 
 _TRANSIENT_CLI_FAILURE_MARKERS = (
     "authorization denied",

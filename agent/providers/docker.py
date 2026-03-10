@@ -44,12 +44,8 @@ from agent.labels import (
     LABEL_LAB_ID,
     LABEL_NODE_DEFINITION_ID,
     LABEL_NODE_DISPLAY_NAME,
-    LABEL_NODE_INTERFACE_COUNT,
     LABEL_NODE_KIND,
     LABEL_NODE_NAME,
-    LABEL_NODE_READINESS_PATTERN,
-    LABEL_NODE_READINESS_PROBE,
-    LABEL_NODE_READINESS_TIMEOUT,
     LABEL_PROVIDER,
 )
 from agent.network.local import LocalNetworkManager, get_local_manager
