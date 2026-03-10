@@ -297,6 +297,15 @@ async def create_lab_networks(provider: Any, lab_id: str, max_interfaces: int = 
                     networks[interface_name] = network_name
                     continue
                 except Exception as _inspect_err:
+                    logger.error(
+                        f"DEBUG inspect exception: type={type(_inspect_err).__name__}, "
+                        f"isinstance_NotFound={isinstance(_inspect_err, NotFound)}, "
+                        f"isinstance_APIError={isinstance(_inspect_err, APIError)}, "
+                        f"isinstance_Exception={isinstance(_inspect_err, Exception)}, "
+                        f"mro={[c.__name__ for c in type(_inspect_err).__mro__]}, "
+                        f"NotFound_id={id(NotFound)}, "
+                        f"exc_class_id={id(type(_inspect_err))}"
+                    )
                     if not isinstance(_inspect_err, NotFound):
                         raise
 
