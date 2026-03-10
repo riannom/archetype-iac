@@ -176,7 +176,10 @@ try:
     import libvirt
     LIBVIRT_AVAILABLE = True
 except ImportError:
-    libvirt = None
+    # Provide a stub so that ``except libvirt.libvirtError`` clauses are
+    # syntactically valid even when the real library is absent (e.g. tests).
+    import types as _types
+    libvirt = _types.SimpleNamespace(libvirtError=Exception, open=lambda _uri: None)  # type: ignore[assignment]
     LIBVIRT_AVAILABLE = False
 
 
