@@ -346,6 +346,59 @@ class TestDeploySingleNode:
         assert ns.boot_started_at is not None
 
     @pytest.mark.asyncio
+    async def test_deploy_passes_vendor_environment_to_agent_create(self, test_db, test_user):
+        """Vendor runtime environment should be forwarded on create-node calls."""
+        host = _make_host(test_db)
+        lab = _make_lab(test_db, test_user, agent_id=host.id)
+        job = _make_job(test_db, lab, test_user)
+        ns = _make_node_state(test_db, lab, "n1", "R1")
+        node_def = _make_node_def(
+            test_db,
+            lab,
+            "n1",
+            "R1",
+            "R1",
+            host_id=host.id,
+            device="juniper_cjunos",
+        )
+
+        manager = _make_manager(test_db, lab, job, ["n1"], agent=host)
+        manager.db_nodes_map = {"R1": node_def}
+        manager.explicit_snapshots_map = {}
+        manager.latest_snapshots_map = {}
+        manager._manifest = None
+
+        with (
+            patch.object(manager.topo_service, "get_interface_count_map", return_value={"R1": 4}),
+            patch("app.tasks.node_lifecycle_deploy.resolve_node_image", return_value="cjunosevolved:25.4R1.13-EVO"),
+            patch("app.tasks.node_lifecycle_deploy.get_image_provider", return_value="docker"),
+            patch("app.tasks.node_lifecycle_deploy.lab_workspace", return_value=MagicMock()),
+            patch("app.tasks.node_lifecycle_deploy.get_device_service") as mock_ds,
+            patch("app.tasks.node_lifecycle_deploy.agent_client") as mock_ac,
+        ):
+            mock_ds.return_value.resolve_hardware_specs.return_value = {}
+            mock_ac.create_node_on_agent = AsyncMock(return_value={"success": True})
+            mock_ac.start_node_on_agent = AsyncMock(return_value={"success": True})
+            mock_ac.get_lab_status_from_agent = AsyncMock(
+                return_value={
+                    "nodes": [
+                        {
+                            "name": "R1",
+                            "node_definition_id": node_def.id,
+                            "runtime_id": "container://r1",
+                        }
+                    ]
+                }
+            )
+
+            result = await manager._deploy_single_node(ns)
+
+        assert result == "R1"
+        create_kwargs = mock_ac.create_node_on_agent.await_args.kwargs
+        assert create_kwargs["env"]["CPTX_CHANNELIZED"] == "1"
+        assert create_kwargs["env"]["CPTX_COSIM"] == "BT"
+
+    @pytest.mark.asyncio
     async def test_start_success_waits_for_runtime_identity_stabilization(self, test_db, test_user):
         """Post-start verification should tolerate a short status lag before succeeding."""
         host = _make_host(test_db)
