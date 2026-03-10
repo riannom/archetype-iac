@@ -9,11 +9,20 @@ from agent.version import __version__, get_commit
 from agent.schemas.enums import AgentStatus, JobStatus, Provider
 
 
+class AgentVirtualizationCapabilities(BaseModel):
+    """Host virtualization fingerprint relevant for placement decisions."""
+
+    cpu_model: str | None = None
+    cpu_flags: dict[str, bool] = Field(default_factory=dict)
+    kvm_amd: dict[str, bool] = Field(default_factory=dict)
+
+
 class AgentCapabilities(BaseModel):
     """What the agent can do."""
     providers: list[Provider] = Field(default_factory=list)
     max_concurrent_jobs: int = 4
     features: list[str] = Field(default_factory=list)  # e.g., ["vxlan", "console"]
+    virtualization: AgentVirtualizationCapabilities | None = None
 
 
 class AgentInfo(BaseModel):

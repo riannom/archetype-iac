@@ -34,6 +34,7 @@ from agent.schemas.enums import (  # noqa: F401
 from agent.schemas.common import (  # noqa: F401
     AgentCapabilities,
     AgentInfo,
+    AgentVirtualizationCapabilities,
     HeartbeatRequest,
     HeartbeatResponse,
     JobResult,

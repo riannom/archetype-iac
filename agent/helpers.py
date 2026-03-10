@@ -26,6 +26,7 @@ from agent.providers.base import Provider as BaseProvider
 from agent.schemas import (
     AgentCapabilities,
     AgentInfo,
+    AgentVirtualizationCapabilities,
     DockerImageInfo,
     DockerPruneRequest,
     DockerPruneResponse,
@@ -136,6 +137,81 @@ def get_docker_snapshotter_mode() -> str | None:
         logger.warning(f"Failed to inspect Docker snapshotter mode: {e}")
         return None
 
+
+def _read_sysfs_bool(path: str) -> bool | None:
+    try:
+        value = Path(path).read_text().strip()
+    except OSError:
+        return None
+
+    if value in {"Y", "1"}:
+        return True
+    if value in {"N", "0"}:
+        return False
+    return None
+
+
+def get_virtualization_capabilities() -> AgentVirtualizationCapabilities | None:
+    """Collect host virtualization features relevant to placement."""
+    if not settings.enable_docker:
+        return None
+
+    try:
+        cpuinfo = Path("/proc/cpuinfo").read_text()
+    except OSError as e:
+        logger.warning(
+            f"Failed to read /proc/cpuinfo for virtualization capabilities: {e}"
+        )
+        return None
+
+    cpu_model = None
+    cpu_flags: set[str] = set()
+    for block in cpuinfo.split("\n\n"):
+        for line in block.splitlines():
+            if ":" not in line:
+                continue
+            key, value = line.split(":", 1)
+            key = key.strip()
+            value = value.strip()
+            if key == "model name" and cpu_model is None:
+                cpu_model = value
+            elif key == "flags":
+                cpu_flags.update(value.split())
+
+    tracked_flags = (
+        "svm",
+        "npt",
+        "nrip_save",
+        "avic",
+        "vgif",
+        "v_spec_ctrl",
+        "tsc_scale",
+        "flushbyasid",
+        "decodeassists",
+        "pausefilter",
+        "pfthreshold",
+        "vnmi",
+    )
+    tracked_kvm_params = (
+        "avic",
+        "vgif",
+        "vnmi",
+        "npt",
+        "tsc_scaling",
+    )
+
+    kvm_amd = {}
+    for param in tracked_kvm_params:
+        value = _read_sysfs_bool(f"/sys/module/kvm_amd/parameters/{param}")
+        if value is not None:
+            kvm_amd[param] = value
+
+    return AgentVirtualizationCapabilities(
+        cpu_model=cpu_model,
+        cpu_flags={flag: flag in cpu_flags for flag in tracked_flags},
+        kvm_amd=kvm_amd,
+    )
+
 def get_capabilities() -> AgentCapabilities:
     """Determine agent capabilities based on config and available tools."""
     providers = []
@@ -152,6 +228,7 @@ def get_capabilities() -> AgentCapabilities:
         providers=providers,
         max_concurrent_jobs=settings.max_concurrent_jobs,
         features=features,
+        virtualization=get_virtualization_capabilities(),
     )
 
 

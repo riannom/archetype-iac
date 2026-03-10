@@ -26,6 +26,27 @@ from app.agent_client.http import (
 logger = logging.getLogger(__name__)
 
 
+def _get_agent_virtualization(agent: models.Host) -> dict:
+    return agent.get_capabilities().get("virtualization") or {}
+
+
+def is_agent_compatible_for_device(agent: models.Host, device_type: str | None) -> bool:
+    """Check whether an agent meets device-specific host requirements."""
+    if device_type != "juniper_cjunos":
+        return True
+
+    virtualization = _get_agent_virtualization(agent)
+    kvm_amd = virtualization.get("kvm_amd") or {}
+    cpu_flags = virtualization.get("cpu_flags") or {}
+
+    # cJunosEvolved on this image/build requires host-exposed VNMI support.
+    if kvm_amd.get("vnmi") is True:
+        return True
+    if cpu_flags.get("vnmi") is True:
+        return True
+    return False
+
+
 async def resolve_agent_ip(address: str) -> str:
     """Extract and resolve IP address from agent address.
 
@@ -171,6 +192,7 @@ async def get_healthy_agent(
     required_provider: str | None = None,
     prefer_agent_id: str | None = None,
     exclude_agents: list[str] | None = None,
+    device_type: str | None = None,
 ) -> models.Host | None:
     """Get a healthy agent to handle jobs with capability-based selection.
 
@@ -214,6 +236,15 @@ async def get_healthy_agent(
         agents = [a for a in agents if required_provider in get_agent_providers(a)]
         if not agents:
             logger.warning(f"No agents support required provider: {required_provider}")
+            return None
+
+    if device_type:
+        agents = [a for a in agents if is_agent_compatible_for_device(a, device_type)]
+        if not agents:
+            logger.warning(
+                "No agents satisfy compatibility requirements for device '%s'",
+                device_type,
+            )
             return None
 
     # Filter by capacity (max_concurrent_jobs)
@@ -271,6 +302,7 @@ async def get_agent_for_lab(
     database: Session,
     lab: models.Lab,
     required_provider: str = "docker",
+    device_type: str | None = None,
 ) -> models.Host | None:
     """Get an agent for a lab, respecting node-level affinity.
 
@@ -311,6 +343,7 @@ async def get_agent_for_lab(
         database,
         required_provider=required_provider,
         prefer_agent_id=preferred_agent_id,
+        device_type=device_type,
     )
 
 
@@ -349,12 +382,16 @@ async def get_agent_for_node(
 
     if node and node.host_id:
         agent = database.get(models.Host, node.host_id)
-        if agent and is_agent_online(agent):
+        if agent and is_agent_online(agent) and is_agent_compatible_for_device(agent, node.device):
             logger.debug(f"Node {node_name}: using explicit host {agent.name} from Node.host_id")
             return agent
         else:
             # Explicit placement but agent unavailable
-            logger.warning(f"Node {node_name}: explicit host {node.host_id} is unavailable")
+            logger.warning(
+                "Node %s: explicit host %s is unavailable or incompatible",
+                node_name,
+                node.host_id,
+            )
             return None  # Don't fall back - explicit placement must be honored
 
     # Step 2: Check NodePlacement (runtime placement)
@@ -369,7 +406,7 @@ async def get_agent_for_node(
 
     if placement:
         agent = database.get(models.Host, placement.host_id)
-        if agent and is_agent_online(agent):
+        if agent and is_agent_online(agent) and is_agent_compatible_for_device(agent, node.device if node else None):
             logger.debug(f"Node {node_name}: using placed host {agent.name} from NodePlacement")
             return agent
         # Placement exists but agent unavailable - fall through to lab default
@@ -378,7 +415,7 @@ async def get_agent_for_node(
     lab = database.get(models.Lab, lab_id)
     if lab and lab.agent_id:
         agent = database.get(models.Host, lab.agent_id)
-        if agent and is_agent_online(agent):
+        if agent and is_agent_online(agent) and is_agent_compatible_for_device(agent, node.device if node else None):
             logger.debug(f"Node {node_name}: using lab default agent {agent.name}")
             return agent
 
@@ -386,6 +423,7 @@ async def get_agent_for_node(
     return await get_healthy_agent(
         database,
         required_provider=required_provider,
+        device_type=node.device if node else None,
     )
 
 
