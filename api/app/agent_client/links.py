@@ -297,6 +297,7 @@ async def set_port_vlan_on_agent(
     agent: models.Host,
     port_name: str,
     vlan_tag: int,
+    link_id: str | None = None,
 ) -> bool:
     """Set the VLAN tag on an OVS port via the agent.
 
@@ -304,16 +305,20 @@ async def set_port_vlan_on_agent(
         agent: The agent managing the port
         port_name: OVS port name (e.g., VXLAN port or container veth)
         vlan_tag: VLAN tag to set
+        link_id: Optional link identifier for agent in-memory tracking sync
 
     Returns:
         True if successful, False otherwise
     """
     url = f"{get_agent_url(agent)}/overlay/ports/{port_name}/vlan"
+    body: dict = {"vlan_tag": vlan_tag}
+    if link_id:
+        body["link_id"] = link_id
     try:
         result = await _agent_request(
             "PUT",
             url,
-            json_body={"vlan_tag": vlan_tag},
+            json_body=body,
             timeout=10.0,
             max_retries=0,
         )
