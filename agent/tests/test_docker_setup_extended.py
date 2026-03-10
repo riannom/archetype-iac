@@ -214,20 +214,20 @@ class TestSetupCjunosDirectories:
     """Tests for cJunOS directory and config setup."""
 
     def test_config_directory_created(self, tmp_path: Path):
-        """Configdisk directory is created under workspace/configs/node/configdisk."""
+        """Config directory is created under workspace/configs/node/config."""
         node = _make_node("junos1", kind="juniper_cjunos")
         setup_cjunos_directories("junos1", node, tmp_path)
 
-        config_dir = tmp_path / "configs" / "junos1" / "configdisk"
+        config_dir = tmp_path / "configs" / "junos1" / "config"
         assert config_dir.is_dir()
 
     def test_startup_config_from_topology(self, tmp_path: Path):
-        """Topology startup_config is written to configdisk/juniper.conf."""
+        """Topology startup_config is written to config/startup-config.cfg."""
         cfg_text = "system { host-name topo-test; }"
         node = _make_node("junos1", kind="juniper_cjunos", startup_config=cfg_text)
         setup_cjunos_directories("junos1", node, tmp_path)
 
-        cfg = tmp_path / "configs" / "junos1" / "configdisk" / "juniper.conf"
+        cfg = tmp_path / "configs" / "junos1" / "config" / "startup-config.cfg"
         assert cfg.exists()
         assert cfg.read_text() == cfg_text
 
@@ -240,16 +240,16 @@ class TestSetupCjunosDirectories:
         node = _make_node("junos1", kind="juniper_cjunos")
         setup_cjunos_directories("junos1", node, tmp_path)
 
-        cfg = tmp_path / "configs" / "junos1" / "configdisk" / "juniper.conf"
+        cfg = tmp_path / "configs" / "junos1" / "config" / "startup-config.cfg"
         assert cfg.exists()
         assert cfg.read_text() == "system { host-name extracted; }"
 
     def test_no_config_when_no_source(self, tmp_path: Path):
-        """No juniper.conf is created when no source exists."""
+        """No startup-config.cfg is created when no source exists."""
         node = _make_node("junos1", kind="juniper_cjunos")
         setup_cjunos_directories("junos1", node, tmp_path)
 
-        cfg = tmp_path / "configs" / "junos1" / "configdisk" / "juniper.conf"
+        cfg = tmp_path / "configs" / "junos1" / "config" / "startup-config.cfg"
         assert not cfg.exists()
 
     def test_topology_config_priority(self, tmp_path: Path):
@@ -262,7 +262,7 @@ class TestSetupCjunosDirectories:
         node = _make_node("junos1", kind="juniper_cjunos", startup_config=topo_config)
         setup_cjunos_directories("junos1", node, tmp_path)
 
-        cfg = tmp_path / "configs" / "junos1" / "configdisk" / "juniper.conf"
+        cfg = tmp_path / "configs" / "junos1" / "config" / "startup-config.cfg"
         assert cfg.read_text() == topo_config
 
 

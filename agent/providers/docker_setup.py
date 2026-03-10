@@ -126,11 +126,11 @@ def setup_cjunos_directories(
 
     This is a blocking operation meant to run in asyncio.to_thread().
     """
-    config_dir = workspace / "configs" / node_name / "configdisk"
+    config_dir = workspace / "configs" / node_name / "config"
     config_dir.mkdir(parents=True, exist_ok=True)
-    logger.debug(f"Created cJunOS configdisk directory: {config_dir}")
+    logger.debug(f"Created cJunOS config directory: {config_dir}")
 
-    startup_config_path = config_dir / "juniper.conf"
+    startup_config_path = config_dir / "startup-config.cfg"
     extracted_config = workspace / "configs" / node_name / "startup-config"
 
     if node.startup_config:

@@ -554,10 +554,8 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         port_naming="et-0/0/",
         port_start_index=0,
         max_ports=12,
-        management_interface="eth0",
         memory=8192,
         cpu=4,
-        reserved_nics=3,
         requires_image=True,
         supported_image_kinds=["docker"],
         documentation_url="https://www.juniper.net/documentation/product/us/en/cjunos-evolved/",
@@ -573,15 +571,16 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         config_extract_command="ssh -o StrictHostKeyChecking=no -i /root/.ssh/sshkey root@176.1.1.1 \"cli -c 'show configuration'\"",
         config_extract_timeout=30,
         environment={
-            "CPTX_COSIM": "BT",
-            "CPTX_CHANNELIZED": "1",
+            "CPTX_COSIM": "BT|BX",
+            # Required by entrypoint.sh to read /config/startup-config.cfg
+            "CLAB_LABEL_CLAB_NODE_KIND": "juniper_cjunos",
         },
         capabilities=["NET_ADMIN", "SYS_ADMIN", "NET_RAW"],
         privileged=True,
         binds=[
             "/dev/kvm:/dev/kvm",
             "/dev/net/tun:/dev/net/tun",
-            "{workspace}/configs/{node}/configdisk:/home/evo/configdisk",
+            "{workspace}/configs/{node}/config:/config",
         ],
         sysctls={
             "net.ipv4.ip_forward": "1",

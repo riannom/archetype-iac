@@ -97,10 +97,10 @@ class TestCjunosVendorConfig:
         assert "display set" not in config.config_extract_command
 
     def test_bind_mount_includes_config(self):
-        """Verify configdisk bind mount is present."""
+        """Verify /config bind mount is present."""
         config = get_config_by_device("juniper_cjunos")
         assert config is not None
-        config_bind = "{workspace}/configs/{node}/configdisk:/home/evo/configdisk"
+        config_bind = "{workspace}/configs/{node}/config:/config"
         assert config_bind in config.binds
 
     def test_bind_mount_includes_kvm(self):
@@ -109,14 +109,14 @@ class TestCjunosVendorConfig:
         assert config is not None
         assert "/dev/kvm:/dev/kvm" in config.binds
 
-    def test_juniper_yaml_topology_defaults(self):
-        """Verify cJunos matches Juniper's documented eth0 + reserved NIC layout."""
+    def test_cjunos_runtime_defaults(self):
+        """Verify cJunos keeps the pre-alignment runtime defaults."""
         config = get_config_by_device("juniper_cjunos")
         assert config is not None
-        assert config.management_interface == "eth0"
-        assert config.reserved_nics == 3
-        assert config.environment["CPTX_CHANNELIZED"] == "1"
-        assert config.environment["CPTX_COSIM"] == "BT"
+        assert config.management_interface is None
+        assert config.reserved_nics == 0
+        assert config.environment["CPTX_COSIM"] == "BT|BX"
+        assert config.environment["CLAB_LABEL_CLAB_NODE_KIND"] == "juniper_cjunos"
 
 
 # --- Tests for _setup_cjunos_directories ---
@@ -126,7 +126,7 @@ class TestSetupCjunosDirectories:
 
     @pytest.mark.asyncio
     async def test_config_directory_created(self, provider):
-        """Verify configdisk directory is created."""
+        """Verify config directory is created."""
         topology = ParsedTopology(
             name="test",
             nodes={"junos_1": TopologyNode(name="junos_1", kind="juniper_cjunos")},
@@ -136,7 +136,7 @@ class TestSetupCjunosDirectories:
             workspace = Path(tmpdir)
             await provider._ensure_directories(topology, workspace, use_thread=False)
 
-            config_dir = workspace / "configs" / "junos_1" / "configdisk"
+            config_dir = workspace / "configs" / "junos_1" / "config"
             assert config_dir.exists()
             assert config_dir.is_dir()
 
@@ -159,13 +159,13 @@ class TestSetupCjunosDirectories:
             workspace = Path(tmpdir)
             await provider._ensure_directories(topology, workspace, use_thread=False)
 
-            cfg_path = workspace / "configs" / "junos_1" / "configdisk" / "juniper.conf"
+            cfg_path = workspace / "configs" / "junos_1" / "config" / "startup-config.cfg"
             assert cfg_path.exists()
             assert cfg_path.read_text() == topo_config
 
     @pytest.mark.asyncio
     async def test_startup_config_from_extracted(self, provider):
-        """Verify previously extracted config is copied into configdisk."""
+        """Verify previously extracted config is copied into config dir."""
         topology = ParsedTopology(
             name="test",
             nodes={"junos_1": TopologyNode(name="junos_1", kind="juniper_cjunos")},
@@ -182,13 +182,13 @@ class TestSetupCjunosDirectories:
 
             await provider._ensure_directories(topology, workspace, use_thread=False)
 
-            cfg_path = workspace / "configs" / "junos_1" / "configdisk" / "juniper.conf"
+            cfg_path = workspace / "configs" / "junos_1" / "config" / "startup-config.cfg"
             assert cfg_path.exists()
             assert cfg_path.read_text() == "system { host-name extracted; }"
 
     @pytest.mark.asyncio
     async def test_no_default_config_when_no_source(self, provider):
-        """Verify no juniper.conf is created when no source exists."""
+        """Verify no startup-config.cfg is created when no source exists."""
         topology = ParsedTopology(
             name="test",
             nodes={"junos_1": TopologyNode(name="junos_1", kind="juniper_cjunos")},
@@ -198,7 +198,7 @@ class TestSetupCjunosDirectories:
             workspace = Path(tmpdir)
             await provider._ensure_directories(topology, workspace, use_thread=False)
 
-            cfg_path = workspace / "configs" / "junos_1" / "configdisk" / "juniper.conf"
+            cfg_path = workspace / "configs" / "junos_1" / "config" / "startup-config.cfg"
             assert not cfg_path.exists()
 
     @pytest.mark.asyncio
@@ -226,7 +226,7 @@ class TestSetupCjunosDirectories:
 
             await provider._ensure_directories(topology, workspace, use_thread=False)
 
-            cfg_path = workspace / "configs" / "junos_1" / "configdisk" / "juniper.conf"
+            cfg_path = workspace / "configs" / "junos_1" / "config" / "startup-config.cfg"
             assert cfg_path.read_text() == topo_config
 
     @pytest.mark.asyncio
@@ -241,12 +241,12 @@ class TestSetupCjunosDirectories:
             workspace = Path(tmpdir)
             await provider._ensure_directories(topology, workspace, use_thread=False)
 
-            config_dir = workspace / "configs" / "junos_1" / "configdisk"
+            config_dir = workspace / "configs" / "junos_1" / "config"
             assert config_dir.exists()
 
     @pytest.mark.asyncio
     async def test_non_cjunos_no_config_dir(self, provider):
-        """Verify non-cJunOS nodes don't get a configdisk directory."""
+        """Verify non-cJunOS nodes don't get a config directory."""
         topology = ParsedTopology(
             name="test",
             nodes={"linux_1": TopologyNode(name="linux_1", kind="linux")},
@@ -256,5 +256,5 @@ class TestSetupCjunosDirectories:
             workspace = Path(tmpdir)
             await provider._ensure_directories(topology, workspace, use_thread=False)
 
-            config_dir = workspace / "configs" / "linux_1" / "configdisk"
+            config_dir = workspace / "configs" / "linux_1" / "config"
             assert not config_dir.exists()
