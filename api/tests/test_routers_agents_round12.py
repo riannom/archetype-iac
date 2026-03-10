@@ -349,6 +349,7 @@ class TestUpdateCompletionDetection:
     ):
         """Re-registration with matching version completes update job."""
         monkeypatch.setattr("app.config.settings.image_sync_enabled", False)
+        # Prevent background convergence task from racing with test session
         monkeypatch.setattr("app.routers.agents.asyncio.create_task", lambda coro: coro.close())
 
         ts = datetime.now(timezone.utc).replace(tzinfo=None).strftime("%Y-%m-%dT%H:%M:%S")
@@ -391,6 +392,7 @@ class TestUpdateCompletionDetection:
     ):
         """Re-registration with wrong version expires stale update job."""
         monkeypatch.setattr("app.config.settings.image_sync_enabled", False)
+        # Prevent background convergence task from racing with test session
         monkeypatch.setattr("app.routers.agents.asyncio.create_task", lambda coro: coro.close())
 
         ts = datetime.now(timezone.utc).replace(tzinfo=None).strftime("%Y-%m-%dT%H:%M:%S")
