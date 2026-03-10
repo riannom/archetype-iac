@@ -205,6 +205,8 @@ class TestLinkRecoveryOnRestart:
     ):
         """Agent restart marks cross-host links as error for recovery."""
         monkeypatch.setattr("app.config.settings.image_sync_enabled", False)
+        # Prevent background convergence task from racing with second register call
+        monkeypatch.setattr("app.routers.agents.asyncio.create_task", lambda coro: coro.close())
 
         old_ts = (datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(minutes=5)).strftime(
             "%Y-%m-%dT%H:%M:%S"
@@ -273,6 +275,8 @@ class TestLinkRecoveryOnRestart:
     ):
         """Agent restart with no cross-host links completes without error."""
         monkeypatch.setattr("app.config.settings.image_sync_enabled", False)
+        # Prevent background convergence task from racing with second register call
+        monkeypatch.setattr("app.routers.agents.asyncio.create_task", lambda coro: coro.close())
 
         old_ts = (datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(minutes=5)).strftime(
             "%Y-%m-%dT%H:%M:%S"
@@ -345,6 +349,7 @@ class TestUpdateCompletionDetection:
     ):
         """Re-registration with matching version completes update job."""
         monkeypatch.setattr("app.config.settings.image_sync_enabled", False)
+        monkeypatch.setattr("app.routers.agents.asyncio.create_task", lambda coro: coro.close())
 
         ts = datetime.now(timezone.utc).replace(tzinfo=None).strftime("%Y-%m-%dT%H:%M:%S")
         payload = {
@@ -386,6 +391,7 @@ class TestUpdateCompletionDetection:
     ):
         """Re-registration with wrong version expires stale update job."""
         monkeypatch.setattr("app.config.settings.image_sync_enabled", False)
+        monkeypatch.setattr("app.routers.agents.asyncio.create_task", lambda coro: coro.close())
 
         ts = datetime.now(timezone.utc).replace(tzinfo=None).strftime("%Y-%m-%dT%H:%M:%S")
         payload = {
