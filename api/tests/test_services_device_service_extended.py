@@ -160,8 +160,8 @@ class TestResolveHardwareSpecs:
         monkeypatch.setattr(device_service, "find_custom_device", lambda d: None)
         monkeypatch.setattr(device_service, "get_device_override", lambda d: {})
         monkeypatch.setattr(device_service, "get_image_runtime_metadata", lambda r: {})
-        monkeypatch.setattr(device_service, "canonicalize_device_id", lambda d: d)
-        monkeypatch.setattr(device_service, "find_image_reference", lambda d, v=None: None)
+        monkeypatch.setattr("app.image_store.canonicalize_device_id", lambda d: d)
+        monkeypatch.setattr("app.image_store.find_image_reference", lambda d, v=None: None)
 
         specs = service.resolve_hardware_specs("test_device")
         assert specs["memory"] == 8192
@@ -177,8 +177,8 @@ class TestResolveHardwareSpecs:
         })
         monkeypatch.setattr(device_service, "get_device_override", lambda d: {})
         monkeypatch.setattr(device_service, "get_image_runtime_metadata", lambda r: {})
-        monkeypatch.setattr(device_service, "canonicalize_device_id", lambda d: d)
-        monkeypatch.setattr(device_service, "find_image_reference", lambda d, v=None: None)
+        monkeypatch.setattr("app.image_store.canonicalize_device_id", lambda d: d)
+        monkeypatch.setattr("app.image_store.find_image_reference", lambda d, v=None: None)
 
         specs = service.resolve_hardware_specs("custom_dev")
         assert specs["memory"] == 2048
@@ -195,8 +195,8 @@ class TestResolveHardwareSpecs:
         monkeypatch.setattr(device_service, "get_image_runtime_metadata", lambda r: {
             "memory": 8192, "cpu": 4
         })
-        monkeypatch.setattr(device_service, "canonicalize_device_id", lambda d: d)
-        monkeypatch.setattr(device_service, "find_image_reference", lambda d, v=None: None)
+        monkeypatch.setattr("app.image_store.canonicalize_device_id", lambda d: d)
+        monkeypatch.setattr("app.image_store.find_image_reference", lambda d, v=None: None)
 
         specs = service.resolve_hardware_specs("test_device", image_reference="/img.qcow2")
         assert specs["memory"] == 8192
@@ -210,8 +210,8 @@ class TestResolveHardwareSpecs:
         monkeypatch.setattr(device_service, "find_custom_device", lambda d: None)
         monkeypatch.setattr(device_service, "get_device_override", lambda d: {"memory": 16384})
         monkeypatch.setattr(device_service, "get_image_runtime_metadata", lambda r: {})
-        monkeypatch.setattr(device_service, "canonicalize_device_id", lambda d: d)
-        monkeypatch.setattr(device_service, "find_image_reference", lambda d, v=None: None)
+        monkeypatch.setattr("app.image_store.canonicalize_device_id", lambda d: d)
+        monkeypatch.setattr("app.image_store.find_image_reference", lambda d, v=None: None)
 
         specs = service.resolve_hardware_specs("test_device")
         assert specs["memory"] == 16384
@@ -225,8 +225,8 @@ class TestResolveHardwareSpecs:
         monkeypatch.setattr(device_service, "find_custom_device", lambda d: None)
         monkeypatch.setattr(device_service, "get_device_override", lambda d: {"memory": 8192})
         monkeypatch.setattr(device_service, "get_image_runtime_metadata", lambda r: {})
-        monkeypatch.setattr(device_service, "canonicalize_device_id", lambda d: d)
-        monkeypatch.setattr(device_service, "find_image_reference", lambda d, v=None: None)
+        monkeypatch.setattr("app.image_store.canonicalize_device_id", lambda d: d)
+        monkeypatch.setattr("app.image_store.find_image_reference", lambda d, v=None: None)
 
         specs = service.resolve_hardware_specs(
             "test_device",
@@ -243,8 +243,8 @@ class TestResolveHardwareSpecs:
         monkeypatch.setattr(device_service, "find_custom_device", lambda d: None)
         monkeypatch.setattr(device_service, "get_device_override", lambda d: {})
         monkeypatch.setattr(device_service, "get_image_runtime_metadata", lambda r: {})
-        monkeypatch.setattr(device_service, "canonicalize_device_id", lambda d: d)
-        monkeypatch.setattr(device_service, "find_image_reference", lambda d, v=None: None)
+        monkeypatch.setattr("app.image_store.canonicalize_device_id", lambda d: d)
+        monkeypatch.setattr("app.image_store.find_image_reference", lambda d, v=None: None)
 
         specs = service.resolve_hardware_specs("test_device")
         assert specs["libvirt_driver"] == "kvm"
@@ -261,8 +261,8 @@ class TestResolveHardwareSpecs:
             "readiness_probe": "pexpect",
             "readiness_pattern": "login:",
         })
-        monkeypatch.setattr(device_service, "canonicalize_device_id", lambda d: d)
-        monkeypatch.setattr(device_service, "find_image_reference", lambda d, v=None: None)
+        monkeypatch.setattr("app.image_store.canonicalize_device_id", lambda d: d)
+        monkeypatch.setattr("app.image_store.find_image_reference", lambda d, v=None: None)
 
         specs = service.resolve_hardware_specs("test_device", image_reference="/img.qcow2")
         assert specs["readiness_probe"] == "none"
@@ -275,8 +275,8 @@ class TestResolveHardwareSpecs:
         monkeypatch.setattr(device_service, "find_custom_device", lambda d: None)
         monkeypatch.setattr(device_service, "get_device_override", lambda d: {})
         monkeypatch.setattr(device_service, "get_image_runtime_metadata", lambda r: {})
-        monkeypatch.setattr(device_service, "canonicalize_device_id", lambda d: d)
-        monkeypatch.setattr(device_service, "find_image_reference", lambda d, v=None: None)
+        monkeypatch.setattr("app.image_store.canonicalize_device_id", lambda d: d)
+        monkeypatch.setattr("app.image_store.find_image_reference", lambda d, v=None: None)
 
         specs = service.resolve_hardware_specs("test_device")
         assert specs["data_volume_gb"] == 10
@@ -314,7 +314,7 @@ class TestDeviceServiceCrudEdge:
     def test_delete_custom_device(self, monkeypatch) -> None:
         service = DeviceService()
         monkeypatch.setattr(device_service, "get_config_by_device", lambda d: None)
-        monkeypatch.setattr(device_service, "canonicalize_device_id", lambda d: d)
+        monkeypatch.setattr("app.image_store.canonicalize_device_id", lambda d: d)
         monkeypatch.setattr("app.image_store.get_device_image_count", lambda d: 0)
         monkeypatch.setattr("app.image_store.find_custom_device", lambda d: {"id": d})
         monkeypatch.setattr("app.image_store.delete_custom_device", lambda d: True)
@@ -325,7 +325,7 @@ class TestDeviceServiceCrudEdge:
     def test_delete_nonexistent_raises(self, monkeypatch) -> None:
         service = DeviceService()
         monkeypatch.setattr(device_service, "get_config_by_device", lambda d: None)
-        monkeypatch.setattr(device_service, "canonicalize_device_id", lambda d: d)
+        monkeypatch.setattr("app.image_store.canonicalize_device_id", lambda d: d)
         monkeypatch.setattr("app.image_store.get_device_image_count", lambda d: 0)
         monkeypatch.setattr("app.image_store.find_custom_device", lambda d: None)
 
@@ -335,7 +335,7 @@ class TestDeviceServiceCrudEdge:
     def test_hide_non_builtin_raises(self, monkeypatch) -> None:
         service = DeviceService()
         monkeypatch.setattr(device_service, "get_config_by_device", lambda d: None)
-        monkeypatch.setattr(device_service, "canonicalize_device_id", lambda d: d)
+        monkeypatch.setattr("app.image_store.canonicalize_device_id", lambda d: d)
 
         with pytest.raises(DeviceValidationError, match="Only built-in"):
             service.hide_device("custom_only")
@@ -343,7 +343,7 @@ class TestDeviceServiceCrudEdge:
     def test_hide_already_hidden_raises(self, monkeypatch) -> None:
         service = DeviceService()
         monkeypatch.setattr(device_service, "get_config_by_device", lambda d: object())
-        monkeypatch.setattr(device_service, "canonicalize_device_id", lambda d: d)
+        monkeypatch.setattr("app.image_store.canonicalize_device_id", lambda d: d)
         monkeypatch.setattr("app.image_store.is_device_hidden", lambda d: True)
 
         with pytest.raises(DeviceValidationError, match="already hidden"):
@@ -352,7 +352,7 @@ class TestDeviceServiceCrudEdge:
     def test_restore_not_hidden_raises(self, monkeypatch) -> None:
         service = DeviceService()
         monkeypatch.setattr(device_service, "get_config_by_device", lambda d: object())
-        monkeypatch.setattr(device_service, "canonicalize_device_id", lambda d: d)
+        monkeypatch.setattr("app.image_store.canonicalize_device_id", lambda d: d)
         monkeypatch.setattr("app.image_store.is_device_hidden", lambda d: False)
 
         with pytest.raises(DeviceValidationError, match="not hidden"):
@@ -361,7 +361,7 @@ class TestDeviceServiceCrudEdge:
     def test_restore_non_builtin_raises(self, monkeypatch) -> None:
         service = DeviceService()
         monkeypatch.setattr(device_service, "get_config_by_device", lambda d: None)
-        monkeypatch.setattr(device_service, "canonicalize_device_id", lambda d: d)
+        monkeypatch.setattr("app.image_store.canonicalize_device_id", lambda d: d)
 
         with pytest.raises(DeviceValidationError, match="Only built-in"):
             service.restore_device("custom_only")
@@ -385,7 +385,7 @@ class TestUpdateDeviceConfig:
         captured = {}
 
         monkeypatch.setattr(device_service, "get_config_by_device", lambda d: object())
-        monkeypatch.setattr(device_service, "canonicalize_device_id", lambda d: d)
+        monkeypatch.setattr("app.image_store.canonicalize_device_id", lambda d: d)
         monkeypatch.setattr("app.image_store.find_custom_device", lambda d: None)
         monkeypatch.setattr(
             "app.image_store.set_device_override",
@@ -410,7 +410,7 @@ class TestResetDeviceConfig:
     def test_reset_no_overrides(self, monkeypatch) -> None:
         service = DeviceService()
         monkeypatch.setattr(device_service, "get_config_by_device", lambda d: object())
-        monkeypatch.setattr(device_service, "canonicalize_device_id", lambda d: d)
+        monkeypatch.setattr("app.image_store.canonicalize_device_id", lambda d: d)
         monkeypatch.setattr("app.image_store.delete_device_override", lambda d: False)
         monkeypatch.setattr("app.image_store.find_custom_device", lambda d: None)
 

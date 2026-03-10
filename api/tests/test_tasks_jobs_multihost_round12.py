@@ -194,12 +194,13 @@ class TestDeployMidFailureRollback:
                 }
                 mock_ts_cls.return_value = mock_ts
 
-                with patch(f"{MODULE}.agent_client") as mock_ac:
+                with patch(f"{MODULE}.agent_client") as mock_ac, \
+                     patch(f"{MODULE}.get_node_provider", return_value="docker"):
                     mock_ac.is_agent_online.return_value = True
                     mock_ac.get_lab_status_from_agent = AsyncMock(return_value={})
 
                     # Agent-A succeeds, Agent-B raises
-                    async def _deploy_side_effect(agent, jid, lid, topology=None):
+                    async def _deploy_side_effect(agent, jid, lid, **kwargs):
                         if agent.id == host_a.id:
                             return {"status": "completed"}
                         raise RuntimeError("Agent-B crashed")
@@ -254,7 +255,8 @@ class TestDeployMidFailureRollback:
                 mock_ts.build_deploy_topology.return_value = {"nodes": [{"name": "n1"}], "links": []}
                 mock_ts_cls.return_value = mock_ts
 
-                with patch(f"{MODULE}.agent_client") as mock_ac:
+                with patch(f"{MODULE}.agent_client") as mock_ac, \
+                     patch(f"{MODULE}.get_node_provider", return_value="docker"):
                     mock_ac.is_agent_online.return_value = True
                     mock_ac.get_lab_status_from_agent = AsyncMock(return_value={})
                     mock_ac.deploy_to_agent = AsyncMock(
@@ -307,11 +309,12 @@ class TestDeployMidFailureRollback:
                 }
                 mock_ts_cls.return_value = mock_ts
 
-                with patch(f"{MODULE}.agent_client") as mock_ac:
+                with patch(f"{MODULE}.agent_client") as mock_ac, \
+                     patch(f"{MODULE}.get_node_provider", return_value="docker"):
                     mock_ac.is_agent_online.return_value = True
                     mock_ac.get_lab_status_from_agent = AsyncMock(return_value={})
 
-                    async def _deploy(agent, jid, lid, topology=None):
+                    async def _deploy(agent, jid, lid, **kwargs):
                         if agent.id == host_a.id:
                             return {"status": "completed"}
                         return {"status": "error", "stderr": "deploy error on B"}

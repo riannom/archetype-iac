@@ -141,7 +141,7 @@ async def test_get_agent_for_node_priorities_and_mark_offline():
     db = MagicMock()
 
     node_q = MagicMock()
-    node_q.filter.return_value.first.return_value = SimpleNamespace(host_id="h1")
+    node_q.filter.return_value.first.return_value = SimpleNamespace(host_id="h1", device=None)
     placement_q = MagicMock()
     placement_q.filter.return_value.first.return_value = None
 

@@ -156,6 +156,8 @@ class TestStopNodesSequencing:
         lab = _make_lab(test_db, test_user, agent_id=host.id)
         job = _make_job(test_db, lab, test_user)
         ns = _make_node_state(test_db, lab, "n1", "R1", desired="stopped", actual="running")
+        ns.stopping_started_at = datetime.now(timezone.utc)
+        test_db.commit()
         container_name = _get_container_name(lab.id, "R1")
 
         manager = _make_manager(test_db, lab, job, [ns.node_id], agent=host)
@@ -283,6 +285,7 @@ class TestStopStateTransitions:
         ns = _make_node_state(test_db, lab, "n1", "R1", desired="stopped", actual="running")
         ns.is_ready = True
         ns.boot_started_at = datetime.now(timezone.utc)
+        ns.stopping_started_at = datetime.now(timezone.utc)
         test_db.commit()
         container_name = _get_container_name(lab.id, "R1")
 
@@ -662,6 +665,7 @@ class TestApplyStopResult:
         ns = _make_node_state(test_db, lab, "n1", "R1", desired="stopped", actual="running")
         ns.error_message = "Previous error"
         ns.is_ready = True
+        ns.stopping_started_at = datetime.now(timezone.utc)
         test_db.commit()
 
         manager = _make_manager(test_db, lab, job, [ns.node_id], agent=host)

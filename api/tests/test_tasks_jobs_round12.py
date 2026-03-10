@@ -545,8 +545,8 @@ class TestSessionHelpers:
         session.dirty = set()
         session.deleted = set()
         session.commit.side_effect = RuntimeError("commit failed")
-        with patch("app.tasks.jobs.record_db_transaction_issue") as mock_metric, \
-             patch("app.tasks.jobs.record_db_transaction_release_duration") as mock_duration:
+        with patch("app.utils.db.record_db_transaction_issue") as mock_metric, \
+             patch("app.utils.db.record_db_transaction_release_duration") as mock_duration:
             with pytest.raises(RuntimeError, match="commit failed"):
                 _release_db_transaction_for_io(
                     session,
@@ -572,9 +572,9 @@ class TestSessionHelpers:
         session.deleted = set()
         session.rollback.side_effect = RuntimeError("statement timeout during rollback")
 
-        with patch("app.tasks.jobs.record_db_transaction_issue") as mock_metric, \
-             patch("app.tasks.jobs.record_db_transaction_release_duration") as mock_duration, \
-             patch("app.tasks.jobs.logger.warning") as mock_warning:
+        with patch("app.utils.db.record_db_transaction_issue") as mock_metric, \
+             patch("app.utils.db.record_db_transaction_release_duration") as mock_duration, \
+             patch("app.utils.db.logger.warning") as mock_warning:
             with pytest.raises(RuntimeError, match="statement timeout"):
                 _release_db_transaction_for_io(
                     session,
@@ -602,8 +602,8 @@ class TestSessionHelpers:
         """Rollback failures during reset are logged but not raised."""
         session = MagicMock()
         session.rollback.side_effect = RuntimeError("rollback failed")
-        with patch("app.tasks.jobs.record_db_transaction_issue") as mock_metric, \
-             patch("app.tasks.jobs.logger.warning") as mock_warning:
+        with patch("app.utils.db.record_db_transaction_issue") as mock_metric, \
+             patch("app.utils.db.logger.warning") as mock_warning:
             # Should not raise
             _reset_session_after_db_error(
                 session,

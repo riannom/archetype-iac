@@ -61,7 +61,7 @@ def test_delete_device_handles_built_in(monkeypatch) -> None:
     service = device_service.DeviceService()
 
     monkeypatch.setattr(device_service, "get_config_by_device", lambda device_id: object())
-    monkeypatch.setattr(device_service, "canonicalize_device_id", lambda device_id: "router")
+    monkeypatch.setattr("app.image_store.canonicalize_device_id", lambda device_id: "router")
     monkeypatch.setattr("app.image_store.get_device_image_count", lambda device_id: 0)
     monkeypatch.setattr("app.image_store.is_device_hidden", lambda device_id: False)
 
@@ -81,7 +81,7 @@ def test_delete_device_blocks_with_images(monkeypatch) -> None:
     service = device_service.DeviceService()
 
     monkeypatch.setattr(device_service, "get_config_by_device", lambda device_id: object())
-    monkeypatch.setattr(device_service, "canonicalize_device_id", lambda device_id: "router")
+    monkeypatch.setattr("app.image_store.canonicalize_device_id", lambda device_id: "router")
     monkeypatch.setattr("app.image_store.get_device_image_count", lambda device_id: 2)
 
     with pytest.raises(device_service.DeviceHasImagesError):
@@ -98,7 +98,7 @@ def test_update_device_config_recognizes_built_in_when_key_differs_from_kind(mon
         "get_config_by_device",
         lambda device_id: object() if device_id in {"c8000v", "cisco_c8000v"} else None,
     )
-    monkeypatch.setattr(device_service, "canonicalize_device_id", lambda device_id: "c8000v")
+    monkeypatch.setattr("app.image_store.canonicalize_device_id", lambda device_id: "c8000v")
     monkeypatch.setattr("app.image_store.find_custom_device", lambda device_id: None)
     monkeypatch.setattr(
         "app.image_store.set_device_override",
@@ -152,7 +152,7 @@ def test_get_device_config_uses_canonical_override_key_for_builtins(monkeypatch)
         "get_config_by_device",
         lambda device_id: fake_config if device_id in {"c8000v", "cisco_c8000v"} else None,
     )
-    monkeypatch.setattr(device_service, "canonicalize_device_id", lambda device_id: "c8000v")
+    monkeypatch.setattr("app.image_store.canonicalize_device_id", lambda device_id: "c8000v")
     monkeypatch.setattr(
         "app.image_store.get_device_override",
         lambda device_id: override_lookups.append(device_id) or {"cpu": 4},
@@ -180,7 +180,7 @@ def test_reset_device_config_uses_canonical_id_for_builtins(monkeypatch) -> None
         "get_config_by_device",
         lambda device_id: object() if device_id in {"c8000v", "cisco_c8000v"} else None,
     )
-    monkeypatch.setattr(device_service, "canonicalize_device_id", lambda device_id: "c8000v")
+    monkeypatch.setattr("app.image_store.canonicalize_device_id", lambda device_id: "c8000v")
     monkeypatch.setattr("app.image_store.delete_device_override", fake_delete_override)
     monkeypatch.setattr("app.image_store.find_custom_device", lambda device_id: None)
 
@@ -198,7 +198,7 @@ def test_hide_restore_device_uses_canonical_device_id(monkeypatch) -> None:
         "get_config_by_device",
         lambda device_id: object() if device_id in {"c8000v", "cisco_c8000v"} else None,
     )
-    monkeypatch.setattr(device_service, "canonicalize_device_id", lambda device_id: "c8000v")
+    monkeypatch.setattr("app.image_store.canonicalize_device_id", lambda device_id: "c8000v")
     monkeypatch.setattr("app.image_store.get_device_image_count", lambda device_id: 0)
 
     hidden_state = {"value": False}
@@ -334,7 +334,7 @@ def test_resolve_hardware_specs_uses_versioned_manifest_lookup(monkeypatch) -> N
     service = device_service.DeviceService()
 
     monkeypatch.setattr(device_service, "_get_config_by_kind", lambda device_id: None)
-    monkeypatch.setattr(device_service, "canonicalize_device_id", lambda _device_id: "nxosv9000")
+    monkeypatch.setattr("app.image_store.canonicalize_device_id", lambda _device_id: "nxosv9000")
     monkeypatch.setattr(device_service, "find_custom_device", lambda device_id: None)
     monkeypatch.setattr(device_service, "get_device_override", lambda device_id: {})
 
@@ -346,7 +346,7 @@ def test_resolve_hardware_specs_uses_versioned_manifest_lookup(monkeypatch) -> N
             return "/var/lib/archetype/images/nxosv9000.qcow2"
         return None
 
-    monkeypatch.setattr(device_service, "find_image_reference", _fake_find_image_reference)
+    monkeypatch.setattr("app.image_store.find_image_reference", _fake_find_image_reference)
     monkeypatch.setattr(
         device_service,
         "get_image_runtime_metadata",

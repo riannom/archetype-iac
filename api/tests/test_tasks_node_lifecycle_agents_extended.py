@@ -217,7 +217,7 @@ class TestReleaseDbTransactionForIo:
     def test_commit_exception_falls_back_to_rollback(
         self, test_db: Session, ext_lab: models.Lab, ext_job: models.Job,
     ):
-        """If commit raises, a rollback attempt should be made without re-raising."""
+        """If commit raises, a rollback attempt should be made and the error re-raised."""
         ns = _make_node_state(test_db, ext_lab, "R1")
         mixin = _make_mixin(test_db, ext_lab, ext_job, [ns])
 
@@ -228,8 +228,9 @@ class TestReleaseDbTransactionForIo:
         mock_session.commit.side_effect = RuntimeError("db gone")
         mixin.session = mock_session
 
-        # Should not propagate the exception
-        mixin._release_db_transaction_for_io("commit error recovery")
+        # Exception propagates after rollback
+        with pytest.raises(RuntimeError, match="db gone"):
+            mixin._release_db_transaction_for_io("commit error recovery")
 
         mock_session.commit.assert_called_once()
         mock_session.rollback.assert_called_once()
@@ -1020,6 +1021,7 @@ class TestResolveAgentsIntegration:
             mock_client.is_agent_online.return_value = True
             mock_client.ping_agent = AsyncMock(return_value=None)
             mock_client.get_healthy_agent = AsyncMock(return_value=host)
+            mock_client.get_agent_for_node = AsyncMock(return_value=host)
             with patch(
                 "app.agent_client.get_agent_providers",
                 return_value=["docker"],
@@ -1096,6 +1098,7 @@ class TestResolveAgentsIntegration:
             mock_client.is_agent_online.return_value = False
             mock_client.ping_agent = AsyncMock(return_value=None)
             mock_client.get_healthy_agent = AsyncMock(return_value=None)
+            mock_client.get_agent_for_node = AsyncMock(return_value=None)
             with patch(
                 "app.agent_client.get_agent_providers",
                 return_value=["docker"],

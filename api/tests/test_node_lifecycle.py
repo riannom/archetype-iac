@@ -536,6 +536,7 @@ class TestResolveAgents:
         with patch("app.tasks.node_lifecycle_agents.agent_client") as mock_ac:
             mock_ac.is_agent_online = MagicMock(return_value=False)
             mock_ac.get_healthy_agent = AsyncMock(return_value=None)
+            mock_ac.get_agent_for_node = AsyncMock(return_value=None)
             result = await manager._resolve_agents()
 
         assert result is False
@@ -591,6 +592,7 @@ class TestResolveAgents:
                 mock_ac.is_agent_online = MagicMock(return_value=True)
                 mock_ac.ping_agent = AsyncMock(side_effect=_ping)
                 mock_ac.get_healthy_agent = AsyncMock(return_value=fallback_host)
+                mock_ac.get_agent_for_node = AsyncMock(return_value=fallback_host)
                 result = await manager._resolve_agents()
 
         test_db.refresh(placement)
@@ -3314,6 +3316,7 @@ class TestPlacementFailover:
         with patch("app.tasks.node_lifecycle_agents.agent_client") as mock_ac:
             mock_ac.is_agent_online = MagicMock(return_value=False)
             mock_ac.get_healthy_agent = AsyncMock(return_value=None)
+            mock_ac.get_agent_for_node = AsyncMock(return_value=None)
             mock_ac.get_agent_providers = MagicMock(return_value=["docker"])
             result = await manager._resolve_agents()
 
