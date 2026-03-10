@@ -5,7 +5,8 @@
  * Pre-generates all random values to avoid flickering.
  */
 
-import { useEffect, useRef } from 'react';
+import { useRef } from 'react';
+import { useCanvasAnimation } from './useCanvasAnimation';
 
 interface LavenderStem {
   x: number;
@@ -43,6 +44,7 @@ interface Cloud {
   puffs: { offsetX: number; offsetY: number; size: number }[];
 }
 
+
 export function useLavenderFields(
   canvasRef: React.RefObject<HTMLCanvasElement>,
   darkMode: boolean,
@@ -52,102 +54,12 @@ export function useLavenderFields(
   const stemsRef = useRef<LavenderStem[]>([]);
   const butterfliesRef = useRef<Butterfly[]>([]);
   const cloudsRef = useRef<Cloud[]>([]);
-  const animationRef = useRef<number>(0);
-  const timeRef = useRef<number>(0);
+  const sizeRef = useRef({ w: 0, h: 0 });
 
-  useEffect(() => {
-    if (!active) return;
+  useCanvasAnimation(canvasRef, darkMode, opacity, active, {
 
-    const canvas = canvasRef.current;
-    if (!canvas) return;
+    draw: (ctx, canvas, time, _dt) => {
 
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-
-    const resize = () => {
-      canvas.width = window.innerWidth;
-      canvas.height = window.innerHeight;
-      initializeElements();
-    };
-
-    const initializeElements = () => {
-      const width = canvas.width;
-      const height = canvas.height;
-
-      // Create lavender stems - denser at the bottom
-      stemsRef.current = [];
-      const stemCount = Math.floor(width / 8);
-      for (let i = 0; i < stemCount; i++) {
-        const x = (i / stemCount) * width + (Math.random() - 0.5) * 15;
-        const row = Math.floor(Math.random() * 5);
-        const baseY = height * 0.5 + row * (height * 0.1);
-        const heightVariation = 40 + Math.random() * 60;
-        const flowerCount = 3 + Math.floor(Math.random() * 4);
-
-        const flowerOffsets: { y: number; size: number; hue: number }[] = [];
-        for (let f = 0; f < flowerCount; f++) {
-          flowerOffsets.push({
-            y: (f / flowerCount) * heightVariation * 0.6,
-            size: 2 + Math.random() * 2,
-            hue: 260 + Math.random() * 20 - 10, // Purple variations
-          });
-        }
-
-        stemsRef.current.push({
-          x,
-          baseY,
-          height: heightVariation,
-          phase: Math.random() * Math.PI * 2,
-          swayAmount: 0.02 + Math.random() * 0.02,
-          flowerCount,
-          flowerOffsets,
-        });
-      }
-
-      // Create butterflies
-      butterfliesRef.current = [];
-      const butterflyCount = 3 + Math.floor(Math.random() * 3);
-      for (let i = 0; i < butterflyCount; i++) {
-        butterfliesRef.current.push({
-          x: Math.random() * width,
-          y: height * 0.3 + Math.random() * height * 0.4,
-          vx: 0,
-          vy: 0,
-          wingPhase: Math.random() * Math.PI * 2,
-          wingSpeed: 0.04 + Math.random() * 0.02, // Slower, varied wing speed
-          hue: Math.random() > 0.5 ? 40 : 30, // Orange or yellow
-          size: 8 + Math.random() * 6,
-          targetX: Math.random() * width,
-          targetY: height * 0.3 + Math.random() * height * 0.4,
-          restTimer: 0,
-          isResting: false,
-          bodyAngle: 0,
-          flutterOffset: Math.random() * Math.PI * 2,
-        });
-      }
-
-      // Create clouds
-      cloudsRef.current = [];
-      for (let i = 0; i < 4; i++) {
-        const puffs: { offsetX: number; offsetY: number; size: number }[] = [];
-        const puffCount = 4 + Math.floor(Math.random() * 3);
-        for (let p = 0; p < puffCount; p++) {
-          puffs.push({
-            offsetX: (p - puffCount / 2) * 30 + (Math.random() - 0.5) * 20,
-            offsetY: (Math.random() - 0.5) * 20,
-            size: 25 + Math.random() * 20,
-          });
-        }
-        cloudsRef.current.push({
-          x: Math.random() * width * 1.5,
-          y: 30 + Math.random() * height * 0.15,
-          width: 80 + Math.random() * 60,
-          opacity: 0.3 + Math.random() * 0.3,
-          speed: 0.1 + Math.random() * 0.15,
-          puffs,
-        });
-      }
-    };
 
     const drawSky = () => {
       const gradient = ctx.createLinearGradient(0, 0, 0, canvas.height);
@@ -497,9 +409,89 @@ export function useLavenderFields(
       });
     };
 
-    const animate = () => {
-      timeRef.current += 16;
-      const time = timeRef.current;
+
+      const w = canvas.width;
+      const h = canvas.height;
+      if (sizeRef.current.w !== w || sizeRef.current.h !== h) {
+        sizeRef.current = { w, h };
+        const width = canvas.width;
+        const height = canvas.height;
+  
+        // Create lavender stems - denser at the bottom
+        stemsRef.current = [];
+        const stemCount = Math.floor(width / 8);
+        for (let i = 0; i < stemCount; i++) {
+          const x = (i / stemCount) * width + (Math.random() - 0.5) * 15;
+          const row = Math.floor(Math.random() * 5);
+          const baseY = height * 0.5 + row * (height * 0.1);
+          const heightVariation = 40 + Math.random() * 60;
+          const flowerCount = 3 + Math.floor(Math.random() * 4);
+  
+          const flowerOffsets: { y: number; size: number; hue: number }[] = [];
+          for (let f = 0; f < flowerCount; f++) {
+            flowerOffsets.push({
+              y: (f / flowerCount) * heightVariation * 0.6,
+              size: 2 + Math.random() * 2,
+              hue: 260 + Math.random() * 20 - 10, // Purple variations
+            });
+          }
+  
+          stemsRef.current.push({
+            x,
+            baseY,
+            height: heightVariation,
+            phase: Math.random() * Math.PI * 2,
+            swayAmount: 0.02 + Math.random() * 0.02,
+            flowerCount,
+            flowerOffsets,
+          });
+        }
+  
+        // Create butterflies
+        butterfliesRef.current = [];
+        const butterflyCount = 3 + Math.floor(Math.random() * 3);
+        for (let i = 0; i < butterflyCount; i++) {
+          butterfliesRef.current.push({
+            x: Math.random() * width,
+            y: height * 0.3 + Math.random() * height * 0.4,
+            vx: 0,
+            vy: 0,
+            wingPhase: Math.random() * Math.PI * 2,
+            wingSpeed: 0.04 + Math.random() * 0.02, // Slower, varied wing speed
+            hue: Math.random() > 0.5 ? 40 : 30, // Orange or yellow
+            size: 8 + Math.random() * 6,
+            targetX: Math.random() * width,
+            targetY: height * 0.3 + Math.random() * height * 0.4,
+            restTimer: 0,
+            isResting: false,
+            bodyAngle: 0,
+            flutterOffset: Math.random() * Math.PI * 2,
+          });
+        }
+  
+        // Create clouds
+        cloudsRef.current = [];
+        for (let i = 0; i < 4; i++) {
+          const puffs: { offsetX: number; offsetY: number; size: number }[] = [];
+          const puffCount = 4 + Math.floor(Math.random() * 3);
+          for (let p = 0; p < puffCount; p++) {
+            puffs.push({
+              offsetX: (p - puffCount / 2) * 30 + (Math.random() - 0.5) * 20,
+              offsetY: (Math.random() - 0.5) * 20,
+              size: 25 + Math.random() * 20,
+            });
+          }
+          cloudsRef.current.push({
+            x: Math.random() * width * 1.5,
+            y: 30 + Math.random() * height * 0.15,
+            width: 80 + Math.random() * 60,
+            opacity: 0.3 + Math.random() * 0.3,
+            speed: 0.1 + Math.random() * 0.15,
+            puffs,
+          });
+        }
+      }
+
 
       ctx.clearRect(0, 0, canvas.width, canvas.height);
 
@@ -509,16 +501,6 @@ export function useLavenderFields(
       drawLavender(time);
       drawButterflies(time);
 
-      animationRef.current = requestAnimationFrame(animate);
-    };
-
-    resize();
-    window.addEventListener('resize', resize);
-    animate();
-
-    return () => {
-      window.removeEventListener('resize', resize);
-      cancelAnimationFrame(animationRef.current);
-    };
-  }, [canvasRef, darkMode, opacity, active]);
+    },
+  });
 }

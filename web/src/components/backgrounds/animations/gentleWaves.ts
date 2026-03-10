@@ -5,7 +5,8 @@
  * Pre-generates all random values to avoid flickering.
  */
 
-import { useEffect, useRef } from 'react';
+import { useRef } from 'react';
+import { useCanvasAnimation } from './useCanvasAnimation';
 
 interface WaveLayer {
   amplitude: number;
@@ -33,6 +34,7 @@ interface Sparkle {
   size: number;
 }
 
+
 export function useGentleWaves(
   canvasRef: React.RefObject<HTMLCanvasElement>,
   darkMode: boolean,
@@ -42,75 +44,12 @@ export function useGentleWaves(
   const wavesRef = useRef<WaveLayer[]>([]);
   const bubblesRef = useRef<Bubble[]>([]);
   const sparklesRef = useRef<Sparkle[]>([]);
-  const animationRef = useRef<number>(0);
-  const timeRef = useRef<number>(0);
+  const sizeRef = useRef({ w: 0, h: 0 });
 
-  useEffect(() => {
-    if (!active) return;
+  useCanvasAnimation(canvasRef, darkMode, opacity, active, {
 
-    const canvas = canvasRef.current;
-    if (!canvas) return;
+    draw: (ctx, canvas, time, _dt) => {
 
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-
-    const resize = () => {
-      canvas.width = window.innerWidth;
-      canvas.height = window.innerHeight;
-      initializeElements();
-    };
-
-    const initializeElements = () => {
-      const height = canvas.height;
-
-      // Create wave layers
-      wavesRef.current = [];
-
-      const waveConfigs = darkMode
-        ? [
-            { yOffset: 0.3, amplitude: 30, frequency: 0.008, speed: 0.0008, color: 'rgba(30, 60, 80, 0.4)' },
-            { yOffset: 0.4, amplitude: 25, frequency: 0.01, speed: 0.001, color: 'rgba(40, 70, 90, 0.5)' },
-            { yOffset: 0.5, amplitude: 20, frequency: 0.012, speed: 0.0012, color: 'rgba(50, 80, 100, 0.6)' },
-            { yOffset: 0.6, amplitude: 18, frequency: 0.015, speed: 0.0015, color: 'rgba(60, 90, 110, 0.7)' },
-            { yOffset: 0.7, amplitude: 15, frequency: 0.018, speed: 0.0018, color: 'rgba(70, 100, 120, 0.8)' },
-          ]
-        : [
-            { yOffset: 0.3, amplitude: 30, frequency: 0.008, speed: 0.0008, color: 'rgba(100, 180, 220, 0.3)' },
-            { yOffset: 0.4, amplitude: 25, frequency: 0.01, speed: 0.001, color: 'rgba(80, 160, 210, 0.4)' },
-            { yOffset: 0.5, amplitude: 20, frequency: 0.012, speed: 0.0012, color: 'rgba(60, 140, 200, 0.5)' },
-            { yOffset: 0.6, amplitude: 18, frequency: 0.015, speed: 0.0015, color: 'rgba(40, 120, 190, 0.6)' },
-            { yOffset: 0.7, amplitude: 15, frequency: 0.018, speed: 0.0018, color: 'rgba(20, 100, 180, 0.7)' },
-          ];
-
-      waveConfigs.forEach((config) => {
-        wavesRef.current.push({
-          amplitude: config.amplitude,
-          frequency: config.frequency,
-          speed: config.speed,
-          phase: Math.random() * Math.PI * 2,
-          yOffset: config.yOffset * height,
-          color: config.color,
-        });
-      });
-
-      // Create bubbles
-      bubblesRef.current = [];
-      for (let i = 0; i < 15; i++) {
-        bubblesRef.current.push(createBubble());
-      }
-
-      // Create surface sparkles
-      sparklesRef.current = [];
-      for (let i = 0; i < 20; i++) {
-        sparklesRef.current.push({
-          x: Math.random() * canvas.width,
-          y: height * 0.25 + Math.random() * height * 0.15,
-          phase: Math.random() * Math.PI * 2,
-          speed: 0.03 + Math.random() * 0.03,
-          size: 2 + Math.random() * 3,
-        });
-      }
-    };
 
     const createBubble = (): Bubble => ({
       x: Math.random() * canvas.width,
@@ -239,9 +178,62 @@ export function useGentleWaves(
       }
     };
 
-    const animate = () => {
-      timeRef.current += 16;
-      const time = timeRef.current;
+
+      const w = canvas.width;
+      const h = canvas.height;
+      if (sizeRef.current.w !== w || sizeRef.current.h !== h) {
+        sizeRef.current = { w, h };
+        const height = canvas.height;
+  
+        // Create wave layers
+        wavesRef.current = [];
+  
+        const waveConfigs = darkMode
+          ? [
+              { yOffset: 0.3, amplitude: 30, frequency: 0.008, speed: 0.0008, color: 'rgba(30, 60, 80, 0.4)' },
+              { yOffset: 0.4, amplitude: 25, frequency: 0.01, speed: 0.001, color: 'rgba(40, 70, 90, 0.5)' },
+              { yOffset: 0.5, amplitude: 20, frequency: 0.012, speed: 0.0012, color: 'rgba(50, 80, 100, 0.6)' },
+              { yOffset: 0.6, amplitude: 18, frequency: 0.015, speed: 0.0015, color: 'rgba(60, 90, 110, 0.7)' },
+              { yOffset: 0.7, amplitude: 15, frequency: 0.018, speed: 0.0018, color: 'rgba(70, 100, 120, 0.8)' },
+            ]
+          : [
+              { yOffset: 0.3, amplitude: 30, frequency: 0.008, speed: 0.0008, color: 'rgba(100, 180, 220, 0.3)' },
+              { yOffset: 0.4, amplitude: 25, frequency: 0.01, speed: 0.001, color: 'rgba(80, 160, 210, 0.4)' },
+              { yOffset: 0.5, amplitude: 20, frequency: 0.012, speed: 0.0012, color: 'rgba(60, 140, 200, 0.5)' },
+              { yOffset: 0.6, amplitude: 18, frequency: 0.015, speed: 0.0015, color: 'rgba(40, 120, 190, 0.6)' },
+              { yOffset: 0.7, amplitude: 15, frequency: 0.018, speed: 0.0018, color: 'rgba(20, 100, 180, 0.7)' },
+            ];
+  
+        waveConfigs.forEach((config) => {
+          wavesRef.current.push({
+            amplitude: config.amplitude,
+            frequency: config.frequency,
+            speed: config.speed,
+            phase: Math.random() * Math.PI * 2,
+            yOffset: config.yOffset * height,
+            color: config.color,
+          });
+        });
+  
+        // Create bubbles
+        bubblesRef.current = [];
+        for (let i = 0; i < 15; i++) {
+          bubblesRef.current.push(createBubble());
+        }
+  
+        // Create surface sparkles
+        sparklesRef.current = [];
+        for (let i = 0; i < 20; i++) {
+          sparklesRef.current.push({
+            x: Math.random() * canvas.width,
+            y: height * 0.25 + Math.random() * height * 0.15,
+            phase: Math.random() * Math.PI * 2,
+            speed: 0.03 + Math.random() * 0.03,
+            size: 2 + Math.random() * 3,
+          });
+        }
+      }
+
 
       ctx.clearRect(0, 0, canvas.width, canvas.height);
 
@@ -256,16 +248,6 @@ export function useGentleWaves(
       // Draw sparkles
       sparklesRef.current.forEach((sparkle) => drawSparkle(sparkle, time));
 
-      animationRef.current = requestAnimationFrame(animate);
-    };
-
-    resize();
-    window.addEventListener('resize', resize);
-    animate();
-
-    return () => {
-      window.removeEventListener('resize', resize);
-      cancelAnimationFrame(animationRef.current);
-    };
-  }, [canvasRef, darkMode, opacity, active]);
+    },
+  });
 }

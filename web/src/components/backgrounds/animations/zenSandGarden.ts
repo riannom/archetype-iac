@@ -6,7 +6,8 @@
  * Pre-generates all random values to avoid flickering.
  */
 
-import { useEffect, useRef } from 'react';
+import { useRef } from 'react';
+import { useCanvasAnimation } from './useCanvasAnimation';
 
 interface Stone {
   x: number;
@@ -36,6 +37,7 @@ interface Leaf {
   color: string;
 }
 
+
 export function useZenSandGarden(
   canvasRef: React.RefObject<HTMLCanvasElement>,
   darkMode: boolean,
@@ -46,120 +48,13 @@ export function useZenSandGarden(
   const ripplesRef = useRef<SandRipple[]>([]);
   const leavesRef = useRef<Leaf[]>([]);
   const rakePatternRef = useRef<{ x: number; curve: number }[]>([]);
-  const animationRef = useRef<number>(0);
-  const timeRef = useRef<number>(0);
   const nextRippleRef = useRef<number>(0);
+  const sizeRef = useRef({ w: 0, h: 0 });
 
-  useEffect(() => {
-    if (!active) return;
+  useCanvasAnimation(canvasRef, darkMode, opacity, active, {
 
-    const canvas = canvasRef.current;
-    if (!canvas) return;
+    draw: (ctx, canvas, time, _dt) => {
 
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-
-    const resize = () => {
-      canvas.width = window.innerWidth;
-      canvas.height = window.innerHeight;
-      initializeElements();
-    };
-
-    const initializeElements = () => {
-      const width = canvas.width;
-      const height = canvas.height;
-
-      // Create stones with collision detection to prevent overlapping zones
-      stonesRef.current = [];
-      const stoneCount = 3 + Math.floor(Math.random() * 3);
-
-      for (let i = 0; i < stoneCount; i++) {
-        const stoneWidth = 40 + Math.random() * 60;
-        const stoneHeight = 30 + Math.random() * 40;
-        const zoneRadius = Math.max(stoneWidth, stoneHeight) * 3;
-
-        // Try to find a position that doesn't overlap with existing stones' zones
-        let x = 0, y = 0;
-        let attempts = 0;
-        const maxAttempts = 50;
-
-        do {
-          x = width * 0.15 + Math.random() * width * 0.7;
-          y = height * 0.25 + Math.random() * height * 0.5;
-          attempts++;
-
-          // Check distance from all existing stones
-          let tooClose = false;
-          for (const existing of stonesRef.current) {
-            const existingZoneRadius = Math.max(existing.width, existing.height) * 3;
-            const minDist = zoneRadius + existingZoneRadius + 20; // Extra margin
-            const dx = x - existing.x;
-            const dy = y - existing.y;
-            const dist = Math.sqrt(dx * dx + dy * dy);
-            if (dist < minDist) {
-              tooClose = true;
-              break;
-            }
-          }
-          if (!tooClose) break;
-        } while (attempts < maxAttempts);
-
-        // Skip this stone if we couldn't find a valid position
-        if (attempts >= maxAttempts && stonesRef.current.length > 0) {
-          continue;
-        }
-
-        // Generate moss patches
-        const mossPatches: { x: number; y: number; size: number }[] = [];
-        const mossCoverage = 0.2 + Math.random() * 0.4;
-        const patchCount = Math.floor(mossCoverage * 10);
-
-        for (let m = 0; m < patchCount; m++) {
-          mossPatches.push({
-            x: (Math.random() - 0.5) * stoneWidth * 0.8,
-            y: (Math.random() - 0.5) * stoneHeight * 0.6 - stoneHeight * 0.2,
-            size: 5 + Math.random() * 10,
-          });
-        }
-
-        const grayValue = 80 + Math.floor(Math.random() * 60);
-        stonesRef.current.push({
-          x,
-          y,
-          width: stoneWidth,
-          height: stoneHeight,
-          rotation: (Math.random() - 0.5) * 0.3,
-          mossCoverage,
-          mossPatches,
-          color: `rgb(${grayValue}, ${grayValue - 5}, ${grayValue - 10})`,
-        });
-      }
-
-      // Create rake pattern lines
-      rakePatternRef.current = [];
-      for (let x = 0; x < width + 50; x += 8) {
-        rakePatternRef.current.push({
-          x,
-          curve: Math.sin(x * 0.02) * 10 + Math.sin(x * 0.005) * 20,
-        });
-      }
-
-      // Create decorative leaves
-      leavesRef.current = [];
-      for (let i = 0; i < 5; i++) {
-        leavesRef.current.push({
-          x: Math.random() * width,
-          y: Math.random() * height,
-          rotation: Math.random() * Math.PI * 2,
-          size: 8 + Math.random() * 8,
-          color: Math.random() > 0.5 ? '#8B4513' : '#A0522D',
-        });
-      }
-
-      // Initialize ripples array
-      ripplesRef.current = [];
-      nextRippleRef.current = 2000 + Math.random() * 3000;
-    };
 
     // Helper to check if a point is within a stone's circular rake zone
     const isInStoneZone = (px: number, py: number): boolean => {
@@ -357,9 +252,106 @@ export function useZenSandGarden(
       });
     };
 
-    const animate = () => {
-      timeRef.current += 16;
-      const time = timeRef.current;
+
+      const w = canvas.width;
+      const h = canvas.height;
+      if (sizeRef.current.w !== w || sizeRef.current.h !== h) {
+        sizeRef.current = { w, h };
+        const width = canvas.width;
+        const height = canvas.height;
+  
+        // Create stones with collision detection to prevent overlapping zones
+        stonesRef.current = [];
+        const stoneCount = 3 + Math.floor(Math.random() * 3);
+  
+        for (let i = 0; i < stoneCount; i++) {
+          const stoneWidth = 40 + Math.random() * 60;
+          const stoneHeight = 30 + Math.random() * 40;
+          const zoneRadius = Math.max(stoneWidth, stoneHeight) * 3;
+  
+          // Try to find a position that doesn't overlap with existing stones' zones
+          let x = 0, y = 0;
+          let attempts = 0;
+          const maxAttempts = 50;
+  
+          do {
+            x = width * 0.15 + Math.random() * width * 0.7;
+            y = height * 0.25 + Math.random() * height * 0.5;
+            attempts++;
+  
+            // Check distance from all existing stones
+            let tooClose = false;
+            for (const existing of stonesRef.current) {
+              const existingZoneRadius = Math.max(existing.width, existing.height) * 3;
+              const minDist = zoneRadius + existingZoneRadius + 20; // Extra margin
+              const dx = x - existing.x;
+              const dy = y - existing.y;
+              const dist = Math.sqrt(dx * dx + dy * dy);
+              if (dist < minDist) {
+                tooClose = true;
+                break;
+              }
+            }
+            if (!tooClose) break;
+          } while (attempts < maxAttempts);
+  
+          // Skip this stone if we couldn't find a valid position
+          if (attempts >= maxAttempts && stonesRef.current.length > 0) {
+            continue;
+          }
+  
+          // Generate moss patches
+          const mossPatches: { x: number; y: number; size: number }[] = [];
+          const mossCoverage = 0.2 + Math.random() * 0.4;
+          const patchCount = Math.floor(mossCoverage * 10);
+  
+          for (let m = 0; m < patchCount; m++) {
+            mossPatches.push({
+              x: (Math.random() - 0.5) * stoneWidth * 0.8,
+              y: (Math.random() - 0.5) * stoneHeight * 0.6 - stoneHeight * 0.2,
+              size: 5 + Math.random() * 10,
+            });
+          }
+  
+          const grayValue = 80 + Math.floor(Math.random() * 60);
+          stonesRef.current.push({
+            x,
+            y,
+            width: stoneWidth,
+            height: stoneHeight,
+            rotation: (Math.random() - 0.5) * 0.3,
+            mossCoverage,
+            mossPatches,
+            color: `rgb(${grayValue}, ${grayValue - 5}, ${grayValue - 10})`,
+          });
+        }
+  
+        // Create rake pattern lines
+        rakePatternRef.current = [];
+        for (let x = 0; x < width + 50; x += 8) {
+          rakePatternRef.current.push({
+            x,
+            curve: Math.sin(x * 0.02) * 10 + Math.sin(x * 0.005) * 20,
+          });
+        }
+  
+        // Create decorative leaves
+        leavesRef.current = [];
+        for (let i = 0; i < 5; i++) {
+          leavesRef.current.push({
+            x: Math.random() * width,
+            y: Math.random() * height,
+            rotation: Math.random() * Math.PI * 2,
+            size: 8 + Math.random() * 8,
+            color: Math.random() > 0.5 ? '#8B4513' : '#A0522D',
+          });
+        }
+  
+        // Initialize ripples array
+        ripplesRef.current = [];
+        nextRippleRef.current = 2000 + Math.random() * 3000;
+      }
+
 
       // Occasionally create new ripple
       nextRippleRef.current -= 16;
@@ -382,16 +374,6 @@ export function useZenSandGarden(
       drawStones();
       drawLeaves();
 
-      animationRef.current = requestAnimationFrame(animate);
-    };
-
-    resize();
-    window.addEventListener('resize', resize);
-    animate();
-
-    return () => {
-      window.removeEventListener('resize', resize);
-      cancelAnimationFrame(animationRef.current);
-    };
-  }, [canvasRef, darkMode, opacity, active]);
+    },
+  });
 }

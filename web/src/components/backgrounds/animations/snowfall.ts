@@ -3,7 +3,8 @@
  * Gentle falling snowflakes with crystal patterns
  */
 
-import { useRef, useEffect, useCallback } from 'react';
+import { useRef, useCallback } from 'react';
+import { useCanvasAnimation } from './useCanvasAnimation';
 
 interface Snowflake {
   x: number;
@@ -25,8 +26,6 @@ export function useSnowfall(
   active: boolean
 ) {
   const snowflakesRef = useRef<Snowflake[]>([]);
-  const animationRef = useRef<number | undefined>(undefined);
-  const timeRef = useRef<number>(0);
 
   const createSnowflake = useCallback((canvas: HTMLCanvasElement, startFromTop = true): Snowflake => {
     return {
@@ -118,38 +117,21 @@ export function useSnowfall(
     ctx.restore();
   }, []);
 
-  useEffect(() => {
-    if (!active) return;
-
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-
-    const resizeCanvas = () => {
-      canvas.width = window.innerWidth;
-      canvas.height = window.innerHeight;
-    };
-    resizeCanvas();
-    window.addEventListener('resize', resizeCanvas);
-
-    const flakeCount = Math.floor((canvas.width * canvas.height) / 15000);
-    snowflakesRef.current = Array.from({ length: flakeCount }, () =>
-      createSnowflake(canvas, false)
-    );
-
-    const animate = () => {
-      if (!canvas || !ctx) return;
-
+  useCanvasAnimation(canvasRef, darkMode, opacity, active, {
+    init: (_ctx, canvas) => {
+      const flakeCount = Math.floor((canvas.width * canvas.height) / 15000);
+      snowflakesRef.current = Array.from({ length: flakeCount }, () =>
+        createSnowflake(canvas, false)
+      );
+    },
+    draw: (ctx, canvas, time) => {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
-      timeRef.current += 0.016;
 
       const opacityMultiplier = opacity / 50;
 
       snowflakesRef.current.forEach((flake, index) => {
         flake.y += flake.speed;
-        flake.x += Math.sin(timeRef.current * flake.wobbleSpeed + flake.wobblePhase) * 0.3;
+        flake.x += Math.sin(time * flake.wobbleSpeed + flake.wobblePhase) * 0.3;
         flake.rotation += flake.rotationSpeed;
 
         if (flake.y > canvas.height + 20 || flake.x < -20 || flake.x > canvas.width + 20) {
@@ -158,17 +140,6 @@ export function useSnowfall(
 
         drawSnowflake(ctx, flake, darkMode, opacityMultiplier);
       });
-
-      animationRef.current = requestAnimationFrame(animate);
-    };
-
-    animate();
-
-    return () => {
-      window.removeEventListener('resize', resizeCanvas);
-      if (animationRef.current) {
-        cancelAnimationFrame(animationRef.current);
-      }
-    };
-  }, [canvasRef, darkMode, opacity, createSnowflake, drawSnowflake, active]);
+    },
+  });
 }

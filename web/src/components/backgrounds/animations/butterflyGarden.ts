@@ -5,7 +5,8 @@
  * Pre-generates all random values to avoid flickering.
  */
 
-import { useEffect, useRef } from 'react';
+import { useRef } from 'react';
+import { useCanvasAnimation } from './useCanvasAnimation';
 
 interface Butterfly {
   x: number;
@@ -39,6 +40,7 @@ interface Flower {
   stemHeight: number;
 }
 
+
 export function useButterflyGarden(
   canvasRef: React.RefObject<HTMLCanvasElement>,
   darkMode: boolean,
@@ -47,69 +49,12 @@ export function useButterflyGarden(
 ): void {
   const butterfliesRef = useRef<Butterfly[]>([]);
   const flowersRef = useRef<Flower[]>([]);
-  const animationRef = useRef<number>(0);
-  const timeRef = useRef<number>(0);
+  const sizeRef = useRef({ w: 0, h: 0 });
 
-  useEffect(() => {
-    if (!active) return;
+  useCanvasAnimation(canvasRef, darkMode, opacity, active, {
 
-    const canvas = canvasRef.current;
-    if (!canvas) return;
+    draw: (ctx, canvas, time, _dt) => {
 
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-
-    const resize = () => {
-      canvas.width = window.innerWidth;
-      canvas.height = window.innerHeight;
-      initializeElements();
-    };
-
-    const initializeElements = () => {
-      const width = canvas.width;
-      const height = canvas.height;
-
-      // Create flowers
-      flowersRef.current = [];
-      const flowerCount = Math.floor(width / 60);
-      for (let i = 0; i < flowerCount; i++) {
-        flowersRef.current.push({
-          x: (i / flowerCount) * width + (Math.random() - 0.5) * 50,
-          y: height * 0.6 + Math.random() * height * 0.35,
-          size: 15 + Math.random() * 20,
-          petalCount: 5 + Math.floor(Math.random() * 3),
-          hue: [320, 40, 280, 200, 350][Math.floor(Math.random() * 5)],
-          swayPhase: Math.random() * Math.PI * 2,
-          stemHeight: 40 + Math.random() * 60,
-        });
-      }
-
-      // Create butterflies
-      butterfliesRef.current = [];
-      for (let i = 0; i < 8; i++) {
-        butterfliesRef.current.push({
-          x: Math.random() * width,
-          y: height * 0.2 + Math.random() * height * 0.5,
-          vx: 0,
-          vy: 0,
-          size: 12 + Math.random() * 10,
-          wingPhase: Math.random() * Math.PI * 2,
-          wingSpeed: 0.10 + Math.random() * 0.05, // Slower wing flapping
-          hue: [280, 30, 180, 320, 50][Math.floor(Math.random() * 5)],
-          pattern: Math.floor(Math.random() * 3),
-          targetX: Math.random() * width,
-          targetY: height * 0.2 + Math.random() * height * 0.5,
-          restTimer: 0,
-          bodyAngle: 0,
-          flutterOffset: Math.random() * Math.PI * 2,
-          // Random wandering properties for more erratic flight
-          wanderPhase: Math.random() * Math.PI * 2,
-          wanderSpeed: 0.002 + Math.random() * 0.003,
-          zigzagPhase: Math.random() * Math.PI * 2,
-          directionChangeTimer: 30 + Math.random() * 60,
-        });
-      }
-    };
 
     const drawBackground = () => {
       const gradient = ctx.createLinearGradient(0, 0, 0, canvas.height);
@@ -459,9 +404,56 @@ export function useButterflyGarden(
       ctx.restore();
     };
 
-    const animate = () => {
-      timeRef.current += 16;
-      const time = timeRef.current;
+
+      const w = canvas.width;
+      const h = canvas.height;
+      if (sizeRef.current.w !== w || sizeRef.current.h !== h) {
+        sizeRef.current = { w, h };
+        const width = canvas.width;
+        const height = canvas.height;
+  
+        // Create flowers
+        flowersRef.current = [];
+        const flowerCount = Math.floor(width / 60);
+        for (let i = 0; i < flowerCount; i++) {
+          flowersRef.current.push({
+            x: (i / flowerCount) * width + (Math.random() - 0.5) * 50,
+            y: height * 0.6 + Math.random() * height * 0.35,
+            size: 15 + Math.random() * 20,
+            petalCount: 5 + Math.floor(Math.random() * 3),
+            hue: [320, 40, 280, 200, 350][Math.floor(Math.random() * 5)],
+            swayPhase: Math.random() * Math.PI * 2,
+            stemHeight: 40 + Math.random() * 60,
+          });
+        }
+  
+        // Create butterflies
+        butterfliesRef.current = [];
+        for (let i = 0; i < 8; i++) {
+          butterfliesRef.current.push({
+            x: Math.random() * width,
+            y: height * 0.2 + Math.random() * height * 0.5,
+            vx: 0,
+            vy: 0,
+            size: 12 + Math.random() * 10,
+            wingPhase: Math.random() * Math.PI * 2,
+            wingSpeed: 0.10 + Math.random() * 0.05, // Slower wing flapping
+            hue: [280, 30, 180, 320, 50][Math.floor(Math.random() * 5)],
+            pattern: Math.floor(Math.random() * 3),
+            targetX: Math.random() * width,
+            targetY: height * 0.2 + Math.random() * height * 0.5,
+            restTimer: 0,
+            bodyAngle: 0,
+            flutterOffset: Math.random() * Math.PI * 2,
+            // Random wandering properties for more erratic flight
+            wanderPhase: Math.random() * Math.PI * 2,
+            wanderSpeed: 0.002 + Math.random() * 0.003,
+            zigzagPhase: Math.random() * Math.PI * 2,
+            directionChangeTimer: 30 + Math.random() * 60,
+          });
+        }
+      }
+
 
       ctx.clearRect(0, 0, canvas.width, canvas.height);
 
@@ -474,16 +466,6 @@ export function useButterflyGarden(
       // Draw butterflies
       butterfliesRef.current.forEach((butterfly) => drawButterfly(butterfly, time));
 
-      animationRef.current = requestAnimationFrame(animate);
-    };
-
-    resize();
-    window.addEventListener('resize', resize);
-    animate();
-
-    return () => {
-      window.removeEventListener('resize', resize);
-      cancelAnimationFrame(animationRef.current);
-    };
-  }, [canvasRef, darkMode, opacity, active]);
+    },
+  });
 }

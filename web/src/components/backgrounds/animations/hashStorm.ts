@@ -4,7 +4,8 @@
  * Hexadecimal characters expand and fade as they travel outward.
  */
 
-import { useEffect, useRef } from 'react';
+import { useRef } from 'react';
+import { useCanvasAnimation } from './useCanvasAnimation';
 
 interface HashChar {
   x: number;
@@ -19,6 +20,7 @@ interface HashChar {
   rotationSpeed: number;
 }
 
+
 export function useHashStorm(
   canvasRef: React.RefObject<HTMLCanvasElement>,
   darkMode: boolean,
@@ -26,46 +28,17 @@ export function useHashStorm(
   active: boolean
 ): void {
   const charsRef = useRef<HashChar[]>([]);
-  const animationRef = useRef<number>(0);
-  const timeRef = useRef<number>(0);
   const centerRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
   const maxRadiusRef = useRef<number>(0);
+  const sizeRef = useRef({ w: 0, h: 0 });
 
-  useEffect(() => {
-    if (!active) return;
+  useCanvasAnimation(canvasRef, darkMode, opacity, active, {
 
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-
+    draw: (ctx, canvas, time, _dt) => {
     const hexChars = '0123456789abcdef';
     const hashPrefixes = ['0x', 'SHA', '256', 'BTC', '###'];
 
-    const resize = () => {
-      canvas.width = window.innerWidth;
-      canvas.height = window.innerHeight;
-      // Center positioned to the right side of the screen
-      centerRef.current = {
-        x: canvas.width * 0.75,
-        y: canvas.height / 2,
-      };
-      // Max radius is the distance to the corners
-      maxRadiusRef.current = Math.sqrt(
-        Math.pow(canvas.width / 2, 2) + Math.pow(canvas.height / 2, 2)
-      ) * 1.2;
-      initializeChars();
-    };
 
-    const initializeChars = () => {
-      charsRef.current = [];
-      // Start with characters at various radii
-      const charCount = Math.floor((canvas.width * canvas.height) / 6000);
-      for (let i = 0; i < charCount; i++) {
-        charsRef.current.push(createChar(Math.random() * maxRadiusRef.current * 0.8));
-      }
-    };
 
     const createChar = (startRadius = 0): HashChar => {
       const angle = Math.random() * Math.PI * 2;
@@ -185,9 +158,19 @@ export function useHashStorm(
       ctx.restore();
     };
 
-    const animate = () => {
-      timeRef.current += 16;
-      const time = timeRef.current;
+
+      const w = canvas.width;
+      const h = canvas.height;
+      if (sizeRef.current.w !== w || sizeRef.current.h !== h) {
+        sizeRef.current = { w, h };
+        charsRef.current = [];
+        // Start with characters at various radii
+        const charCount = Math.floor((canvas.width * canvas.height) / 6000);
+        for (let i = 0; i < charCount; i++) {
+          charsRef.current.push(createChar(Math.random() * maxRadiusRef.current * 0.8));
+        }
+      }
+
 
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       const opacityMult = opacity / 50;
@@ -224,16 +207,6 @@ export function useHashStorm(
       // Draw core on top
       drawCore(opacityMult, time);
 
-      animationRef.current = requestAnimationFrame(animate);
-    };
-
-    resize();
-    window.addEventListener('resize', resize);
-    animate();
-
-    return () => {
-      window.removeEventListener('resize', resize);
-      cancelAnimationFrame(animationRef.current);
-    };
-  }, [canvasRef, darkMode, opacity, active]);
+    },
+  });
 }

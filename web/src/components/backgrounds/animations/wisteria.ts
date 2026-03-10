@@ -7,7 +7,8 @@
  * and water reflection.
  */
 
-import { useEffect, useRef } from 'react';
+import { useRef } from 'react';
+import { useCanvasAnimation } from './useCanvasAnimation';
 
 interface WisteriaCluster {
   x: number;
@@ -56,6 +57,7 @@ interface LightParticle {
   opacity: number;
 }
 
+
 export function useWisteria(
   canvasRef: React.RefObject<HTMLCanvasElement>,
   darkMode: boolean,
@@ -66,18 +68,11 @@ export function useWisteria(
   const petalsRef = useRef<FallingPetal[]>([]);
   const vinesRef = useRef<Vine[]>([]);
   const particlesRef = useRef<LightParticle[]>([]);
-  const animationRef = useRef<number | undefined>(undefined);
-  const timeRef = useRef(0);
+  const sizeRef = useRef({ w: 0, h: 0 });
 
-  useEffect(() => {
-    if (!enabled) return;
+  useCanvasAnimation(canvasRef, darkMode, opacity, enabled, {
 
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-
+    draw: (ctx, canvas, time, _dt) => {
     const resizeCanvas = () => {
       canvas.width = window.innerWidth;
       canvas.height = window.innerHeight;
@@ -382,7 +377,7 @@ export function useWisteria(
         ctx.beginPath();
         ctx.moveTo(0, rippleY);
         for (let x = 0; x < currentWidth; x += 20) {
-          const wave = Math.sin(x * 0.02 + timeRef.current * 0.5 + i) * 2;
+          const wave = Math.sin(x * 0.02 + time * 0.5 + i) * 2;
           ctx.lineTo(x, rippleY + wave);
         }
         ctx.stroke();
@@ -413,13 +408,19 @@ export function useWisteria(
       });
     };
 
-    const animate = () => {
+
+      const w = canvas.width;
+      const h = canvas.height;
+      if (sizeRef.current.w !== w || sizeRef.current.h !== h) {
+        sizeRef.current = { w, h };
+      }
+
       const currentWidth = canvas.width;
       const currentHeight = canvas.height;
       const wLevel = currentHeight * 0.82;
 
       ctx.clearRect(0, 0, currentWidth, currentHeight);
-      timeRef.current += 0.016;
+      time += 0.016;
 
       // Background gradient
       const bgGradient = ctx.createLinearGradient(0, 0, 0, wLevel);
@@ -564,16 +565,6 @@ export function useWisteria(
       ctx.fillStyle = canopyGradient;
       ctx.fillRect(0, 0, currentWidth, 50);
 
-      animationRef.current = requestAnimationFrame(animate);
-    };
-
-    animate();
-
-    return () => {
-      window.removeEventListener('resize', resizeCanvas);
-      if (animationRef.current) {
-        cancelAnimationFrame(animationRef.current);
-      }
-    };
-  }, [canvasRef, darkMode, opacity, enabled]);
+    },
+  });
 }

@@ -3,7 +3,8 @@
  * Soft rolling hills with gentle mist, trees, flowers, and peaceful scenery
  */
 
-import { useRef, useEffect } from 'react';
+import { useRef } from 'react';
+import { useCanvasAnimation } from './useCanvasAnimation';
 
 interface Hill {
   baseY: number;
@@ -68,58 +69,12 @@ export function useSereneMeadows(
   const flowersRef = useRef<Flower[]>([]);
   const birdsRef = useRef<Bird[]>([]);
   const cloudsRef = useRef<Cloud[]>([]);
-  const animationRef = useRef<number | undefined>(undefined);
-  const timeRef = useRef<number>(0);
 
-  useEffect(() => {
-    if (!active) return;
-
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-
-    // Soft, serene color palettes
-    const hillColors = darkMode
-      ? [
-          [45, 55, 75],    // Deep blue-gray (far)
-          [55, 70, 85],    // Muted blue
-          [50, 75, 70],    // Soft teal
-          [60, 80, 65],    // Muted sage
-          [55, 70, 55],    // Soft forest (near)
-        ]
-      : [
-          [180, 160, 200], // Soft lavender (far)
-          [160, 180, 190], // Pale blue
-          [170, 195, 175], // Soft sage
-          [145, 175, 140], // Light green
-          [120, 155, 110], // Meadow green (near)
-        ];
-
-    const mistColors = darkMode
-      ? [[140, 150, 180], [130, 145, 170], [150, 160, 185]]
-      : [[220, 210, 235], [210, 220, 240], [230, 225, 245]];
-
+  useCanvasAnimation(canvasRef, darkMode, opacity, active, {
+    init: (_ctx, canvas) => {
     const flowerColors = darkMode
-      ? [
-          [255, 200, 220], // Soft pink
-          [220, 180, 255], // Lavender
-          [255, 230, 180], // Cream
-          [200, 220, 255], // Pale blue
-          [255, 210, 200], // Peach
-        ]
-      : [
-          [255, 180, 200], // Pink
-          [200, 160, 235], // Purple
-          [255, 220, 150], // Yellow
-          [180, 200, 255], // Blue
-          [255, 190, 180], // Coral
-        ];
-
-    const skyGradient = darkMode
-      ? { top: [25, 30, 50], bottom: [50, 55, 80] }
-      : { top: [180, 200, 230], bottom: [240, 220, 210] };
+      ? [[255, 200, 220], [220, 180, 255], [255, 230, 180], [200, 220, 255], [255, 210, 200]]
+      : [[255, 180, 200], [200, 160, 235], [255, 220, 150], [180, 200, 255], [255, 190, 180]];
 
     const createTree = (x: number, _hillY: number, layerIndex: number): TreeSilhouette => {
       const types: TreeSilhouette['type'][] = ['round', 'pine', 'willow'];
@@ -132,11 +87,6 @@ export function useSereneMeadows(
       };
     };
 
-    const resizeCanvas = () => {
-      canvas.width = window.innerWidth;
-      canvas.height = window.innerHeight;
-
-      // Create rolling hills with soft curves
       hillsRef.current = [];
       const hillCount = 5;
       for (let i = 0; i < hillCount; i++) {
@@ -207,10 +157,23 @@ export function useSereneMeadows(
         speed: 0.05 + Math.random() * 0.1,
         opacity: 0.12 + Math.random() * 0.08,
       }));
-    };
+    },
+    draw: (ctx, canvas, time) => {
+    const hillColors = darkMode
+      ? [[45, 55, 75], [55, 70, 85], [50, 75, 70], [60, 80, 65], [55, 70, 55]]
+      : [[180, 160, 200], [160, 180, 190], [170, 195, 175], [145, 175, 140], [120, 155, 110]];
 
-    resizeCanvas();
-    window.addEventListener('resize', resizeCanvas);
+    const mistColors = darkMode
+      ? [[140, 150, 180], [130, 145, 170], [150, 160, 185]]
+      : [[220, 210, 235], [210, 220, 240], [230, 225, 245]];
+
+    const flowerColors = darkMode
+      ? [[255, 200, 220], [220, 180, 255], [255, 230, 180], [200, 220, 255], [255, 210, 200]]
+      : [[255, 180, 200], [200, 160, 235], [255, 220, 150], [180, 200, 255], [255, 190, 180]];
+
+    const skyGradient = darkMode
+      ? { top: [25, 30, 50], bottom: [50, 55, 80] }
+      : { top: [180, 200, 230], bottom: [240, 220, 210] };
 
     const getHillY = (hill: Hill, x: number): number => {
       // Use multiple sine waves for smooth, natural rolling hills
@@ -270,7 +233,7 @@ export function useSereneMeadows(
     };
 
     const drawBird = (bird: Bird, opacityMult: number) => {
-      const wingAngle = Math.sin(timeRef.current * bird.wingSpeed + bird.wingPhase) * 0.4;
+      const wingAngle = Math.sin(time * bird.wingSpeed + bird.wingPhase) * 0.4;
       const birdColor = darkMode ? [80, 80, 90] : [60, 60, 70];
 
       ctx.save();
@@ -317,7 +280,7 @@ export function useSereneMeadows(
       // Draw trees on this hill
       hill.trees.forEach(tree => {
         const treeY = getHillY(hill, tree.x);
-        const sway = Math.sin(timeRef.current * tree.swaySpeed + tree.sway) * 2;
+        const sway = Math.sin(time * tree.swaySpeed + tree.sway) * 2;
         const treeColor = darkMode
           ? [colors[0] - 15, colors[1] - 10, colors[2] - 15]
           : [colors[0] - 20, colors[1] - 15, colors[2] - 20];
@@ -353,7 +316,7 @@ export function useSereneMeadows(
           // Drooping branches
           for (let b = 0; b < 5; b++) {
             const angle = (b / 5) * Math.PI - Math.PI * 0.5;
-            const branchSway = Math.sin(timeRef.current * 0.5 + b) * 3;
+            const branchSway = Math.sin(time * 0.5 + b) * 3;
             ctx.beginPath();
             ctx.moveTo(Math.cos(angle) * tree.size * 0.3, -tree.size * 0.4 + Math.sin(angle) * tree.size * 0.3);
             ctx.quadraticCurveTo(
@@ -379,7 +342,7 @@ export function useSereneMeadows(
       ctx.moveTo(0, canvas.height);
 
       for (let x = 0; x <= canvas.width; x += 5) {
-        const wave = Math.sin(x * mist.waveFrequency + timeRef.current * mist.speed + mist.phase) * mist.waveAmplitude;
+        const wave = Math.sin(x * mist.waveFrequency + time * mist.speed + mist.phase) * mist.waveAmplitude;
         const y = mist.y + wave;
         ctx.lineTo(x, y);
       }
@@ -396,7 +359,7 @@ export function useSereneMeadows(
 
     const drawFlower = (flower: Flower, opacityMult: number) => {
       const colors = flowerColors[flower.colorIndex];
-      const sway = Math.sin(timeRef.current * 1.5 + flower.swayPhase) * 2;
+      const sway = Math.sin(time * 1.5 + flower.swayPhase) * 2;
 
       ctx.save();
       ctx.translate(flower.x + sway, flower.y);
@@ -450,11 +413,7 @@ export function useSereneMeadows(
       ctx.restore();
     };
 
-    const animate = () => {
-      if (!canvas || !ctx) return;
-
       ctx.clearRect(0, 0, canvas.width, canvas.height);
-      timeRef.current += 0.016;
 
       const opacityMultiplier = opacity / 50;
 
@@ -473,7 +432,7 @@ export function useSereneMeadows(
       // Draw birds
       birdsRef.current.forEach((bird, i) => {
         bird.x += bird.speed;
-        bird.y += Math.sin(timeRef.current + i) * 0.1;
+        bird.y += Math.sin(time + i) * 0.1;
         if (bird.x > canvas.width + 20) {
           bird.x = -20;
           bird.y = canvas.height * (0.1 + Math.random() * 0.2);
@@ -485,7 +444,6 @@ export function useSereneMeadows(
       hillsRef.current.forEach((hill, i) => {
         drawHill(hill, opacityMultiplier);
 
-        // Draw mist after each hill except the last
         if (i < mistRef.current.length) {
           drawMist(mistRef.current[i], opacityMultiplier);
         }
@@ -493,17 +451,6 @@ export function useSereneMeadows(
 
       // Draw flowers in foreground
       flowersRef.current.forEach(flower => drawFlower(flower, opacityMultiplier));
-
-      animationRef.current = requestAnimationFrame(animate);
-    };
-
-    animate();
-
-    return () => {
-      window.removeEventListener('resize', resizeCanvas);
-      if (animationRef.current) {
-        cancelAnimationFrame(animationRef.current);
-      }
-    };
-  }, [canvasRef, darkMode, opacity, active]);
+    },
+  });
 }

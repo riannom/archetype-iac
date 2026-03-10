@@ -5,7 +5,8 @@
  * Pre-generates all random values to avoid flickering.
  */
 
-import { useEffect, useRef } from 'react';
+import { useRef } from 'react';
+import { useCanvasAnimation } from './useCanvasAnimation';
 
 interface MountainLayer {
   baseY: number;
@@ -33,6 +34,7 @@ interface Bird {
   size: number;
 }
 
+
 export function useMistyValley(
   canvasRef: React.RefObject<HTMLCanvasElement>,
   darkMode: boolean,
@@ -42,101 +44,12 @@ export function useMistyValley(
   const mountainsRef = useRef<MountainLayer[]>([]);
   const mistRef = useRef<MistCloud[]>([]);
   const birdsRef = useRef<Bird[]>([]);
-  const animationRef = useRef<number>(0);
-  const timeRef = useRef<number>(0);
+  const sizeRef = useRef({ w: 0, h: 0 });
 
-  useEffect(() => {
-    if (!active) return;
+  useCanvasAnimation(canvasRef, darkMode, opacity, active, {
 
-    const canvas = canvasRef.current;
-    if (!canvas) return;
+    draw: (ctx, canvas, time, _dt) => {
 
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-
-    const resize = () => {
-      canvas.width = window.innerWidth;
-      canvas.height = window.innerHeight;
-      initializeElements();
-    };
-
-    const initializeElements = () => {
-      const width = canvas.width;
-      const height = canvas.height;
-
-      // Create mountain layers (back to front)
-      mountainsRef.current = [];
-
-      const layerConfigs = darkMode
-        ? [
-            { baseY: height * 0.35, color: '#1a1a2a', parallax: 0.1 },
-            { baseY: height * 0.45, color: '#252535', parallax: 0.2 },
-            { baseY: height * 0.55, color: '#303045', parallax: 0.3 },
-            { baseY: height * 0.65, color: '#3a3a55', parallax: 0.4 },
-          ]
-        : [
-            { baseY: height * 0.35, color: '#7B8FA0', parallax: 0.1 },
-            { baseY: height * 0.45, color: '#8FA5B5', parallax: 0.2 },
-            { baseY: height * 0.55, color: '#A3BACA', parallax: 0.3 },
-            { baseY: height * 0.65, color: '#B7CFDF', parallax: 0.4 },
-          ];
-
-      layerConfigs.forEach((config) => {
-        const peaks: { x: number; height: number }[] = [];
-        const peakCount = 5 + Math.floor(Math.random() * 4);
-
-        for (let p = 0; p < peakCount; p++) {
-          peaks.push({
-            x: (p / (peakCount - 1)) * width * 1.2 - width * 0.1,
-            height: 50 + Math.random() * 150,
-          });
-        }
-
-        mountainsRef.current.push({
-          baseY: config.baseY,
-          peaks,
-          color: config.color,
-          parallaxSpeed: config.parallax,
-        });
-      });
-
-      // Create mist clouds
-      mistRef.current = [];
-      for (let i = 0; i < 8; i++) {
-        const puffs: { offsetX: number; offsetY: number; size: number }[] = [];
-        const puffCount = 5 + Math.floor(Math.random() * 5);
-        for (let p = 0; p < puffCount; p++) {
-          puffs.push({
-            offsetX: (Math.random() - 0.5) * 150,
-            offsetY: (Math.random() - 0.5) * 40,
-            size: 40 + Math.random() * 60,
-          });
-        }
-
-        mistRef.current.push({
-          x: Math.random() * width * 1.5 - width * 0.25,
-          y: height * 0.4 + Math.random() * height * 0.4,
-          width: 150 + Math.random() * 200,
-          height: 40 + Math.random() * 40,
-          opacity: 0.2 + Math.random() * 0.3,
-          targetOpacity: 0.2 + Math.random() * 0.3,
-          speed: 0.1 + Math.random() * 0.2,
-          puffs,
-        });
-      }
-
-      // Create distant birds
-      birdsRef.current = [];
-      for (let i = 0; i < 4; i++) {
-        birdsRef.current.push({
-          x: Math.random() * width,
-          y: height * 0.2 + Math.random() * height * 0.2,
-          speed: 0.3 + Math.random() * 0.2,
-          wingPhase: Math.random() * Math.PI * 2,
-          size: 3 + Math.random() * 3,
-        });
-      }
-    };
 
     const drawSky = () => {
       const gradient = ctx.createLinearGradient(0, 0, 0, canvas.height * 0.6);
@@ -264,9 +177,88 @@ export function useMistyValley(
       ctx.stroke();
     };
 
-    const animate = () => {
-      timeRef.current += 16;
-      const time = timeRef.current;
+
+      const w = canvas.width;
+      const h = canvas.height;
+      if (sizeRef.current.w !== w || sizeRef.current.h !== h) {
+        sizeRef.current = { w, h };
+        const width = canvas.width;
+        const height = canvas.height;
+  
+        // Create mountain layers (back to front)
+        mountainsRef.current = [];
+  
+        const layerConfigs = darkMode
+          ? [
+              { baseY: height * 0.35, color: '#1a1a2a', parallax: 0.1 },
+              { baseY: height * 0.45, color: '#252535', parallax: 0.2 },
+              { baseY: height * 0.55, color: '#303045', parallax: 0.3 },
+              { baseY: height * 0.65, color: '#3a3a55', parallax: 0.4 },
+            ]
+          : [
+              { baseY: height * 0.35, color: '#7B8FA0', parallax: 0.1 },
+              { baseY: height * 0.45, color: '#8FA5B5', parallax: 0.2 },
+              { baseY: height * 0.55, color: '#A3BACA', parallax: 0.3 },
+              { baseY: height * 0.65, color: '#B7CFDF', parallax: 0.4 },
+            ];
+  
+        layerConfigs.forEach((config) => {
+          const peaks: { x: number; height: number }[] = [];
+          const peakCount = 5 + Math.floor(Math.random() * 4);
+  
+          for (let p = 0; p < peakCount; p++) {
+            peaks.push({
+              x: (p / (peakCount - 1)) * width * 1.2 - width * 0.1,
+              height: 50 + Math.random() * 150,
+            });
+          }
+  
+          mountainsRef.current.push({
+            baseY: config.baseY,
+            peaks,
+            color: config.color,
+            parallaxSpeed: config.parallax,
+          });
+        });
+  
+        // Create mist clouds
+        mistRef.current = [];
+        for (let i = 0; i < 8; i++) {
+          const puffs: { offsetX: number; offsetY: number; size: number }[] = [];
+          const puffCount = 5 + Math.floor(Math.random() * 5);
+          for (let p = 0; p < puffCount; p++) {
+            puffs.push({
+              offsetX: (Math.random() - 0.5) * 150,
+              offsetY: (Math.random() - 0.5) * 40,
+              size: 40 + Math.random() * 60,
+            });
+          }
+  
+          mistRef.current.push({
+            x: Math.random() * width * 1.5 - width * 0.25,
+            y: height * 0.4 + Math.random() * height * 0.4,
+            width: 150 + Math.random() * 200,
+            height: 40 + Math.random() * 40,
+            opacity: 0.2 + Math.random() * 0.3,
+            targetOpacity: 0.2 + Math.random() * 0.3,
+            speed: 0.1 + Math.random() * 0.2,
+            puffs,
+          });
+        }
+  
+        // Create distant birds
+        birdsRef.current = [];
+        for (let i = 0; i < 4; i++) {
+          birdsRef.current.push({
+            x: Math.random() * width,
+            y: height * 0.2 + Math.random() * height * 0.2,
+            speed: 0.3 + Math.random() * 0.2,
+            wingPhase: Math.random() * Math.PI * 2,
+            size: 3 + Math.random() * 3,
+          });
+        }
+      }
+
 
       ctx.clearRect(0, 0, canvas.width, canvas.height);
 
@@ -281,16 +273,6 @@ export function useMistyValley(
       // Draw birds
       birdsRef.current.forEach((bird) => drawBird(bird, time));
 
-      animationRef.current = requestAnimationFrame(animate);
-    };
-
-    resize();
-    window.addEventListener('resize', resize);
-    animate();
-
-    return () => {
-      window.removeEventListener('resize', resize);
-      cancelAnimationFrame(animationRef.current);
-    };
-  }, [canvasRef, darkMode, opacity, active]);
+    },
+  });
 }

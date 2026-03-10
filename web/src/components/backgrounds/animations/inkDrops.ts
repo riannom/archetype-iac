@@ -3,7 +3,8 @@
  * Abstract ink slowly diffusing in water
  */
 
-import { useRef, useEffect, useCallback } from 'react';
+import { useRef, useCallback } from 'react';
+import { useCanvasAnimation } from './useCanvasAnimation';
 
 interface InkDrop {
   x: number;
@@ -29,8 +30,6 @@ export function useInkDrops(
   active: boolean
 ) {
   const dropsRef = useRef<InkDrop[]>([]);
-  const animationRef = useRef<number | undefined>(undefined);
-  const timeRef = useRef<number>(0);
   const lastDropTimeRef = useRef<number>(0);
 
   const inkColors = darkMode
@@ -65,37 +64,20 @@ export function useInkDrops(
     };
   }, [inkColors]);
 
-  useEffect(() => {
-    if (!active) return;
-
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-
-    const resizeCanvas = () => {
-      canvas.width = window.innerWidth;
-      canvas.height = window.innerHeight;
-    };
-    resizeCanvas();
-    window.addEventListener('resize', resizeCanvas);
-
-    dropsRef.current = Array.from({ length: 3 }, () => createDrop(canvas));
-
-    const animate = () => {
-      if (!canvas || !ctx) return;
-
+  useCanvasAnimation(canvasRef, darkMode, opacity, active, {
+    init: (_ctx, canvas) => {
+      dropsRef.current = Array.from({ length: 3 }, () => createDrop(canvas));
+    },
+    draw: (ctx, canvas, time) => {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
-      timeRef.current += 0.016;
 
       const opacityMultiplier = opacity / 50;
 
-      if (timeRef.current - lastDropTimeRef.current > 2.5 + Math.random() * 2) {
+      if (time - lastDropTimeRef.current > 2.5 + Math.random() * 2) {
         if (dropsRef.current.length < 8) {
           dropsRef.current.push(createDrop(canvas));
         }
-        lastDropTimeRef.current = timeRef.current;
+        lastDropTimeRef.current = time;
       }
 
       dropsRef.current.forEach((drop) => {
@@ -127,7 +109,7 @@ export function useInkDrops(
 
         drop.tendrils.forEach((tendril) => {
           const tendrilLength = drop.radius * tendril.length * progress;
-          const wobbleOffset = Math.sin(timeRef.current * tendril.speed + tendril.wobble) * 10;
+          const wobbleOffset = Math.sin(time * tendril.speed + tendril.wobble) * 10;
 
           const endX = drop.x + Math.cos(tendril.angle) * tendrilLength + Math.cos(tendril.angle + Math.PI / 2) * wobbleOffset;
           const endY = drop.y + Math.sin(tendril.angle) * tendrilLength + Math.sin(tendril.angle + Math.PI / 2) * wobbleOffset;
@@ -152,17 +134,6 @@ export function useInkDrops(
       });
 
       dropsRef.current = dropsRef.current.filter(drop => drop.age < 1);
-
-      animationRef.current = requestAnimationFrame(animate);
-    };
-
-    animate();
-
-    return () => {
-      window.removeEventListener('resize', resizeCanvas);
-      if (animationRef.current) {
-        cancelAnimationFrame(animationRef.current);
-      }
-    };
-  }, [canvasRef, darkMode, opacity, active, createDrop]);
+    },
+  });
 }

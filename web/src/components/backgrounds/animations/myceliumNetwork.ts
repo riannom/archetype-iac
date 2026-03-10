@@ -5,7 +5,8 @@
  * like underground fungal networks or neural pathways.
  */
 
-import { useEffect, useRef } from 'react';
+import { useRef } from 'react';
+import { useCanvasAnimation } from './useCanvasAnimation';
 
 interface Node {
   x: number;
@@ -42,6 +43,7 @@ interface GrowingTip {
   thickness: number;
 }
 
+
 export function useMyceliumNetwork(
   canvasRef: React.RefObject<HTMLCanvasElement>,
   darkMode: boolean,
@@ -51,58 +53,12 @@ export function useMyceliumNetwork(
   const nodesRef = useRef<Node[]>([]);
   const branchesRef = useRef<Branch[]>([]);
   const growingTipsRef = useRef<GrowingTip[]>([]);
-  const animationRef = useRef<number>(0);
-  const timeRef = useRef<number>(0);
+  const sizeRef = useRef({ w: 0, h: 0 });
 
-  useEffect(() => {
-    if (!active) return;
+  useCanvasAnimation(canvasRef, darkMode, opacity, active, {
 
-    const canvas = canvasRef.current;
-    if (!canvas) return;
+    draw: (ctx, canvas, _time, _dt) => {
 
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-
-    const resize = () => {
-      canvas.width = window.innerWidth;
-      canvas.height = window.innerHeight;
-      initializeNetwork();
-    };
-
-    const initializeNetwork = () => {
-      const { width, height } = canvas;
-      nodesRef.current = [];
-      branchesRef.current = [];
-      growingTipsRef.current = [];
-
-      // Create initial seed nodes
-      const seedCount = 3 + Math.floor(Math.random() * 3);
-      for (let i = 0; i < seedCount; i++) {
-        const node: Node = {
-          x: width * 0.2 + Math.random() * width * 0.6,
-          y: height * 0.2 + Math.random() * height * 0.6,
-          connections: [],
-          pulsePhase: Math.random() * Math.PI * 2,
-          size: 4 + Math.random() * 4,
-          bloomPhase: 0,
-          isBloomNode: Math.random() < 0.3,
-        };
-        nodesRef.current.push(node);
-
-        // Create initial growing tips from seed
-        const tipCount = 2 + Math.floor(Math.random() * 3);
-        for (let t = 0; t < tipCount; t++) {
-          growingTipsRef.current.push({
-            x: node.x,
-            y: node.y,
-            angle: (t / tipCount) * Math.PI * 2 + (Math.random() - 0.5) * 0.5,
-            parentNode: nodesRef.current.length - 1,
-            age: 0,
-            thickness: 2 + Math.random() * 2,
-          });
-        }
-      }
-    };
 
     const addNode = (x: number, y: number, parentIndex: number): number => {
       const node: Node = {
@@ -240,9 +196,46 @@ export function useMyceliumNetwork(
       });
     };
 
-    const animate = () => {
+
+      const w = canvas.width;
+      const h = canvas.height;
+      if (sizeRef.current.w !== w || sizeRef.current.h !== h) {
+        sizeRef.current = { w, h };
+        const { width, height } = canvas;
+        nodesRef.current = [];
+        branchesRef.current = [];
+        growingTipsRef.current = [];
+  
+        // Create initial seed nodes
+        const seedCount = 3 + Math.floor(Math.random() * 3);
+        for (let i = 0; i < seedCount; i++) {
+          const node: Node = {
+            x: width * 0.2 + Math.random() * width * 0.6,
+            y: height * 0.2 + Math.random() * height * 0.6,
+            connections: [],
+            pulsePhase: Math.random() * Math.PI * 2,
+            size: 4 + Math.random() * 4,
+            bloomPhase: 0,
+            isBloomNode: Math.random() < 0.3,
+          };
+          nodesRef.current.push(node);
+  
+          // Create initial growing tips from seed
+          const tipCount = 2 + Math.floor(Math.random() * 3);
+          for (let t = 0; t < tipCount; t++) {
+            growingTipsRef.current.push({
+              x: node.x,
+              y: node.y,
+              angle: (t / tipCount) * Math.PI * 2 + (Math.random() - 0.5) * 0.5,
+              parentNode: nodesRef.current.length - 1,
+              age: 0,
+              thickness: 2 + Math.random() * 2,
+            });
+          }
+        }
+      }
+
       const { width, height } = canvas;
-      timeRef.current += 16;
 
       // Clear
       ctx.fillStyle = darkMode ? 'rgba(15, 18, 15, 1)' : 'rgba(250, 252, 250, 1)';
@@ -343,16 +336,6 @@ export function useMyceliumNetwork(
 
       drawNetwork();
 
-      animationRef.current = requestAnimationFrame(animate);
-    };
-
-    resize();
-    window.addEventListener('resize', resize);
-    animate();
-
-    return () => {
-      window.removeEventListener('resize', resize);
-      cancelAnimationFrame(animationRef.current);
-    };
-  }, [canvasRef, darkMode, opacity, active]);
+    },
+  });
 }

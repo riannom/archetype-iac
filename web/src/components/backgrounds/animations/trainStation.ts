@@ -3,7 +3,8 @@
  * Trains arriving and departing with passengers moving on platforms
  */
 
-import { useRef, useEffect, useCallback } from 'react';
+import { useRef, useCallback } from 'react';
+import { useCanvasAnimation } from './useCanvasAnimation';
 
 interface Train {
   x: number;
@@ -49,8 +50,6 @@ export function useTrainStation(
   const trainsRef = useRef<Train[]>([]);
   const passengersRef = useRef<Passenger[]>([]);
   const platformsRef = useRef<Platform[]>([]);
-  const animationRef = useRef<number | undefined>(undefined);
-  const timeRef = useRef<number>(0);
 
   const trainColors = darkMode
     ? [
@@ -121,26 +120,13 @@ export function useTrainStation(
     };
   }, []);
 
-  useEffect(() => {
-    if (!active) return;
-
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-
-    const resizeCanvas = () => {
-      canvas.width = window.innerWidth;
-      canvas.height = window.innerHeight;
-
-      // Create platforms
+  useCanvasAnimation(canvasRef, darkMode, opacity, active, {
+    init: (_ctx, canvas) => {
       platformsRef.current = [
         { y: canvas.height * 0.4, width: canvas.width },
         { y: canvas.height * 0.65, width: canvas.width },
       ];
 
-      // Create initial passengers
       const passengerCount = Math.floor(canvas.width / 80) + 5;
       passengersRef.current = [];
       platformsRef.current.forEach(platform => {
@@ -149,14 +135,15 @@ export function useTrainStation(
         }
       });
 
-      // Create initial trains - one on each platform
       trainsRef.current = [
         createTrain(canvas, 0),
         createTrain(canvas, 1),
       ];
-    };
-    resizeCanvas();
-    window.addEventListener('resize', resizeCanvas);
+    },
+    draw: (ctx, canvas, time) => {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      const opacityMultiplier = opacity / 50;
 
     const drawPlatform = (platform: Platform, opacityMult: number) => {
       const platformColor = darkMode ? [80, 75, 70] : [60, 55, 50];
@@ -254,12 +241,12 @@ export function useTrainStation(
       ctx.restore();
     };
 
-    const drawPassenger = (passenger: Passenger, opacityMult: number) => {
+    const drawPassenger = (passenger: Passenger, time: number, opacityMult: number) => {
       const colors = passengerColors[passenger.colorScheme];
       const walkBob = passenger.state === 'walking' || passenger.state === 'boarding' || passenger.state === 'exiting'
-        ? Math.abs(Math.sin(timeRef.current * 8 + passenger.walkPhase)) * 2
+        ? Math.abs(Math.sin(time * 8 + passenger.walkPhase)) * 2
         : 0;
-      const legPhase = Math.sin(timeRef.current * 8 + passenger.walkPhase);
+      const legPhase = Math.sin(time * 8 + passenger.walkPhase);
 
       ctx.save();
       ctx.translate(passenger.x, passenger.y - walkBob);
@@ -319,14 +306,6 @@ export function useTrainStation(
       ctx.restore();
     };
 
-    const animate = () => {
-      if (!canvas || !ctx) return;
-
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      timeRef.current += 0.016;
-
-      const opacityMultiplier = opacity / 50;
-
       // Draw platforms
       platformsRef.current.forEach(platform => drawPlatform(platform, opacityMultiplier));
 
@@ -339,23 +318,25 @@ export function useTrainStation(
             train.x += train.speed * train.direction;
 
             // Check if should stop
-            const stopX = train.direction > 0 ? canvas.width * 0.3 : canvas.width * 0.7;
-            if ((train.direction > 0 && train.x > stopX) || (train.direction < 0 && train.x < stopX)) {
-              train.state = 'stopped';
-              train.stateTimer = 200 + Math.random() * 200;
+            {
+              const stopX = train.direction > 0 ? canvas.width * 0.3 : canvas.width * 0.7;
+              if ((train.direction > 0 && train.x > stopX) || (train.direction < 0 && train.x < stopX)) {
+                train.state = 'stopped';
+                train.stateTimer = 200 + Math.random() * 200;
 
-              // Passengers exit and board
-              passengersRef.current.forEach(p => {
-                if (Math.abs(p.y - train.y - 20) < 30) {
-                  if (Math.random() < 0.3) {
-                    p.state = 'exiting';
-                    p.targetX = p.x + (Math.random() - 0.5) * 200;
-                  } else if (Math.random() < 0.3) {
-                    p.state = 'boarding';
-                    p.targetX = train.x + train.length / 2;
+                // Passengers exit and board
+                passengersRef.current.forEach(p => {
+                  if (Math.abs(p.y - train.y - 20) < 30) {
+                    if (Math.random() < 0.3) {
+                      p.state = 'exiting';
+                      p.targetX = p.x + (Math.random() - 0.5) * 200;
+                    } else if (Math.random() < 0.3) {
+                      p.state = 'boarding';
+                      p.targetX = train.x + train.length / 2;
+                    }
                   }
-                }
-              });
+                });
+              }
             }
             break;
 
@@ -403,7 +384,7 @@ export function useTrainStation(
             break;
 
           case 'walking':
-          case 'exiting':
+          case 'exiting': {
             const dx = passenger.targetX - passenger.x;
             if (Math.abs(dx) > 2) {
               passenger.direction = dx > 0 ? 1 : -1;
@@ -412,8 +393,9 @@ export function useTrainStation(
               passenger.state = 'waiting';
             }
             break;
+          }
 
-          case 'boarding':
+          case 'boarding': {
             // Move toward train
             const bx = passenger.targetX - passenger.x;
             if (Math.abs(bx) > 5) {
@@ -425,25 +407,16 @@ export function useTrainStation(
               passengersRef.current[i] = createPassenger(canvas, platformY);
             }
             break;
+          }
         }
 
         // Keep passengers on screen
         if (passenger.x < 0) passenger.x = canvas.width;
         if (passenger.x > canvas.width) passenger.x = 0;
 
-        drawPassenger(passenger, opacityMultiplier);
+        drawPassenger(passenger, time, opacityMultiplier);
       });
 
-      animationRef.current = requestAnimationFrame(animate);
-    };
-
-    animate();
-
-    return () => {
-      window.removeEventListener('resize', resizeCanvas);
-      if (animationRef.current) {
-        cancelAnimationFrame(animationRef.current);
-      }
-    };
-  }, [canvasRef, darkMode, opacity, active, createTrain, createPassenger]);
+    },
+  });
 }

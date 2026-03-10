@@ -3,7 +3,8 @@
  * Flowing aurora bands with shifting colors
  */
 
-import { useRef, useEffect } from 'react';
+import { useRef} from 'react';
+import { useCanvasAnimation } from './useCanvasAnimation';
 
 interface AuroraBand {
   y: number;
@@ -16,6 +17,7 @@ interface AuroraBand {
   height: number;
 }
 
+
 export function useNorthernLights(
   canvasRef: React.RefObject<HTMLCanvasElement>,
   darkMode: boolean,
@@ -23,18 +25,11 @@ export function useNorthernLights(
   active: boolean
 ) {
   const bandsRef = useRef<AuroraBand[]>([]);
-  const animationRef = useRef<number | undefined>(undefined);
-  const timeRef = useRef<number>(0);
+  const sizeRef = useRef({ w: 0, h: 0 });
 
-  useEffect(() => {
-    if (!active) return;
+  useCanvasAnimation(canvasRef, darkMode, opacity, active, {
 
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-
+    draw: (ctx, canvas, time, _dt) => {
     const resizeCanvas = () => {
       canvas.width = window.innerWidth;
       canvas.height = window.innerHeight;
@@ -53,16 +48,21 @@ export function useNorthernLights(
       height: 80 + Math.random() * 120,
     }));
 
-    const animate = () => {
-      if (!canvas || !ctx) return;
+
+      const w = canvas.width;
+      const h = canvas.height;
+      if (sizeRef.current.w !== w || sizeRef.current.h !== h) {
+        sizeRef.current = { w, h };
+      }
+
 
       ctx.clearRect(0, 0, canvas.width, canvas.height);
-      timeRef.current += 0.016;
+      time += 0.016;
 
       const opacityMultiplier = opacity / 50;
 
       bandsRef.current.forEach((band) => {
-        const colorPhase = timeRef.current * 0.1 + band.colorShift;
+        const colorPhase = time * 0.1 + band.colorShift;
 
         // More vibrant colors with better saturation
         const r = darkMode ? 100 + Math.sin(colorPhase) * 80 : 80 + Math.sin(colorPhase) * 60;
@@ -72,8 +72,8 @@ export function useNorthernLights(
         ctx.beginPath();
 
         for (let x = 0; x <= canvas.width; x += 3) {
-          const wave1 = Math.sin(x * band.frequency + timeRef.current * band.speed + band.phase) * band.amplitude;
-          const wave2 = Math.sin(x * band.frequency * 1.5 + timeRef.current * band.speed * 0.8 + band.phase + 1) * (band.amplitude * 0.5);
+          const wave1 = Math.sin(x * band.frequency + time * band.speed + band.phase) * band.amplitude;
+          const wave2 = Math.sin(x * band.frequency * 1.5 + time * band.speed * 0.8 + band.phase + 1) * (band.amplitude * 0.5);
           const y = band.y + wave1 + wave2;
 
           if (x === 0) {
@@ -84,8 +84,8 @@ export function useNorthernLights(
         }
 
         for (let x = canvas.width; x >= 0; x -= 3) {
-          const wave1 = Math.sin(x * band.frequency + timeRef.current * band.speed + band.phase) * band.amplitude;
-          const wave2 = Math.sin(x * band.frequency * 1.5 + timeRef.current * band.speed * 0.8 + band.phase + 1) * (band.amplitude * 0.5);
+          const wave1 = Math.sin(x * band.frequency + time * band.speed + band.phase) * band.amplitude;
+          const wave2 = Math.sin(x * band.frequency * 1.5 + time * band.speed * 0.8 + band.phase + 1) * (band.amplitude * 0.5);
           const y = band.y + wave1 + wave2 + band.height;
           ctx.lineTo(x, y);
         }
@@ -103,16 +103,6 @@ export function useNorthernLights(
         ctx.fill();
       });
 
-      animationRef.current = requestAnimationFrame(animate);
-    };
-
-    animate();
-
-    return () => {
-      window.removeEventListener('resize', resizeCanvas);
-      if (animationRef.current) {
-        cancelAnimationFrame(animationRef.current);
-      }
-    };
-  }, [canvasRef, darkMode, opacity, active]);
+    },
+  });
 }

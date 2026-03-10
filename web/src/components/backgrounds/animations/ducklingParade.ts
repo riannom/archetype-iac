@@ -5,7 +5,8 @@
  * waddling along paths near water. Positioned on sides of screen.
  */
 
-import { useEffect, RefObject } from 'react';
+import { useRef, RefObject } from 'react';
+import { useCanvasAnimation } from './useCanvasAnimation';
 
 interface Duck {
   x: number;
@@ -74,33 +75,25 @@ interface Butterfly {
   baseSpeed: number;
 }
 
+
 export function useDucklingParade(
   canvasRef: RefObject<HTMLCanvasElement>,
   darkMode: boolean,
   opacity: number,
   active: boolean
 ) {
-  useEffect(() => {
-    if (!active) return;
+  const familiesRef = useRef<DuckFamily[]>([]);
+  const ripplesRef = useRef<Ripple[]>([]);
+  const grassPatchesRef = useRef<Grass[]>([]);
+  const butterfliesRef = useRef<Butterfly[]>([]);
+  const frameRef = useRef<number>(0);
+  const sizeRef = useRef({ w: 0, h: 0 });
 
-    const canvas = canvasRef.current;
-    if (!canvas) return;
+  useCanvasAnimation(canvasRef, darkMode, opacity, active, {
 
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
+    draw: (ctx, canvas, _time, _dt) => {
+      frameRef.current++;
 
-    let animationId: number;
-    let families: DuckFamily[] = [];
-    let ripples: Ripple[] = [];
-    let grassPatches: Grass[] = [];
-    let butterflies: Butterfly[] = [];
-    let timeRef = 0;
-
-    const resize = () => {
-      canvas.width = window.innerWidth;
-      canvas.height = window.innerHeight;
-      initializeScene();
-    };
 
     const getRandomSideY = (height: number): number => {
       // Prefer top and bottom areas
@@ -112,120 +105,6 @@ export function useDucklingParade(
       return height * 0.3 + Math.random() * height * 0.4;
     };
 
-    const initializeScene = () => {
-      const { width, height } = canvas;
-
-      // Create duck families
-      families = [];
-      const familyCount = Math.ceil(width / 600);
-
-      for (let f = 0; f < familyCount; f++) {
-        const pathY = getRandomSideY(height);
-        const direction = Math.random() < 0.5 ? 1 : -1;
-        const startX = direction === 1 ? -100 - f * 200 : width + 100 + f * 200;
-        const ducklingCount = 3 + Math.floor(Math.random() * 4);
-
-        const ducks: Duck[] = [];
-
-        // Mother duck
-        const mother: Duck = {
-          x: startX,
-          y: pathY,
-          targetX: startX + direction * 100,
-          targetY: pathY,
-          size: 40,
-          waddle: 0,
-          isMother: true,
-          followIndex: -1,
-          bobPhase: Math.random() * Math.PI * 2,
-          blinkTimer: Math.random() * 200,
-          isBlinking: false,
-          quackTimer: Math.random() * 300,
-          isQuacking: false,
-          wingFlap: 0,
-        };
-        ducks.push(mother);
-
-        // Ducklings
-        for (let i = 0; i < ducklingCount; i++) {
-          ducks.push({
-            x: startX - direction * (30 + i * 25),
-            y: pathY + (Math.random() - 0.5) * 10,
-            targetX: mother.x - direction * 30,
-            targetY: pathY,
-            size: 18 + Math.random() * 6,
-            waddle: Math.random() * Math.PI * 2,
-            isMother: false,
-            followIndex: i,
-            bobPhase: Math.random() * Math.PI * 2,
-            blinkTimer: Math.random() * 200,
-            isBlinking: false,
-            quackTimer: Math.random() * 500,
-            isQuacking: false,
-            wingFlap: 0,
-          });
-        }
-
-        families.push({
-          ducks,
-          direction,
-          pathY,
-          leader: mother,
-        });
-      }
-
-      // Create grass patches on edges with pre-generated blade data
-      grassPatches = [];
-      const grassCount = Math.floor(width / 80);
-      for (let i = 0; i < grassCount; i++) {
-        const side = Math.random() < 0.5 ? 0 : 1;
-        const bladeCount = 5 + Math.floor(Math.random() * 5);
-        const bladeData: GrassBlade[] = [];
-        for (let b = 0; b < bladeCount; b++) {
-          bladeData.push({
-            heightMult: 0.7 + Math.random() * 0.3,
-            swayMult: 0.8 + Math.random() * 0.4,
-          });
-        }
-        grassPatches.push({
-          x: side === 0 ? Math.random() * width * 0.2 : width * 0.8 + Math.random() * width * 0.2,
-          y: height * 0.3 + Math.random() * height * 0.6,
-          height: 20 + Math.random() * 30,
-          blades: bladeCount,
-          swayPhase: Math.random() * Math.PI * 2,
-          bladeData,
-        });
-      }
-
-      // Create butterflies
-      butterflies = [];
-      for (let i = 0; i < 3; i++) {
-        const angle = Math.random() * Math.PI * 2;
-        const baseSpeed = 0.8 + Math.random() * 0.6;
-        const startX = Math.random() * width;
-        const startY = Math.random() * height * 0.5;
-        butterflies.push({
-          x: startX,
-          y: startY,
-          vx: Math.cos(angle) * baseSpeed,
-          vy: Math.sin(angle) * baseSpeed,
-          wingPhase: Math.random() * Math.PI * 2,
-          color: ['#FFB6C1', '#87CEEB', '#DDA0DD', '#F0E68C'][Math.floor(Math.random() * 4)],
-          size: 8 + Math.random() * 6,
-          targetX: startX + Math.cos(angle) * 100,
-          targetY: startY + Math.sin(angle) * 100,
-          flutterPhase: Math.random() * Math.PI * 2,
-          flutterSpeed: 0.15 + Math.random() * 0.1,
-          turnTimer: 0,
-          turnInterval: 30 + Math.floor(Math.random() * 60),
-          hoverTimer: 0,
-          isHovering: false,
-          baseSpeed,
-        });
-      }
-
-      ripples = [];
-    };
 
     const drawBackground = (ctx: CanvasRenderingContext2D, width: number, height: number) => {
       // Grass/pond gradient
@@ -246,7 +125,7 @@ export function useDucklingParade(
 
       // Add some path/pond areas
       ctx.fillStyle = darkMode ? 'rgba(20, 60, 80, 0.3)' : 'rgba(135, 206, 235, 0.4)';
-      for (const family of families) {
+      for (const family of familiesRef.current) {
         ctx.beginPath();
         ctx.ellipse(width / 2, family.pathY, width * 0.4, 40, 0, 0, Math.PI * 2);
         ctx.fill();
@@ -255,7 +134,7 @@ export function useDucklingParade(
 
     const drawGrass = (ctx: CanvasRenderingContext2D, grass: Grass) => {
       // Reduced sway for more graceful movement
-      const sway = Math.sin(timeRef * 0.0008 + grass.swayPhase) * 2;
+      const sway = Math.sin(frameRef.current * 0.0008 + grass.swayPhase) * 2;
 
       ctx.save();
       ctx.translate(grass.x, grass.y);
@@ -293,8 +172,8 @@ export function useDucklingParade(
     };
 
     const drawDuck = (ctx: CanvasRenderingContext2D, duck: Duck, direction: number) => {
-      const waddle = Math.sin(timeRef * 0.08 + duck.waddle) * 5;
-      const bob = Math.sin(timeRef * 0.05 + duck.bobPhase) * 2;
+      const waddle = Math.sin(frameRef.current * 0.08 + duck.waddle) * 5;
+      const bob = Math.sin(frameRef.current * 0.05 + duck.bobPhase) * 2;
       const size = duck.size;
 
       ctx.save();
@@ -472,7 +351,7 @@ export function useDucklingParade(
     };
 
     const drawButterfly = (ctx: CanvasRenderingContext2D, bf: Butterfly) => {
-      const wingAngle = Math.sin(timeRef * 0.1 + bf.wingPhase) * 0.5;
+      const wingAngle = Math.sin(frameRef.current * 0.1 + bf.wingPhase) * 0.5;
 
       ctx.save();
       ctx.translate(bf.x, bf.y);
@@ -592,7 +471,7 @@ export function useDucklingParade(
         // Calculate where the duckling should be (behind the target in the parade direction)
         const targetPosX = target.x - family.direction * followDist;
         const dx = targetPosX - duckling.x;
-        const dy = target.y + Math.sin(timeRef * 0.02 + i) * 3 - duckling.y;
+        const dy = target.y + Math.sin(frameRef.current * 0.02 + i) * 3 - duckling.y;
 
         // Smooth following - clamp movement to prevent overshooting
         const moveSpeed = Math.min(Math.abs(dx) * 0.08, 2.0);
@@ -623,10 +502,10 @@ export function useDucklingParade(
         }
       }
 
-      // Add ripples occasionally
+      // Add ripplesRef.current occasionally
       if (Math.random() < 0.03) {
         const randomDuck = family.ducks[Math.floor(Math.random() * family.ducks.length)];
-        ripples.push({
+        ripplesRef.current.push({
           x: randomDuck.x,
           y: randomDuck.y + randomDuck.size * 0.3,
           radius: 0,
@@ -664,12 +543,12 @@ export function useDucklingParade(
           bf.hoverTimer = 0;
         }
 
-        // Frequent erratic direction changes (like real butterflies)
+        // Frequent erratic direction changes (like real butterfliesRef.current)
         if (bf.turnTimer >= bf.turnInterval) {
           bf.turnTimer = 0;
           bf.turnInterval = 20 + Math.floor(Math.random() * 50);
 
-          // Add random turn angle (butterflies don't fly straight)
+          // Add random turn angle (butterfliesRef.current don't fly straight)
           const turnAngle = (Math.random() - 0.5) * Math.PI * 0.8;
           const currentAngle = Math.atan2(bf.vy, bf.vx);
           const newAngle = currentAngle + turnAngle;
@@ -702,9 +581,127 @@ export function useDucklingParade(
       }
     };
 
-    const animate = () => {
+
+      const w = canvas.width;
+      const h = canvas.height;
+      if (sizeRef.current.w !== w || sizeRef.current.h !== h) {
+        sizeRef.current = { w, h };
+        const { width, height } = canvas;
+  
+        // Create duck familiesRef.current
+        familiesRef.current = [];
+        const familyCount = Math.ceil(width / 600);
+  
+        for (let f = 0; f < familyCount; f++) {
+          const pathY = getRandomSideY(height);
+          const direction = Math.random() < 0.5 ? 1 : -1;
+          const startX = direction === 1 ? -100 - f * 200 : width + 100 + f * 200;
+          const ducklingCount = 3 + Math.floor(Math.random() * 4);
+  
+          const ducks: Duck[] = [];
+  
+          // Mother duck
+          const mother: Duck = {
+            x: startX,
+            y: pathY,
+            targetX: startX + direction * 100,
+            targetY: pathY,
+            size: 40,
+            waddle: 0,
+            isMother: true,
+            followIndex: -1,
+            bobPhase: Math.random() * Math.PI * 2,
+            blinkTimer: Math.random() * 200,
+            isBlinking: false,
+            quackTimer: Math.random() * 300,
+            isQuacking: false,
+            wingFlap: 0,
+          };
+          ducks.push(mother);
+  
+          // Ducklings
+          for (let i = 0; i < ducklingCount; i++) {
+            ducks.push({
+              x: startX - direction * (30 + i * 25),
+              y: pathY + (Math.random() - 0.5) * 10,
+              targetX: mother.x - direction * 30,
+              targetY: pathY,
+              size: 18 + Math.random() * 6,
+              waddle: Math.random() * Math.PI * 2,
+              isMother: false,
+              followIndex: i,
+              bobPhase: Math.random() * Math.PI * 2,
+              blinkTimer: Math.random() * 200,
+              isBlinking: false,
+              quackTimer: Math.random() * 500,
+              isQuacking: false,
+              wingFlap: 0,
+            });
+          }
+  
+          familiesRef.current.push({
+            ducks,
+            direction,
+            pathY,
+            leader: mother,
+          });
+        }
+  
+        // Create grass patches on edges with pre-generated blade data
+        grassPatchesRef.current = [];
+        const grassCount = Math.floor(width / 80);
+        for (let i = 0; i < grassCount; i++) {
+          const side = Math.random() < 0.5 ? 0 : 1;
+          const bladeCount = 5 + Math.floor(Math.random() * 5);
+          const bladeData: GrassBlade[] = [];
+          for (let b = 0; b < bladeCount; b++) {
+            bladeData.push({
+              heightMult: 0.7 + Math.random() * 0.3,
+              swayMult: 0.8 + Math.random() * 0.4,
+            });
+          }
+          grassPatchesRef.current.push({
+            x: side === 0 ? Math.random() * width * 0.2 : width * 0.8 + Math.random() * width * 0.2,
+            y: height * 0.3 + Math.random() * height * 0.6,
+            height: 20 + Math.random() * 30,
+            blades: bladeCount,
+            swayPhase: Math.random() * Math.PI * 2,
+            bladeData,
+          });
+        }
+  
+        // Create butterfliesRef.current
+        butterfliesRef.current = [];
+        for (let i = 0; i < 3; i++) {
+          const angle = Math.random() * Math.PI * 2;
+          const baseSpeed = 0.8 + Math.random() * 0.6;
+          const startX = Math.random() * width;
+          const startY = Math.random() * height * 0.5;
+          butterfliesRef.current.push({
+            x: startX,
+            y: startY,
+            vx: Math.cos(angle) * baseSpeed,
+            vy: Math.sin(angle) * baseSpeed,
+            wingPhase: Math.random() * Math.PI * 2,
+            color: ['#FFB6C1', '#87CEEB', '#DDA0DD', '#F0E68C'][Math.floor(Math.random() * 4)],
+            size: 8 + Math.random() * 6,
+            targetX: startX + Math.cos(angle) * 100,
+            targetY: startY + Math.sin(angle) * 100,
+            flutterPhase: Math.random() * Math.PI * 2,
+            flutterSpeed: 0.15 + Math.random() * 0.1,
+            turnTimer: 0,
+            turnInterval: 30 + Math.floor(Math.random() * 60),
+            hoverTimer: 0,
+            isHovering: false,
+            baseSpeed,
+          });
+        }
+  
+        ripplesRef.current = [];
+      }
+
       const { width, height } = canvas;
-      timeRef++;
+      frameRef.current++;
 
       // Clear canvas
       ctx.clearRect(0, 0, width, height);
@@ -713,18 +710,18 @@ export function useDucklingParade(
       drawBackground(ctx, width, height);
 
       // Draw grass
-      grassPatches.forEach(grass => drawGrass(ctx, grass));
+      grassPatchesRef.current.forEach(grass => drawGrass(ctx, grass));
 
-      // Update and draw ripples
-      ripples = ripples.filter(r => {
+      // Update and draw ripplesRef.current
+      ripplesRef.current = ripplesRef.current.filter(r => {
         r.radius += 0.5;
         r.opacity = 0.3 * (1 - r.radius / r.maxRadius);
         drawRipple(ctx, r);
         return r.radius < r.maxRadius;
       });
 
-      // Update and draw duck families
-      families.forEach(family => {
+      // Update and draw duck familiesRef.current
+      familiesRef.current.forEach(family => {
         updateDucks(family, width);
         // Draw ducks from back to front
         for (let i = family.ducks.length - 1; i >= 0; i--) {
@@ -732,22 +729,12 @@ export function useDucklingParade(
         }
       });
 
-      // Update and draw butterflies
-      butterflies.forEach(bf => {
+      // Update and draw butterfliesRef.current
+      butterfliesRef.current.forEach(bf => {
         updateButterfly(bf, width, height);
         drawButterfly(ctx, bf);
       });
 
-      animationId = requestAnimationFrame(animate);
-    };
-
-    resize();
-    window.addEventListener('resize', resize);
-    animate();
-
-    return () => {
-      window.removeEventListener('resize', resize);
-      cancelAnimationFrame(animationId);
-    };
-  }, [canvasRef, darkMode, opacity, active]);
+    },
+  });
 }

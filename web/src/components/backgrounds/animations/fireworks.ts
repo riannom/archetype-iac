@@ -5,7 +5,8 @@
  * Rockets launch, explode into particles, and fade with trails.
  */
 
-import { useEffect, useRef } from 'react';
+import { useRef } from 'react';
+import { useCanvasAnimation } from './useCanvasAnimation';
 
 interface Particle {
   x: number;
@@ -39,6 +40,7 @@ interface Sparkle {
   phase: number;
 }
 
+
 export function useFireworks(
   canvasRef: React.RefObject<HTMLCanvasElement>,
   darkMode: boolean,
@@ -48,38 +50,13 @@ export function useFireworks(
   const particlesRef = useRef<Particle[]>([]);
   const rocketsRef = useRef<Rocket[]>([]);
   const sparklesRef = useRef<Sparkle[]>([]);
-  const animationRef = useRef<number>(0);
-  const timeRef = useRef<number>(0);
   const lastLaunchRef = useRef<number>(0);
+  const sizeRef = useRef({ w: 0, h: 0 });
 
-  useEffect(() => {
-    if (!active) return;
+  useCanvasAnimation(canvasRef, darkMode, opacity, active, {
 
-    const canvas = canvasRef.current;
-    if (!canvas) return;
+    draw: (ctx, canvas, time, _dt) => {
 
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-
-    const resize = () => {
-      canvas.width = window.innerWidth;
-      canvas.height = window.innerHeight;
-      initializeSparkles();
-    };
-
-    const initializeSparkles = () => {
-      // Background stars/sparkles
-      sparklesRef.current = [];
-      for (let i = 0; i < 50; i++) {
-        sparklesRef.current.push({
-          x: Math.random() * canvas.width,
-          y: Math.random() * canvas.height * 0.7,
-          size: 1 + Math.random() * 2,
-          opacity: 0.3 + Math.random() * 0.5,
-          phase: Math.random() * Math.PI * 2,
-        });
-      }
-    };
 
     const colors = [
       '#FF6B6B', // Red
@@ -400,9 +377,24 @@ export function useFireworks(
       return `rgba(${r}, ${g}, ${b}, ${alpha})`;
     };
 
-    const animate = () => {
-      timeRef.current += 16;
-      const time = timeRef.current;
+
+      const w = canvas.width;
+      const h = canvas.height;
+      if (sizeRef.current.w !== w || sizeRef.current.h !== h) {
+        sizeRef.current = { w, h };
+        // Background stars/sparkles
+        sparklesRef.current = [];
+        for (let i = 0; i < 50; i++) {
+          sparklesRef.current.push({
+            x: Math.random() * canvas.width,
+            y: Math.random() * canvas.height * 0.7,
+            size: 1 + Math.random() * 2,
+            opacity: 0.3 + Math.random() * 0.5,
+            phase: Math.random() * Math.PI * 2,
+          });
+        }
+      }
+
 
       ctx.clearRect(0, 0, canvas.width, canvas.height);
 
@@ -454,16 +446,6 @@ export function useFireworks(
         return true;
       });
 
-      animationRef.current = requestAnimationFrame(animate);
-    };
-
-    resize();
-    window.addEventListener('resize', resize);
-    animate();
-
-    return () => {
-      window.removeEventListener('resize', resize);
-      cancelAnimationFrame(animationRef.current);
-    };
-  }, [canvasRef, darkMode, opacity, active]);
+    },
+  });
 }

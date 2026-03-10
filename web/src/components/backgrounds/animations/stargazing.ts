@@ -7,7 +7,8 @@
  * All random values pre-generated for smooth, flicker-free animation.
  */
 
-import { useEffect, RefObject } from 'react';
+import { useRef, RefObject } from 'react';
+import { useCanvasAnimation } from './useCanvasAnimation';
 
 interface Star {
   x: number;
@@ -67,35 +68,27 @@ interface Firefly {
   size: number;
 }
 
+
 export function useStargazing(
   canvasRef: RefObject<HTMLCanvasElement>,
   darkMode: boolean,
   opacity: number,
   active: boolean
 ) {
-  useEffect(() => {
-    if (!active) return;
+  const starsRef = useRef<Star[]>([]);
+  const shootingStarsRef = useRef<ShootingStar[]>([]);
+  const constellationsRef = useRef<Constellation[]>([]);
+  const cloudsRef = useRef<Cloud[]>([]);
+  const treesRef = useRef<Tree[]>([]);
+  const firefliesRef = useRef<Firefly[]>([]);
+  const frameRef = useRef<number>(0);
+  const sizeRef = useRef({ w: 0, h: 0 });
 
-    const canvas = canvasRef.current;
-    if (!canvas) return;
+  useCanvasAnimation(canvasRef, darkMode, opacity, active, {
 
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
+    draw: (ctx, canvas, _time, _dt) => {
+      frameRef.current++;
 
-    let animationId: number;
-    let stars: Star[] = [];
-    let shootingStars: ShootingStar[] = [];
-    let constellations: Constellation[] = [];
-    let clouds: Cloud[] = [];
-    let trees: Tree[] = [];
-    let fireflies: Firefly[] = [];
-    let timeRef = 0;
-
-    const resize = () => {
-      canvas.width = window.innerWidth;
-      canvas.height = window.innerHeight;
-      initializeScene();
-    };
 
     const isInSideZone = (x: number, width: number): boolean => {
       const centerStart = width * 0.3;
@@ -125,144 +118,6 @@ export function useStargazing(
       return puffs;
     };
 
-    const initializeScene = () => {
-      const { width, height } = canvas;
-
-      // Create stars with bias towards sides
-      stars = [];
-      const starCount = Math.floor((width * height) / 8000);
-      const starColors = ['#FFFFFF', '#FFFACD', '#ADD8E6', '#FFE4E1', '#E6E6FA'];
-
-      for (let i = 0; i < starCount; i++) {
-        const x = getRandomSidePosition(width);
-        // Bias stars towards upper portion
-        const y = Math.random() * height * 0.7;
-
-        stars.push({
-          x,
-          y,
-          size: isInSideZone(x, width) ? 0.5 + Math.random() * 2 : 0.3 + Math.random() * 1,
-          brightness: 0.5 + Math.random() * 0.5,
-          twinkleSpeed: 0.015 + Math.random() * 0.02,
-          twinklePhase: Math.random() * Math.PI * 2,
-          color: starColors[Math.floor(Math.random() * starColors.length)],
-        });
-      }
-
-      // Create constellations based on real star positions (RA/Dec → screen coords)
-      constellations = [];
-
-      if (width > 600) {
-        // Orion — left side (proportions from actual RA/Dec)
-        constellations.push({
-          stars: [
-            { x: width * 0.03,  y: height * 0.06  },  // Betelgeuse (left shoulder)
-            { x: width * 0.176, y: height * 0.087 },  // Bellatrix (right shoulder)
-            { x: width * 0.103, y: height * 0.301 },  // Alnitak (belt left)
-            { x: width * 0.123, y: height * 0.282 },  // Alnilam (belt center)
-            { x: width * 0.142, y: height * 0.258 },  // Mintaka (belt right)
-            { x: width * 0.069, y: height * 0.50  },  // Saiph (left foot)
-            { x: width * 0.23,  y: height * 0.462 },  // Rigel (right foot)
-          ],
-          connections: [
-            [0, 1],  // shoulders
-            [0, 2],  // left torso
-            [1, 4],  // right torso
-            [2, 3],  // belt
-            [3, 4],  // belt
-            [2, 5],  // left leg
-            [4, 6],  // right leg
-          ],
-        });
-
-        // Big Dipper (Ursa Major) — right upper (proportions from actual RA/Dec)
-        constellations.push({
-          stars: [
-            { x: width * 0.733, y: height * 0.04  },  // Dubhe (bowl top-left)
-            { x: width * 0.73,  y: height * 0.144 },  // Merak (bowl bottom-left)
-            { x: width * 0.805, y: height * 0.196 },  // Phecda (bowl bottom-right)
-            { x: width * 0.837, y: height * 0.131 },  // Megrez (bowl top-right → handle)
-            { x: width * 0.893, y: height * 0.152 },  // Alioth (handle)
-            { x: width * 0.935, y: height * 0.172 },  // Mizar (handle)
-            { x: width * 0.97,  y: height * 0.28  },  // Alkaid (handle end)
-          ],
-          connections: [
-            [0, 1],  // bowl left
-            [1, 2],  // bowl bottom
-            [2, 3],  // bowl right
-            [3, 0],  // bowl top
-            [3, 4],  // handle start
-            [4, 5],  // handle middle
-            [5, 6],  // handle end
-          ],
-        });
-
-        // Cassiopeia (W shape) — right lower (proportions from actual RA/Dec)
-        constellations.push({
-          stars: [
-            { x: width * 0.75,  y: height * 0.432 },  // Caph
-            { x: width * 0.803, y: height * 0.48  },  // Schedar
-            { x: width * 0.831, y: height * 0.404 },  // Gamma Cas (Navi)
-            { x: width * 0.880, y: height * 0.413 },  // Ruchbah
-            { x: width * 0.93,  y: height * 0.35  },  // Segin
-          ],
-          connections: [
-            [0, 1],  // W segment
-            [1, 2],  // W segment
-            [2, 3],  // W segment
-            [3, 4],  // W segment
-          ],
-        });
-      }
-
-      // Create wispy clouds with pre-generated puffs
-      clouds = [];
-      for (let i = 0; i < 3; i++) {
-        const baseSize = 100 + Math.random() * 150;
-        const initialOpacity = 0.05 + Math.random() * 0.08;
-        clouds.push({
-          x: Math.random() * width,
-          y: height * 0.1 + Math.random() * height * 0.3,
-          baseSize,
-          opacity: initialOpacity,
-          targetOpacity: initialOpacity,
-          speed: 0.02 + Math.random() * 0.03,
-          puffs: generateCloudPuffs(baseSize),
-        });
-      }
-
-      // Create silhouette trees on sides
-      trees = [];
-      const treeCount = Math.floor(width / 60);
-      for (let i = 0; i < treeCount; i++) {
-        const treeX = (i / treeCount) * width;
-        if (isInSideZone(treeX, width) || Math.random() < 0.3) {
-          trees.push({
-            x: treeX + Math.random() * 30 - 15,
-            height: 40 + Math.random() * 80,
-            width: 20 + Math.random() * 30,
-            type: Math.random() < 0.6 ? 'pine' : 'deciduous',
-          });
-        }
-      }
-
-      // Create fireflies at tree level (near ground)
-      fireflies = [];
-      const fireflyCount = Math.floor(width / 150);
-      for (let i = 0; i < fireflyCount; i++) {
-        const x = getRandomSidePosition(width);
-        fireflies.push({
-          x,
-          y: height * 0.85 + Math.random() * height * 0.1, // Near ground/trees
-          glowPhase: Math.random() * Math.PI * 2,
-          targetX: getRandomSidePosition(width),
-          targetY: height * 0.85 + Math.random() * height * 0.1,
-          size: 0.8 + Math.random() * 0.7, // Much smaller
-        });
-      }
-
-      shootingStars = [];
-    };
 
     const drawSky = (ctx: CanvasRenderingContext2D, width: number, height: number) => {
       // Night sky gradient
@@ -293,7 +148,7 @@ export function useStargazing(
     };
 
     const drawStar = (ctx: CanvasRenderingContext2D, star: Star) => {
-      const twinkle = Math.sin(timeRef * star.twinkleSpeed + star.twinklePhase) * 0.3 + 0.7;
+      const twinkle = Math.sin(frameRef.current * star.twinkleSpeed + star.twinklePhase) * 0.3 + 0.7;
       const actualBrightness = star.brightness * twinkle;
 
       // Star glow
@@ -317,7 +172,7 @@ export function useStargazing(
       ctx.arc(star.x, star.y, star.size, 0, Math.PI * 2);
       ctx.fill();
 
-      // Star points (for brighter stars)
+      // Star points (for brighter starsRef.current)
       if (star.size > 1.2) {
         ctx.strokeStyle = star.color;
         ctx.lineWidth = 0.5;
@@ -354,9 +209,9 @@ export function useStargazing(
         ctx.stroke();
       });
 
-      // Draw constellation stars (brighter)
+      // Draw constellation starsRef.current (brighter)
       constellation.stars.forEach(star => {
-        const twinkle = Math.sin(timeRef * 0.015 + star.x) * 0.2 + 0.8;
+        const twinkle = Math.sin(frameRef.current * 0.015 + star.x) * 0.2 + 0.8;
 
         // Glow
         const glowGradient = ctx.createRadialGradient(
@@ -402,7 +257,7 @@ export function useStargazing(
       ctx.lineTo(0, 0);
       ctx.stroke();
 
-      // Big stars get a wider, softer outer glow trail
+      // Big starsRef.current get a wider, softer outer glow trail
       if (ss.isBig) {
         const outerTrail = ctx.createLinearGradient(-ss.length * 0.7, 0, 0, 0);
         outerTrail.addColorStop(0, 'transparent');
@@ -426,7 +281,7 @@ export function useStargazing(
       ctx.arc(0, 0, headRadius, 0, Math.PI * 2);
       ctx.fill();
 
-      // Big stars get an extra outer halo
+      // Big starsRef.current get an extra outer halo
       if (ss.isBig) {
         const halo = ctx.createRadialGradient(0, 0, headRadius * 0.5, 0, 0, headRadius * 2.5);
         halo.addColorStop(0, `rgba(200, 220, 255, ${lifeRatio * 0.3})`);
@@ -495,7 +350,7 @@ export function useStargazing(
     };
 
     const drawFirefly = (ctx: CanvasRenderingContext2D, ff: Firefly) => {
-      const glow = Math.sin(timeRef * 0.03 + ff.glowPhase) * 0.5 + 0.5;
+      const glow = Math.sin(frameRef.current * 0.03 + ff.glowPhase) * 0.5 + 0.5;
 
       if (glow > 0.4) { // Higher threshold = less time visible
         // Smaller, dimmer outer glow
@@ -546,21 +401,163 @@ export function useStargazing(
         ff.targetY = height * 0.85 + Math.random() * height * 0.1; // Stay at tree level
       } else {
         ff.x += (dx / dist) * 0.15; // Slower movement
-        ff.y += (dy / dist) * 0.15 + Math.sin(timeRef * 0.015 + ff.glowPhase) * 0.08;
+        ff.y += (dy / dist) * 0.15 + Math.sin(frameRef.current * 0.015 + ff.glowPhase) * 0.08;
       }
     };
 
-    const animate = () => {
+
+      const w = canvas.width;
+      const h = canvas.height;
+      if (sizeRef.current.w !== w || sizeRef.current.h !== h) {
+        sizeRef.current = { w, h };
+        const { width, height } = canvas;
+  
+        // Create starsRef.current with bias towards sides
+        starsRef.current = [];
+        const starCount = Math.floor((width * height) / 8000);
+        const starColors = ['#FFFFFF', '#FFFACD', '#ADD8E6', '#FFE4E1', '#E6E6FA'];
+  
+        for (let i = 0; i < starCount; i++) {
+          const x = getRandomSidePosition(width);
+          // Bias starsRef.current towards upper portion
+          const y = Math.random() * height * 0.7;
+  
+          starsRef.current.push({
+            x,
+            y,
+            size: isInSideZone(x, width) ? 0.5 + Math.random() * 2 : 0.3 + Math.random() * 1,
+            brightness: 0.5 + Math.random() * 0.5,
+            twinkleSpeed: 0.015 + Math.random() * 0.02,
+            twinklePhase: Math.random() * Math.PI * 2,
+            color: starColors[Math.floor(Math.random() * starColors.length)],
+          });
+        }
+  
+        // Create constellationsRef.current based on real star positions (RA/Dec → screen coords)
+        constellationsRef.current = [];
+  
+        if (width > 600) {
+          // Orion — left side (proportions from actual RA/Dec)
+          constellationsRef.current.push({
+            stars: [
+              { x: width * 0.03,  y: height * 0.06  },  // Betelgeuse (left shoulder)
+              { x: width * 0.176, y: height * 0.087 },  // Bellatrix (right shoulder)
+              { x: width * 0.103, y: height * 0.301 },  // Alnitak (belt left)
+              { x: width * 0.123, y: height * 0.282 },  // Alnilam (belt center)
+              { x: width * 0.142, y: height * 0.258 },  // Mintaka (belt right)
+              { x: width * 0.069, y: height * 0.50  },  // Saiph (left foot)
+              { x: width * 0.23,  y: height * 0.462 },  // Rigel (right foot)
+            ],
+            connections: [
+              [0, 1],  // shoulders
+              [0, 2],  // left torso
+              [1, 4],  // right torso
+              [2, 3],  // belt
+              [3, 4],  // belt
+              [2, 5],  // left leg
+              [4, 6],  // right leg
+            ],
+          });
+  
+          // Big Dipper (Ursa Major) — right upper (proportions from actual RA/Dec)
+          constellationsRef.current.push({
+            stars: [
+              { x: width * 0.733, y: height * 0.04  },  // Dubhe (bowl top-left)
+              { x: width * 0.73,  y: height * 0.144 },  // Merak (bowl bottom-left)
+              { x: width * 0.805, y: height * 0.196 },  // Phecda (bowl bottom-right)
+              { x: width * 0.837, y: height * 0.131 },  // Megrez (bowl top-right → handle)
+              { x: width * 0.893, y: height * 0.152 },  // Alioth (handle)
+              { x: width * 0.935, y: height * 0.172 },  // Mizar (handle)
+              { x: width * 0.97,  y: height * 0.28  },  // Alkaid (handle end)
+            ],
+            connections: [
+              [0, 1],  // bowl left
+              [1, 2],  // bowl bottom
+              [2, 3],  // bowl right
+              [3, 0],  // bowl top
+              [3, 4],  // handle start
+              [4, 5],  // handle middle
+              [5, 6],  // handle end
+            ],
+          });
+  
+          // Cassiopeia (W shape) — right lower (proportions from actual RA/Dec)
+          constellationsRef.current.push({
+            stars: [
+              { x: width * 0.75,  y: height * 0.432 },  // Caph
+              { x: width * 0.803, y: height * 0.48  },  // Schedar
+              { x: width * 0.831, y: height * 0.404 },  // Gamma Cas (Navi)
+              { x: width * 0.880, y: height * 0.413 },  // Ruchbah
+              { x: width * 0.93,  y: height * 0.35  },  // Segin
+            ],
+            connections: [
+              [0, 1],  // W segment
+              [1, 2],  // W segment
+              [2, 3],  // W segment
+              [3, 4],  // W segment
+            ],
+          });
+        }
+  
+        // Create wispy cloudsRef.current with pre-generated puffs
+        cloudsRef.current = [];
+        for (let i = 0; i < 3; i++) {
+          const baseSize = 100 + Math.random() * 150;
+          const initialOpacity = 0.05 + Math.random() * 0.08;
+          cloudsRef.current.push({
+            x: Math.random() * width,
+            y: height * 0.1 + Math.random() * height * 0.3,
+            baseSize,
+            opacity: initialOpacity,
+            targetOpacity: initialOpacity,
+            speed: 0.02 + Math.random() * 0.03,
+            puffs: generateCloudPuffs(baseSize),
+          });
+        }
+  
+        // Create silhouette treesRef.current on sides
+        treesRef.current = [];
+        const treeCount = Math.floor(width / 60);
+        for (let i = 0; i < treeCount; i++) {
+          const treeX = (i / treeCount) * width;
+          if (isInSideZone(treeX, width) || Math.random() < 0.3) {
+            treesRef.current.push({
+              x: treeX + Math.random() * 30 - 15,
+              height: 40 + Math.random() * 80,
+              width: 20 + Math.random() * 30,
+              type: Math.random() < 0.6 ? 'pine' : 'deciduous',
+            });
+          }
+        }
+  
+        // Create firefliesRef.current at tree level (near ground)
+        firefliesRef.current = [];
+        const fireflyCount = Math.floor(width / 150);
+        for (let i = 0; i < fireflyCount; i++) {
+          const x = getRandomSidePosition(width);
+          firefliesRef.current.push({
+            x,
+            y: height * 0.85 + Math.random() * height * 0.1, // Near ground/treesRef.current
+            glowPhase: Math.random() * Math.PI * 2,
+            targetX: getRandomSidePosition(width),
+            targetY: height * 0.85 + Math.random() * height * 0.1,
+            size: 0.8 + Math.random() * 0.7, // Much smaller
+          });
+        }
+  
+        shootingStarsRef.current = [];
+      }
+
       const { width, height } = canvas;
-      timeRef++;
+      frameRef.current++;
 
       ctx.clearRect(0, 0, width, height);
 
       // Draw sky
       drawSky(ctx, width, height);
 
-      // Update and draw clouds with smooth opacity transitions
-      clouds.forEach(cloud => {
+      // Update and draw cloudsRef.current with smooth opacity transitions
+      cloudsRef.current.forEach(cloud => {
         cloud.x += cloud.speed;
         if (cloud.x > width + cloud.baseSize) {
           cloud.x = -cloud.baseSize;
@@ -572,17 +569,17 @@ export function useStargazing(
         drawCloud(ctx, cloud);
       });
 
-      // Draw stars
-      stars.forEach(star => drawStar(ctx, star));
+      // Draw starsRef.current
+      starsRef.current.forEach(star => drawStar(ctx, star));
 
-      // Draw constellations
-      constellations.forEach(constellation => drawConstellation(ctx, constellation));
+      // Draw constellationsRef.current
+      constellationsRef.current.forEach(constellation => drawConstellation(ctx, constellation));
 
-      // Add shooting stars occasionally (less frequent)
+      // Add shooting starsRef.current occasionally (less frequent)
       if (Math.random() < 0.001) {
         const startX = Math.random() * width;
         const startY = Math.random() * height * 0.4;
-        shootingStars.push({
+        shootingStarsRef.current.push({
           x: startX,
           y: startY,
           angle: Math.PI * 0.15 + Math.random() * Math.PI * 0.2,
@@ -597,7 +594,7 @@ export function useStargazing(
       if (Math.random() < 0.0001) {
         const startX = Math.random() * width;
         const startY = Math.random() * height * 0.3;
-        shootingStars.push({
+        shootingStarsRef.current.push({
           x: startX,
           y: startY,
           angle: Math.PI * 0.15 + Math.random() * Math.PI * 0.15,
@@ -609,8 +606,8 @@ export function useStargazing(
         });
       }
 
-      // Update and draw shooting stars
-      shootingStars = shootingStars.filter(ss => {
+      // Update and draw shooting starsRef.current
+      shootingStarsRef.current = shootingStarsRef.current.filter(ss => {
         ss.x += Math.cos(ss.angle) * ss.speed;
         ss.y += Math.sin(ss.angle) * ss.speed;
         ss.life--;
@@ -621,25 +618,15 @@ export function useStargazing(
       // Draw ground
       drawGround(ctx, width, height);
 
-      // Draw trees
-      trees.forEach(tree => drawTree(ctx, tree, height));
+      // Draw treesRef.current
+      treesRef.current.forEach(tree => drawTree(ctx, tree, height));
 
-      // Update and draw fireflies
-      fireflies.forEach(ff => {
+      // Update and draw firefliesRef.current
+      firefliesRef.current.forEach(ff => {
         updateFirefly(ff, width, height);
         drawFirefly(ctx, ff);
       });
 
-      animationId = requestAnimationFrame(animate);
-    };
-
-    resize();
-    window.addEventListener('resize', resize);
-    animate();
-
-    return () => {
-      window.removeEventListener('resize', resize);
-      cancelAnimationFrame(animationId);
-    };
-  }, [canvasRef, darkMode, opacity, active]);
+    },
+  });
 }

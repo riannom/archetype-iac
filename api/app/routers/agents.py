@@ -19,7 +19,7 @@ from app import db, models
 from app.agent_auth import verify_agent_secret
 from app.auth import get_current_admin, get_current_user
 from app.config import settings
-from app.metrics import record_agent_stale_image_cleanup, set_agent_stale_image_count
+from app.metrics import set_agent_stale_image_count
 from app.routers.system import get_commit
 from app.state import HostStatus, JobStatus, LabState, LinkActualState
 from app.utils.http import require_admin
@@ -1192,11 +1192,6 @@ async def _cleanup_stale_images_for_host(host: models.Host, database: Session) -
                 "reference": reference,
                 "error": str(response.get("error") or "delete failed"),
             })
-
-    if deleted:
-        record_agent_stale_image_cleanup(host.id, host.name or host.id, "deleted", len(deleted))
-    if failed:
-        record_agent_stale_image_cleanup(host.id, host.name or host.id, "failed", len(failed))
 
     refreshed = await _build_agent_image_details(host, database)
     return {

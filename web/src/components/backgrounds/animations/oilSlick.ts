@@ -5,7 +5,8 @@
  * like oil on water. Slow morphing shapes with prismatic edges.
  */
 
-import { useEffect, useRef } from 'react';
+import { useRef } from 'react';
+import { useCanvasAnimation } from './useCanvasAnimation';
 
 interface OilBlob {
   x: number;
@@ -18,6 +19,7 @@ interface OilBlob {
   morphSpeeds: number[];
 }
 
+
 export function useOilSlick(
   canvasRef: React.RefObject<HTMLCanvasElement>,
   darkMode: boolean,
@@ -25,51 +27,12 @@ export function useOilSlick(
   active: boolean
 ): void {
   const blobsRef = useRef<OilBlob[]>([]);
-  const animationRef = useRef<number>(0);
-  const timeRef = useRef<number>(0);
+  const sizeRef = useRef({ w: 0, h: 0 });
 
-  useEffect(() => {
-    if (!active) return;
+  useCanvasAnimation(canvasRef, darkMode, opacity, active, {
 
-    const canvas = canvasRef.current;
-    if (!canvas) return;
+    draw: (ctx, canvas, time, _dt) => {
 
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-
-    const resize = () => {
-      canvas.width = window.innerWidth;
-      canvas.height = window.innerHeight;
-      initializeBlobs();
-    };
-
-    const initializeBlobs = () => {
-      const { width, height } = canvas;
-      blobsRef.current = [];
-
-      const blobCount = 4 + Math.floor(Math.random() * 3);
-      for (let i = 0; i < blobCount; i++) {
-        // Generate morph phases for organic shape distortion
-        const morphCount = 5 + Math.floor(Math.random() * 4);
-        const morphPhases: number[] = [];
-        const morphSpeeds: number[] = [];
-        for (let m = 0; m < morphCount; m++) {
-          morphPhases.push(Math.random() * Math.PI * 2);
-          morphSpeeds.push(0.005 + Math.random() * 0.01);
-        }
-
-        blobsRef.current.push({
-          x: width * 0.1 + Math.random() * width * 0.8,
-          y: height * 0.1 + Math.random() * height * 0.8,
-          radius: 100 + Math.random() * 150,
-          phase: Math.random() * Math.PI * 2,
-          phaseSpeed: 0.003 + Math.random() * 0.003,
-          hueOffset: Math.random() * 360,
-          morphPhases,
-          morphSpeeds,
-        });
-      }
-    };
 
     const getBlobPath = (blob: OilBlob, scale: number = 1): Path2D => {
       const path = new Path2D();
@@ -168,9 +131,39 @@ export function useOilSlick(
       ctx.fill();
     };
 
-    const animate = () => {
+
+      const w = canvas.width;
+      const h = canvas.height;
+      if (sizeRef.current.w !== w || sizeRef.current.h !== h) {
+        sizeRef.current = { w, h };
+        const { width, height } = canvas;
+        blobsRef.current = [];
+  
+        const blobCount = 4 + Math.floor(Math.random() * 3);
+        for (let i = 0; i < blobCount; i++) {
+          // Generate morph phases for organic shape distortion
+          const morphCount = 5 + Math.floor(Math.random() * 4);
+          const morphPhases: number[] = [];
+          const morphSpeeds: number[] = [];
+          for (let m = 0; m < morphCount; m++) {
+            morphPhases.push(Math.random() * Math.PI * 2);
+            morphSpeeds.push(0.005 + Math.random() * 0.01);
+          }
+  
+          blobsRef.current.push({
+            x: width * 0.1 + Math.random() * width * 0.8,
+            y: height * 0.1 + Math.random() * height * 0.8,
+            radius: 100 + Math.random() * 150,
+            phase: Math.random() * Math.PI * 2,
+            phaseSpeed: 0.003 + Math.random() * 0.003,
+            hueOffset: Math.random() * 360,
+            morphPhases,
+            morphSpeeds,
+          });
+        }
+      }
+
       const { width, height } = canvas;
-      timeRef.current += 16;
 
       // Clear
       ctx.fillStyle = darkMode ? 'rgba(10, 15, 20, 1)' : 'rgba(245, 248, 252, 1)';
@@ -199,27 +192,17 @@ export function useOilSlick(
 
       // Subtle overall shimmer overlay
       const shimmerOverlay = ctx.createRadialGradient(
-        width / 2 + Math.sin(timeRef.current * 0.001) * 100,
-        height / 2 + Math.cos(timeRef.current * 0.0008) * 100,
+        width / 2 + Math.sin(time * 0.001) * 100,
+        height / 2 + Math.cos(time * 0.0008) * 100,
         0,
         width / 2, height / 2, Math.max(width, height) * 0.5
       );
-      const overlayHue = (timeRef.current * 0.01) % 360;
+      const overlayHue = (time * 0.01) % 360;
       shimmerOverlay.addColorStop(0, `hsla(${overlayHue}, 50%, 70%, 0.02)`);
       shimmerOverlay.addColorStop(1, 'transparent');
       ctx.fillStyle = shimmerOverlay;
       ctx.fillRect(0, 0, width, height);
 
-      animationRef.current = requestAnimationFrame(animate);
-    };
-
-    resize();
-    window.addEventListener('resize', resize);
-    animate();
-
-    return () => {
-      window.removeEventListener('resize', resize);
-      cancelAnimationFrame(animationRef.current);
-    };
-  }, [canvasRef, darkMode, opacity, active]);
+    },
+  });
 }

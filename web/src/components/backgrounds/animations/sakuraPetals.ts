@@ -3,7 +3,8 @@
  * Gentle falling cherry blossom petals
  */
 
-import { useRef, useEffect, useCallback } from 'react';
+import { useRef, useCallback } from 'react';
+import { useCanvasAnimation } from './useCanvasAnimation';
 
 interface Petal {
   x: number;
@@ -31,8 +32,6 @@ export function useSakuraPetals(
   active: boolean
 ) {
   const petalsRef = useRef<Petal[]>([]);
-  const animationRef = useRef<number | undefined>(undefined);
-  const timeRef = useRef<number>(0);
 
   const createPetal = useCallback((canvas: HTMLCanvasElement, startFromTop = true): Petal => {
     return {
@@ -171,102 +170,60 @@ export function useSakuraPetals(
     ctx.restore();
   }, []);
 
-  useEffect(() => {
-    if (!active) return;
-
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-
-    const resizeCanvas = () => {
-      canvas.width = window.innerWidth;
-      canvas.height = window.innerHeight;
-    };
-    resizeCanvas();
-    window.addEventListener('resize', resizeCanvas);
-
-    const petalCount = Math.floor((canvas.width * canvas.height) / 25000);
-    petalsRef.current = Array.from({ length: petalCount }, () =>
-      createPetal(canvas, false)
-    );
-
-    const animate = () => {
-      if (!canvas || !ctx) return;
-
+  useCanvasAnimation(canvasRef, darkMode, opacity, active, {
+    init: (_ctx, canvas) => {
+      const petalCount = Math.floor((canvas.width * canvas.height) / 25000);
+      petalsRef.current = Array.from({ length: petalCount }, () =>
+        createPetal(canvas, false)
+      );
+    },
+    draw: (ctx, canvas, time) => {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
-      timeRef.current += 0.016;
 
       const opacityMultiplier = opacity / 50;
 
       petalsRef.current.forEach((petal, index) => {
-        // Update flutter timer
         petal.flutterTimer += 1;
 
-        // Occasionally change drift direction (simulates catching air currents)
         if (petal.flutterTimer > 70 + Math.random() * 50) {
           petal.flutterTimer = 0;
           petal.isDrifting = !petal.isDrifting;
           petal.targetRotationSpeed = (Math.random() - 0.5) * 0.04;
-          // Add a gentle swoop
           petal.vx += (Math.random() - 0.5) * 0.6;
         }
 
-        // Smooth rotation speed changes
         petal.rotationSpeed += (petal.targetRotationSpeed - petal.rotationSpeed) * 0.02;
 
-        // Update 3D tilt (tumbling effect)
         petal.tilt += petal.tiltSpeed;
-        // Vary tilt speed for organic movement
-        petal.tiltSpeed += Math.sin(timeRef.current * 1.5 + petal.tiltPhase) * 0.0008;
+        petal.tiltSpeed += Math.sin(time * 1.5 + petal.tiltPhase) * 0.0008;
         petal.tiltSpeed = Math.max(0.01, Math.min(0.04, petal.tiltSpeed));
 
-        // Horizontal sway influenced by tilt
-        const sway = Math.sin(timeRef.current * 0.6 + petal.swayPhase) * 0.35;
+        const sway = Math.sin(time * 0.6 + petal.swayPhase) * 0.35;
         const tiltInfluence = Math.sin(petal.tilt) * 0.25;
 
-        // Apply velocities based on drift state
         if (petal.isDrifting) {
-          // Drifting - more horizontal, slower fall
           petal.vx += sway * 0.06 + tiltInfluence * 0.08;
-          petal.vy *= 0.985; // Slow down vertical
-          petal.vy = Math.max(0.1, petal.vy); // Never stop falling completely
+          petal.vy *= 0.985;
+          petal.vy = Math.max(0.1, petal.vy);
         } else {
-          // Normal falling
           petal.vx += sway * 0.025;
-          petal.vy += 0.002; // Gentle acceleration
-          petal.vy = Math.min(0.7, petal.vy); // Terminal velocity
+          petal.vy += 0.002;
+          petal.vy = Math.min(0.7, petal.vy);
         }
 
-        // Air resistance on horizontal movement
         petal.vx *= 0.988;
 
-        // Apply movement
         petal.x += petal.vx;
         petal.y += petal.vy;
 
-        // Rotation affected by horizontal movement and tilt
         petal.rotation += petal.rotationSpeed + petal.vx * 0.015;
 
-        // Reset if off screen
         if (petal.y > canvas.height + 30 || petal.x < -40 || petal.x > canvas.width + 40) {
           petalsRef.current[index] = createPetal(canvas, true);
         }
 
         drawPetal(ctx, petal, darkMode, opacityMultiplier);
       });
-
-      animationRef.current = requestAnimationFrame(animate);
-    };
-
-    animate();
-
-    return () => {
-      window.removeEventListener('resize', resizeCanvas);
-      if (animationRef.current) {
-        cancelAnimationFrame(animationRef.current);
-      }
-    };
-  }, [canvasRef, darkMode, opacity, createPetal, drawPetal, active]);
+    },
+  });
 }

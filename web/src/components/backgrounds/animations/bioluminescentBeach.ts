@@ -5,7 +5,8 @@
  * stars reflecting on water, peaceful nighttime beach scene.
  */
 
-import { useEffect, useRef } from 'react';
+import { useRef } from 'react';
+import { useCanvasAnimation } from './useCanvasAnimation';
 
 interface Wave {
   x: number;
@@ -45,6 +46,7 @@ interface Reflection {
   wobblePhase: number;
 }
 
+
 export function useBioluminescentBeach(
   canvasRef: React.RefObject<HTMLCanvasElement>,
   darkMode: boolean,
@@ -55,18 +57,11 @@ export function useBioluminescentBeach(
   const particlesRef = useRef<BioParticle[]>([]);
   const starsRef = useRef<Star[]>([]);
   const reflectionsRef = useRef<Reflection[]>([]);
-  const animationRef = useRef<number | undefined>(undefined);
-  const timeRef = useRef(0);
+  const sizeRef = useRef({ w: 0, h: 0 });
 
-  useEffect(() => {
-    if (!enabled) return;
+  useCanvasAnimation(canvasRef, darkMode, opacity, enabled, {
 
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-
+    draw: (ctx, canvas, time, _dt) => {
     const resizeCanvas = () => {
       canvas.width = window.innerWidth;
       canvas.height = window.innerHeight;
@@ -119,11 +114,17 @@ export function useBioluminescentBeach(
 
     particlesRef.current = [];
 
-    const animate = () => {
+
+      const w = canvas.width;
+      const h = canvas.height;
+      if (sizeRef.current.w !== w || sizeRef.current.h !== h) {
+        sizeRef.current = { w, h };
+      }
+
       const currentWidth = canvas.width;
       const currentHeight = canvas.height;
       ctx.clearRect(0, 0, currentWidth, currentHeight);
-      timeRef.current += 0.016;
+      time += 0.016;
 
       // Sky gradient (dark night sky)
       const skyGradient = ctx.createLinearGradient(0, 0, 0, shoreY);
@@ -204,7 +205,7 @@ export function useBioluminescentBeach(
 
         // Bioluminescent glow
         const glowGradient = ctx.createLinearGradient(0, wave.y - 5, 0, wave.y + 15);
-        const glowPulse = 0.7 + Math.sin(timeRef.current * 2 + wave.phase) * 0.3;
+        const glowPulse = 0.7 + Math.sin(time * 2 + wave.phase) * 0.3;
         const intensity = wave.glowIntensity * glowPulse;
 
         if (darkMode) {
@@ -293,16 +294,6 @@ export function useBioluminescentBeach(
       ctx.fillStyle = beachGradient;
       ctx.fillRect(0, shoreY - 20, currentWidth, 50);
 
-      animationRef.current = requestAnimationFrame(animate);
-    };
-
-    animate();
-
-    return () => {
-      window.removeEventListener('resize', resizeCanvas);
-      if (animationRef.current) {
-        cancelAnimationFrame(animationRef.current);
-      }
-    };
-  }, [canvasRef, darkMode, opacity, enabled]);
+    },
+  });
 }

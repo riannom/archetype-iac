@@ -5,7 +5,8 @@
  * stars appearing as darkness grows.
  */
 
-import { useEffect, useRef } from 'react';
+import { useRef } from 'react';
+import { useCanvasAnimation } from './useCanvasAnimation';
 
 interface Star {
   x: number;
@@ -34,6 +35,7 @@ interface Particle {
   brightness: number;
 }
 
+
 export function useEclipse(
   canvasRef: React.RefObject<HTMLCanvasElement>,
   darkMode: boolean,
@@ -43,19 +45,12 @@ export function useEclipse(
   const starsRef = useRef<Star[]>([]);
   const coronaRaysRef = useRef<CoronaRay[]>([]);
   const particlesRef = useRef<Particle[]>([]);
-  const animationRef = useRef<number | undefined>(undefined);
-  const timeRef = useRef(0);
   const eclipsePhaseRef = useRef(0); // 0 = full sun, 1 = full eclipse, cycles slowly
+  const sizeRef = useRef({ w: 0, h: 0 });
 
-  useEffect(() => {
-    if (!enabled) return;
+  useCanvasAnimation(canvasRef, darkMode, opacity, enabled, {
 
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-
+    draw: (ctx, canvas, time, _dt) => {
     const resizeCanvas = () => {
       canvas.width = window.innerWidth;
       canvas.height = window.innerHeight;
@@ -97,11 +92,17 @@ export function useEclipse(
 
     particlesRef.current = [];
 
-    const animate = () => {
+
+      const w = canvas.width;
+      const h = canvas.height;
+      if (sizeRef.current.w !== w || sizeRef.current.h !== h) {
+        sizeRef.current = { w, h };
+      }
+
       const currentWidth = canvas.width;
       const currentHeight = canvas.height;
       ctx.clearRect(0, 0, currentWidth, currentHeight);
-      timeRef.current += 0.016;
+      time += 0.016;
 
       // Very slow eclipse cycle (about 60 seconds for full cycle)
       eclipsePhaseRef.current += 0.0003;
@@ -325,16 +326,6 @@ export function useEclipse(
       ctx.fillStyle = horizonGlow;
       ctx.fillRect(0, horizonY, currentWidth, currentHeight - horizonY);
 
-      animationRef.current = requestAnimationFrame(animate);
-    };
-
-    animate();
-
-    return () => {
-      window.removeEventListener('resize', resizeCanvas);
-      if (animationRef.current) {
-        cancelAnimationFrame(animationRef.current);
-      }
-    };
-  }, [canvasRef, darkMode, opacity, enabled]);
+    },
+  });
 }

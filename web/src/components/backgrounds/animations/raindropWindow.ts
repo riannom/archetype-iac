@@ -6,7 +6,8 @@
  * Pre-generates all random values to avoid flickering.
  */
 
-import { useEffect, useRef } from 'react';
+import { useRef } from 'react';
+import { useCanvasAnimation } from './useCanvasAnimation';
 
 interface Raindrop {
   x: number;
@@ -35,6 +36,7 @@ interface StreamLine {
   opacity: number;
 }
 
+
 export function useRaindropWindow(
   canvasRef: React.RefObject<HTMLCanvasElement>,
   darkMode: boolean,
@@ -44,67 +46,12 @@ export function useRaindropWindow(
   const dropsRef = useRef<Raindrop[]>([]);
   const lightsRef = useRef<BackgroundLight[]>([]);
   const streamsRef = useRef<StreamLine[]>([]);
-  const animationRef = useRef<number>(0);
-  const timeRef = useRef<number>(0);
+  const sizeRef = useRef({ w: 0, h: 0 });
 
-  useEffect(() => {
-    if (!active) return;
+  useCanvasAnimation(canvasRef, darkMode, opacity, active, {
 
-    const canvas = canvasRef.current;
-    if (!canvas) return;
+    draw: (ctx, canvas, time, _dt) => {
 
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-
-    const resize = () => {
-      canvas.width = window.innerWidth;
-      canvas.height = window.innerHeight;
-      initializeElements();
-    };
-
-    const initializeElements = () => {
-      const width = canvas.width;
-      const height = canvas.height;
-
-      // Create background bokeh lights
-      lightsRef.current = [];
-      for (let i = 0; i < 15; i++) {
-        lightsRef.current.push({
-          x: Math.random() * width,
-          y: Math.random() * height,
-          size: 30 + Math.random() * 80,
-          hue: Math.random() > 0.5 ? 40 + Math.random() * 20 : 200 + Math.random() * 40,
-          brightness: 0.3 + Math.random() * 0.4,
-          pulsePhase: Math.random() * Math.PI * 2,
-        });
-      }
-
-      // Create raindrops
-      dropsRef.current = [];
-      for (let i = 0; i < 25; i++) {
-        dropsRef.current.push(createDrop(width, height, true));
-      }
-
-      // Create stream lines (water trails that stay)
-      streamsRef.current = [];
-      for (let i = 0; i < 8; i++) {
-        const segments: { y: number; offset: number }[] = [];
-        let y = 0;
-        while (y < height) {
-          segments.push({
-            y,
-            offset: (Math.random() - 0.5) * 10,
-          });
-          y += 20 + Math.random() * 30;
-        }
-        streamsRef.current.push({
-          x: Math.random() * width,
-          startY: 0,
-          segments,
-          opacity: 0.1 + Math.random() * 0.15,
-        });
-      }
-    };
 
     const createDrop = (width: number, height: number, randomY: boolean): Raindrop => ({
       x: Math.random() * width,
@@ -283,9 +230,54 @@ export function useRaindropWindow(
       ctx.fillRect(0, 0, canvas.width, 100);
     };
 
-    const animate = () => {
-      timeRef.current += 16;
-      const time = timeRef.current;
+
+      const w = canvas.width;
+      const h = canvas.height;
+      if (sizeRef.current.w !== w || sizeRef.current.h !== h) {
+        sizeRef.current = { w, h };
+        const width = canvas.width;
+        const height = canvas.height;
+  
+        // Create background bokeh lights
+        lightsRef.current = [];
+        for (let i = 0; i < 15; i++) {
+          lightsRef.current.push({
+            x: Math.random() * width,
+            y: Math.random() * height,
+            size: 30 + Math.random() * 80,
+            hue: Math.random() > 0.5 ? 40 + Math.random() * 20 : 200 + Math.random() * 40,
+            brightness: 0.3 + Math.random() * 0.4,
+            pulsePhase: Math.random() * Math.PI * 2,
+          });
+        }
+  
+        // Create raindrops
+        dropsRef.current = [];
+        for (let i = 0; i < 25; i++) {
+          dropsRef.current.push(createDrop(width, height, true));
+        }
+  
+        // Create stream lines (water trails that stay)
+        streamsRef.current = [];
+        for (let i = 0; i < 8; i++) {
+          const segments: { y: number; offset: number }[] = [];
+          let y = 0;
+          while (y < height) {
+            segments.push({
+              y,
+              offset: (Math.random() - 0.5) * 10,
+            });
+            y += 20 + Math.random() * 30;
+          }
+          streamsRef.current.push({
+            x: Math.random() * width,
+            startY: 0,
+            segments,
+            opacity: 0.1 + Math.random() * 0.15,
+          });
+        }
+      }
+
 
       ctx.clearRect(0, 0, canvas.width, canvas.height);
 
@@ -305,16 +297,6 @@ export function useRaindropWindow(
 
       drawWindowFrame();
 
-      animationRef.current = requestAnimationFrame(animate);
-    };
-
-    resize();
-    window.addEventListener('resize', resize);
-    animate();
-
-    return () => {
-      window.removeEventListener('resize', resize);
-      cancelAnimationFrame(animationRef.current);
-    };
-  }, [canvasRef, darkMode, opacity, active]);
+    },
+  });
 }

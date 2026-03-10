@@ -6,7 +6,8 @@
  * Pre-generates all random values to avoid flickering.
  */
 
-import { useEffect, useRef } from 'react';
+import { useRef } from 'react';
+import { useCanvasAnimation } from './useCanvasAnimation';
 
 interface Sailboat {
   x: number;
@@ -43,6 +44,7 @@ interface Cloud {
   puffs: { offsetX: number; offsetY: number; size: number }[];
 }
 
+
 export function useSunsetSailing(
   canvasRef: React.RefObject<HTMLCanvasElement>,
   darkMode: boolean,
@@ -53,95 +55,12 @@ export function useSunsetSailing(
   const wavesRef = useRef<Wave[]>([]);
   const birdsRef = useRef<Bird[]>([]);
   const cloudsRef = useRef<Cloud[]>([]);
-  const animationRef = useRef<number>(0);
-  const timeRef = useRef<number>(0);
+  const sizeRef = useRef({ w: 0, h: 0 });
 
-  useEffect(() => {
-    if (!active) return;
+  useCanvasAnimation(canvasRef, darkMode, opacity, active, {
 
-    const canvas = canvasRef.current;
-    if (!canvas) return;
+    draw: (ctx, canvas, time, _dt) => {
 
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-
-    const resize = () => {
-      canvas.width = window.innerWidth;
-      canvas.height = window.innerHeight;
-      initializeElements();
-    };
-
-    const initializeElements = () => {
-      const width = canvas.width;
-      const height = canvas.height;
-
-      // Create sailboats
-      boatsRef.current = [];
-      const boatCount = 2 + Math.floor(Math.random() * 2);
-      const sailColors = ['#FFFFFF', '#FFF8DC', '#FFFAF0'];
-      const hullColors = ['#8B4513', '#A0522D', '#654321', '#2F4F4F'];
-
-      for (let i = 0; i < boatCount; i++) {
-        boatsRef.current.push({
-          x: width * 0.1 + Math.random() * width * 0.8,
-          y: height * 0.55 + Math.random() * height * 0.1,
-          size: 30 + Math.random() * 30,
-          speed: 0.1 + Math.random() * 0.15,
-          bobPhase: Math.random() * Math.PI * 2,
-          sailColor: sailColors[Math.floor(Math.random() * sailColors.length)],
-          hullColor: hullColors[Math.floor(Math.random() * hullColors.length)],
-        });
-      }
-
-      // Create waves
-      wavesRef.current = [];
-      for (let y = height * 0.5; y < height; y += 15) {
-        for (let x = 0; x < width + 100; x += 80) {
-          wavesRef.current.push({
-            x: x + (Math.random() - 0.5) * 30,
-            y: y + (Math.random() - 0.5) * 5,
-            width: 40 + Math.random() * 40,
-            phase: Math.random() * Math.PI * 2,
-            speed: 0.002 + Math.random() * 0.002,
-            amplitude: 2 + Math.random() * 3,
-          });
-        }
-      }
-
-      // Create birds
-      birdsRef.current = [];
-      for (let i = 0; i < 5; i++) {
-        birdsRef.current.push({
-          x: Math.random() * width,
-          y: height * 0.15 + Math.random() * height * 0.2,
-          wingPhase: Math.random() * Math.PI * 2,
-          speed: 0.3 + Math.random() * 0.3,
-          size: 8 + Math.random() * 6,
-        });
-      }
-
-      // Create clouds
-      cloudsRef.current = [];
-      for (let i = 0; i < 4; i++) {
-        const puffs: { offsetX: number; offsetY: number; size: number }[] = [];
-        const puffCount = 4 + Math.floor(Math.random() * 3);
-        for (let p = 0; p < puffCount; p++) {
-          puffs.push({
-            offsetX: (p - puffCount / 2) * 25 + (Math.random() - 0.5) * 15,
-            offsetY: (Math.random() - 0.5) * 15,
-            size: 20 + Math.random() * 20,
-          });
-        }
-        cloudsRef.current.push({
-          x: Math.random() * width * 1.5,
-          y: 30 + Math.random() * height * 0.15,
-          width: 70 + Math.random() * 50,
-          speed: 0.05 + Math.random() * 0.1,
-          puffs,
-        });
-      }
-
-    };
 
     const drawSky = () => {
       const height = canvas.height;
@@ -350,9 +269,82 @@ export function useSunsetSailing(
       });
     };
 
-    const animate = () => {
-      timeRef.current += 16;
-      const time = timeRef.current;
+
+      const w = canvas.width;
+      const h = canvas.height;
+      if (sizeRef.current.w !== w || sizeRef.current.h !== h) {
+        sizeRef.current = { w, h };
+        const width = canvas.width;
+        const height = canvas.height;
+  
+        // Create sailboats
+        boatsRef.current = [];
+        const boatCount = 2 + Math.floor(Math.random() * 2);
+        const sailColors = ['#FFFFFF', '#FFF8DC', '#FFFAF0'];
+        const hullColors = ['#8B4513', '#A0522D', '#654321', '#2F4F4F'];
+  
+        for (let i = 0; i < boatCount; i++) {
+          boatsRef.current.push({
+            x: width * 0.1 + Math.random() * width * 0.8,
+            y: height * 0.55 + Math.random() * height * 0.1,
+            size: 30 + Math.random() * 30,
+            speed: 0.1 + Math.random() * 0.15,
+            bobPhase: Math.random() * Math.PI * 2,
+            sailColor: sailColors[Math.floor(Math.random() * sailColors.length)],
+            hullColor: hullColors[Math.floor(Math.random() * hullColors.length)],
+          });
+        }
+  
+        // Create waves
+        wavesRef.current = [];
+        for (let y = height * 0.5; y < height; y += 15) {
+          for (let x = 0; x < width + 100; x += 80) {
+            wavesRef.current.push({
+              x: x + (Math.random() - 0.5) * 30,
+              y: y + (Math.random() - 0.5) * 5,
+              width: 40 + Math.random() * 40,
+              phase: Math.random() * Math.PI * 2,
+              speed: 0.002 + Math.random() * 0.002,
+              amplitude: 2 + Math.random() * 3,
+            });
+          }
+        }
+  
+        // Create birds
+        birdsRef.current = [];
+        for (let i = 0; i < 5; i++) {
+          birdsRef.current.push({
+            x: Math.random() * width,
+            y: height * 0.15 + Math.random() * height * 0.2,
+            wingPhase: Math.random() * Math.PI * 2,
+            speed: 0.3 + Math.random() * 0.3,
+            size: 8 + Math.random() * 6,
+          });
+        }
+  
+        // Create clouds
+        cloudsRef.current = [];
+        for (let i = 0; i < 4; i++) {
+          const puffs: { offsetX: number; offsetY: number; size: number }[] = [];
+          const puffCount = 4 + Math.floor(Math.random() * 3);
+          for (let p = 0; p < puffCount; p++) {
+            puffs.push({
+              offsetX: (p - puffCount / 2) * 25 + (Math.random() - 0.5) * 15,
+              offsetY: (Math.random() - 0.5) * 15,
+              size: 20 + Math.random() * 20,
+            });
+          }
+          cloudsRef.current.push({
+            x: Math.random() * width * 1.5,
+            y: 30 + Math.random() * height * 0.15,
+            width: 70 + Math.random() * 50,
+            speed: 0.05 + Math.random() * 0.1,
+            puffs,
+          });
+        }
+  
+      }
+
 
       ctx.clearRect(0, 0, canvas.width, canvas.height);
 
@@ -367,16 +359,6 @@ export function useSunsetSailing(
 
       drawBirds(time);
 
-      animationRef.current = requestAnimationFrame(animate);
-    };
-
-    resize();
-    window.addEventListener('resize', resize);
-    animate();
-
-    return () => {
-      window.removeEventListener('resize', resize);
-      cancelAnimationFrame(animationRef.current);
-    };
-  }, [canvasRef, darkMode, opacity, active]);
+    },
+  });
 }

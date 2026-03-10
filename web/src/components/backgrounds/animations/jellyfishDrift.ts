@@ -5,7 +5,8 @@
  * Pre-generates all random values to avoid flickering.
  */
 
-import { useEffect, useRef } from 'react';
+import { useRef } from 'react';
+import { useCanvasAnimation } from './useCanvasAnimation';
 
 interface Jellyfish {
   x: number;
@@ -29,6 +30,7 @@ interface Particle {
   hue: number;
 }
 
+
 export function useJellyfishDrift(
   canvasRef: React.RefObject<HTMLCanvasElement>,
   darkMode: boolean,
@@ -37,49 +39,12 @@ export function useJellyfishDrift(
 ): void {
   const jellyfishRef = useRef<Jellyfish[]>([]);
   const particlesRef = useRef<Particle[]>([]);
-  const animationRef = useRef<number>(0);
-  const timeRef = useRef<number>(0);
+  const sizeRef = useRef({ w: 0, h: 0 });
 
-  useEffect(() => {
-    if (!active) return;
+  useCanvasAnimation(canvasRef, darkMode, opacity, active, {
 
-    const canvas = canvasRef.current;
-    if (!canvas) return;
+    draw: (ctx, canvas, time, _dt) => {
 
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-
-    const resize = () => {
-      canvas.width = window.innerWidth;
-      canvas.height = window.innerHeight;
-      initializeElements();
-    };
-
-    const initializeElements = () => {
-      const width = canvas.width;
-      const height = canvas.height;
-
-      // Create jellyfish
-      jellyfishRef.current = [];
-      const count = Math.floor(width / 300) + 2;
-
-      for (let i = 0; i < count; i++) {
-        jellyfishRef.current.push(createJellyfish(width, height));
-      }
-
-      // Create floating particles (plankton)
-      particlesRef.current = [];
-      for (let i = 0; i < 50; i++) {
-        particlesRef.current.push({
-          x: Math.random() * width,
-          y: Math.random() * height,
-          size: 1 + Math.random() * 2,
-          opacity: 0.2 + Math.random() * 0.4,
-          speed: 0.1 + Math.random() * 0.2,
-          hue: 180 + Math.random() * 60,
-        });
-      }
-    };
 
     const createJellyfish = (width: number, height: number): Jellyfish => {
       const tentacleCount = 6 + Math.floor(Math.random() * 4);
@@ -234,9 +199,36 @@ export function useJellyfishDrift(
       ctx.restore();
     };
 
-    const animate = () => {
-      timeRef.current += 16;
-      const time = timeRef.current;
+
+      const w = canvas.width;
+      const h = canvas.height;
+      if (sizeRef.current.w !== w || sizeRef.current.h !== h) {
+        sizeRef.current = { w, h };
+        const width = canvas.width;
+        const height = canvas.height;
+  
+        // Create jellyfish
+        jellyfishRef.current = [];
+        const count = Math.floor(width / 300) + 2;
+  
+        for (let i = 0; i < count; i++) {
+          jellyfishRef.current.push(createJellyfish(width, height));
+        }
+  
+        // Create floating particles (plankton)
+        particlesRef.current = [];
+        for (let i = 0; i < 50; i++) {
+          particlesRef.current.push({
+            x: Math.random() * width,
+            y: Math.random() * height,
+            size: 1 + Math.random() * 2,
+            opacity: 0.2 + Math.random() * 0.4,
+            speed: 0.1 + Math.random() * 0.2,
+            hue: 180 + Math.random() * 60,
+          });
+        }
+      }
+
 
       ctx.clearRect(0, 0, canvas.width, canvas.height);
 
@@ -250,16 +242,6 @@ export function useJellyfishDrift(
         .sort((a, b) => a.y - b.y)
         .forEach((jelly) => drawJellyfish(jelly, time));
 
-      animationRef.current = requestAnimationFrame(animate);
-    };
-
-    resize();
-    window.addEventListener('resize', resize);
-    animate();
-
-    return () => {
-      window.removeEventListener('resize', resize);
-      cancelAnimationFrame(animationRef.current);
-    };
-  }, [canvasRef, darkMode, opacity, active]);
+    },
+  });
 }

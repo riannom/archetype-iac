@@ -3,7 +3,8 @@
  * Dense bamboo forest with many stalks, branches, and leaves swaying in the breeze
  */
 
-import { useRef, useEffect } from 'react';
+import { useRef} from 'react';
+import { useCanvasAnimation } from './useCanvasAnimation';
 
 interface BambooLeaf {
   segment: number;
@@ -38,6 +39,7 @@ interface BambooStalk {
   layer: number; // 0 = back, 1 = mid, 2 = front for depth
 }
 
+
 export function useBambooSway(
   canvasRef: React.RefObject<HTMLCanvasElement>,
   darkMode: boolean,
@@ -45,18 +47,11 @@ export function useBambooSway(
   active: boolean
 ) {
   const stalksRef = useRef<BambooStalk[]>([]);
-  const animationRef = useRef<number | undefined>(undefined);
-  const timeRef = useRef<number>(0);
+  const sizeRef = useRef({ w: 0, h: 0 });
 
-  useEffect(() => {
-    if (!active) return;
+  useCanvasAnimation(canvasRef, darkMode, opacity, active, {
 
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-
+    draw: (ctx, canvas, time, _dt) => {
     // Rich green color schemes
     const colorSchemes = darkMode
       ? [
@@ -277,8 +272,8 @@ export function useBambooSway(
       const colors = colorSchemes[stalk.colorScheme];
       const stalkColor = `rgba(${colors.stalk[0]}, ${colors.stalk[1]}, ${colors.stalk[2]}, ${stalk.opacity * opacityMultiplier})`;
 
-      const sway = Math.sin(timeRef.current * stalk.swaySpeed + stalk.swayPhase) * 1.8;
-      const secondarySway = Math.sin(timeRef.current * stalk.swaySpeed * 1.4 + stalk.swayPhase + 1) * 1.5;
+      const sway = Math.sin(time * stalk.swaySpeed + stalk.swayPhase) * 1.8;
+      const secondarySway = Math.sin(time * stalk.swaySpeed * 1.4 + stalk.swayPhase + 1) * 1.5;
 
       let prevX = stalk.x;
       let prevY = stalk.baseY;
@@ -348,24 +343,19 @@ export function useBambooSway(
       }
     };
 
-    const animate = () => {
-      if (!canvas || !ctx) return;
+
+      const w = canvas.width;
+      const h = canvas.height;
+      if (sizeRef.current.w !== w || sizeRef.current.h !== h) {
+        sizeRef.current = { w, h };
+      }
+
 
       ctx.clearRect(0, 0, canvas.width, canvas.height);
-      timeRef.current += 0.016;
+      time += 0.016;
 
       stalksRef.current.forEach(drawBamboo);
 
-      animationRef.current = requestAnimationFrame(animate);
-    };
-
-    animate();
-
-    return () => {
-      window.removeEventListener('resize', resizeCanvas);
-      if (animationRef.current) {
-        cancelAnimationFrame(animationRef.current);
-      }
-    };
-  }, [canvasRef, darkMode, opacity, active]);
+    },
+  });
 }

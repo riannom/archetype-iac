@@ -4,7 +4,8 @@
  * Symbol: 3 horizontal lines with 1 vertical line through them
  */
 
-import { useRef, useEffect } from 'react';
+import { useRef} from 'react';
+import { useCanvasAnimation } from './useCanvasAnimation';
 
 interface SatsSymbol {
   x: number;
@@ -31,6 +32,7 @@ interface Particle {
   maxLife: number;
 }
 
+
 export function useSatsSymbol(
   canvasRef: React.RefObject<HTMLCanvasElement>,
   darkMode: boolean,
@@ -39,18 +41,11 @@ export function useSatsSymbol(
 ) {
   const symbolsRef = useRef<SatsSymbol[]>([]);
   const particlesRef = useRef<Particle[]>([]);
-  const animationRef = useRef<number | undefined>(undefined);
-  const timeRef = useRef<number>(0);
+  const sizeRef = useRef({ w: 0, h: 0 });
 
-  useEffect(() => {
-    if (!active) return;
+  useCanvasAnimation(canvasRef, darkMode, opacity, active, {
 
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-
+    draw: (ctx, canvas, time, _dt) => {
     const resizeCanvas = () => {
       canvas.width = window.innerWidth;
       canvas.height = window.innerHeight;
@@ -181,11 +176,15 @@ export function useSatsSymbol(
       ctx.fill();
     };
 
-    const animate = () => {
-      if (!canvas || !ctx) return;
+
+      const w = canvas.width;
+      const h = canvas.height;
+      if (sizeRef.current.w !== w || sizeRef.current.h !== h) {
+        sizeRef.current = { w, h };
+      }
+
 
       ctx.clearRect(0, 0, canvas.width, canvas.height);
-      timeRef.current += 16;
 
       // Update and draw symbols
       symbolsRef.current.forEach((symbol) => {
@@ -205,7 +204,7 @@ export function useSatsSymbol(
         if (symbol.x > canvas.width + margin) symbol.x = -margin * 0.5;
 
         maybeSpawnParticle(symbol);
-        drawSatsSymbol(symbol, timeRef.current);
+        drawSatsSymbol(symbol, time);
       });
 
       // Update and draw particles
@@ -221,16 +220,6 @@ export function useSatsSymbol(
         return true;
       });
 
-      animationRef.current = requestAnimationFrame(animate);
-    };
-
-    animate();
-
-    return () => {
-      window.removeEventListener('resize', resizeCanvas);
-      if (animationRef.current) {
-        cancelAnimationFrame(animationRef.current);
-      }
-    };
-  }, [canvasRef, darkMode, opacity, active]);
+    },
+  });
 }

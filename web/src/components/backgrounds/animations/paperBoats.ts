@@ -5,7 +5,8 @@
  * with organic riverbanks and realistic flowing water.
  */
 
-import { useEffect, useRef } from 'react';
+import { useRef } from 'react';
+import { useCanvasAnimation } from './useCanvasAnimation';
 
 interface PaperBoat {
   x: number;
@@ -45,6 +46,7 @@ interface Caustic {
   opacity: number;
 }
 
+
 export function usePaperBoats(
   canvasRef: React.RefObject<HTMLCanvasElement>,
   darkMode: boolean,
@@ -55,20 +57,13 @@ export function usePaperBoats(
   const ripplesRef = useRef<Ripple[]>([]);
   const waterLayersRef = useRef<WaterLayer[]>([]);
   const causticsRef = useRef<Caustic[]>([]);
-  const animationRef = useRef<number | undefined>(undefined);
-  const timeRef = useRef(0);
   // Store bank curves for consistent rendering
   const bankCurvesRef = useRef<{ top: number[]; bottom: number[] }>({ top: [], bottom: [] });
+  const sizeRef = useRef({ w: 0, h: 0 });
 
-  useEffect(() => {
-    if (!enabled) return;
+  useCanvasAnimation(canvasRef, darkMode, opacity, enabled, {
 
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-
+    draw: (ctx, canvas, time, _dt) => {
     const resizeCanvas = () => {
       canvas.width = window.innerWidth;
       canvas.height = window.innerHeight;
@@ -254,11 +249,17 @@ export function usePaperBoats(
       return y0 + (y1 - y0) * t;
     };
 
-    const animate = () => {
+
+      const w = canvas.width;
+      const h = canvas.height;
+      if (sizeRef.current.w !== w || sizeRef.current.h !== h) {
+        sizeRef.current = { w, h };
+      }
+
       const currentWidth = canvas.width;
       const currentHeight = canvas.height;
       ctx.clearRect(0, 0, currentWidth, currentHeight);
-      timeRef.current += 0.016;
+      time += 0.016;
 
       const { top: topBank, bottom: bottomBank } = bankCurvesRef.current;
 
@@ -432,9 +433,9 @@ export function usePaperBoats(
 
       // Subtle shimmer on water surface
       for (let i = 0; i < 8; i++) {
-        const shimmerX = ((timeRef.current * 30 + i * 200) % (currentWidth + 100)) - 50;
+        const shimmerX = ((time * 30 + i * 200) % (currentWidth + 100)) - 50;
         const topY = getBankY(shimmerX, topBank, currentWidth);
-        const shimmerY = topY + 20 + Math.sin(shimmerX * 0.02 + timeRef.current) * 5;
+        const shimmerY = topY + 20 + Math.sin(shimmerX * 0.02 + time) * 5;
 
         ctx.beginPath();
         ctx.moveTo(shimmerX, shimmerY);
@@ -534,7 +535,7 @@ export function usePaperBoats(
           for (let t = 0; t < tufts; t++) {
             const offsetX = (t - tufts / 2) * 4;
             const height = 6 + Math.random() * 8;
-            const sway = Math.sin(timeRef.current * 1.2 + x * 0.05 + t) * 2;
+            const sway = Math.sin(time * 1.2 + x * 0.05 + t) * 2;
 
             ctx.beginPath();
             ctx.moveTo(x + offsetX, bankY);
@@ -562,16 +563,6 @@ export function usePaperBoats(
       drawGrassTufts(topBank, true);
       drawGrassTufts(bottomBank, false);
 
-      animationRef.current = requestAnimationFrame(animate);
-    };
-
-    animate();
-
-    return () => {
-      window.removeEventListener('resize', resizeCanvas);
-      if (animationRef.current) {
-        cancelAnimationFrame(animationRef.current);
-      }
-    };
-  }, [canvasRef, darkMode, opacity, enabled]);
+    },
+  });
 }

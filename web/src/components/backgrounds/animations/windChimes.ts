@@ -6,7 +6,8 @@
  * Pre-generates all random values to avoid flickering.
  */
 
-import { useEffect, useRef } from 'react';
+import { useRef } from 'react';
+import { useCanvasAnimation } from './useCanvasAnimation';
 
 interface Chime {
   x: number;
@@ -37,6 +38,7 @@ interface Star {
   twinklePhase: number;
 }
 
+
 export function useWindChimes(
   canvasRef: React.RefObject<HTMLCanvasElement>,
   darkMode: boolean,
@@ -46,62 +48,12 @@ export function useWindChimes(
   const chimesRef = useRef<Chime[]>([]);
   const soundRingsRef = useRef<SoundRing[]>([]);
   const starsRef = useRef<Star[]>([]);
-  const animationRef = useRef<number>(0);
-  const timeRef = useRef<number>(0);
+  const sizeRef = useRef({ w: 0, h: 0 });
 
-  useEffect(() => {
-    if (!active) return;
+  useCanvasAnimation(canvasRef, darkMode, opacity, active, {
 
-    const canvas = canvasRef.current;
-    if (!canvas) return;
+    draw: (ctx, canvas, time, _dt) => {
 
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-
-    const resize = () => {
-      canvas.width = window.innerWidth;
-      canvas.height = window.innerHeight;
-      initializeElements();
-    };
-
-    const initializeElements = () => {
-      const width = canvas.width;
-      const height = canvas.height;
-
-      // Create chimes
-      chimesRef.current = [];
-      const chimeCount = 5 + Math.floor(width / 250);
-      const materials: ('brass' | 'silver' | 'copper' | 'glass')[] = ['brass', 'silver', 'copper', 'glass'];
-
-      for (let i = 0; i < chimeCount; i++) {
-        const spacing = width / (chimeCount + 1);
-        chimesRef.current.push({
-          x: spacing * (i + 1) + (Math.random() - 0.5) * spacing * 0.3,
-          baseY: 30 + Math.random() * 50,
-          length: 80 + Math.random() * 120,
-          width: 8 + Math.random() * 8,
-          swingPhase: Math.random() * Math.PI * 2,
-          swingSpeed: 0.008 + Math.random() * 0.006,
-          swingAmplitude: 0.05 + Math.random() * 0.1,
-          material: materials[Math.floor(Math.random() * materials.length)],
-          resonance: 0,
-          targetResonance: 0,
-        });
-      }
-
-      // Create stars for night sky
-      starsRef.current = [];
-      for (let i = 0; i < 60; i++) {
-        starsRef.current.push({
-          x: Math.random() * width,
-          y: Math.random() * height * 0.6,
-          size: 0.5 + Math.random() * 1.5,
-          twinklePhase: Math.random() * Math.PI * 2,
-        });
-      }
-
-      soundRingsRef.current = [];
-    };
 
     const getMaterialColors = (material: Chime['material'], _darkMode: boolean) => {
       const colors: Record<Chime['material'], { body: string; highlight: string; shadow: string }> = {
@@ -268,9 +220,49 @@ export function useWindChimes(
       });
     };
 
-    const animate = () => {
-      timeRef.current += 16;
-      const time = timeRef.current;
+
+      const w = canvas.width;
+      const h = canvas.height;
+      if (sizeRef.current.w !== w || sizeRef.current.h !== h) {
+        sizeRef.current = { w, h };
+        const width = canvas.width;
+        const height = canvas.height;
+  
+        // Create chimes
+        chimesRef.current = [];
+        const chimeCount = 5 + Math.floor(width / 250);
+        const materials: ('brass' | 'silver' | 'copper' | 'glass')[] = ['brass', 'silver', 'copper', 'glass'];
+  
+        for (let i = 0; i < chimeCount; i++) {
+          const spacing = width / (chimeCount + 1);
+          chimesRef.current.push({
+            x: spacing * (i + 1) + (Math.random() - 0.5) * spacing * 0.3,
+            baseY: 30 + Math.random() * 50,
+            length: 80 + Math.random() * 120,
+            width: 8 + Math.random() * 8,
+            swingPhase: Math.random() * Math.PI * 2,
+            swingSpeed: 0.008 + Math.random() * 0.006,
+            swingAmplitude: 0.05 + Math.random() * 0.1,
+            material: materials[Math.floor(Math.random() * materials.length)],
+            resonance: 0,
+            targetResonance: 0,
+          });
+        }
+  
+        // Create stars for night sky
+        starsRef.current = [];
+        for (let i = 0; i < 60; i++) {
+          starsRef.current.push({
+            x: Math.random() * width,
+            y: Math.random() * height * 0.6,
+            size: 0.5 + Math.random() * 1.5,
+            twinklePhase: Math.random() * Math.PI * 2,
+          });
+        }
+  
+        soundRingsRef.current = [];
+      }
+
 
       ctx.clearRect(0, 0, canvas.width, canvas.height);
 
@@ -284,16 +276,6 @@ export function useWindChimes(
       // Draw sound visualization
       drawSoundRings();
 
-      animationRef.current = requestAnimationFrame(animate);
-    };
-
-    resize();
-    window.addEventListener('resize', resize);
-    animate();
-
-    return () => {
-      window.removeEventListener('resize', resize);
-      cancelAnimationFrame(animationRef.current);
-    };
-  }, [canvasRef, darkMode, opacity, active]);
+    },
+  });
 }

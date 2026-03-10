@@ -6,7 +6,8 @@
  * All random values pre-generated for smooth, flicker-free animation.
  */
 
-import { useEffect, RefObject } from 'react';
+import { useRef, RefObject } from 'react';
+import { useCanvasAnimation } from './useCanvasAnimation';
 
 interface SandDune {
   x: number;
@@ -64,45 +65,24 @@ interface Star {
   twinklePhase: number;
 }
 
+
 export function useDesertDunes(
   canvasRef: RefObject<HTMLCanvasElement>,
   darkMode: boolean,
   opacity: number,
   active: boolean
 ) {
-  useEffect(() => {
-    if (!active) return;
+  const dunesRef = useRef<SandDune[]>([]);
+  const sandParticlesRef = useRef<SandParticle[]>([]);
+  const plantsRef = useRef<DesertPlant[]>([]);
+  const tumbleweedsRef = useRef<Tumbleweed[]>([]);
+  const heatWavesRef = useRef<HeatWave[]>([]);
+  const starsRef = useRef<Star[]>([]);
+  const frameRef = useRef<number>(0);
 
-    const canvas = canvasRef.current;
-    if (!canvas) return;
+  useCanvasAnimation(canvasRef, darkMode, opacity, active, {
 
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-
-    let animationId: number;
-    let dunes: SandDune[] = [];
-    let sandParticles: SandParticle[] = [];
-    let plants: DesertPlant[] = [];
-    let tumbleweeds: Tumbleweed[] = [];
-    let heatWaves: HeatWave[] = [];
-    let stars: Star[] = [];
-    let timeRef = 0;
-
-    const resize = () => {
-      canvas.width = window.innerWidth;
-      canvas.height = window.innerHeight;
-      initializeScene();
-    };
-
-    const getRandomSidePosition = (width: number): number => {
-      if (Math.random() < 0.7) {
-        return Math.random() < 0.5
-          ? Math.random() * width * 0.25
-          : width * 0.75 + Math.random() * width * 0.25;
-      }
-      return Math.random() * width;
-    };
-
+    init: (_ctx, canvas) => {
     const generateBushClusters = (size: number): { x: number; y: number; size: number }[] => {
       const clusters = [];
       for (let i = 0; i < 5; i++) {
@@ -114,15 +94,6 @@ export function useDesertDunes(
       }
       return clusters;
     };
-
-    const generateGrassHeights = (size: number): number[] => {
-      const heights = [];
-      for (let i = 0; i < 8; i++) {
-        heights.push(size * (0.6 + Math.random() * 0.4));
-      }
-      return heights;
-    };
-
     const generateTumbleweedBranches = (size: number): Tumbleweed['branches'] => {
       const branches = [];
       for (let i = 0; i < 20; i++) {
@@ -136,14 +107,27 @@ export function useDesertDunes(
       }
       return branches;
     };
-
-    const initializeScene = () => {
+    const getRandomSidePosition = (width: number): number => {
+      if (Math.random() < 0.7) {
+        return Math.random() < 0.5
+          ? Math.random() * width * 0.25
+          : width * 0.75 + Math.random() * width * 0.25;
+      }
+      return Math.random() * width;
+    };
+    const generateGrassHeights = (size: number): number[] => {
+      const heights = [];
+      for (let i = 0; i < 8; i++) {
+        heights.push(size * (0.6 + Math.random() * 0.4));
+      }
+      return heights;
+    };
       const { width, height } = canvas;
 
-      // Create stars (pre-generated)
-      stars = [];
+      // Create starsRef.current (pre-generated)
+      starsRef.current = [];
       for (let i = 0; i < 50; i++) {
-        stars.push({
+        starsRef.current.push({
           x: Math.random() * width,
           y: Math.random() * height * 0.4,
           size: Math.random() * 1.5,
@@ -151,12 +135,12 @@ export function useDesertDunes(
         });
       }
 
-      // Create layered dunes
-      dunes = [];
+      // Create layered dunesRef.current
+      dunesRef.current = [];
 
-      // Background dunes (layer 0)
+      // Background dunesRef.current (layer 0)
       for (let i = 0; i < 4; i++) {
-        dunes.push({
+        dunesRef.current.push({
           x: (i / 4) * width - width * 0.1,
           baseY: height * 0.4,
           width: width * 0.5,
@@ -166,9 +150,9 @@ export function useDesertDunes(
         });
       }
 
-      // Middle dunes (layer 1)
+      // Middle dunesRef.current (layer 1)
       for (let i = 0; i < 5; i++) {
-        dunes.push({
+        dunesRef.current.push({
           x: (i / 5) * width - width * 0.15,
           baseY: height * 0.55,
           width: width * 0.45,
@@ -178,9 +162,9 @@ export function useDesertDunes(
         });
       }
 
-      // Foreground dunes (layer 2)
+      // Foreground dunesRef.current (layer 2)
       for (let i = 0; i < 6; i++) {
-        dunes.push({
+        dunesRef.current.push({
           x: (i / 6) * width - width * 0.2,
           baseY: height * 0.75,
           width: width * 0.4,
@@ -191,10 +175,10 @@ export function useDesertDunes(
       }
 
       // Create sand particles
-      sandParticles = [];
+      sandParticlesRef.current = [];
       const particleCount = Math.floor(width / 25);
       for (let i = 0; i < particleCount; i++) {
-        sandParticles.push({
+        sandParticlesRef.current.push({
           x: Math.random() * width,
           y: Math.random() * height * 0.8,
           size: 1 + Math.random() * 1.5,
@@ -205,8 +189,8 @@ export function useDesertDunes(
         });
       }
 
-      // Create desert plants on sides with pre-generated data
-      plants = [];
+      // Create desert plantsRef.current on sides with pre-generated data
+      plantsRef.current = [];
       const plantCount = Math.floor(width / 200);
       for (let i = 0; i < plantCount; i++) {
         const type = ['cactus', 'succulent', 'bush', 'grass'][Math.floor(Math.random() * 4)] as DesertPlant['type'];
@@ -226,14 +210,14 @@ export function useDesertDunes(
           plant.grassHeights = generateGrassHeights(size);
         }
 
-        plants.push(plant);
+        plantsRef.current.push(plant);
       }
 
-      // Create tumbleweeds with pre-generated branches
-      tumbleweeds = [];
+      // Create tumbleweedsRef.current with pre-generated branches
+      tumbleweedsRef.current = [];
       for (let i = 0; i < 2; i++) {
         const size = 15 + Math.random() * 15;
-        tumbleweeds.push({
+        tumbleweedsRef.current.push({
           x: -50 - Math.random() * 200,
           y: height * 0.7 + Math.random() * height * 0.2,
           size,
@@ -245,9 +229,9 @@ export function useDesertDunes(
       }
 
       // Create heat waves
-      heatWaves = [];
+      heatWavesRef.current = [];
       for (let i = 0; i < 5; i++) {
-        heatWaves.push({
+        heatWavesRef.current.push({
           x: Math.random() * width,
           y: height * 0.3 + Math.random() * height * 0.2,
           width: 100 + Math.random() * 150,
@@ -255,162 +239,13 @@ export function useDesertDunes(
           speed: 0.008 + Math.random() * 0.008,
         });
       }
-    };
+    },
 
-    const drawSky = (ctx: CanvasRenderingContext2D, width: number, height: number) => {
-      const skyGradient = ctx.createLinearGradient(0, 0, 0, height * 0.6);
-      if (darkMode) {
-        // Night desert sky
-        skyGradient.addColorStop(0, '#0a0a1a');
-        skyGradient.addColorStop(0.3, '#1a1a3a');
-        skyGradient.addColorStop(0.6, '#2a2040');
-        skyGradient.addColorStop(1, '#3a2a50');
-      } else {
-        // Warm desert sky
-        skyGradient.addColorStop(0, '#87CEEB');
-        skyGradient.addColorStop(0.3, '#F0E68C');
-        skyGradient.addColorStop(0.6, '#FFE4B5');
-        skyGradient.addColorStop(1, '#FFDAB9');
-      }
-      ctx.fillStyle = skyGradient;
-      ctx.fillRect(0, 0, width, height);
-
-      // Sun/moon
-      if (darkMode) {
-        // Moon
-        ctx.fillStyle = '#E8E8E8';
-        ctx.beginPath();
-        ctx.arc(width * 0.15, height * 0.15, 30, 0, Math.PI * 2);
-        ctx.fill();
-
-        // Moon craters
-        ctx.fillStyle = 'rgba(200, 200, 200, 0.3)';
-        ctx.beginPath();
-        ctx.arc(width * 0.15 - 8, height * 0.15 - 5, 8, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.beginPath();
-        ctx.arc(width * 0.15 + 10, height * 0.15 + 8, 5, 0, Math.PI * 2);
-        ctx.fill();
-
-        // Stars (using pre-generated positions)
-        ctx.fillStyle = '#FFFFFF';
-        stars.forEach(star => {
-          const twinkle = Math.sin(timeRef * 0.003 + star.twinklePhase) * 0.5 + 0.5;
-          ctx.globalAlpha = 0.3 + twinkle * 0.5;
-          ctx.beginPath();
-          ctx.arc(star.x, star.y, star.size, 0, Math.PI * 2);
-          ctx.fill();
-        });
-        ctx.globalAlpha = 1;
-      } else {
-        // Sun with glow
-        const sunGlow = ctx.createRadialGradient(
-          width * 0.85, height * 0.12, 0,
-          width * 0.85, height * 0.12, 80
-        );
-        sunGlow.addColorStop(0, '#FFFACD');
-        sunGlow.addColorStop(0.3, 'rgba(255, 250, 205, 0.5)');
-        sunGlow.addColorStop(1, 'transparent');
-        ctx.fillStyle = sunGlow;
-        ctx.fillRect(width * 0.85 - 80, height * 0.12 - 80, 160, 160);
-
-        ctx.fillStyle = '#FFD700';
-        ctx.beginPath();
-        ctx.arc(width * 0.85, height * 0.12, 35, 0, Math.PI * 2);
-        ctx.fill();
-      }
-    };
-
-    const drawDune = (ctx: CanvasRenderingContext2D, dune: SandDune, _width: number, height: number) => {
-      // Calculate colors based on layer
-      let baseColor: string, shadowColor: string, highlightColor: string;
-
-      if (darkMode) {
-        const intensity = 60 + dune.layer * 20 + dune.colorOffset;
-        baseColor = `rgb(${intensity}, ${intensity * 0.7}, ${intensity * 0.5})`;
-        shadowColor = `rgb(${intensity * 0.6}, ${intensity * 0.4}, ${intensity * 0.3})`;
-        highlightColor = `rgb(${intensity * 1.2}, ${intensity * 0.9}, ${intensity * 0.7})`;
-      } else {
-        const r = 210 + dune.layer * 15 + dune.colorOffset;
-        const g = 180 + dune.layer * 10 + dune.colorOffset * 0.8;
-        const b = 140 + dune.layer * 5 + dune.colorOffset * 0.5;
-        baseColor = `rgb(${Math.min(255, r)}, ${Math.min(255, g)}, ${Math.min(255, b)})`;
-        shadowColor = `rgb(${r * 0.85}, ${g * 0.8}, ${b * 0.75})`;
-        highlightColor = `rgb(${Math.min(255, r * 1.1)}, ${Math.min(255, g * 1.05)}, ${Math.min(255, b)})`;
-      }
-
-      // Draw dune with curved shape
-      const duneGradient = ctx.createLinearGradient(
-        dune.x, dune.baseY - dune.height,
-        dune.x + dune.width, dune.baseY
-      );
-      duneGradient.addColorStop(0, highlightColor);
-      duneGradient.addColorStop(0.4, baseColor);
-      duneGradient.addColorStop(1, shadowColor);
-
-      ctx.fillStyle = duneGradient;
-      ctx.beginPath();
-      ctx.moveTo(dune.x, height);
-
-      // Left slope
-      ctx.lineTo(dune.x, dune.baseY);
-
-      // Crest with curve
-      const crestX = dune.x + dune.width * 0.7;
-      const crestY = dune.baseY - dune.height;
-      ctx.quadraticCurveTo(
-        dune.x + dune.width * 0.3,
-        dune.baseY - dune.height * 0.3,
-        crestX,
-        crestY
-      );
-
-      // Right slope (steeper)
-      ctx.quadraticCurveTo(
-        dune.x + dune.width * 0.9,
-        dune.baseY - dune.height * 0.5,
-        dune.x + dune.width,
-        dune.baseY
-      );
-
-      ctx.lineTo(dune.x + dune.width, height);
-      ctx.closePath();
-      ctx.fill();
-
-      // Add sand ripple texture on lit side (very slow movement)
-      ctx.strokeStyle = highlightColor;
-      ctx.lineWidth = 0.5;
-      ctx.globalAlpha = 0.2;
-
-      for (let i = 0; i < 5; i++) {
-        const rippleY = dune.baseY - dune.height * 0.3 - i * 8;
-        const ripplePhase = Math.sin(timeRef * 0.0003 + i) * 1.5;
-        ctx.beginPath();
-        ctx.moveTo(dune.x + dune.width * 0.2, rippleY + ripplePhase);
-        ctx.quadraticCurveTo(
-          dune.x + dune.width * 0.4,
-          rippleY - 3 + ripplePhase,
-          dune.x + dune.width * 0.6,
-          rippleY + ripplePhase
-        );
-        ctx.stroke();
-      }
-      ctx.globalAlpha = 1;
-    };
-
-    const drawSandParticle = (ctx: CanvasRenderingContext2D, particle: SandParticle) => {
-      const wobble = Math.sin(timeRef * particle.wobbleSpeed + particle.wobble) * 2;
-      ctx.fillStyle = darkMode
-        ? `rgba(180, 150, 120, ${particle.opacity})`
-        : `rgba(220, 190, 150, ${particle.opacity})`;
-      ctx.beginPath();
-      ctx.arc(particle.x, particle.y + wobble, particle.size, 0, Math.PI * 2);
-      ctx.fill();
-    };
-
+    draw: (ctx, canvas, _time, _dt) => {
+      frameRef.current++;
     const drawCactus = (ctx: CanvasRenderingContext2D, plant: DesertPlant) => {
       const size = plant.size;
-      const sway = Math.sin(timeRef * 0.0008 + plant.swayPhase) * 1.5;
+      const sway = Math.sin(frameRef.current * 0.0008 + plant.swayPhase) * 1.5;
       ctx.save();
       ctx.translate(plant.x, plant.y);
 
@@ -482,7 +317,256 @@ export function useDesertDunes(
 
       ctx.restore();
     };
+    const drawDesertBush = (ctx: CanvasRenderingContext2D, plant: DesertPlant) => {
+      const sway = Math.sin(frameRef.current * 0.001 + plant.swayPhase) * 2;
+      const size = plant.size;
 
+      ctx.save();
+      ctx.translate(plant.x, plant.y);
+
+      // Shadow
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.1)';
+      ctx.beginPath();
+      ctx.ellipse(0, 5, size * 0.8, size * 0.2, 0, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Bush clusters (using pre-generated data)
+      const bushColor = darkMode ? '#4a5a3a' : '#8B9A6B';
+      const bushHighlight = darkMode ? '#5a6a4a' : '#A0B080';
+
+      if (plant.clusters) {
+        plant.clusters.forEach(cluster => {
+          const bushGradient = ctx.createRadialGradient(
+            cluster.x - cluster.size * 0.2,
+            cluster.y - cluster.size * 0.2,
+            0,
+            cluster.x, cluster.y, cluster.size
+          );
+          bushGradient.addColorStop(0, bushHighlight);
+          bushGradient.addColorStop(1, bushColor);
+
+          ctx.fillStyle = bushGradient;
+          ctx.beginPath();
+          ctx.arc(cluster.x + sway * 0.2, cluster.y + sway * 0.1, cluster.size, 0, Math.PI * 2);
+          ctx.fill();
+        });
+      }
+
+      ctx.restore();
+    };
+    const drawDesertGrass = (ctx: CanvasRenderingContext2D, plant: DesertPlant) => {
+      ctx.save();
+      ctx.translate(plant.x, plant.y);
+
+      const grassColor = darkMode ? '#6a7a5a' : '#C9B896';
+
+      if (plant.grassHeights) {
+        plant.grassHeights.forEach((grassHeight, i) => {
+          const sway = Math.sin(frameRef.current * 0.001 + plant.swayPhase + i * 0.5) * 3;
+          const grassX = (i - 4) * 4;
+
+          ctx.strokeStyle = grassColor;
+          ctx.lineWidth = 2;
+          ctx.beginPath();
+          ctx.moveTo(grassX, 0);
+          ctx.quadraticCurveTo(
+            grassX + sway * 0.5,
+            -grassHeight * 0.5,
+            grassX + sway,
+            -grassHeight
+          );
+          ctx.stroke();
+        });
+      }
+
+      ctx.restore();
+    };
+    const drawDune = (ctx: CanvasRenderingContext2D, dune: SandDune, _width: number, height: number) => {
+      // Calculate colors based on layer
+      let baseColor: string, shadowColor: string, highlightColor: string;
+
+      if (darkMode) {
+        const intensity = 60 + dune.layer * 20 + dune.colorOffset;
+        baseColor = `rgb(${intensity}, ${intensity * 0.7}, ${intensity * 0.5})`;
+        shadowColor = `rgb(${intensity * 0.6}, ${intensity * 0.4}, ${intensity * 0.3})`;
+        highlightColor = `rgb(${intensity * 1.2}, ${intensity * 0.9}, ${intensity * 0.7})`;
+      } else {
+        const r = 210 + dune.layer * 15 + dune.colorOffset;
+        const g = 180 + dune.layer * 10 + dune.colorOffset * 0.8;
+        const b = 140 + dune.layer * 5 + dune.colorOffset * 0.5;
+        baseColor = `rgb(${Math.min(255, r)}, ${Math.min(255, g)}, ${Math.min(255, b)})`;
+        shadowColor = `rgb(${r * 0.85}, ${g * 0.8}, ${b * 0.75})`;
+        highlightColor = `rgb(${Math.min(255, r * 1.1)}, ${Math.min(255, g * 1.05)}, ${Math.min(255, b)})`;
+      }
+
+      // Draw dune with curved shape
+      const duneGradient = ctx.createLinearGradient(
+        dune.x, dune.baseY - dune.height,
+        dune.x + dune.width, dune.baseY
+      );
+      duneGradient.addColorStop(0, highlightColor);
+      duneGradient.addColorStop(0.4, baseColor);
+      duneGradient.addColorStop(1, shadowColor);
+
+      ctx.fillStyle = duneGradient;
+      ctx.beginPath();
+      ctx.moveTo(dune.x, height);
+
+      // Left slope
+      ctx.lineTo(dune.x, dune.baseY);
+
+      // Crest with curve
+      const crestX = dune.x + dune.width * 0.7;
+      const crestY = dune.baseY - dune.height;
+      ctx.quadraticCurveTo(
+        dune.x + dune.width * 0.3,
+        dune.baseY - dune.height * 0.3,
+        crestX,
+        crestY
+      );
+
+      // Right slope (steeper)
+      ctx.quadraticCurveTo(
+        dune.x + dune.width * 0.9,
+        dune.baseY - dune.height * 0.5,
+        dune.x + dune.width,
+        dune.baseY
+      );
+
+      ctx.lineTo(dune.x + dune.width, height);
+      ctx.closePath();
+      ctx.fill();
+
+      // Add sand ripple texture on lit side (very slow movement)
+      ctx.strokeStyle = highlightColor;
+      ctx.lineWidth = 0.5;
+      ctx.globalAlpha = 0.2;
+
+      for (let i = 0; i < 5; i++) {
+        const rippleY = dune.baseY - dune.height * 0.3 - i * 8;
+        const ripplePhase = Math.sin(frameRef.current * 0.0003 + i) * 1.5;
+        ctx.beginPath();
+        ctx.moveTo(dune.x + dune.width * 0.2, rippleY + ripplePhase);
+        ctx.quadraticCurveTo(
+          dune.x + dune.width * 0.4,
+          rippleY - 3 + ripplePhase,
+          dune.x + dune.width * 0.6,
+          rippleY + ripplePhase
+        );
+        ctx.stroke();
+      }
+      ctx.globalAlpha = 1;
+    };
+    const drawHeatWave = (ctx: CanvasRenderingContext2D, wave: HeatWave) => {
+      if (darkMode) return; // No heat waves at night
+
+      const waveY = wave.y + Math.sin(frameRef.current * wave.speed + wave.phase) * 2;
+
+      ctx.globalAlpha = 0.02;
+      ctx.fillStyle = '#FFFFFF';
+      ctx.beginPath();
+      for (let x = 0; x < wave.width; x += 5) {
+        const y = waveY + Math.sin((x / 20) + frameRef.current * 0.003 + wave.phase) * 4;
+        if (x === 0) {
+          ctx.moveTo(wave.x + x, y);
+        } else {
+          ctx.lineTo(wave.x + x, y);
+        }
+      }
+      ctx.lineTo(wave.x + wave.width, wave.y + 20);
+      ctx.lineTo(wave.x, wave.y + 20);
+      ctx.closePath();
+      ctx.fill();
+      ctx.globalAlpha = 1;
+    };
+    const drawPlant = (ctx: CanvasRenderingContext2D, plant: DesertPlant) => {
+      switch (plant.type) {
+        case 'cactus':
+          drawCactus(ctx, plant);
+          break;
+        case 'succulent':
+          drawSucculent(ctx, plant);
+          break;
+        case 'bush':
+          drawDesertBush(ctx, plant);
+          break;
+        case 'grass':
+          drawDesertGrass(ctx, plant);
+          break;
+      }
+    };
+    const drawSandParticle = (ctx: CanvasRenderingContext2D, particle: SandParticle) => {
+      const wobble = Math.sin(frameRef.current * particle.wobbleSpeed + particle.wobble) * 2;
+      ctx.fillStyle = darkMode
+        ? `rgba(180, 150, 120, ${particle.opacity})`
+        : `rgba(220, 190, 150, ${particle.opacity})`;
+      ctx.beginPath();
+      ctx.arc(particle.x, particle.y + wobble, particle.size, 0, Math.PI * 2);
+      ctx.fill();
+    };
+    const drawSky = (ctx: CanvasRenderingContext2D, width: number, height: number) => {
+      const skyGradient = ctx.createLinearGradient(0, 0, 0, height * 0.6);
+      if (darkMode) {
+        // Night desert sky
+        skyGradient.addColorStop(0, '#0a0a1a');
+        skyGradient.addColorStop(0.3, '#1a1a3a');
+        skyGradient.addColorStop(0.6, '#2a2040');
+        skyGradient.addColorStop(1, '#3a2a50');
+      } else {
+        // Warm desert sky
+        skyGradient.addColorStop(0, '#87CEEB');
+        skyGradient.addColorStop(0.3, '#F0E68C');
+        skyGradient.addColorStop(0.6, '#FFE4B5');
+        skyGradient.addColorStop(1, '#FFDAB9');
+      }
+      ctx.fillStyle = skyGradient;
+      ctx.fillRect(0, 0, width, height);
+
+      // Sun/moon
+      if (darkMode) {
+        // Moon
+        ctx.fillStyle = '#E8E8E8';
+        ctx.beginPath();
+        ctx.arc(width * 0.15, height * 0.15, 30, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Moon craters
+        ctx.fillStyle = 'rgba(200, 200, 200, 0.3)';
+        ctx.beginPath();
+        ctx.arc(width * 0.15 - 8, height * 0.15 - 5, 8, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.beginPath();
+        ctx.arc(width * 0.15 + 10, height * 0.15 + 8, 5, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Stars (using pre-generated positions)
+        ctx.fillStyle = '#FFFFFF';
+        starsRef.current.forEach(star => {
+          const twinkle = Math.sin(frameRef.current * 0.003 + star.twinklePhase) * 0.5 + 0.5;
+          ctx.globalAlpha = 0.3 + twinkle * 0.5;
+          ctx.beginPath();
+          ctx.arc(star.x, star.y, star.size, 0, Math.PI * 2);
+          ctx.fill();
+        });
+        ctx.globalAlpha = 1;
+      } else {
+        // Sun with glow
+        const sunGlow = ctx.createRadialGradient(
+          width * 0.85, height * 0.12, 0,
+          width * 0.85, height * 0.12, 80
+        );
+        sunGlow.addColorStop(0, '#FFFACD');
+        sunGlow.addColorStop(0.3, 'rgba(255, 250, 205, 0.5)');
+        sunGlow.addColorStop(1, 'transparent');
+        ctx.fillStyle = sunGlow;
+        ctx.fillRect(width * 0.85 - 80, height * 0.12 - 80, 160, 160);
+
+        ctx.fillStyle = '#FFD700';
+        ctx.beginPath();
+        ctx.arc(width * 0.85, height * 0.12, 35, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    };
     const drawSucculent = (ctx: CanvasRenderingContext2D, plant: DesertPlant) => {
       const size = plant.size;
 
@@ -520,92 +604,8 @@ export function useDesertDunes(
 
       ctx.restore();
     };
-
-    const drawDesertBush = (ctx: CanvasRenderingContext2D, plant: DesertPlant) => {
-      const sway = Math.sin(timeRef * 0.001 + plant.swayPhase) * 2;
-      const size = plant.size;
-
-      ctx.save();
-      ctx.translate(plant.x, plant.y);
-
-      // Shadow
-      ctx.fillStyle = 'rgba(0, 0, 0, 0.1)';
-      ctx.beginPath();
-      ctx.ellipse(0, 5, size * 0.8, size * 0.2, 0, 0, Math.PI * 2);
-      ctx.fill();
-
-      // Bush clusters (using pre-generated data)
-      const bushColor = darkMode ? '#4a5a3a' : '#8B9A6B';
-      const bushHighlight = darkMode ? '#5a6a4a' : '#A0B080';
-
-      if (plant.clusters) {
-        plant.clusters.forEach(cluster => {
-          const bushGradient = ctx.createRadialGradient(
-            cluster.x - cluster.size * 0.2,
-            cluster.y - cluster.size * 0.2,
-            0,
-            cluster.x, cluster.y, cluster.size
-          );
-          bushGradient.addColorStop(0, bushHighlight);
-          bushGradient.addColorStop(1, bushColor);
-
-          ctx.fillStyle = bushGradient;
-          ctx.beginPath();
-          ctx.arc(cluster.x + sway * 0.2, cluster.y + sway * 0.1, cluster.size, 0, Math.PI * 2);
-          ctx.fill();
-        });
-      }
-
-      ctx.restore();
-    };
-
-    const drawDesertGrass = (ctx: CanvasRenderingContext2D, plant: DesertPlant) => {
-      ctx.save();
-      ctx.translate(plant.x, plant.y);
-
-      const grassColor = darkMode ? '#6a7a5a' : '#C9B896';
-
-      if (plant.grassHeights) {
-        plant.grassHeights.forEach((grassHeight, i) => {
-          const sway = Math.sin(timeRef * 0.001 + plant.swayPhase + i * 0.5) * 3;
-          const grassX = (i - 4) * 4;
-
-          ctx.strokeStyle = grassColor;
-          ctx.lineWidth = 2;
-          ctx.beginPath();
-          ctx.moveTo(grassX, 0);
-          ctx.quadraticCurveTo(
-            grassX + sway * 0.5,
-            -grassHeight * 0.5,
-            grassX + sway,
-            -grassHeight
-          );
-          ctx.stroke();
-        });
-      }
-
-      ctx.restore();
-    };
-
-    const drawPlant = (ctx: CanvasRenderingContext2D, plant: DesertPlant) => {
-      switch (plant.type) {
-        case 'cactus':
-          drawCactus(ctx, plant);
-          break;
-        case 'succulent':
-          drawSucculent(ctx, plant);
-          break;
-        case 'bush':
-          drawDesertBush(ctx, plant);
-          break;
-        case 'grass':
-          drawDesertGrass(ctx, plant);
-          break;
-      }
-    };
-
     const drawTumbleweed = (ctx: CanvasRenderingContext2D, tw: Tumbleweed) => {
-      const bounce = Math.abs(Math.sin(timeRef * 0.008 + tw.bouncePhase)) * 4;
+      const bounce = Math.abs(Math.sin(frameRef.current * 0.008 + tw.bouncePhase)) * 4;
 
       ctx.save();
       ctx.translate(tw.x, tw.y - bounce);
@@ -631,33 +631,7 @@ export function useDesertDunes(
 
       ctx.restore();
     };
-
-    const drawHeatWave = (ctx: CanvasRenderingContext2D, wave: HeatWave) => {
-      if (darkMode) return; // No heat waves at night
-
-      const waveY = wave.y + Math.sin(timeRef * wave.speed + wave.phase) * 2;
-
-      ctx.globalAlpha = 0.02;
-      ctx.fillStyle = '#FFFFFF';
-      ctx.beginPath();
-      for (let x = 0; x < wave.width; x += 5) {
-        const y = waveY + Math.sin((x / 20) + timeRef * 0.003 + wave.phase) * 4;
-        if (x === 0) {
-          ctx.moveTo(wave.x + x, y);
-        } else {
-          ctx.lineTo(wave.x + x, y);
-        }
-      }
-      ctx.lineTo(wave.x + wave.width, wave.y + 20);
-      ctx.lineTo(wave.x, wave.y + 20);
-      ctx.closePath();
-      ctx.fill();
-      ctx.globalAlpha = 1;
-    };
-
-    const animate = () => {
       const { width, height } = canvas;
-      timeRef++;
 
       // Clear canvas
       ctx.clearRect(0, 0, width, height);
@@ -665,15 +639,15 @@ export function useDesertDunes(
       // Draw sky
       drawSky(ctx, width, height);
 
-      // Draw heat waves (before dunes for layering)
-      heatWaves.forEach(wave => drawHeatWave(ctx, wave));
+      // Draw heat waves (before dunesRef.current for layering)
+      heatWavesRef.current.forEach(wave => drawHeatWave(ctx, wave));
 
-      // Sort dunes by layer and draw
-      dunes.sort((a, b) => a.layer - b.layer);
-      dunes.forEach(dune => drawDune(ctx, dune, width, height));
+      // Sort dunesRef.current by layer and draw
+      dunesRef.current.sort((a, b) => a.layer - b.layer);
+      dunesRef.current.forEach(dune => drawDune(ctx, dune, width, height));
 
       // Draw sand particles (slower movement)
-      sandParticles.forEach(particle => {
+      sandParticlesRef.current.forEach(particle => {
         particle.x += particle.speed;
         if (particle.x > width + 10) {
           particle.x = -10;
@@ -682,11 +656,11 @@ export function useDesertDunes(
         drawSandParticle(ctx, particle);
       });
 
-      // Draw plants
-      plants.forEach(plant => drawPlant(ctx, plant));
+      // Draw plantsRef.current
+      plantsRef.current.forEach(plant => drawPlant(ctx, plant));
 
-      // Update and draw tumbleweeds (slower)
-      tumbleweeds.forEach(tw => {
+      // Update and draw tumbleweedsRef.current (slower)
+      tumbleweedsRef.current.forEach(tw => {
         tw.x += tw.speed;
         tw.rotation += tw.speed * 0.02;
 
@@ -698,16 +672,6 @@ export function useDesertDunes(
         drawTumbleweed(ctx, tw);
       });
 
-      animationId = requestAnimationFrame(animate);
-    };
-
-    resize();
-    window.addEventListener('resize', resize);
-    animate();
-
-    return () => {
-      window.removeEventListener('resize', resize);
-      cancelAnimationFrame(animationId);
-    };
-  }, [canvasRef, darkMode, opacity, active]);
+    },
+  });
 }

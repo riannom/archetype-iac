@@ -39,349 +39,259 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+
+# ---------------------------------------------------------------------------
+# DummyMetric & factory helpers
+# ---------------------------------------------------------------------------
+
+
+class DummyMetric:
+    """No-op metric used when prometheus_client is not installed."""
+
+    def labels(self, *args, **kwargs):
+        return self
+
+    def inc(self, amount=1):
+        pass
+
+    def dec(self, amount=1):
+        pass
+
+    def set(self, value):
+        pass
+
+    def observe(self, value):
+        pass
+
+
+_DUMMY = DummyMetric()
+
+
+def _make_gauge(name, description, labels=None):
+    if PROMETHEUS_AVAILABLE:
+        return Gauge(name, description, labels or [])
+    return _DUMMY
+
+
+def _make_counter(name, description, labels=None):
+    if PROMETHEUS_AVAILABLE:
+        return Counter(name, description, labels or [])
+    return _DUMMY
+
+
+def _make_histogram(name, description, labels=None, buckets=None):
+    if PROMETHEUS_AVAILABLE:
+        return Histogram(name, description, labels or [], buckets=buckets or Histogram.DEFAULT_BUCKETS)
+    return _DUMMY
+
+
+# ---------------------------------------------------------------------------
+# Metric definitions
+# ---------------------------------------------------------------------------
+
 # --- Node Metrics ---
 
-if PROMETHEUS_AVAILABLE:
-    nodes_total = Gauge(
-        "archetype_nodes_total",
-        "Total number of nodes",
-        ["lab_id", "state"],
-    )
+nodes_total = _make_gauge(
+    "archetype_nodes_total", "Total number of nodes", ["lab_id", "state"],
+)
+nodes_ready = _make_gauge(
+    "archetype_nodes_ready", "Number of nodes in ready state", ["lab_id"],
+)
+nodes_by_host = _make_gauge(
+    "archetype_nodes_by_host", "Number of nodes per host", ["host_id", "host_name"],
+)
 
-    nodes_ready = Gauge(
-        "archetype_nodes_ready",
-        "Number of nodes in ready state",
-        ["lab_id"],
-    )
+# --- Job Metrics ---
 
-    nodes_by_host = Gauge(
-        "archetype_nodes_by_host",
-        "Number of nodes per host",
-        ["host_id", "host_name"],
-    )
+jobs_total = _make_counter(
+    "archetype_jobs_total", "Total number of jobs created", ["action", "status"],
+)
+job_duration = _make_histogram(
+    "archetype_job_duration_seconds", "Job execution duration in seconds",
+    ["action"],
+    buckets=(5, 10, 30, 60, 120, 300, 600, 900, 1200, 1800, float("inf")),
+)
+job_queue_wait = _make_histogram(
+    "archetype_job_queue_wait_seconds", "Time jobs spend queued before execution",
+    ["action"],
+    buckets=(0.5, 1, 2, 5, 10, 30, 60, 120, 300, 600, float("inf")),
+)
+job_failures = _make_counter(
+    "archetype_job_failures_total", "Total failed jobs categorized by reason",
+    ["action", "reason"],
+)
+jobs_active = _make_gauge(
+    "archetype_jobs_active", "Number of currently active jobs", ["action"],
+)
 
-    # --- Job Metrics ---
+# --- Agent Metrics ---
 
-    jobs_total = Counter(
-        "archetype_jobs_total",
-        "Total number of jobs created",
-        ["action", "status"],
-    )
+agents_online = _make_gauge("archetype_agents_online", "Number of online agents")
+agents_total = _make_gauge("archetype_agents_total", "Total number of registered agents")
+agent_stale_images = _make_gauge(
+    "archetype_agent_stale_images",
+    "Number of stale image artifacts detected on an agent",
+    ["host_id", "host_name"],
+)
 
-    job_duration = Histogram(
-        "archetype_job_duration_seconds",
-        "Job execution duration in seconds",
-        ["action"],
-        buckets=(5, 10, 30, 60, 120, 300, 600, 900, 1200, 1800, float("inf")),
-    )
+# --- Enforcement Metrics ---
 
-    job_queue_wait = Histogram(
-        "archetype_job_queue_wait_seconds",
-        "Time jobs spend queued before execution",
-        ["action"],
-        buckets=(0.5, 1, 2, 5, 10, 30, 60, 120, 300, 600, float("inf")),
-    )
+enforcement_actions = _make_counter(
+    "archetype_enforcement_total", "Total enforcement actions taken", ["result"],
+)
+enforcement_failures = _make_counter(
+    "archetype_enforcement_failures_total",
+    "Number of nodes that exceeded max enforcement retries",
+)
+enforcement_pending = _make_gauge(
+    "archetype_enforcement_pending", "Number of nodes with pending enforcement",
+)
+enforcement_skip_reasons = _make_counter(
+    "archetype_enforcement_skips_total", "Enforcement skips by reason", ["reason"],
+)
 
-    job_failures = Counter(
-        "archetype_job_failures_total",
-        "Total failed jobs categorized by reason",
-        ["action", "reason"],
-    )
+# --- NLM Phase Timing ---
 
-    jobs_active = Gauge(
-        "archetype_jobs_active",
-        "Number of currently active jobs",
-        ["action"],
-    )
+nlm_phase_duration = _make_histogram(
+    "archetype_nlm_phase_duration_seconds", "Duration of NLM lifecycle phases",
+    ["phase", "device_type", "status"],
+    buckets=(0.5, 1, 2, 5, 10, 30, 60, 120, 300, float("inf")),
+)
 
-    # --- Agent Metrics ---
+# --- Agent Operation Timing (API-measured round-trip) ---
 
-    agents_online = Gauge(
-        "archetype_agents_online",
-        "Number of online agents",
-    )
+agent_operation_duration = _make_histogram(
+    "archetype_agent_operation_duration_seconds",
+    "API-to-agent operation round-trip duration",
+    ["operation", "host_id", "status"],
+    buckets=(0.5, 1, 2, 5, 10, 30, 60, 120, 300, float("inf")),
+)
 
-    agents_total = Gauge(
-        "archetype_agents_total",
-        "Total number of registered agents",
-    )
+# --- Lab Metrics ---
 
-    agent_cpu_percent = Gauge(
-        "archetype_agent_cpu_percent",
-        "Agent CPU usage percentage",
-        ["host_id", "host_name"],
-    )
+labs_total = _make_gauge("archetype_labs_total", "Total number of labs", ["state"])
+labs_active = _make_gauge("archetype_labs_active", "Number of labs in running state")
 
-    agent_memory_percent = Gauge(
-        "archetype_agent_memory_percent",
-        "Agent memory usage percentage",
-        ["host_id", "host_name"],
-    )
+# --- Link Operational State Metrics ---
 
-    agent_containers_running = Gauge(
-        "archetype_agent_containers_running",
-        "Number of running containers on agent",
-        ["host_id", "host_name"],
-    )
+link_oper_transitions = _make_counter(
+    "archetype_link_oper_transitions_total",
+    "Total link endpoint operational-state transitions",
+    ["endpoint", "old_state", "new_state", "reason", "is_cross_host"],
+)
+link_endpoint_reservations_total = _make_gauge(
+    "archetype_link_endpoint_reservations_total",
+    "Total link endpoint reservation rows",
+)
+link_endpoint_reservation_missing = _make_gauge(
+    "archetype_link_endpoint_reservation_missing",
+    "Expected desired-up endpoint reservations missing from DB",
+)
+link_endpoint_reservation_orphaned = _make_gauge(
+    "archetype_link_endpoint_reservation_orphaned",
+    "Reservation rows not tied to desired-up links",
+)
+link_endpoint_reservation_conflicts = _make_gauge(
+    "archetype_link_endpoint_reservation_conflicts",
+    "Endpoints reserved by more than one link",
+)
 
-    agent_vms_running = Gauge(
-        "archetype_agent_vms_running",
-        "Number of running VMs on agent",
-        ["host_id", "host_name"],
-    )
+# --- Database Metrics ---
 
-    agent_stale_images = Gauge(
-        "archetype_agent_stale_images",
-        "Number of stale image artifacts detected on an agent",
-        ["host_id", "host_name"],
-    )
+db_connections_idle_in_transaction = _make_gauge(
+    "archetype_db_idle_in_transaction",
+    "Number of database connections stuck idle in transaction",
+)
+db_connections_total = _make_gauge(
+    "archetype_db_connections_total", "Total active database connections", ["state"],
+)
+db_transaction_issues = _make_counter(
+    "archetype_db_transaction_issues_total",
+    "Database transaction/rollback issues by issue type and phase",
+    ["issue", "phase", "table"],
+)
+db_transaction_release_duration = _make_histogram(
+    "archetype_db_transaction_release_seconds",
+    "Duration spent releasing a DB transaction boundary before awaited I/O",
+    ["phase", "table", "result"],
+    buckets=(0.001, 0.01, 0.05, 0.1, 0.25, 0.5, 1, 2, 5, float("inf")),
+)
 
-    agent_stale_image_cleanup_total = Counter(
-        "archetype_agent_stale_image_cleanup_total",
-        "Total stale-image cleanup results by agent",
-        ["host_id", "host_name", "result"],
-    )
+# --- Queue Metrics ---
 
-    # --- Enforcement Metrics ---
+job_queue_depth = _make_gauge(
+    "archetype_job_queue_depth", "Number of jobs currently in the RQ queue",
+)
 
-    enforcement_actions = Counter(
-        "archetype_enforcement_total",
-        "Total enforcement actions taken",
-        ["result"],  # success, failed, skipped
-    )
+# --- Reconciliation Metrics ---
 
-    enforcement_failures = Counter(
-        "archetype_enforcement_failures_total",
-        "Number of nodes that exceeded max enforcement retries",
-    )
+reconciliation_cycle_duration = _make_histogram(
+    "archetype_reconciliation_cycle_seconds",
+    "Duration of a full reconciliation cycle",
+    buckets=(0.5, 1, 2, 5, 10, 30, 60, float("inf")),
+)
+reconciliation_labs_checked = _make_counter(
+    "archetype_reconciliation_labs_checked_total",
+    "Total labs checked during reconciliation cycles",
+)
+reconciliation_state_changes = _make_counter(
+    "archetype_reconciliation_state_changes_total",
+    "Total node state changes detected during reconciliation",
+)
 
-    enforcement_pending = Gauge(
-        "archetype_enforcement_pending",
-        "Number of nodes with pending enforcement",
-    )
+# --- State Flap Detection ---
 
-    enforcement_skip_reasons = Counter(
-        "archetype_enforcement_skips_total",
-        "Enforcement skips by reason",
-        ["reason"],
-    )
+node_state_transitions = _make_counter(
+    "archetype_node_state_transitions_total",
+    "Total node state transitions",
+    ["transition_type"],
+)
 
-    # --- NLM Phase Timing ---
+# --- Circuit Breaker Metrics ---
 
-    nlm_phase_duration = Histogram(
-        "archetype_nlm_phase_duration_seconds",
-        "Duration of NLM lifecycle phases",
-        ["phase", "device_type", "status"],
-        buckets=(0.5, 1, 2, 5, 10, 30, 60, 120, 300, float("inf")),
-    )
+circuit_breaker_state = _make_gauge(
+    "archetype_circuit_breaker_state",
+    "Circuit breaker state (0=closed, 1=half-open, 2=open)",
+    ["handler_type"],
+)
 
-    # --- Agent Operation Timing (API-measured round-trip) ---
+# --- Broadcast Metrics ---
 
-    agent_operation_duration = Histogram(
-        "archetype_agent_operation_duration_seconds",
-        "API-to-agent operation round-trip duration",
-        ["operation", "host_id", "status"],
-        buckets=(0.5, 1, 2, 5, 10, 30, 60, 120, 300, float("inf")),
-    )
+broadcast_messages = _make_counter(
+    "archetype_broadcast_messages_total",
+    "Total broadcast messages published",
+    ["message_type"],
+)
+broadcast_failures = _make_counter(
+    "archetype_broadcast_failures_total",
+    "Total broadcast publish failures",
+    ["message_type"],
+)
 
-    # --- Lab Metrics ---
+# --- Enforcement Timing ---
 
-    labs_total = Gauge(
-        "archetype_labs_total",
-        "Total number of labs",
-        ["state"],
-    )
+enforcement_operation_duration = _make_histogram(
+    "archetype_enforcement_operation_seconds",
+    "Duration of enforcement operations",
+    buckets=(0.5, 1, 2, 5, 10, 30, 60, 120, float("inf")),
+)
 
-    labs_active = Gauge(
-        "archetype_labs_active",
-        "Number of labs in running state",
-    )
+# --- Runtime Identity Metrics ---
 
-    # --- Link Operational State Metrics ---
+runtime_identity_events = _make_counter(
+    "archetype_runtime_identity_events_total",
+    "Runtime identity events observed during reconciliation",
+    ["event"],
+)
+runtime_identity_missing_runtime_id_active_placements = _make_gauge(
+    "archetype_runtime_identity_missing_runtime_id_active_placements",
+    "Number of active node placements missing runtime_id",
+)
 
-    link_oper_transitions = Counter(
-        "archetype_link_oper_transitions_total",
-        "Total link endpoint operational-state transitions",
-        ["endpoint", "old_state", "new_state", "reason", "is_cross_host"],
-    )
 
-    link_endpoint_reservations_total = Gauge(
-        "archetype_link_endpoint_reservations_total",
-        "Total link endpoint reservation rows",
-    )
-
-    link_endpoint_reservation_missing = Gauge(
-        "archetype_link_endpoint_reservation_missing",
-        "Expected desired-up endpoint reservations missing from DB",
-    )
-
-    link_endpoint_reservation_orphaned = Gauge(
-        "archetype_link_endpoint_reservation_orphaned",
-        "Reservation rows not tied to desired-up links",
-    )
-
-    link_endpoint_reservation_conflicts = Gauge(
-        "archetype_link_endpoint_reservation_conflicts",
-        "Endpoints reserved by more than one link",
-    )
-
-    # --- Database Metrics ---
-
-    db_connections_idle_in_transaction = Gauge(
-        "archetype_db_idle_in_transaction",
-        "Number of database connections stuck idle in transaction",
-    )
-
-    db_connections_total = Gauge(
-        "archetype_db_connections_total",
-        "Total active database connections",
-        ["state"],
-    )
-
-    db_transaction_issues = Counter(
-        "archetype_db_transaction_issues_total",
-        "Database transaction/rollback issues by issue type and phase",
-        ["issue", "phase", "table"],
-    )
-
-    db_transaction_release_duration = Histogram(
-        "archetype_db_transaction_release_seconds",
-        "Duration spent releasing a DB transaction boundary before awaited I/O",
-        ["phase", "table", "result"],
-        buckets=(0.001, 0.01, 0.05, 0.1, 0.25, 0.5, 1, 2, 5, float("inf")),
-    )
-
-    # --- Queue Metrics ---
-
-    job_queue_depth = Gauge(
-        "archetype_job_queue_depth",
-        "Number of jobs currently in the RQ queue",
-    )
-
-    # --- Reconciliation Metrics ---
-
-    reconciliation_cycle_duration = Histogram(
-        "archetype_reconciliation_cycle_seconds",
-        "Duration of a full reconciliation cycle",
-        buckets=(0.5, 1, 2, 5, 10, 30, 60, float("inf")),
-    )
-    reconciliation_labs_checked = Counter(
-        "archetype_reconciliation_labs_checked_total",
-        "Total labs checked during reconciliation cycles",
-    )
-    reconciliation_state_changes = Counter(
-        "archetype_reconciliation_state_changes_total",
-        "Total node state changes detected during reconciliation",
-    )
-
-    # --- State Flap Detection ---
-
-    node_state_transitions = Counter(
-        "archetype_node_state_transitions_total",
-        "Total node state transitions",
-        ["transition_type"],
-    )
-
-    # --- Circuit Breaker Metrics ---
-
-    circuit_breaker_state = Gauge(
-        "archetype_circuit_breaker_state",
-        "Circuit breaker state (0=closed, 1=half-open, 2=open)",
-        ["handler_type"],
-    )
-
-    # --- Broadcast Metrics ---
-
-    broadcast_messages = Counter(
-        "archetype_broadcast_messages_total",
-        "Total broadcast messages published",
-        ["message_type"],
-    )
-    broadcast_failures = Counter(
-        "archetype_broadcast_failures_total",
-        "Total broadcast publish failures",
-        ["message_type"],
-    )
-
-    # --- Enforcement Timing ---
-
-    enforcement_operation_duration = Histogram(
-        "archetype_enforcement_operation_seconds",
-        "Duration of enforcement operations",
-        buckets=(0.5, 1, 2, 5, 10, 30, 60, 120, float("inf")),
-    )
-
-    # --- Runtime Identity Metrics ---
-
-    runtime_identity_events = Counter(
-        "archetype_runtime_identity_events_total",
-        "Runtime identity events observed during reconciliation",
-        ["event"],
-    )
-
-    runtime_identity_missing_runtime_id_active_placements = Gauge(
-        "archetype_runtime_identity_missing_runtime_id_active_placements",
-        "Number of active node placements missing runtime_id",
-    )
-
-else:
-    # Dummy implementations when prometheus_client is not installed
-    class DummyMetric:
-        def labels(self, *args, **kwargs):
-            return self
-        def inc(self, amount=1):
-            pass
-        def dec(self, amount=1):
-            pass
-        def set(self, value):
-            pass
-        def observe(self, value):
-            pass
-
-    nodes_total = DummyMetric()
-    nodes_ready = DummyMetric()
-    nodes_by_host = DummyMetric()
-    jobs_total = DummyMetric()
-    job_duration = DummyMetric()
-    job_queue_wait = DummyMetric()
-    job_failures = DummyMetric()
-    jobs_active = DummyMetric()
-    agents_online = DummyMetric()
-    agents_total = DummyMetric()
-    agent_cpu_percent = DummyMetric()
-    agent_memory_percent = DummyMetric()
-    agent_containers_running = DummyMetric()
-    agent_vms_running = DummyMetric()
-    agent_stale_images = DummyMetric()
-    agent_stale_image_cleanup_total = DummyMetric()
-    enforcement_actions = DummyMetric()
-    enforcement_failures = DummyMetric()
-    enforcement_pending = DummyMetric()
-    enforcement_skip_reasons = DummyMetric()
-    nlm_phase_duration = DummyMetric()
-    agent_operation_duration = DummyMetric()
-    labs_total = DummyMetric()
-    labs_active = DummyMetric()
-    link_oper_transitions = DummyMetric()
-    link_endpoint_reservations_total = DummyMetric()
-    link_endpoint_reservation_missing = DummyMetric()
-    link_endpoint_reservation_orphaned = DummyMetric()
-    link_endpoint_reservation_conflicts = DummyMetric()
-    db_connections_idle_in_transaction = DummyMetric()
-    db_connections_total = DummyMetric()
-    db_transaction_issues = DummyMetric()
-    db_transaction_release_duration = DummyMetric()
-    job_queue_depth = DummyMetric()
-    reconciliation_cycle_duration = DummyMetric()
-    reconciliation_labs_checked = DummyMetric()
-    reconciliation_state_changes = DummyMetric()
-    node_state_transitions = DummyMetric()
-    circuit_breaker_state = DummyMetric()
-    broadcast_messages = DummyMetric()
-    broadcast_failures = DummyMetric()
-    enforcement_operation_duration = DummyMetric()
-    runtime_identity_events = DummyMetric()
-    runtime_identity_missing_runtime_id_active_placements = DummyMetric()
+# ---------------------------------------------------------------------------
+# Periodic update functions
+# ---------------------------------------------------------------------------
 
 
 def update_node_metrics(session: "Session") -> None:
@@ -463,40 +373,11 @@ def update_agent_metrics(session: "Session") -> None:
         total_count = len(hosts)
 
         # Clear host-specific metrics
-        agent_cpu_percent._metrics.clear()
-        agent_memory_percent._metrics.clear()
-        agent_containers_running._metrics.clear()
-        agent_vms_running._metrics.clear()
         nodes_by_host._metrics.clear()
 
         for host in hosts:
             if agent_client.is_agent_online(host):
                 online_count += 1
-
-            # Parse resource usage
-            usage = host.get_resource_usage()
-
-            host_name = host.name or host.id
-
-            if "cpu_percent" in usage:
-                agent_cpu_percent.labels(
-                    host_id=host.id, host_name=host_name
-                ).set(usage["cpu_percent"])
-
-            if "memory_percent" in usage:
-                agent_memory_percent.labels(
-                    host_id=host.id, host_name=host_name
-                ).set(usage["memory_percent"])
-
-            if "containers_running" in usage:
-                agent_containers_running.labels(
-                    host_id=host.id, host_name=host_name
-                ).set(usage["containers_running"])
-
-            if "vms_running" in usage:
-                agent_vms_running.labels(
-                    host_id=host.id, host_name=host_name
-                ).set(usage["vms_running"])
 
         # Count nodes per host using SQL GROUP BY
         from sqlalchemy import func
@@ -693,6 +574,11 @@ def get_metrics() -> tuple[bytes, str]:
     return generate_latest(REGISTRY), CONTENT_TYPE_LATEST
 
 
+# ---------------------------------------------------------------------------
+# Label normalization helpers
+# ---------------------------------------------------------------------------
+
+
 def _normalize_reason_label(value: str) -> str:
     lowered = value.strip().lower()
     lowered = re.sub(r"[^a-z0-9_]+", "_", lowered)
@@ -787,6 +673,11 @@ def infer_job_failure_reason(message: str | None) -> str:
         if needle in text:
             return reason
     return "unknown"
+
+
+# ---------------------------------------------------------------------------
+# Recording helpers
+# ---------------------------------------------------------------------------
 
 
 def record_job_started(action: str, queue_wait_seconds: float | None = None) -> None:
@@ -956,22 +847,6 @@ def set_agent_stale_image_count(host_id: str, host_name: str, count: int) -> Non
     if not PROMETHEUS_AVAILABLE:
         return
     agent_stale_images.labels(host_id=host_id, host_name=host_name).set(max(0, count))
-
-
-def record_agent_stale_image_cleanup(
-    host_id: str,
-    host_name: str,
-    result: str,
-    count: int = 1,
-) -> None:
-    """Record stale-image cleanup outcomes for an agent."""
-    if not PROMETHEUS_AVAILABLE or count <= 0:
-        return
-    agent_stale_image_cleanup_total.labels(
-        host_id=host_id,
-        host_name=host_name,
-        result=_normalize_reason_label(result),
-    ).inc(count)
 
 
 def record_enforcement_duration(duration: float) -> None:

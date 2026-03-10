@@ -5,7 +5,8 @@
  * catching air currents with graceful turns and sweeping arcs.
  */
 
-import { useEffect, useRef } from 'react';
+import { useRef } from 'react';
+import { useCanvasAnimation } from './useCanvasAnimation';
 
 interface PaperAirplane {
   x: number;
@@ -47,6 +48,7 @@ interface Bird {
   heading: number;
 }
 
+
 export function usePaperAirplanes(
   canvasRef: React.RefObject<HTMLCanvasElement>,
   darkMode: boolean,
@@ -56,18 +58,11 @@ export function usePaperAirplanes(
   const airplanesRef = useRef<PaperAirplane[]>([]);
   const cloudsRef = useRef<Cloud[]>([]);
   const birdsRef = useRef<Bird[]>([]);
-  const animationRef = useRef<number | undefined>(undefined);
-  const timeRef = useRef(0);
+  const sizeRef = useRef({ w: 0, h: 0 });
 
-  useEffect(() => {
-    if (!enabled) return;
+  useCanvasAnimation(canvasRef, darkMode, opacity, enabled, {
 
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-
+    draw: (ctx, canvas, time, _dt) => {
     const resizeCanvas = () => {
       canvas.width = window.innerWidth;
       canvas.height = window.innerHeight;
@@ -329,11 +324,17 @@ export function usePaperAirplanes(
       ctx.restore();
     };
 
-    const animate = () => {
+
+      const w = canvas.width;
+      const h = canvas.height;
+      if (sizeRef.current.w !== w || sizeRef.current.h !== h) {
+        sizeRef.current = { w, h };
+      }
+
       const currentWidth = canvas.width;
       const currentHeight = canvas.height;
       ctx.clearRect(0, 0, currentWidth, currentHeight);
-      timeRef.current += 0.016;
+      time += 0.016;
 
       // Sky gradient
       const skyGrad = ctx.createLinearGradient(0, 0, 0, currentHeight);
@@ -618,16 +619,6 @@ export function usePaperAirplanes(
         airplanesRef.current.push(createAirplane(currentWidth, currentHeight, paperColors));
       }
 
-      animationRef.current = requestAnimationFrame(animate);
-    };
-
-    animate();
-
-    return () => {
-      window.removeEventListener('resize', resizeCanvas);
-      if (animationRef.current) {
-        cancelAnimationFrame(animationRef.current);
-      }
-    };
-  }, [canvasRef, darkMode, opacity, enabled]);
+    },
+  });
 }

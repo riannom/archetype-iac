@@ -3,7 +3,8 @@
  * Rising Bitcoin symbols with glow effect
  */
 
-import { useRef, useEffect, useCallback } from 'react';
+import { useRef, useCallback } from 'react';
+import { useCanvasAnimation } from './useCanvasAnimation';
 
 interface BitcoinParticle {
   x: number;
@@ -17,6 +18,7 @@ interface BitcoinParticle {
   fadeDirection: number;
 }
 
+
 export function useBitcoinParticles(
   canvasRef: React.RefObject<HTMLCanvasElement>,
   darkMode: boolean,
@@ -24,8 +26,6 @@ export function useBitcoinParticles(
   active: boolean
 ) {
   const particlesRef = useRef<BitcoinParticle[]>([]);
-  const animationRef = useRef<number | undefined>(undefined);
-
   const createParticle = useCallback((canvas: HTMLCanvasElement): BitcoinParticle => {
     return {
       x: Math.random() * canvas.width,
@@ -39,7 +39,6 @@ export function useBitcoinParticles(
       fadeDirection: 1,
     };
   }, []);
-
   const drawBitcoin = useCallback((
     ctx: CanvasRenderingContext2D,
     particle: BitcoinParticle,
@@ -49,41 +48,30 @@ export function useBitcoinParticles(
     ctx.save();
     ctx.translate(particle.x, particle.y);
     ctx.rotate(particle.rotation);
-
     const s = particle.size;
     const alpha = particle.opacity * opacityMultiplier;
-
     const baseColor = isDark
       ? { r: 247, g: 147, b: 26 }
       : { r: 242, g: 169, b: 0 };
-
     ctx.beginPath();
     ctx.arc(0, 0, s / 2, 0, Math.PI * 2);
     ctx.fillStyle = `rgba(${baseColor.r}, ${baseColor.g}, ${baseColor.b}, ${alpha * 0.3})`;
     ctx.fill();
-
     ctx.font = `bold ${s * 0.7}px Arial`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillStyle = `rgba(${baseColor.r}, ${baseColor.g}, ${baseColor.b}, ${alpha})`;
     ctx.fillText('₿', 0, 0);
-
     ctx.shadowColor = `rgba(${baseColor.r}, ${baseColor.g}, ${baseColor.b}, ${alpha * 0.5})`;
     ctx.shadowBlur = 10;
     ctx.fillText('₿', 0, 0);
-
     ctx.restore();
   }, []);
+  const sizeRef = useRef({ w: 0, h: 0 });
 
-  useEffect(() => {
-    if (!active) return;
+  useCanvasAnimation(canvasRef, darkMode, opacity, active, {
 
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-
+    draw: (ctx, canvas, _time, _dt) => {
     const resizeCanvas = () => {
       canvas.width = window.innerWidth;
       canvas.height = window.innerHeight;
@@ -96,8 +84,13 @@ export function useBitcoinParticles(
       createParticle(canvas)
     );
 
-    const animate = () => {
-      if (!canvas || !ctx) return;
+
+      const w = canvas.width;
+      const h = canvas.height;
+      if (sizeRef.current.w !== w || sizeRef.current.h !== h) {
+        sizeRef.current = { w, h };
+      }
+
 
       ctx.clearRect(0, 0, canvas.width, canvas.height);
 
@@ -123,16 +116,6 @@ export function useBitcoinParticles(
         drawBitcoin(ctx, particle, darkMode, opacityMultiplier);
       });
 
-      animationRef.current = requestAnimationFrame(animate);
-    };
-
-    animate();
-
-    return () => {
-      window.removeEventListener('resize', resizeCanvas);
-      if (animationRef.current) {
-        cancelAnimationFrame(animationRef.current);
-      }
-    };
-  }, [canvasRef, darkMode, opacity, createParticle, drawBitcoin, active]);
+    },
+  });
 }

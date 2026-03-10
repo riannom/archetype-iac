@@ -3,7 +3,8 @@
  * Gentle floating protection shields
  */
 
-import { useRef, useEffect, useCallback } from 'react';
+import { useRef, useCallback } from 'react';
+import { useCanvasAnimation } from './useCanvasAnimation';
 
 interface Shield {
   x: number;
@@ -17,6 +18,7 @@ interface Shield {
   pulsePhase: number;
 }
 
+
 export function useFloatingShields(
   canvasRef: React.RefObject<HTMLCanvasElement>,
   darkMode: boolean,
@@ -24,9 +26,6 @@ export function useFloatingShields(
   active: boolean
 ) {
   const shieldsRef = useRef<Shield[]>([]);
-  const animationRef = useRef<number | undefined>(undefined);
-  const timeRef = useRef<number>(0);
-
   const createShield = useCallback((canvas: HTMLCanvasElement): Shield => {
     return {
       x: Math.random() * canvas.width,
@@ -40,7 +39,6 @@ export function useFloatingShields(
       pulsePhase: Math.random() * Math.PI * 2,
     };
   }, []);
-
   const drawShield = useCallback((
     ctx: CanvasRenderingContext2D,
     shield: Shield,
@@ -51,29 +49,23 @@ export function useFloatingShields(
     ctx.save();
     ctx.translate(shield.x, shield.y);
     ctx.rotate(shield.rotation);
-
     const pulse = 1 + Math.sin(time * 2 + shield.pulsePhase) * 0.1;
     const s = shield.size * pulse;
-
     const baseColor = isDark
       ? { r: 218, g: 165, b: 32 }
       : { r: 184, g: 134, b: 11 };
-
     const alpha = shield.opacity * opacityMultiplier;
-
     ctx.beginPath();
     ctx.moveTo(0, -s * 0.6);
     ctx.bezierCurveTo(s * 0.5, -s * 0.5, s * 0.5, s * 0.2, 0, s * 0.6);
     ctx.bezierCurveTo(-s * 0.5, s * 0.2, -s * 0.5, -s * 0.5, 0, -s * 0.6);
     ctx.closePath();
-
     const gradient = ctx.createLinearGradient(0, -s * 0.6, 0, s * 0.6);
     gradient.addColorStop(0, `rgba(${baseColor.r + 40}, ${baseColor.g + 40}, ${baseColor.b + 20}, ${alpha})`);
     gradient.addColorStop(0.5, `rgba(${baseColor.r}, ${baseColor.g}, ${baseColor.b}, ${alpha})`);
     gradient.addColorStop(1, `rgba(${baseColor.r - 40}, ${baseColor.g - 40}, ${baseColor.b}, ${alpha * 0.8})`);
     ctx.fillStyle = gradient;
     ctx.fill();
-
     ctx.strokeStyle = `rgba(255, 255, 255, ${alpha * 0.5})`;
     ctx.lineWidth = 2;
     ctx.beginPath();
@@ -82,19 +74,13 @@ export function useFloatingShields(
     ctx.moveTo(-s * 0.2, 0);
     ctx.lineTo(s * 0.2, 0);
     ctx.stroke();
-
     ctx.restore();
   }, []);
+  const sizeRef = useRef({ w: 0, h: 0 });
 
-  useEffect(() => {
-    if (!active) return;
+  useCanvasAnimation(canvasRef, darkMode, opacity, active, {
 
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-
+    draw: (ctx, canvas, time, _dt) => {
     const resizeCanvas = () => {
       canvas.width = window.innerWidth;
       canvas.height = window.innerHeight;
@@ -107,11 +93,16 @@ export function useFloatingShields(
       createShield(canvas)
     );
 
-    const animate = () => {
-      if (!canvas || !ctx) return;
+
+      const w = canvas.width;
+      const h = canvas.height;
+      if (sizeRef.current.w !== w || sizeRef.current.h !== h) {
+        sizeRef.current = { w, h };
+      }
+
 
       ctx.clearRect(0, 0, canvas.width, canvas.height);
-      timeRef.current += 0.016;
+      time += 0.016;
 
       const opacityMultiplier = opacity / 50;
 
@@ -125,19 +116,9 @@ export function useFloatingShields(
         if (shield.y < -50) shield.y = canvas.height + 50;
         if (shield.y > canvas.height + 50) shield.y = -50;
 
-        drawShield(ctx, shield, darkMode, opacityMultiplier, timeRef.current);
+        drawShield(ctx, shield, darkMode, opacityMultiplier, time);
       });
 
-      animationRef.current = requestAnimationFrame(animate);
-    };
-
-    animate();
-
-    return () => {
-      window.removeEventListener('resize', resizeCanvas);
-      if (animationRef.current) {
-        cancelAnimationFrame(animationRef.current);
-      }
-    };
-  }, [canvasRef, darkMode, opacity, createShield, drawShield, active]);
+    },
+  });
 }

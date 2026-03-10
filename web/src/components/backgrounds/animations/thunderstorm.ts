@@ -5,7 +5,8 @@
  * heavy rain, and atmospheric thunder effects.
  */
 
-import { useEffect, useRef } from 'react';
+import { useRef } from 'react';
+import { useCanvasAnimation } from './useCanvasAnimation';
 
 interface RainDrop {
   x: number;
@@ -40,6 +41,7 @@ interface Ripple {
   opacity: number;
 }
 
+
 export function useThunderstorm(
   canvasRef: React.RefObject<HTMLCanvasElement>,
   darkMode: boolean,
@@ -50,22 +52,15 @@ export function useThunderstorm(
   const cloudsRef = useRef<Cloud[]>([]);
   const lightningRef = useRef<Lightning | null>(null);
   const ripplesRef = useRef<Ripple[]>([]);
-  const animationRef = useRef<number | undefined>(undefined);
-  const timeRef = useRef(0);
   const flashRef = useRef(0);
   const nextLightningRef = useRef(Math.random() * 3 + 2);
   const windRef = useRef(0);
   const windTargetRef = useRef(0);
+  const sizeRef = useRef({ w: 0, h: 0 });
 
-  useEffect(() => {
-    if (!enabled) return;
+  useCanvasAnimation(canvasRef, darkMode, opacity, enabled, {
 
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-
+    draw: (ctx, canvas, time, _dt) => {
     const resizeCanvas = () => {
       canvas.width = window.innerWidth;
       canvas.height = window.innerHeight;
@@ -188,11 +183,17 @@ export function useThunderstorm(
       });
     }
 
-    const animate = () => {
+
+      const w = canvas.width;
+      const h = canvas.height;
+      if (sizeRef.current.w !== w || sizeRef.current.h !== h) {
+        sizeRef.current = { w, h };
+      }
+
       const currentWidth = canvas.width;
       const currentHeight = canvas.height;
       ctx.clearRect(0, 0, currentWidth, currentHeight);
-      timeRef.current += 0.016;
+      time += 0.016;
 
       // Update wind
       if (Math.random() < 0.01) {
@@ -340,16 +341,6 @@ export function useThunderstorm(
       ctx.fillStyle = groundGradient;
       ctx.fillRect(0, groundY, currentWidth, currentHeight - groundY);
 
-      animationRef.current = requestAnimationFrame(animate);
-    };
-
-    animate();
-
-    return () => {
-      window.removeEventListener('resize', resizeCanvas);
-      if (animationRef.current) {
-        cancelAnimationFrame(animationRef.current);
-      }
-    };
-  }, [canvasRef, darkMode, opacity, enabled]);
+    },
+  });
 }

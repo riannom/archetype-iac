@@ -5,7 +5,8 @@
  * gentle tide advancing and receding.
  */
 
-import { useEffect, useRef } from 'react';
+import { useRef } from 'react';
+import { useCanvasAnimation } from './useCanvasAnimation';
 
 interface SandRipple {
   y: number;
@@ -29,6 +30,7 @@ interface Sparkle {
   maxLife: number;
 }
 
+
 export function useTidalPatterns(
   canvasRef: React.RefObject<HTMLCanvasElement>,
   darkMode: boolean,
@@ -38,19 +40,12 @@ export function useTidalPatterns(
   const ripplesRef = useRef<SandRipple[]>([]);
   const foamRef = useRef<WaterFoam[]>([]);
   const sparklesRef = useRef<Sparkle[]>([]);
-  const animationRef = useRef<number | undefined>(undefined);
-  const timeRef = useRef(0);
   const tidePhaseRef = useRef(0);
+  const sizeRef = useRef({ w: 0, h: 0 });
 
-  useEffect(() => {
-    if (!enabled) return;
+  useCanvasAnimation(canvasRef, darkMode, opacity, enabled, {
 
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-
+    draw: (ctx, canvas, time, _dt) => {
     const resizeCanvas = () => {
       canvas.width = window.innerWidth;
       canvas.height = window.innerHeight;
@@ -75,11 +70,17 @@ export function useTidalPatterns(
     foamRef.current = [];
     sparklesRef.current = [];
 
-    const animate = () => {
+
+      const w = canvas.width;
+      const h = canvas.height;
+      if (sizeRef.current.w !== w || sizeRef.current.h !== h) {
+        sizeRef.current = { w, h };
+      }
+
       const currentWidth = canvas.width;
       const currentHeight = canvas.height;
       ctx.clearRect(0, 0, currentWidth, currentHeight);
-      timeRef.current += 0.016;
+      time += 0.016;
       tidePhaseRef.current += 0.008;
 
       // Calculate tide position (advances and recedes)
@@ -148,8 +149,8 @@ export function useTidalPatterns(
 
       for (let x = 0; x <= currentWidth; x += 3) {
         const waveOffset =
-          Math.sin(x * 0.02 + timeRef.current * 2) * 5 +
-          Math.sin(x * 0.05 + timeRef.current * 3) * 2;
+          Math.sin(x * 0.02 + time * 2) * 5 +
+          Math.sin(x * 0.05 + time * 3) * 2;
         ctx.lineTo(x, foamY + waveOffset);
       }
 
@@ -170,7 +171,7 @@ export function useTidalPatterns(
         const x = Math.random() * currentWidth;
         foamRef.current.push({
           x,
-          y: foamY + Math.sin(x * 0.02 + timeRef.current * 2) * 5,
+          y: foamY + Math.sin(x * 0.02 + time * 2) * 5,
           size: 2 + Math.random() * 4,
           opacity: 0.5 + Math.random() * 0.3,
           phase: Math.random() * Math.PI * 2,
@@ -229,16 +230,6 @@ export function useTidalPatterns(
         sparklesRef.current = sparklesRef.current.slice(-40);
       }
 
-      animationRef.current = requestAnimationFrame(animate);
-    };
-
-    animate();
-
-    return () => {
-      window.removeEventListener('resize', resizeCanvas);
-      if (animationRef.current) {
-        cancelAnimationFrame(animationRef.current);
-      }
-    };
-  }, [canvasRef, darkMode, opacity, enabled]);
+    },
+  });
 }

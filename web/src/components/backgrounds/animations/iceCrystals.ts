@@ -4,7 +4,8 @@
  * Delicate crystalline structures that grow from seed points.
  */
 
-import { useEffect, useRef } from 'react';
+import { useRef } from 'react';
+import { useCanvasAnimation } from './useCanvasAnimation';
 
 interface Crystal {
   x: number;
@@ -42,6 +43,7 @@ interface FrostParticle {
   phase: number;
 }
 
+
 export function useIceCrystals(
   canvasRef: React.RefObject<HTMLCanvasElement>,
   darkMode: boolean,
@@ -50,39 +52,12 @@ export function useIceCrystals(
 ): void {
   const crystalsRef = useRef<Crystal[]>([]);
   const particlesRef = useRef<FrostParticle[]>([]);
-  const animationRef = useRef<number>(0);
-  const timeRef = useRef<number>(0);
+  const sizeRef = useRef({ w: 0, h: 0 });
 
-  useEffect(() => {
-    if (!active) return;
+  useCanvasAnimation(canvasRef, darkMode, opacity, active, {
 
-    const canvas = canvasRef.current;
-    if (!canvas) return;
+    draw: (ctx, canvas, time, _dt) => {
 
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-
-    const resize = () => {
-      canvas.width = window.innerWidth;
-      canvas.height = window.innerHeight;
-      initializeParticles();
-    };
-
-    const initializeParticles = () => {
-      particlesRef.current = [];
-      const particleCount = Math.floor((canvas.width * canvas.height) / 5000);
-
-      for (let i = 0; i < particleCount; i++) {
-        particlesRef.current.push({
-          x: Math.random() * canvas.width,
-          y: Math.random() * canvas.height,
-          size: 1 + Math.random() * 2,
-          opacity: 0.2 + Math.random() * 0.4,
-          drift: (Math.random() - 0.5) * 0.3,
-          phase: Math.random() * Math.PI * 2,
-        });
-      }
-    };
 
     const createCrystal = (): Crystal => {
       const branchCount = 6; // Hexagonal symmetry like real ice
@@ -315,9 +290,26 @@ export function useIceCrystals(
       ctx.fillRect(canvas.width - edgeWidth, 0, edgeWidth, canvas.height);
     };
 
-    const animate = () => {
-      timeRef.current += 16;
-      const time = timeRef.current;
+
+      const w = canvas.width;
+      const h = canvas.height;
+      if (sizeRef.current.w !== w || sizeRef.current.h !== h) {
+        sizeRef.current = { w, h };
+        particlesRef.current = [];
+        const particleCount = Math.floor((canvas.width * canvas.height) / 5000);
+  
+        for (let i = 0; i < particleCount; i++) {
+          particlesRef.current.push({
+            x: Math.random() * canvas.width,
+            y: Math.random() * canvas.height,
+            size: 1 + Math.random() * 2,
+            opacity: 0.2 + Math.random() * 0.4,
+            drift: (Math.random() - 0.5) * 0.3,
+            phase: Math.random() * Math.PI * 2,
+          });
+        }
+      }
+
 
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       const opacityMult = opacity / 50;
@@ -384,16 +376,6 @@ export function useIceCrystals(
         return true;
       });
 
-      animationRef.current = requestAnimationFrame(animate);
-    };
-
-    resize();
-    window.addEventListener('resize', resize);
-    animate();
-
-    return () => {
-      window.removeEventListener('resize', resize);
-      cancelAnimationFrame(animationRef.current);
-    };
-  }, [canvasRef, darkMode, opacity, active]);
+    },
+  });
 }

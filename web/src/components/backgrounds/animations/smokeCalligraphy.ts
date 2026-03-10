@@ -5,7 +5,8 @@
  * The trails occasionally form brush-stroke-like shapes before dissolving.
  */
 
-import { useEffect, useRef } from 'react';
+import { useRef } from 'react';
+import { useCanvasAnimation } from './useCanvasAnimation';
 
 interface SmokeParticle {
   x: number;
@@ -30,6 +31,7 @@ interface SmokeSource {
   lifetime: number;
 }
 
+
 export function useSmokeCalligraphy(
   canvasRef: React.RefObject<HTMLCanvasElement>,
   darkMode: boolean,
@@ -38,43 +40,12 @@ export function useSmokeCalligraphy(
 ): void {
   const particlesRef = useRef<SmokeParticle[]>([]);
   const sourcesRef = useRef<SmokeSource[]>([]);
-  const animationRef = useRef<number>(0);
-  const timeRef = useRef<number>(0);
+  const sizeRef = useRef({ w: 0, h: 0 });
 
-  useEffect(() => {
-    if (!active) return;
+  useCanvasAnimation(canvasRef, darkMode, opacity, active, {
 
-    const canvas = canvasRef.current;
-    if (!canvas) return;
+    draw: (ctx, canvas, time, _dt) => {
 
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-
-    const resize = () => {
-      canvas.width = window.innerWidth;
-      canvas.height = window.innerHeight;
-      initializeSources();
-    };
-
-    const initializeSources = () => {
-      const { width, height } = canvas;
-      particlesRef.current = [];
-      sourcesRef.current = [];
-
-      // Create 2-3 smoke sources at bottom of screen
-      const sourceCount = 2 + Math.floor(Math.random() * 2);
-      for (let i = 0; i < sourceCount; i++) {
-        sourcesRef.current.push({
-          x: width * 0.2 + (i / (sourceCount - 1 || 1)) * width * 0.6,
-          y: height * 0.9,
-          emitRate: 30 + Math.random() * 20,
-          emitTimer: 0,
-          swayPhase: Math.random() * Math.PI * 2,
-          active: true,
-          lifetime: 10000 + Math.random() * 20000,
-        });
-      }
-    };
 
     const createParticle = (source: SmokeSource): SmokeParticle => {
       const sway = Math.sin(source.swayPhase) * 2;
@@ -130,9 +101,31 @@ export function useSmokeCalligraphy(
       });
     };
 
-    const animate = () => {
+
+      const w = canvas.width;
+      const h = canvas.height;
+      if (sizeRef.current.w !== w || sizeRef.current.h !== h) {
+        sizeRef.current = { w, h };
+        const { width, height } = canvas;
+        particlesRef.current = [];
+        sourcesRef.current = [];
+  
+        // Create 2-3 smoke sources at bottom of screen
+        const sourceCount = 2 + Math.floor(Math.random() * 2);
+        for (let i = 0; i < sourceCount; i++) {
+          sourcesRef.current.push({
+            x: width * 0.2 + (i / (sourceCount - 1 || 1)) * width * 0.6,
+            y: height * 0.9,
+            emitRate: 30 + Math.random() * 20,
+            emitTimer: 0,
+            swayPhase: Math.random() * Math.PI * 2,
+            active: true,
+            lifetime: 10000 + Math.random() * 20000,
+          });
+        }
+      }
+
       const { width, height } = canvas;
-      timeRef.current += 16;
 
       // Clear with subtle fade
       ctx.fillStyle = darkMode ? 'rgba(20, 20, 25, 0.08)' : 'rgba(250, 248, 245, 0.08)';
@@ -173,7 +166,7 @@ export function useSmokeCalligraphy(
         const turbulenceY = Math.cos(p.turbulencePhase * 0.7) * 0.05;
 
         // Global wind drift
-        const windX = Math.sin(timeRef.current * 0.0003 + p.y * 0.003) * 0.08;
+        const windX = Math.sin(time * 0.0003 + p.y * 0.003) * 0.08;
 
         p.vx += turbulenceX + windX;
         p.vy += turbulenceY;
@@ -193,16 +186,6 @@ export function useSmokeCalligraphy(
 
       drawSmoke();
 
-      animationRef.current = requestAnimationFrame(animate);
-    };
-
-    resize();
-    window.addEventListener('resize', resize);
-    animate();
-
-    return () => {
-      window.removeEventListener('resize', resize);
-      cancelAnimationFrame(animationRef.current);
-    };
-  }, [canvasRef, darkMode, opacity, active]);
+    },
+  });
 }

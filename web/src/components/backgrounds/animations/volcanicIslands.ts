@@ -5,7 +5,8 @@
  * firefly-like lava particles rising into the night sky.
  */
 
-import { useEffect, useRef } from 'react';
+import { useRef } from 'react';
+import { useCanvasAnimation } from './useCanvasAnimation';
 
 interface LavaParticle {
   x: number;
@@ -42,6 +43,7 @@ interface Star {
   twinklePhase: number;
 }
 
+
 export function useVolcanicIslands(
   canvasRef: React.RefObject<HTMLCanvasElement>,
   darkMode: boolean,
@@ -52,19 +54,12 @@ export function useVolcanicIslands(
   const palmsRef = useRef<PalmTree[]>([]);
   const wavesRef = useRef<OceanWave[]>([]);
   const starsRef = useRef<Star[]>([]);
-  const animationRef = useRef<number | undefined>(undefined);
-  const timeRef = useRef(0);
   const glowPulseRef = useRef(0);
+  const sizeRef = useRef({ w: 0, h: 0 });
 
-  useEffect(() => {
-    if (!enabled) return;
+  useCanvasAnimation(canvasRef, darkMode, opacity, enabled, {
 
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-
+    draw: (ctx, canvas, time, _dt) => {
     const resizeCanvas = () => {
       canvas.width = window.innerWidth;
       canvas.height = window.innerHeight;
@@ -260,11 +255,17 @@ export function useVolcanicIslands(
       }
     };
 
-    const animate = () => {
+
+      const w = canvas.width;
+      const h = canvas.height;
+      if (sizeRef.current.w !== w || sizeRef.current.h !== h) {
+        sizeRef.current = { w, h };
+      }
+
       const currentWidth = canvas.width;
       const currentHeight = canvas.height;
       ctx.clearRect(0, 0, currentWidth, currentHeight);
-      timeRef.current += 0.016;
+      time += 0.016;
       glowPulseRef.current += 0.02;
 
       // Night sky gradient
@@ -418,16 +419,6 @@ export function useVolcanicIslands(
         particlesRef.current = particlesRef.current.slice(-80);
       }
 
-      animationRef.current = requestAnimationFrame(animate);
-    };
-
-    animate();
-
-    return () => {
-      window.removeEventListener('resize', resizeCanvas);
-      if (animationRef.current) {
-        cancelAnimationFrame(animationRef.current);
-      }
-    };
-  }, [canvasRef, darkMode, opacity, enabled]);
+    },
+  });
 }

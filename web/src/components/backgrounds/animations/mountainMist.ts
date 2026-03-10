@@ -5,7 +5,8 @@
  * pine trees, and a peaceful atmosphere. Elements on sides.
  */
 
-import { useEffect, RefObject } from 'react';
+import { useRef, RefObject } from 'react';
+import { useCanvasAnimation } from './useCanvasAnimation';
 
 interface Mountain {
   x: number;
@@ -55,35 +56,27 @@ interface WaterReflection {
   ripplePhase: number;
 }
 
+
 export function useMountainMist(
   canvasRef: RefObject<HTMLCanvasElement>,
   darkMode: boolean,
   opacity: number,
   active: boolean
 ) {
-  useEffect(() => {
-    if (!active) return;
+  const mountainsRef = useRef<Mountain[]>([]);
+  const mistLayersRef = useRef<MistLayer[]>([]);
+  const treesRef = useRef<Tree[]>([]);
+  const cloudsRef = useRef<Cloud[]>([]);
+  const birdsRef = useRef<Bird[]>([]);
+  const waterReflectionRef = useRef<WaterReflection | null>(null);
+  const frameRef = useRef<number>(0);
+  const sizeRef = useRef({ w: 0, h: 0 });
 
-    const canvas = canvasRef.current;
-    if (!canvas) return;
+  useCanvasAnimation(canvasRef, darkMode, opacity, active, {
 
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
+    draw: (ctx, canvas, _time, _dt) => {
+      frameRef.current++;
 
-    let animationId: number;
-    let mountains: Mountain[] = [];
-    let mistLayers: MistLayer[] = [];
-    let trees: Tree[] = [];
-    let clouds: Cloud[] = [];
-    let birds: Bird[] = [];
-    let waterReflection: WaterReflection | null = null;
-    let timeRef = 0;
-
-    const resize = () => {
-      canvas.width = window.innerWidth;
-      canvas.height = window.innerHeight;
-      initializeScene();
-    };
 
     const getRandomSidePosition = (width: number): number => {
       if (Math.random() < 0.7) {
@@ -94,124 +87,6 @@ export function useMountainMist(
       return Math.random() * width;
     };
 
-    const initializeScene = () => {
-      const { width, height } = canvas;
-
-      // Create layered mountains
-      mountains = [];
-
-      // Background mountains (layer 0) - tallest, most distant
-      for (let i = 0; i < 3; i++) {
-        mountains.push({
-          x: width * 0.15 + i * width * 0.3,
-          baseY: height * 0.5,
-          width: width * 0.5,
-          height: height * 0.35 + Math.random() * height * 0.1,
-          layer: 0,
-          snowCap: true,
-          peakOffset: (Math.random() - 0.5) * width * 0.1,
-        });
-      }
-
-      // Middle mountains (layer 1)
-      for (let i = 0; i < 4; i++) {
-        mountains.push({
-          x: width * 0.05 + i * width * 0.28,
-          baseY: height * 0.6,
-          width: width * 0.4,
-          height: height * 0.25 + Math.random() * height * 0.08,
-          layer: 1,
-          snowCap: Math.random() > 0.5,
-          peakOffset: (Math.random() - 0.5) * width * 0.08,
-        });
-      }
-
-      // Foreground mountains (layer 2) - closest
-      for (let i = 0; i < 5; i++) {
-        mountains.push({
-          x: width * -0.1 + i * width * 0.3,
-          baseY: height * 0.75,
-          width: width * 0.35,
-          height: height * 0.15 + Math.random() * height * 0.05,
-          layer: 2,
-          snowCap: false,
-          peakOffset: (Math.random() - 0.5) * width * 0.05,
-        });
-      }
-
-      // Create mist layers
-      mistLayers = [];
-      for (let i = 0; i < 5; i++) {
-        mistLayers.push({
-          y: height * 0.4 + i * height * 0.1,
-          density: 0.1 + Math.random() * 0.15,
-          speed: 0.1 + Math.random() * 0.2,
-          offset: Math.random() * 1000,
-          height: 40 + Math.random() * 60,
-        });
-      }
-
-      // Create trees on sides
-      trees = [];
-      const treeCount = Math.floor(width / 40);
-      for (let i = 0; i < treeCount; i++) {
-        const x = getRandomSidePosition(width);
-        const layer = Math.floor(Math.random() * 3);
-        const baseY = height * (0.55 + layer * 0.1);
-
-        trees.push({
-          x,
-          y: baseY + Math.random() * height * 0.15,
-          height: 30 + Math.random() * 50 * (3 - layer) / 3,
-          type: ['pine', 'fir', 'bare'][Math.floor(Math.random() * 3)] as Tree['type'],
-          layer,
-        });
-      }
-
-      // Sort trees by layer for proper depth
-      trees.sort((a, b) => a.layer - b.layer);
-
-      // Create clouds
-      clouds = [];
-      for (let i = 0; i < 4; i++) {
-        const puffs = [];
-        const puffCount = 3 + Math.floor(Math.random() * 3);
-        for (let p = 0; p < puffCount; p++) {
-          puffs.push({
-            x: (p - puffCount / 2) * 30,
-            y: (Math.random() - 0.5) * 15,
-            size: 25 + Math.random() * 25,
-          });
-        }
-        clouds.push({
-          x: i * width / 3 + Math.random() * 100,
-          y: height * 0.08 + Math.random() * height * 0.12,
-          size: 1,
-          speed: 0.1 + Math.random() * 0.15,
-          puffs,
-        });
-      }
-
-      // Create birds
-      birds = [];
-      for (let i = 0; i < 5; i++) {
-        const direction = Math.random() < 0.5 ? 1 : -1;
-        birds.push({
-          x: direction === 1 ? -20 - Math.random() * 100 : width + 20 + Math.random() * 100,
-          y: height * 0.1 + Math.random() * height * 0.25,
-          wingPhase: Math.random() * Math.PI * 2,
-          speed: 0.5 + Math.random() * 0.8,
-          size: 3 + Math.random() * 3,
-          direction,
-        });
-      }
-
-      // Water reflection at bottom
-      waterReflection = {
-        y: height * 0.85,
-        ripplePhase: 0,
-      };
-    };
 
     const drawSky = (ctx: CanvasRenderingContext2D, width: number, height: number) => {
       const skyGradient = ctx.createLinearGradient(0, 0, 0, height * 0.6);
@@ -342,7 +217,7 @@ export function useMountainMist(
     };
 
     const drawMistLayer = (ctx: CanvasRenderingContext2D, mist: MistLayer, width: number) => {
-      const mistOffset = Math.sin(timeRef * 0.001 + mist.offset) * 50;
+      const mistOffset = Math.sin(frameRef.current * 0.001 + mist.offset) * 50;
 
       ctx.fillStyle = darkMode
         ? `rgba(60, 80, 100, ${mist.density})`
@@ -353,7 +228,7 @@ export function useMountainMist(
 
       for (let x = 0; x <= width; x += 20) {
         const waveY = mist.y +
-          Math.sin((x + mistOffset) * 0.01 + timeRef * mist.speed * 0.01) * mist.height * 0.5;
+          Math.sin((x + mistOffset) * 0.01 + frameRef.current * mist.speed * 0.01) * mist.height * 0.5;
         ctx.lineTo(x, waveY);
       }
 
@@ -438,7 +313,7 @@ export function useMountainMist(
     };
 
     const drawBird = (ctx: CanvasRenderingContext2D, bird: Bird) => {
-      const wingAngle = Math.sin(timeRef * 0.15 + bird.wingPhase) * 0.5;
+      const wingAngle = Math.sin(frameRef.current * 0.15 + bird.wingPhase) * 0.5;
 
       ctx.save();
       ctx.translate(bird.x, bird.y);
@@ -478,7 +353,7 @@ export function useMountainMist(
 
       for (let i = 0; i < 8; i++) {
         const rippleY = water.y + 10 + i * 15;
-        const phase = timeRef * 0.005 + i * 0.5;
+        const phase = frameRef.current * 0.005 + i * 0.5;
 
         ctx.beginPath();
         for (let x = 0; x <= width; x += 10) {
@@ -494,24 +369,146 @@ export function useMountainMist(
       ctx.save();
       ctx.translate(0, water.y * 2);
       ctx.scale(1, -0.3);
-      mountains.filter(m => m.layer < 2).forEach(m => {
+      mountainsRef.current.filter(m => m.layer < 2).forEach(m => {
         drawMountain(ctx, m, height);
       });
       ctx.restore();
       ctx.globalAlpha = 1;
     };
 
-    const animate = () => {
+
+      const w = canvas.width;
+      const h = canvas.height;
+      if (sizeRef.current.w !== w || sizeRef.current.h !== h) {
+        sizeRef.current = { w, h };
+        const { width, height } = canvas;
+  
+        // Create layered mountainsRef.current
+        mountainsRef.current = [];
+  
+        // Background mountainsRef.current (layer 0) - tallest, most distant
+        for (let i = 0; i < 3; i++) {
+          mountainsRef.current.push({
+            x: width * 0.15 + i * width * 0.3,
+            baseY: height * 0.5,
+            width: width * 0.5,
+            height: height * 0.35 + Math.random() * height * 0.1,
+            layer: 0,
+            snowCap: true,
+            peakOffset: (Math.random() - 0.5) * width * 0.1,
+          });
+        }
+  
+        // Middle mountainsRef.current (layer 1)
+        for (let i = 0; i < 4; i++) {
+          mountainsRef.current.push({
+            x: width * 0.05 + i * width * 0.28,
+            baseY: height * 0.6,
+            width: width * 0.4,
+            height: height * 0.25 + Math.random() * height * 0.08,
+            layer: 1,
+            snowCap: Math.random() > 0.5,
+            peakOffset: (Math.random() - 0.5) * width * 0.08,
+          });
+        }
+  
+        // Foreground mountainsRef.current (layer 2) - closest
+        for (let i = 0; i < 5; i++) {
+          mountainsRef.current.push({
+            x: width * -0.1 + i * width * 0.3,
+            baseY: height * 0.75,
+            width: width * 0.35,
+            height: height * 0.15 + Math.random() * height * 0.05,
+            layer: 2,
+            snowCap: false,
+            peakOffset: (Math.random() - 0.5) * width * 0.05,
+          });
+        }
+  
+        // Create mist layers
+        mistLayersRef.current = [];
+        for (let i = 0; i < 5; i++) {
+          mistLayersRef.current.push({
+            y: height * 0.4 + i * height * 0.1,
+            density: 0.1 + Math.random() * 0.15,
+            speed: 0.1 + Math.random() * 0.2,
+            offset: Math.random() * 1000,
+            height: 40 + Math.random() * 60,
+          });
+        }
+  
+        // Create treesRef.current on sides
+        treesRef.current = [];
+        const treeCount = Math.floor(width / 40);
+        for (let i = 0; i < treeCount; i++) {
+          const x = getRandomSidePosition(width);
+          const layer = Math.floor(Math.random() * 3);
+          const baseY = height * (0.55 + layer * 0.1);
+  
+          treesRef.current.push({
+            x,
+            y: baseY + Math.random() * height * 0.15,
+            height: 30 + Math.random() * 50 * (3 - layer) / 3,
+            type: ['pine', 'fir', 'bare'][Math.floor(Math.random() * 3)] as Tree['type'],
+            layer,
+          });
+        }
+  
+        // Sort treesRef.current by layer for proper depth
+        treesRef.current.sort((a, b) => a.layer - b.layer);
+  
+        // Create cloudsRef.current
+        cloudsRef.current = [];
+        for (let i = 0; i < 4; i++) {
+          const puffs = [];
+          const puffCount = 3 + Math.floor(Math.random() * 3);
+          for (let p = 0; p < puffCount; p++) {
+            puffs.push({
+              x: (p - puffCount / 2) * 30,
+              y: (Math.random() - 0.5) * 15,
+              size: 25 + Math.random() * 25,
+            });
+          }
+          cloudsRef.current.push({
+            x: i * width / 3 + Math.random() * 100,
+            y: height * 0.08 + Math.random() * height * 0.12,
+            size: 1,
+            speed: 0.1 + Math.random() * 0.15,
+            puffs,
+          });
+        }
+  
+        // Create birdsRef.current
+        birdsRef.current = [];
+        for (let i = 0; i < 5; i++) {
+          const direction = Math.random() < 0.5 ? 1 : -1;
+          birdsRef.current.push({
+            x: direction === 1 ? -20 - Math.random() * 100 : width + 20 + Math.random() * 100,
+            y: height * 0.1 + Math.random() * height * 0.25,
+            wingPhase: Math.random() * Math.PI * 2,
+            speed: 0.5 + Math.random() * 0.8,
+            size: 3 + Math.random() * 3,
+            direction,
+          });
+        }
+  
+        // Water reflection at bottom
+        waterReflectionRef.current = {
+          y: height * 0.85,
+          ripplePhase: 0,
+        };
+      }
+
       const { width, height } = canvas;
-      timeRef++;
+      frameRef.current++;
 
       ctx.clearRect(0, 0, width, height);
 
       // Draw sky
       drawSky(ctx, width, height);
 
-      // Draw clouds
-      clouds.forEach(cloud => {
+      // Draw cloudsRef.current
+      cloudsRef.current.forEach(cloud => {
         cloud.x += cloud.speed;
         if (cloud.x > width + 100) {
           cloud.x = -100;
@@ -519,23 +516,23 @@ export function useMountainMist(
         drawCloud(ctx, cloud);
       });
 
-      // Draw mountains (sorted by layer)
-      mountains.sort((a, b) => a.layer - b.layer);
-      mountains.forEach(mountain => drawMountain(ctx, mountain, height));
+      // Draw mountainsRef.current (sorted by layer)
+      mountainsRef.current.sort((a, b) => a.layer - b.layer);
+      mountainsRef.current.forEach(mountain => drawMountain(ctx, mountain, height));
 
-      // Draw trees between mountain layers
-      trees.forEach(tree => drawTree(ctx, tree));
+      // Draw treesRef.current between mountain layers
+      treesRef.current.forEach(tree => drawTree(ctx, tree));
 
       // Draw mist layers
-      mistLayers.forEach(mist => drawMistLayer(ctx, mist, width));
+      mistLayersRef.current.forEach(mist => drawMistLayer(ctx, mist, width));
 
       // Draw water reflection
-      if (waterReflection) {
-        drawWaterReflection(ctx, waterReflection, width, height);
+      if (waterReflectionRef.current) {
+        drawWaterReflection(ctx, waterReflectionRef.current, width, height);
       }
 
-      // Update and draw birds
-      birds.forEach(bird => {
+      // Update and draw birdsRef.current
+      birdsRef.current.forEach(bird => {
         bird.x += bird.speed * bird.direction;
         bird.wingPhase += 0.1;
 
@@ -549,16 +546,6 @@ export function useMountainMist(
         drawBird(ctx, bird);
       });
 
-      animationId = requestAnimationFrame(animate);
-    };
-
-    resize();
-    window.addEventListener('resize', resize);
-    animate();
-
-    return () => {
-      window.removeEventListener('resize', resize);
-      cancelAnimationFrame(animationId);
-    };
-  }, [canvasRef, darkMode, opacity, active]);
+    },
+  });
 }

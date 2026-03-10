@@ -5,7 +5,8 @@
  * Features a decorative cherry blossom branch from upper right corner.
  */
 
-import { useRef, useEffect, useCallback } from 'react';
+import { useRef, useCallback } from 'react';
+import { useCanvasAnimation } from './useCanvasAnimation';
 
 interface FallingPetal {
   x: number;
@@ -40,6 +41,7 @@ interface GroundPetal {
 const COLLECTION_DURATION = 10 * 60 * 1000; // 10 minutes in milliseconds
 const FADE_DURATION = 30 * 1000; // 30 seconds to fade out
 
+
 export function useSakuraRedux(
   canvasRef: React.RefObject<HTMLCanvasElement>,
   darkMode: boolean,
@@ -48,10 +50,7 @@ export function useSakuraRedux(
 ) {
   const fallingPetalsRef = useRef<FallingPetal[]>([]);
   const groundPetalsRef = useRef<GroundPetal[]>([]);
-  const animationRef = useRef<number | undefined>(undefined);
-  const timeRef = useRef<number>(0);
   const startTimeRef = useRef<number>(0);
-
   const createFallingPetal = useCallback((canvas: HTMLCanvasElement, startFromTop = true): FallingPetal => {
     return {
       x: Math.random() * canvas.width,
@@ -72,7 +71,6 @@ export function useSakuraRedux(
       notchDepth: 0.15 + Math.random() * 0.15,
     };
   }, []);
-
   const createGroundPetal = useCallback((fallingPetal: FallingPetal, groundY: number): GroundPetal => {
     return {
       x: fallingPetal.x,
@@ -85,7 +83,6 @@ export function useSakuraRedux(
       layer: Math.random(), // Random layer for depth
     };
   }, []);
-
   const drawPetal = useCallback((
     ctx: CanvasRenderingContext2D,
     x: number,
@@ -101,61 +98,49 @@ export function useSakuraRedux(
     ctx.translate(x, y);
     ctx.rotate(rotation);
     ctx.scale(0.3 + tiltFactor * 0.7, 1);
-
     const s = size;
     const notch = notchDepth;
-
     // Sakura petal colors - soft pink like real cherry blossoms
     const baseColor = isDark
       ? { r: 255, g: 192, b: 210 }
       : { r: 255, g: 210, b: 225 };
-
     // Draw realistic sakura petal - soft oval with subtle notch at tip
     ctx.beginPath();
-
     // Start at the base (stem attachment point) - pointed tip
     ctx.moveTo(0, s * 0.55);
-
     // Right side - smooth outward curve forming rounded petal body
     ctx.bezierCurveTo(
       s * 0.25, s * 0.45,   // Control near base
       s * 0.48, s * 0.15,   // Control at widest point
       s * 0.45, -s * 0.15   // End approaching tip
     );
-
     // Right side approaching notch - curves inward smoothly
     ctx.bezierCurveTo(
       s * 0.42, -s * 0.32,  // Control curving toward tip
       s * 0.22, -s * 0.42,  // Control curving into notch
       s * 0.08, -s * (0.38 + notch * 0.4)  // Right edge of notch
     );
-
     // The notch itself - a gentle V or U shape characteristic of sakura
     ctx.quadraticCurveTo(
       0, -s * (0.32 + notch * 0.2),  // Bottom of notch (control point)
       -s * 0.08, -s * (0.38 + notch * 0.4)  // Left edge of notch
     );
-
     // Left side from notch - mirror of right side
     ctx.bezierCurveTo(
       -s * 0.22, -s * 0.42, // Control curving out of notch
       -s * 0.42, -s * 0.32, // Control approaching widest
       -s * 0.45, -s * 0.15  // Left side near tip
     );
-
     // Left side - smooth curve back to base
     ctx.bezierCurveTo(
       -s * 0.48, s * 0.15,  // Control at widest point
       -s * 0.25, s * 0.45,  // Control near base
       0, s * 0.55           // Back to base point
     );
-
     ctx.closePath();
-
     // Base fill - soft pink
     ctx.fillStyle = `rgba(${baseColor.r}, ${baseColor.g}, ${baseColor.b}, ${alpha})`;
     ctx.fill();
-
     // Add subtle radial gradient for natural depth
     const gradient = ctx.createRadialGradient(
       0, s * 0.25, 0,       // Center near base
@@ -166,7 +151,6 @@ export function useSakuraRedux(
     gradient.addColorStop(1, 'rgba(255, 255, 255, 0)');
     ctx.fillStyle = gradient;
     ctx.fill();
-
     // Add soft edge highlight for translucency effect
     const edgeGradient = ctx.createLinearGradient(-s * 0.4, 0, s * 0.4, 0);
     edgeGradient.addColorStop(0, `rgba(255, 255, 255, ${alpha * 0.12})`);
@@ -174,7 +158,6 @@ export function useSakuraRedux(
     edgeGradient.addColorStop(1, `rgba(255, 255, 255, ${alpha * 0.12})`);
     ctx.fillStyle = edgeGradient;
     ctx.fill();
-
     // Draw delicate central vein - subtle and natural
     ctx.strokeStyle = `rgba(${baseColor.r - 45}, ${baseColor.g - 40}, ${baseColor.b - 30}, ${alpha * 0.18})`;
     ctx.lineWidth = 0.4;
@@ -182,7 +165,6 @@ export function useSakuraRedux(
     ctx.moveTo(0, s * 0.45);
     ctx.quadraticCurveTo(s * 0.02, s * 0.1, 0, -s * 0.28);
     ctx.stroke();
-
     // Very subtle secondary veins
     ctx.strokeStyle = `rgba(${baseColor.r - 35}, ${baseColor.g - 30}, ${baseColor.b - 20}, ${alpha * 0.08})`;
     ctx.lineWidth = 0.3;
@@ -194,19 +176,13 @@ export function useSakuraRedux(
     ctx.moveTo(0, s * 0.2);
     ctx.quadraticCurveTo(-s * 0.12, s * 0.05, -s * 0.2, -s * 0.12);
     ctx.stroke();
-
     ctx.restore();
   }, []);
+  const sizeRef = useRef({ w: 0, h: 0 });
 
-  useEffect(() => {
-    if (!active) return;
+  useCanvasAnimation(canvasRef, darkMode, opacity, active, {
 
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-
+    draw: (ctx, canvas, time, _dt) => {
     startTimeRef.current = Date.now();
 
     const resizeCanvas = () => {
@@ -223,11 +199,16 @@ export function useSakuraRedux(
     );
     groundPetalsRef.current = [];
 
-    const animate = () => {
-      if (!canvas || !ctx) return;
+
+      const w = canvas.width;
+      const h = canvas.height;
+      if (sizeRef.current.w !== w || sizeRef.current.h !== h) {
+        sizeRef.current = { w, h };
+      }
+
 
       ctx.clearRect(0, 0, canvas.width, canvas.height);
-      timeRef.current += 0.016;
+      time += 0.016;
       const currentTime = Date.now();
 
       const opacityMultiplier = opacity / 50;
@@ -286,10 +267,10 @@ export function useSakuraRedux(
 
         petal.rotationSpeed += (petal.targetRotationSpeed - petal.rotationSpeed) * 0.02;
         petal.tilt += petal.tiltSpeed;
-        petal.tiltSpeed += Math.sin(timeRef.current * 1.5 + petal.tiltPhase) * 0.0008;
+        petal.tiltSpeed += Math.sin(time * 1.5 + petal.tiltPhase) * 0.0008;
         petal.tiltSpeed = Math.max(0.01, Math.min(0.04, petal.tiltSpeed));
 
-        const sway = Math.sin(timeRef.current * 0.6 + petal.swayPhase) * 0.35;
+        const sway = Math.sin(time * 0.6 + petal.swayPhase) * 0.35;
         const tiltInfluence = Math.sin(petal.tilt) * 0.25;
 
         if (petal.isDrifting) {
@@ -336,16 +317,6 @@ export function useSakuraRedux(
         );
       });
 
-      animationRef.current = requestAnimationFrame(animate);
-    };
-
-    animate();
-
-    return () => {
-      window.removeEventListener('resize', resizeCanvas);
-      if (animationRef.current) {
-        cancelAnimationFrame(animationRef.current);
-      }
-    };
-  }, [canvasRef, darkMode, opacity, createFallingPetal, createGroundPetal, drawPetal, active]);
+    },
+  });
 }

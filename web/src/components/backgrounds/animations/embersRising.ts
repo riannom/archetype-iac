@@ -3,7 +3,8 @@
  * Warm embers floating upward like campfire sparks
  */
 
-import { useRef, useEffect, useCallback } from 'react';
+import { useRef, useCallback } from 'react';
+import { useCanvasAnimation } from './useCanvasAnimation';
 
 interface Ember {
   x: number;
@@ -24,8 +25,6 @@ export function useEmbersRising(
   active: boolean
 ) {
   const embersRef = useRef<Ember[]>([]);
-  const animationRef = useRef<number | undefined>(undefined);
-  const timeRef = useRef<number>(0);
 
   const createEmber = useCallback((canvas: HTMLCanvasElement, startFromBottom = true): Ember => {
     return {
@@ -41,38 +40,21 @@ export function useEmbersRising(
     };
   }, []);
 
-  useEffect(() => {
-    if (!active) return;
-
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-
-    const resizeCanvas = () => {
-      canvas.width = window.innerWidth;
-      canvas.height = window.innerHeight;
-    };
-    resizeCanvas();
-    window.addEventListener('resize', resizeCanvas);
-
-    const emberCount = Math.floor((canvas.width * canvas.height) / 25000);
-    embersRef.current = Array.from({ length: Math.max(20, emberCount) }, () =>
-      createEmber(canvas, false)
-    );
-
-    const animate = () => {
-      if (!canvas || !ctx) return;
-
+  useCanvasAnimation(canvasRef, _darkMode, opacity, active, {
+    init: (_ctx, canvas) => {
+      const emberCount = Math.floor((canvas.width * canvas.height) / 25000);
+      embersRef.current = Array.from({ length: Math.max(20, emberCount) }, () =>
+        createEmber(canvas, false)
+      );
+    },
+    draw: (ctx, canvas, time) => {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
-      timeRef.current += 0.016;
 
       const opacityMultiplier = opacity / 50;
 
       embersRef.current.forEach((ember, index) => {
         ember.y -= ember.speed;
-        ember.x += Math.sin(timeRef.current * ember.wobbleSpeed + ember.wobblePhase) * 0.4;
+        ember.x += Math.sin(time * ember.wobbleSpeed + ember.wobblePhase) * 0.4;
         ember.opacity -= ember.fadeSpeed;
 
         if (ember.opacity <= 0 || ember.y < -20) {
@@ -82,7 +64,7 @@ export function useEmbersRising(
 
         const alpha = ember.opacity * opacityMultiplier;
 
-        const colorShift = Math.sin(timeRef.current * 3 + ember.wobblePhase) * 0.5 + 0.5;
+        const colorShift = Math.sin(time * 3 + ember.wobblePhase) * 0.5 + 0.5;
         const emberColor = {
           r: 255,
           g: Math.floor(100 + colorShift * 80),
@@ -107,17 +89,6 @@ export function useEmbersRising(
         ctx.arc(ember.x, ember.y, ember.size, 0, Math.PI * 2);
         ctx.fill();
       });
-
-      animationRef.current = requestAnimationFrame(animate);
-    };
-
-    animate();
-
-    return () => {
-      window.removeEventListener('resize', resizeCanvas);
-      if (animationRef.current) {
-        cancelAnimationFrame(animationRef.current);
-      }
-    };
-  }, [canvasRef, opacity, createEmber, active]);
+    },
+  });
 }

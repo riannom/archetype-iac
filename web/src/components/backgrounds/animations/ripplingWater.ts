@@ -3,7 +3,8 @@
  * Gentle ripples appearing on calm water
  */
 
-import { useRef, useEffect, useCallback } from 'react';
+import { useRef, useCallback } from 'react';
+import { useCanvasAnimation } from './useCanvasAnimation';
 
 interface Ripple {
   x: number;
@@ -21,8 +22,6 @@ export function useRipplingWater(
   active: boolean
 ) {
   const ripplesRef = useRef<Ripple[]>([]);
-  const animationRef = useRef<number | undefined>(undefined);
-  const timeRef = useRef<number>(0);
   const lastRippleTimeRef = useRef<number>(0);
 
   const createRipple = useCallback((canvas: HTMLCanvasElement): Ripple => {
@@ -36,41 +35,24 @@ export function useRipplingWater(
     };
   }, []);
 
-  useEffect(() => {
-    if (!active) return;
-
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-
-    const resizeCanvas = () => {
-      canvas.width = window.innerWidth;
-      canvas.height = window.innerHeight;
-    };
-    resizeCanvas();
-    window.addEventListener('resize', resizeCanvas);
-
-    ripplesRef.current = Array.from({ length: 3 }, () => {
-      const ripple = createRipple(canvas);
-      ripple.radius = Math.random() * ripple.maxRadius;
-      return ripple;
-    });
-
-    const animate = () => {
-      if (!canvas || !ctx) return;
-
+  useCanvasAnimation(canvasRef, darkMode, opacity, active, {
+    init: (_ctx, canvas) => {
+      ripplesRef.current = Array.from({ length: 3 }, () => {
+        const ripple = createRipple(canvas);
+        ripple.radius = Math.random() * ripple.maxRadius;
+        return ripple;
+      });
+    },
+    draw: (ctx, canvas, time) => {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
-      timeRef.current += 0.016;
 
       const opacityMultiplier = opacity / 50;
 
-      if (timeRef.current - lastRippleTimeRef.current > 1 + Math.random() * 2) {
+      if (time - lastRippleTimeRef.current > 1 + Math.random() * 2) {
         if (ripplesRef.current.length < 8) {
           ripplesRef.current.push(createRipple(canvas));
         }
-        lastRippleTimeRef.current = timeRef.current;
+        lastRippleTimeRef.current = time;
       }
 
       ripplesRef.current = ripplesRef.current.filter((ripple) => {
@@ -98,17 +80,6 @@ export function useRipplingWater(
 
         return true;
       });
-
-      animationRef.current = requestAnimationFrame(animate);
-    };
-
-    animate();
-
-    return () => {
-      window.removeEventListener('resize', resizeCanvas);
-      if (animationRef.current) {
-        cancelAnimationFrame(animationRef.current);
-      }
-    };
-  }, [canvasRef, darkMode, opacity, createRipple, active]);
+    },
+  });
 }

@@ -3,7 +3,8 @@
  * Soft diagonal rain streaks with subtle splash effects
  */
 
-import { useRef, useEffect } from 'react';
+import { useRef } from 'react';
+import { useCanvasAnimation } from './useCanvasAnimation';
 
 interface RainDrop {
   x: number;
@@ -30,37 +31,20 @@ export function useGentleRain(
 ) {
   const dropsRef = useRef<RainDrop[]>([]);
   const splashesRef = useRef<Splash[]>([]);
-  const animationRef = useRef<number | undefined>(undefined);
 
-  useEffect(() => {
-    if (!active) return;
-
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-
-    const resizeCanvas = () => {
-      canvas.width = window.innerWidth;
-      canvas.height = window.innerHeight;
-    };
-    resizeCanvas();
-    window.addEventListener('resize', resizeCanvas);
-
-    const dropCount = Math.floor((canvas.width * canvas.height) / 15000);
-    dropsRef.current = Array.from({ length: Math.max(30, dropCount) }, () => ({
-      x: Math.random() * canvas.width,
-      y: Math.random() * canvas.height,
-      length: 15 + Math.random() * 25,
-      speed: 4 + Math.random() * 4,
-      opacity: 0.1 + Math.random() * 0.15,
-      thickness: 0.5 + Math.random() * 1,
-    }));
-
-    const animate = () => {
-      if (!canvas || !ctx) return;
-
+  useCanvasAnimation(canvasRef, darkMode, opacity, active, {
+    init: (_ctx, canvas) => {
+      const dropCount = Math.floor((canvas.width * canvas.height) / 15000);
+      dropsRef.current = Array.from({ length: Math.max(30, dropCount) }, () => ({
+        x: Math.random() * canvas.width,
+        y: Math.random() * canvas.height,
+        length: 15 + Math.random() * 25,
+        speed: 4 + Math.random() * 4,
+        opacity: 0.1 + Math.random() * 0.15,
+        thickness: 0.5 + Math.random() * 1,
+      }));
+    },
+    draw: (ctx, canvas) => {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
 
       const opacityMultiplier = opacity / 50;
@@ -113,17 +97,6 @@ export function useGentleRain(
 
         return true;
       });
-
-      animationRef.current = requestAnimationFrame(animate);
-    };
-
-    animate();
-
-    return () => {
-      window.removeEventListener('resize', resizeCanvas);
-      if (animationRef.current) {
-        cancelAnimationFrame(animationRef.current);
-      }
-    };
-  }, [canvasRef, darkMode, opacity, active]);
+    },
+  });
 }

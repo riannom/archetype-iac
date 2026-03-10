@@ -4,7 +4,8 @@
  * Wind streams carry fallen leaves in dynamic patterns.
  */
 
-import { useEffect, useRef } from 'react';
+import { useRef } from 'react';
+import { useCanvasAnimation } from './useCanvasAnimation';
 
 interface Leaf {
   x: number;
@@ -43,6 +44,7 @@ interface WindParticle {
   size: number;
 }
 
+
 export function useAutumnWind(
   canvasRef: React.RefObject<HTMLCanvasElement>,
   darkMode: boolean,
@@ -51,19 +53,12 @@ export function useAutumnWind(
 ): void {
   const leavesRef = useRef<Leaf[]>([]);
   const gustsRef = useRef<WindGust[]>([]);
-  const animationRef = useRef<number>(0);
-  const timeRef = useRef<number>(0);
   const baseWindRef = useRef<{ x: number; y: number }>({ x: 1.5, y: 0.2 });
+  const sizeRef = useRef({ w: 0, h: 0 });
 
-  useEffect(() => {
-    if (!active) return;
+  useCanvasAnimation(canvasRef, darkMode, opacity, active, {
 
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-
+    draw: (ctx, canvas, time, _dt) => {
     const autumnColors = [
       { r: 220, g: 80, b: 40 },   // Red-orange
       { r: 240, g: 140, b: 40 },  // Orange
@@ -74,20 +69,7 @@ export function useAutumnWind(
       { r: 190, g: 50, b: 50 },   // Crimson
     ];
 
-    const resize = () => {
-      canvas.width = window.innerWidth;
-      canvas.height = window.innerHeight;
-      initializeLeaves();
-    };
 
-    const initializeLeaves = () => {
-      leavesRef.current = [];
-      const leafCount = Math.floor((canvas.width * canvas.height) / 20000);
-
-      for (let i = 0; i < leafCount; i++) {
-        leavesRef.current.push(createLeaf(true));
-      }
-    };
 
     const createLeaf = (randomPos = false): Leaf => {
       const types: ('maple' | 'oak' | 'ginkgo' | 'elm')[] = ['maple', 'oak', 'ginkgo', 'elm'];
@@ -386,9 +368,19 @@ export function useAutumnWind(
       ctx.restore();
     };
 
-    const animate = () => {
-      timeRef.current += 16;
-      const time = timeRef.current;
+
+      const w = canvas.width;
+      const h = canvas.height;
+      if (sizeRef.current.w !== w || sizeRef.current.h !== h) {
+        sizeRef.current = { w, h };
+        leavesRef.current = [];
+        const leafCount = Math.floor((canvas.width * canvas.height) / 20000);
+  
+        for (let i = 0; i < leafCount; i++) {
+          leavesRef.current.push(createLeaf(true));
+        }
+      }
+
 
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       const opacityMult = opacity / 50;
@@ -468,16 +460,6 @@ export function useAutumnWind(
         drawLeaf(leaf, opacityMult);
       });
 
-      animationRef.current = requestAnimationFrame(animate);
-    };
-
-    resize();
-    window.addEventListener('resize', resize);
-    animate();
-
-    return () => {
-      window.removeEventListener('resize', resize);
-      cancelAnimationFrame(animationRef.current);
-    };
-  }, [canvasRef, darkMode, opacity, active]);
+    },
+  });
 }
