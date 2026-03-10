@@ -17,8 +17,6 @@ Covers additional scenarios beyond the base test file:
 from __future__ import annotations
 
 import asyncio
-import json
-from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -27,105 +25,7 @@ from app import models
 from app.agent_client import AgentUnavailableError
 from app.state import NodeActualState
 from app.tasks.node_lifecycle import NodeLifecycleManager, _get_container_name
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
-def _make_host(test_db, host_id="agent-1", name="Agent 1", status="online"):
-    host = models.Host(
-        id=host_id,
-        name=name,
-        address=f"{host_id}.local:8080",
-        status=status,
-        capabilities=json.dumps({"providers": ["docker"]}),
-        version="1.0.0",
-        resource_usage=json.dumps({
-            "cpu_percent": 25.0,
-            "memory_percent": 40.0,
-            "disk_percent": 30.0,
-            "disk_used_gb": 60.0,
-            "disk_total_gb": 200.0,
-            "containers_running": 2,
-            "containers_total": 4,
-        }),
-        last_heartbeat=datetime.now(timezone.utc),
-    )
-    test_db.add(host)
-    test_db.commit()
-    test_db.refresh(host)
-    return host
-
-
-def _make_lab(test_db, test_user, *, state="running", agent_id=None):
-    lab = models.Lab(
-        name="StopTest Lab",
-        owner_id=test_user.id,
-        provider="docker",
-        state=state,
-        workspace_path="/tmp/stop-test",
-        agent_id=agent_id,
-    )
-    test_db.add(lab)
-    test_db.commit()
-    test_db.refresh(lab)
-    return lab
-
-
-def _make_job(test_db, lab_id, user_id, *, status="running", action="sync:lab"):
-    job = models.Job(
-        lab_id=lab_id,
-        user_id=user_id,
-        action=action,
-        status=status,
-    )
-    test_db.add(job)
-    test_db.commit()
-    test_db.refresh(job)
-    return job
-
-
-def _make_node(test_db, lab_id, name, *, device="linux"):
-    n = models.Node(
-        lab_id=lab_id,
-        gui_id=name.lower(),
-        display_name=name,
-        container_name=name,
-        node_type="device",
-        device=device,
-    )
-    test_db.add(n)
-    test_db.commit()
-    test_db.refresh(n)
-    return n
-
-
-def _make_node_state(test_db, lab_id, name, *, desired="stopped", actual="running", node_id=None):
-    ns = models.NodeState(
-        lab_id=lab_id,
-        node_id=node_id or name.lower(),
-        node_name=name,
-        desired_state=desired,
-        actual_state=actual,
-    )
-    test_db.add(ns)
-    test_db.commit()
-    test_db.refresh(ns)
-    return ns
-
-
-def _make_placement(test_db, lab_id, node_name, host_id):
-    p = models.NodePlacement(
-        lab_id=lab_id,
-        node_name=node_name,
-        host_id=host_id,
-    )
-    test_db.add(p)
-    test_db.commit()
-    test_db.refresh(p)
-    return p
+from tests.factories import make_host, make_job, make_lab, make_node, make_node_state, make_placement
 
 
 def _create_manager(test_db, lab, job, host, node_states):

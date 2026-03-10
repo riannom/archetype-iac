@@ -7,45 +7,7 @@ import pytest
 from sqlalchemy.orm import Session
 
 from app import models
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-def _make_placement(
-    test_db: Session, lab_id: str, node_name: str, host_id: str
-) -> models.NodePlacement:
-    p = models.NodePlacement(
-        lab_id=lab_id,
-        node_name=node_name,
-        host_id=host_id,
-    )
-    test_db.add(p)
-    test_db.commit()
-    return p
-
-
-def _make_node_state(
-    test_db: Session,
-    lab_id: str,
-    node_id: str,
-    node_name: str,
-    *,
-    actual_state: str = "undeployed",
-    desired_state: str = "stopped",
-) -> models.NodeState:
-    ns = models.NodeState(
-        lab_id=lab_id,
-        node_id=node_id,
-        node_name=node_name,
-        desired_state=desired_state,
-        actual_state=actual_state,
-    )
-    test_db.add(ns)
-    test_db.commit()
-    test_db.refresh(ns)
-    return ns
+from tests.factories import make_node_state, make_placement
 
 
 # ---------------------------------------------------------------------------
@@ -58,7 +20,7 @@ class TestCleanupNodeRecords:
     def test_deletes_by_node_definition_id(self, test_db: Session, sample_lab: models.Lab):
         from app.tasks.live_nodes import _cleanup_node_records
 
-        ns = _make_node_state(test_db, sample_lab.id, "n1", "R1")
+        ns = make_node_state(test_db, sample_lab.id, "n1", "R1")
         ns.node_definition_id = "ndef-1"
         test_db.commit()
 
@@ -84,8 +46,8 @@ class TestCleanupNodeRecords:
     def test_deletes_by_node_name_fallback(self, test_db: Session, sample_lab: models.Lab):
         from app.tasks.live_nodes import _cleanup_node_records
 
-        _make_node_state(test_db, sample_lab.id, "n1", "R1")
-        _make_placement(test_db, sample_lab.id, "R1", "host-1")
+        make_node_state(test_db, sample_lab.id, "n1", "R1")
+        make_placement(test_db, sample_lab.id, "R1", "host-1")
 
         _cleanup_node_records(
             test_db, sample_lab.id, node_name="R1", node_definition_id=None
@@ -129,7 +91,7 @@ class TestBuildHostToAgentMapLiveNodes:
     ):
         from app.tasks.live_nodes import _build_host_to_agent_map
 
-        _make_placement(test_db, sample_lab.id, "R1", sample_host.id)
+        make_placement(test_db, sample_lab.id, "R1", sample_host.id)
 
         with patch("app.agent_client.is_agent_online", return_value=True):
             result = await _build_host_to_agent_map(test_db, sample_lab.id, sample_lab)
@@ -154,7 +116,7 @@ class TestBuildHostToAgentMapLiveNodes:
     ):
         from app.tasks.live_nodes import _build_host_to_agent_map
 
-        _make_placement(test_db, sample_lab.id, "R1", sample_host.id)
+        make_placement(test_db, sample_lab.id, "R1", sample_host.id)
 
         with patch("app.agent_client.is_agent_online", return_value=False):
             result = await _build_host_to_agent_map(test_db, sample_lab.id, sample_lab)
@@ -181,7 +143,7 @@ class TestDestroyNodeImmediately:
     ):
         from app.tasks.live_nodes import destroy_node_immediately
 
-        _make_node_state(test_db, sample_lab.id, "n1", "R1", actual_state="undeployed")
+        make_node_state(test_db, sample_lab.id, "n1", "R1", actual_state="undeployed")
 
         result = await destroy_node_immediately(
             test_db,
@@ -212,7 +174,7 @@ class TestDestroyNodeImmediately:
     ):
         from app.tasks.live_nodes import destroy_node_immediately
 
-        _make_node_state(test_db, sample_lab.id, "n1", "R1", actual_state="running")
+        make_node_state(test_db, sample_lab.id, "n1", "R1", actual_state="running")
 
         host_to_agent = {sample_host.id: sample_host}
 
@@ -327,7 +289,7 @@ class TestDeployNodeImmediately:
     ):
         from app.tasks.live_nodes import deploy_node_immediately
 
-        ns = _make_node_state(test_db, running_lab.id, "n1", "R1")
+        ns = make_node_state(test_db, running_lab.id, "n1", "R1")
 
         with (
             patch(
@@ -352,7 +314,7 @@ class TestDeployNodeImmediately:
     ):
         from app.tasks.live_nodes import deploy_node_immediately
 
-        ns = _make_node_state(test_db, running_lab.id, "n1", "R1")
+        ns = make_node_state(test_db, running_lab.id, "n1", "R1")
 
         with (
             patch(
@@ -393,7 +355,7 @@ class TestDeployNodeImmediately:
         test_db.add(node_def)
         test_db.commit()
 
-        ns = _make_node_state(test_db, running_lab.id, "n1", "R1")
+        ns = make_node_state(test_db, running_lab.id, "n1", "R1")
         ns.node_definition_id = "ndef-1"
         test_db.commit()
 

@@ -157,8 +157,8 @@ def save_manifest(data: dict) -> None:
     except Exception:
         logger.warning("Failed to persist image catalog from manifest payload", exc_info=True)
 
-    # Runtime manifest writes are deprecated once DB catalog is seeded.
-    if wrote_catalog and not settings.catalog_manifest_mirror_enabled:
+    # DB catalog is the source of truth; skip file writes when catalog is seeded.
+    if wrote_catalog:
         return
 
     path = manifest_path()

@@ -8,8 +8,6 @@ This module tests:
 """
 from __future__ import annotations
 
-import json
-from datetime import datetime, timezone
 from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 
@@ -18,92 +16,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app import models
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
-def _make_host(
-    test_db: Session,
-    host_id: str = "host-1",
-    name: str = "Agent 1",
-    address: str = "192.168.1.10:8080",
-    status: str = "online",
-) -> models.Host:
-    """Create and persist a Host for testing."""
-    host = models.Host(
-        id=host_id,
-        name=name,
-        address=address,
-        status=status,
-        capabilities=json.dumps({"providers": ["docker"]}),
-        version="1.0.0",
-        last_heartbeat=datetime.now(timezone.utc),
-    )
-    test_db.add(host)
-    test_db.commit()
-    test_db.refresh(host)
-    return host
-
-
-def _make_link_state(
-    test_db: Session,
-    lab_id: str,
-    link_name: str = "R1:eth1-R2:eth1",
-    source_node: str = "archetype-test-r1",
-    target_node: str = "archetype-test-r2",
-    source_interface: str = "eth1",
-    target_interface: str = "eth1",
-    desired_state: str = "up",
-    actual_state: str = "down",
-    source_host_id: str | None = None,
-    target_host_id: str | None = None,
-    is_cross_host: bool = False,
-    vlan_tag: int | None = None,
-) -> models.LinkState:
-    """Create and persist a LinkState for testing."""
-    link = models.LinkState(
-        id=str(uuid4()),
-        lab_id=lab_id,
-        link_name=link_name,
-        source_node=source_node,
-        source_interface=source_interface,
-        target_node=target_node,
-        target_interface=target_interface,
-        desired_state=desired_state,
-        actual_state=actual_state,
-        source_host_id=source_host_id,
-        target_host_id=target_host_id,
-        is_cross_host=is_cross_host,
-        vlan_tag=vlan_tag,
-    )
-    test_db.add(link)
-    test_db.commit()
-    test_db.refresh(link)
-    return link
-
-
-def _make_node_state(
-    test_db: Session,
-    lab_id: str,
-    node_name: str,
-    actual_state: str = "running",
-    desired_state: str = "running",
-) -> models.NodeState:
-    """Create and persist a NodeState for testing."""
-    ns = models.NodeState(
-        lab_id=lab_id,
-        node_id=str(uuid4())[:8],
-        node_name=node_name,
-        desired_state=desired_state,
-        actual_state=actual_state,
-    )
-    test_db.add(ns)
-    test_db.commit()
-    test_db.refresh(ns)
-    return ns
+from tests.factories import make_link_state, make_node, make_node_state, make_placement
 
 
 # ============================================================================
@@ -121,8 +34,9 @@ class TestReconcileLinkStates:
         """Links with desired=up and actual=down should be created."""
         from app.tasks.link_reconciliation import reconcile_link_states
 
-        _make_link_state(
+        make_link_state(
             test_db, sample_lab.id,
+            source_node="archetype-test-r1", target_node="archetype-test-r2",
             desired_state="up", actual_state="down",
             source_host_id=sample_host.id, target_host_id=sample_host.id,
         )
@@ -142,8 +56,9 @@ class TestReconcileLinkStates:
         """Links with desired=down and actual=up should be torn down."""
         from app.tasks.link_reconciliation import reconcile_link_states
 
-        link = _make_link_state(
+        link = make_link_state(
             test_db, sample_lab.id,
+            source_node="archetype-test-r1", target_node="archetype-test-r2",
             desired_state="down", actual_state="up",
             source_host_id=sample_host.id, target_host_id=sample_host.id,
         )
@@ -165,8 +80,9 @@ class TestReconcileLinkStates:
         """Links with offline agent hosts are skipped."""
         from app.tasks.link_reconciliation import reconcile_link_states
 
-        _make_link_state(
+        make_link_state(
             test_db, sample_lab.id,
+            source_node="archetype-test-r1", target_node="archetype-test-r2",
             desired_state="up", actual_state="down",
             source_host_id=offline_host.id, target_host_id=offline_host.id,
         )
@@ -183,8 +99,9 @@ class TestReconcileLinkStates:
         """Cross-host links in error state should attempt partial recovery."""
         from app.tasks.link_reconciliation import reconcile_link_states
 
-        _make_link_state(
+        make_link_state(
             test_db, sample_lab.id,
+            source_node="archetype-test-r1", target_node="archetype-test-r2",
             desired_state="up", actual_state="error",
             source_host_id=multiple_hosts[0].id,
             target_host_id=multiple_hosts[1].id,
@@ -231,42 +148,34 @@ class TestCreateLinkIfReady:
         """Link is created when both endpoint nodes are running on the same host."""
         from app.tasks.live_links import create_link_if_ready
 
-        ns1 = _make_node_state(test_db, sample_lab.id, "archetype-test-r1", actual_state="running")
-        ns2 = _make_node_state(test_db, sample_lab.id, "archetype-test-r2", actual_state="running")
+        ns1 = make_node_state(test_db, sample_lab.id, "ns-r1", "archetype-test-r1",
+                        desired_state="running", actual_state="running")
+        ns2 = make_node_state(test_db, sample_lab.id, "ns-r2", "archetype-test-r2",
+                        desired_state="running", actual_state="running")
         ns1.is_ready = True
         ns2.is_ready = True
         test_db.commit()
 
-        link = _make_link_state(
+        link = make_link_state(
             test_db, sample_lab.id,
+            source_node="archetype-test-r1", target_node="archetype-test-r2",
             desired_state="up", actual_state="down",
             source_host_id=sample_host.id, target_host_id=sample_host.id,
         )
 
         # Need Node definitions for host lookup
-        node1 = models.Node(
-            id=str(uuid4()), lab_id=sample_lab.id, gui_id="n1",
-            display_name="R1", container_name="archetype-test-r1",
-            device="linux", host_id=sample_host.id,
-        )
-        node2 = models.Node(
-            id=str(uuid4()), lab_id=sample_lab.id, gui_id="n2",
-            display_name="R2", container_name="archetype-test-r2",
-            device="linux", host_id=sample_host.id,
-        )
-        test_db.add_all([node1, node2])
-        test_db.commit()
+        node1 = make_node(test_db, sample_lab.id, gui_id="n1",
+                          display_name="R1", container_name="archetype-test-r1",
+                          host_id=sample_host.id)
+        node2 = make_node(test_db, sample_lab.id, gui_id="n2",
+                          display_name="R2", container_name="archetype-test-r2",
+                          host_id=sample_host.id)
 
         # Create placements
-        for node_def in [node1, node2]:
-            test_db.add(models.NodePlacement(
-                id=str(uuid4()),
-                lab_id=sample_lab.id,
-                host_id=sample_host.id,
-                node_name=node_def.container_name,
-                node_definition_id=node_def.id,
-            ))
-        test_db.commit()
+        make_placement(test_db, sample_lab.id, node1.container_name, sample_host.id,
+                       node_definition_id=node1.id)
+        make_placement(test_db, sample_lab.id, node2.container_name, sample_host.id,
+                       node_definition_id=node2.id)
 
         host_to_agent = {sample_host.id: sample_host}
 
@@ -294,16 +203,17 @@ class TestReconcileLabLinks:
     ):
         from app.tasks.link_reconciliation import reconcile_lab_links
 
-        _make_link_state(
+        make_link_state(
             test_db,
             sample_lab.id,
             link_name="R1:eth1-R2:eth1",
+            source_node="archetype-test-r1", target_node="archetype-test-r2",
             desired_state="up",
             actual_state="up",
             source_host_id=sample_host.id,
             target_host_id=sample_host.id,
         )
-        _make_link_state(
+        make_link_state(
             test_db,
             sample_lab.id,
             link_name="R2:eth2-R3:eth2",
@@ -349,11 +259,14 @@ class TestCreateLinkIfReadyAdditional:
         """Link creation is skipped when source node is not running."""
         from app.tasks.live_links import create_link_if_ready
 
-        _make_node_state(test_db, sample_lab.id, "archetype-test-r1", actual_state="stopped")
-        _make_node_state(test_db, sample_lab.id, "archetype-test-r2", actual_state="running")
+        make_node_state(test_db, sample_lab.id, "ns-r1", "archetype-test-r1",
+                        desired_state="stopped", actual_state="stopped")
+        make_node_state(test_db, sample_lab.id, "ns-r2", "archetype-test-r2",
+                        desired_state="running", actual_state="running")
 
-        link = _make_link_state(
+        link = make_link_state(
             test_db, sample_lab.id,
+            source_node="archetype-test-r1", target_node="archetype-test-r2",
             desired_state="up", actual_state="down",
             source_host_id=sample_host.id, target_host_id=sample_host.id,
         )
@@ -374,8 +287,9 @@ class TestCreateLinkIfReadyAdditional:
         """When skip_locked=True and row is locked, returns False silently."""
         from app.tasks.live_links import create_link_if_ready
 
-        link = _make_link_state(
+        link = make_link_state(
             test_db, sample_lab.id,
+            source_node="archetype-test-r1", target_node="archetype-test-r2",
             desired_state="up", actual_state="down",
         )
 
@@ -418,8 +332,9 @@ class TestTeardownLink:
         }
 
         # Create a LinkState for the link
-        _make_link_state(
+        make_link_state(
             test_db, sample_lab.id,
+            source_node="archetype-test-r1", target_node="archetype-test-r2",
             desired_state="down", actual_state="up",
             source_host_id=sample_host.id, target_host_id=sample_host.id,
         )
@@ -446,8 +361,9 @@ class TestTeardownLink:
 
         host_a, host_b = multiple_hosts[0], multiple_hosts[1]
 
-        link = _make_link_state(
+        link = make_link_state(
             test_db, sample_lab.id,
+            source_node="archetype-test-r1", target_node="archetype-test-r2",
             desired_state="down", actual_state="up",
             source_host_id=host_a.id, target_host_id=host_b.id,
             is_cross_host=True,
@@ -537,8 +453,9 @@ class TestTeardownLink:
 
         host_a = multiple_hosts[0]
 
-        link = _make_link_state(
+        link = make_link_state(
             test_db, sample_lab.id,
+            source_node="archetype-test-r1", target_node="archetype-test-r2",
             desired_state="down", actual_state="up",
             source_host_id=host_a.id, target_host_id="missing-agent-id",
             is_cross_host=True,

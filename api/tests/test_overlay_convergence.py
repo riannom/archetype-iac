@@ -14,46 +14,7 @@ import pytest
 from app import models
 from app.agent_client import compute_vxlan_port_name
 import app.tasks.link_reconciliation as link_reconciliation
-
-
-# ─── Helpers ──────────────────────────────────────────────────────────────
-
-
-def _make_link_state(
-    test_db,
-    lab_id: str,
-    link_name: str,
-    *,
-    is_cross_host: bool = True,
-    actual_state: str = "up",
-    desired_state: str = "up",
-    source_host_id: str | None = None,
-    target_host_id: str | None = None,
-    source_vlan_tag: int | None = None,
-    target_vlan_tag: int | None = None,
-    source_vxlan_attached: bool = False,
-    target_vxlan_attached: bool = False,
-) -> models.LinkState:
-    ls = models.LinkState(
-        lab_id=lab_id,
-        link_name=link_name,
-        source_node="R1",
-        source_interface="eth1",
-        target_node="R2",
-        target_interface="eth1",
-        is_cross_host=is_cross_host,
-        actual_state=actual_state,
-        desired_state=desired_state,
-        source_host_id=source_host_id,
-        target_host_id=target_host_id,
-        source_vlan_tag=source_vlan_tag,
-        target_vlan_tag=target_vlan_tag,
-        source_vxlan_attached=source_vxlan_attached,
-        target_vxlan_attached=target_vxlan_attached,
-    )
-    test_db.add(ls)
-    test_db.flush()
-    return ls
+from tests.factories import make_link_state
 
 
 def _make_tunnel(
@@ -92,8 +53,9 @@ def _make_tunnel(
 @pytest.mark.asyncio
 async def test_build_declare_payload_from_db(test_db, sample_lab, multiple_hosts):
     """Correct grouping of declared tunnels by agent from DB records."""
-    ls = _make_link_state(
-        test_db, sample_lab.id, "R1:eth1-R2:eth1",
+    ls = make_link_state(
+        test_db, sample_lab.id, link_name="R1:eth1-R2:eth1",
+        is_cross_host=True, actual_state="up",
         source_host_id=multiple_hosts[0].id,
         target_host_id=multiple_hosts[1].id,
         source_vlan_tag=3001,
@@ -144,8 +106,9 @@ async def test_build_declare_payload_from_db(test_db, sample_lab, multiple_hosts
 async def test_build_payload_skips_inactive_tunnels(test_db, sample_lab, multiple_hosts):
     """Only active tunnels with desired_state='up' are included."""
     # Active tunnel with desired up — should be included
-    ls_up = _make_link_state(
-        test_db, sample_lab.id, "R1:eth1-R2:eth1",
+    ls_up = make_link_state(
+        test_db, sample_lab.id, link_name="R1:eth1-R2:eth1",
+        is_cross_host=True, actual_state="up",
         source_host_id=multiple_hosts[0].id,
         target_host_id=multiple_hosts[1].id,
     )
@@ -156,8 +119,9 @@ async def test_build_payload_skips_inactive_tunnels(test_db, sample_lab, multipl
     )
 
     # Cleanup tunnel — should be excluded
-    ls_down = _make_link_state(
-        test_db, sample_lab.id, "R3:eth1-R4:eth1",
+    ls_down = make_link_state(
+        test_db, sample_lab.id, link_name="R3:eth1-R4:eth1",
+        is_cross_host=True, actual_state="up",
         desired_state="down",
         source_host_id=multiple_hosts[0].id,
         target_host_id=multiple_hosts[1].id,
@@ -192,8 +156,9 @@ async def test_build_payload_skips_inactive_tunnels(test_db, sample_lab, multipl
 @pytest.mark.asyncio
 async def test_build_payload_both_sides_included(test_db, sample_lab, multiple_hosts):
     """Each tunnel produces entries for both agent_a and agent_b."""
-    ls = _make_link_state(
-        test_db, sample_lab.id, "R1:eth1-R2:eth1",
+    ls = make_link_state(
+        test_db, sample_lab.id, link_name="R1:eth1-R2:eth1",
+        is_cross_host=True, actual_state="up",
         source_host_id=multiple_hosts[0].id,
         target_host_id=multiple_hosts[1].id,
     )
@@ -231,8 +196,9 @@ async def test_build_payload_both_sides_included(test_db, sample_lab, multiple_h
 @pytest.mark.asyncio
 async def test_declare_payload_uses_linkstate_vlans(test_db, sample_lab, multiple_hosts):
     """Payload VLAN tags come from LinkState source/target_vlan_tag, not VxlanTunnel."""
-    ls = _make_link_state(
-        test_db, sample_lab.id, "R1:eth1-R2:eth1",
+    ls = make_link_state(
+        test_db, sample_lab.id, link_name="R1:eth1-R2:eth1",
+        is_cross_host=True, actual_state="up",
         source_host_id=multiple_hosts[0].id,
         target_host_id=multiple_hosts[1].id,
         source_vlan_tag=3050,
@@ -274,8 +240,9 @@ async def test_declare_payload_uses_linkstate_vlans(test_db, sample_lab, multipl
 @pytest.mark.asyncio
 async def test_declare_state_updates_attachment_flags(test_db, sample_lab, multiple_hosts):
     """Successful convergence sets source/target_vxlan_attached to True."""
-    ls = _make_link_state(
-        test_db, sample_lab.id, "R1:eth1-R2:eth1",
+    ls = make_link_state(
+        test_db, sample_lab.id, link_name="R1:eth1-R2:eth1",
+        is_cross_host=True, actual_state="up",
         source_host_id=multiple_hosts[0].id,
         target_host_id=multiple_hosts[1].id,
         source_vxlan_attached=False,
@@ -315,8 +282,9 @@ async def test_declare_state_updates_attachment_flags(test_db, sample_lab, multi
 @pytest.mark.asyncio
 async def test_declare_state_handles_agent_offline(test_db, sample_lab, multiple_hosts):
     """Skips offline agents but still converges all online agents."""
-    ls = _make_link_state(
-        test_db, sample_lab.id, "R1:eth1-R2:eth1",
+    ls = make_link_state(
+        test_db, sample_lab.id, link_name="R1:eth1-R2:eth1",
+        is_cross_host=True, actual_state="up",
         source_host_id=multiple_hosts[0].id,
         target_host_id=multiple_hosts[2].id,  # agent-3 is offline
     )
@@ -352,8 +320,9 @@ async def test_declare_state_handles_agent_offline(test_db, sample_lab, multiple
 @pytest.mark.asyncio
 async def test_declare_state_handles_old_agent_404(test_db, sample_lab, multiple_hosts):
     """404 from agent triggers fallback to whitelist reconciliation."""
-    ls = _make_link_state(
-        test_db, sample_lab.id, "R1:eth1-R2:eth1",
+    ls = make_link_state(
+        test_db, sample_lab.id, link_name="R1:eth1-R2:eth1",
+        is_cross_host=True, actual_state="up",
         source_host_id=multiple_hosts[0].id,
         target_host_id=multiple_hosts[1].id,
     )
@@ -391,13 +360,15 @@ async def test_declare_state_handles_old_agent_404(test_db, sample_lab, multiple
 @pytest.mark.asyncio
 async def test_declare_state_handles_mixed_results(test_db, sample_lab, multiple_hosts):
     """Handles mix of converged, created, and error results."""
-    ls1 = _make_link_state(
-        test_db, sample_lab.id, "R1:eth1-R2:eth1",
+    ls1 = make_link_state(
+        test_db, sample_lab.id, link_name="R1:eth1-R2:eth1",
+        is_cross_host=True, actual_state="up",
         source_host_id=multiple_hosts[0].id,
         target_host_id=multiple_hosts[1].id,
     )
-    ls2 = _make_link_state(
-        test_db, sample_lab.id, "R3:eth1-R4:eth1",
+    ls2 = make_link_state(
+        test_db, sample_lab.id, link_name="R3:eth1-R4:eth1",
+        is_cross_host=True, actual_state="up",
         source_host_id=multiple_hosts[0].id,
         target_host_id=multiple_hosts[1].id,
     )
@@ -446,8 +417,9 @@ async def test_declare_state_handles_mixed_results(test_db, sample_lab, multiple
 @pytest.mark.asyncio
 async def test_declare_state_handles_orphan_report(test_db, sample_lab, multiple_hosts):
     """Orphans removed by agent are recorded in results."""
-    ls = _make_link_state(
-        test_db, sample_lab.id, "R1:eth1-R2:eth1",
+    ls = make_link_state(
+        test_db, sample_lab.id, link_name="R1:eth1-R2:eth1",
+        is_cross_host=True, actual_state="up",
         source_host_id=multiple_hosts[0].id,
         target_host_id=multiple_hosts[1].id,
     )
@@ -538,8 +510,9 @@ async def test_convergence_declares_labs_from_placements(test_db, sample_lab, mu
 @pytest.mark.asyncio
 async def test_declare_state_partial_state_error(test_db, sample_lab, multiple_hosts):
     """Links with PARTIAL_STATE prefix in error_message are still included."""
-    ls = _make_link_state(
-        test_db, sample_lab.id, "R1:eth1-R2:eth1",
+    ls = make_link_state(
+        test_db, sample_lab.id, link_name="R1:eth1-R2:eth1",
+        is_cross_host=True,
         actual_state="error",
         desired_state="up",
         source_host_id=multiple_hosts[0].id,
@@ -575,8 +548,9 @@ async def test_declare_state_partial_state_error(test_db, sample_lab, multiple_h
 async def test_convergence_protects_in_progress_links(test_db, sample_lab, multiple_hosts):
     """In-progress (creating/connecting) links are protected from orphan cleanup."""
     # Active tunnel
-    ls1 = _make_link_state(
-        test_db, sample_lab.id, "R1:eth1-R2:eth1",
+    ls1 = make_link_state(
+        test_db, sample_lab.id, link_name="R1:eth1-R2:eth1",
+        is_cross_host=True, actual_state="up",
         source_host_id=multiple_hosts[0].id,
         target_host_id=multiple_hosts[1].id,
     )
@@ -587,8 +561,9 @@ async def test_convergence_protects_in_progress_links(test_db, sample_lab, multi
     )
 
     # In-progress link (no tunnel yet)
-    _make_link_state(
-        test_db, sample_lab.id, "R3:eth1-R4:eth1",
+    make_link_state(
+        test_db, sample_lab.id, link_name="R3:eth1-R4:eth1",
+        is_cross_host=True,
         actual_state="creating",
         source_host_id=multiple_hosts[0].id,
         target_host_id=multiple_hosts[1].id,
@@ -629,8 +604,9 @@ async def test_convergence_protects_in_progress_links(test_db, sample_lab, multi
 @pytest.mark.asyncio
 async def test_convergence_exception_continues(test_db, sample_lab, multiple_hosts):
     """If one agent call throws, other agents still get called."""
-    ls = _make_link_state(
-        test_db, sample_lab.id, "R1:eth1-R2:eth1",
+    ls = make_link_state(
+        test_db, sample_lab.id, link_name="R1:eth1-R2:eth1",
+        is_cross_host=True, actual_state="up",
         source_host_id=multiple_hosts[0].id,
         target_host_id=multiple_hosts[1].id,
     )
@@ -666,8 +642,9 @@ async def test_convergence_exception_continues(test_db, sample_lab, multiple_hos
 @pytest.mark.asyncio
 async def test_convergence_port_name_fallback(test_db, sample_lab, multiple_hosts):
     """When tunnel has no port_name, compute it from lab_id + link_name."""
-    ls = _make_link_state(
-        test_db, sample_lab.id, "R1:eth1-R2:eth1",
+    ls = make_link_state(
+        test_db, sample_lab.id, link_name="R1:eth1-R2:eth1",
+        is_cross_host=True, actual_state="up",
         source_host_id=multiple_hosts[0].id,
         target_host_id=multiple_hosts[1].id,
     )

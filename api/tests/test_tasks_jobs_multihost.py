@@ -20,6 +20,7 @@ from sqlalchemy.orm import Session
 
 from app import models
 from app.tasks.jobs_multihost import run_multihost_deploy, run_multihost_destroy
+from tests.factories import make_job, make_lab, make_link_state, make_node
 
 
 # ---------------------------------------------------------------------------
@@ -37,66 +38,6 @@ def _mock_get_session(test_db: Session):
         yield test_db
 
     return mock_session
-
-
-def _make_lab(test_db, test_user, *, state="stopped", name="Test Lab"):
-    lab = models.Lab(
-        name=name,
-        owner_id=test_user.id,
-        provider="docker",
-        state=state,
-    )
-    test_db.add(lab)
-    test_db.commit()
-    test_db.refresh(lab)
-    return lab
-
-
-def _make_job(test_db, lab, test_user, *, action="up", status="queued"):
-    job = models.Job(
-        lab_id=lab.id,
-        user_id=test_user.id,
-        action=action,
-        status=status,
-    )
-    test_db.add(job)
-    test_db.commit()
-    test_db.refresh(job)
-    return job
-
-
-def _make_node(test_db, lab, *, gui_id, name, device="linux", host_id=None):
-    node = models.Node(
-        lab_id=lab.id,
-        gui_id=gui_id,
-        display_name=name,
-        container_name=name,
-        node_type="device",
-        device=device,
-        host_id=host_id,
-    )
-    test_db.add(node)
-    test_db.commit()
-    test_db.refresh(node)
-    return node
-
-
-def _make_link_state(test_db, lab, *, link_name="r1:eth1-r2:eth1",
-                     desired="up", actual="up"):
-    ls = models.LinkState(
-        lab_id=lab.id,
-        link_name=link_name,
-        source_node=link_name.split("-")[0].split(":")[0],
-        source_interface=link_name.split("-")[0].split(":")[1],
-        target_node=link_name.split("-")[1].split(":")[0],
-        target_interface=link_name.split("-")[1].split(":")[1],
-        desired_state=desired,
-        actual_state=actual,
-    )
-    test_db.add(ls)
-    test_db.commit()
-    test_db.refresh(ls)
-    return ls
 
 
 @dataclass
@@ -149,8 +90,8 @@ class TestMultihostDeployDispatch:
     @pytest.mark.asyncio
     async def test_lab_not_found_fails_job(self, test_db: Session, test_user):
         """If the lab doesn't exist, the job is marked failed."""
-        lab = _make_lab(test_db, test_user)
-        job = _make_job(test_db, lab, test_user)
+        lab = make_lab(test_db, test_user.id)
+        job = make_job(test_db, lab.id, test_user.id, action="up")
         # Delete the lab so the lookup fails
         test_db.delete(lab)
         test_db.commit()
@@ -168,9 +109,9 @@ class TestMultihostDeployDispatch:
     ):
         """Deploying to a single host with one node succeeds end-to-end."""
         host1 = multiple_hosts[0]
-        lab = _make_lab(test_db, test_user)
-        job = _make_job(test_db, lab, test_user)
-        _make_node(test_db, lab, gui_id="n1", name="r1", host_id=host1.id)
+        lab = make_lab(test_db, test_user.id)
+        job = make_job(test_db, lab.id, test_user.id, action="up")
+        make_node(test_db, lab.id, gui_id="n1", display_name="r1", host_id=host1.id)
 
         patches = _standard_deploy_patches(test_db)
         with patch(f"{MODULE}.get_session", patches[f"{MODULE}.get_session"]):
@@ -196,10 +137,10 @@ class TestMultihostDeployDispatch:
     ):
         """Nodes on two different hosts result in two deploy_to_agent calls."""
         host1, host2 = multiple_hosts[0], multiple_hosts[1]
-        lab = _make_lab(test_db, test_user)
-        job = _make_job(test_db, lab, test_user)
-        _make_node(test_db, lab, gui_id="n1", name="r1", host_id=host1.id)
-        _make_node(test_db, lab, gui_id="n2", name="r2", host_id=host2.id)
+        lab = make_lab(test_db, test_user.id)
+        job = make_job(test_db, lab.id, test_user.id, action="up")
+        make_node(test_db, lab.id, gui_id="n1", display_name="r1", host_id=host1.id)
+        make_node(test_db, lab.id, gui_id="n2", display_name="r2", host_id=host2.id)
 
         mock_deploy = AsyncMock(return_value={"status": "completed", "stdout": "OK"})
 
@@ -226,11 +167,11 @@ class TestMultihostDeployDispatch:
     ):
         """Three nodes split across two hosts; deploy to each host once."""
         host1, host2 = multiple_hosts[0], multiple_hosts[1]
-        lab = _make_lab(test_db, test_user)
-        job = _make_job(test_db, lab, test_user)
-        _make_node(test_db, lab, gui_id="n1", name="r1", host_id=host1.id)
-        _make_node(test_db, lab, gui_id="n2", name="r2", host_id=host1.id)
-        _make_node(test_db, lab, gui_id="n3", name="r3", host_id=host2.id)
+        lab = make_lab(test_db, test_user.id)
+        job = make_job(test_db, lab.id, test_user.id, action="up")
+        make_node(test_db, lab.id, gui_id="n1", display_name="r1", host_id=host1.id)
+        make_node(test_db, lab.id, gui_id="n2", display_name="r2", host_id=host1.id)
+        make_node(test_db, lab.id, gui_id="n3", display_name="r3", host_id=host2.id)
 
         mock_deploy = AsyncMock(return_value={"status": "completed", "stdout": "OK"})
 
@@ -262,9 +203,9 @@ class TestMultihostDeployUnplacedNodes:
     ):
         """Nodes without host_id get assigned to the default agent."""
         host1 = multiple_hosts[0]
-        lab = _make_lab(test_db, test_user)
-        job = _make_job(test_db, lab, test_user)
-        node = _make_node(test_db, lab, gui_id="n1", name="r1", host_id=None)
+        lab = make_lab(test_db, test_user.id)
+        job = make_job(test_db, lab.id, test_user.id, action="up")
+        node = make_node(test_db, lab.id, gui_id="n1", display_name="r1", host_id=None)
 
         patches = _standard_deploy_patches(test_db)
         with patch(f"{MODULE}.get_session", patches[f"{MODULE}.get_session"]):
@@ -288,9 +229,9 @@ class TestMultihostDeployUnplacedNodes:
     @pytest.mark.asyncio
     async def test_no_default_agent_fails_job(self, test_db: Session, test_user):
         """Unplaced nodes with no available default agent fails the job."""
-        lab = _make_lab(test_db, test_user)
-        job = _make_job(test_db, lab, test_user)
-        _make_node(test_db, lab, gui_id="n1", name="r1", host_id=None)
+        lab = make_lab(test_db, test_user.id)
+        job = make_job(test_db, lab.id, test_user.id, action="up")
+        make_node(test_db, lab.id, gui_id="n1", display_name="r1", host_id=None)
 
         with patch(f"{MODULE}.get_session", _mock_get_session(test_db)):
             with patch(f"{MODULE}.agent_client.get_agent_for_lab", new_callable=AsyncMock, return_value=None):
@@ -306,10 +247,10 @@ class TestMultihostDeployUnplacedNodes:
     ):
         """Mix of placed and unplaced nodes: unplaced ones get assigned."""
         host1, host2 = multiple_hosts[0], multiple_hosts[1]
-        lab = _make_lab(test_db, test_user)
-        job = _make_job(test_db, lab, test_user)
-        _make_node(test_db, lab, gui_id="n1", name="r1", host_id=host1.id)
-        unplaced = _make_node(test_db, lab, gui_id="n2", name="r2", host_id=None)
+        lab = make_lab(test_db, test_user.id)
+        job = make_job(test_db, lab.id, test_user.id, action="up")
+        make_node(test_db, lab.id, gui_id="n1", display_name="r1", host_id=host1.id)
+        unplaced = make_node(test_db, lab.id, gui_id="n2", display_name="r2", host_id=None)
 
         patches = _standard_deploy_patches(test_db)
         with patch(f"{MODULE}.get_session", patches[f"{MODULE}.get_session"]):
@@ -337,9 +278,9 @@ class TestMultihostDeployAgentFailures:
     @pytest.mark.asyncio
     async def test_missing_host_record_fails(self, test_db: Session, test_user):
         """Node assigned to non-existent host fails the job."""
-        lab = _make_lab(test_db, test_user)
-        job = _make_job(test_db, lab, test_user)
-        _make_node(test_db, lab, gui_id="n1", name="r1", host_id="ghost-host-id")
+        lab = make_lab(test_db, test_user.id)
+        job = make_job(test_db, lab.id, test_user.id, action="up")
+        make_node(test_db, lab.id, gui_id="n1", display_name="r1", host_id="ghost-host-id")
 
         with patch(f"{MODULE}.get_session", _mock_get_session(test_db)):
             with patch(f"{MODULE}._dispatch_webhook", AsyncMock()):
@@ -355,9 +296,9 @@ class TestMultihostDeployAgentFailures:
     ):
         """Node on an offline agent causes failure (all hosts must be online)."""
         host3 = multiple_hosts[2]  # offline host
-        lab = _make_lab(test_db, test_user)
-        job = _make_job(test_db, lab, test_user)
-        _make_node(test_db, lab, gui_id="n1", name="r1", host_id=host3.id)
+        lab = make_lab(test_db, test_user.id)
+        job = make_job(test_db, lab.id, test_user.id, action="up")
+        make_node(test_db, lab.id, gui_id="n1", display_name="r1", host_id=host3.id)
 
         with patch(f"{MODULE}.get_session", _mock_get_session(test_db)):
             with patch(f"{MODULE}._dispatch_webhook", AsyncMock()):
@@ -375,9 +316,9 @@ class TestMultihostDeployAgentFailures:
     ):
         """Agent appears online but preflight connectivity check fails."""
         host1 = multiple_hosts[0]
-        lab = _make_lab(test_db, test_user)
-        job = _make_job(test_db, lab, test_user)
-        _make_node(test_db, lab, gui_id="n1", name="r1", host_id=host1.id)
+        lab = make_lab(test_db, test_user.id)
+        job = make_job(test_db, lab.id, test_user.id, action="up")
+        make_node(test_db, lab.id, gui_id="n1", display_name="r1", host_id=host1.id)
 
         with patch(f"{MODULE}.get_session", _mock_get_session(test_db)):
             with patch(f"{MODULE}._dispatch_webhook", AsyncMock()):
@@ -396,10 +337,10 @@ class TestMultihostDeployAgentFailures:
     ):
         """If deploy_to_agent raises, successful hosts are rolled back."""
         host1, host2 = multiple_hosts[0], multiple_hosts[1]
-        lab = _make_lab(test_db, test_user)
-        job = _make_job(test_db, lab, test_user)
-        _make_node(test_db, lab, gui_id="n1", name="r1", host_id=host1.id)
-        _make_node(test_db, lab, gui_id="n2", name="r2", host_id=host2.id)
+        lab = make_lab(test_db, test_user.id)
+        job = make_job(test_db, lab.id, test_user.id, action="up")
+        make_node(test_db, lab.id, gui_id="n1", display_name="r1", host_id=host1.id)
+        make_node(test_db, lab.id, gui_id="n2", display_name="r2", host_id=host2.id)
 
         call_count = 0
 
@@ -433,10 +374,10 @@ class TestMultihostDeployAgentFailures:
     ):
         """Deploy returning status != 'completed' triggers rollback of successful hosts."""
         host1, host2 = multiple_hosts[0], multiple_hosts[1]
-        lab = _make_lab(test_db, test_user)
-        job = _make_job(test_db, lab, test_user)
-        _make_node(test_db, lab, gui_id="n1", name="r1", host_id=host1.id)
-        _make_node(test_db, lab, gui_id="n2", name="r2", host_id=host2.id)
+        lab = make_lab(test_db, test_user.id)
+        job = make_job(test_db, lab.id, test_user.id, action="up")
+        make_node(test_db, lab.id, gui_id="n1", display_name="r1", host_id=host1.id)
+        make_node(test_db, lab.id, gui_id="n2", display_name="r2", host_id=host2.id)
 
         results = iter([
             {"status": "completed", "stdout": "OK"},
@@ -468,10 +409,10 @@ class TestMultihostDeployAgentFailures:
     ):
         """If rollback itself fails, the job still gets marked failed (no crash)."""
         host1, host2 = multiple_hosts[0], multiple_hosts[1]
-        lab = _make_lab(test_db, test_user)
-        job = _make_job(test_db, lab, test_user)
-        _make_node(test_db, lab, gui_id="n1", name="r1", host_id=host1.id)
-        _make_node(test_db, lab, gui_id="n2", name="r2", host_id=host2.id)
+        lab = make_lab(test_db, test_user.id)
+        job = make_job(test_db, lab.id, test_user.id, action="up")
+        make_node(test_db, lab.id, gui_id="n1", display_name="r1", host_id=host1.id)
+        make_node(test_db, lab.id, gui_id="n2", display_name="r2", host_id=host2.id)
 
         results = iter([
             {"status": "completed", "stdout": "OK"},
@@ -506,10 +447,10 @@ class TestMultihostDeployAgentFailures:
     ):
         """If all deploy calls fail, no rollback is dispatched."""
         host1, host2 = multiple_hosts[0], multiple_hosts[1]
-        lab = _make_lab(test_db, test_user)
-        job = _make_job(test_db, lab, test_user)
-        _make_node(test_db, lab, gui_id="n1", name="r1", host_id=host1.id)
-        _make_node(test_db, lab, gui_id="n2", name="r2", host_id=host2.id)
+        lab = make_lab(test_db, test_user.id)
+        job = make_job(test_db, lab.id, test_user.id, action="up")
+        make_node(test_db, lab.id, gui_id="n1", display_name="r1", host_id=host1.id)
+        make_node(test_db, lab.id, gui_id="n2", display_name="r2", host_id=host2.id)
 
         mock_deploy = AsyncMock(side_effect=RuntimeError("total failure"))
         mock_rollback = AsyncMock()
@@ -540,9 +481,9 @@ class TestMultihostDeployCapacity:
     ):
         """When check_multihost_capacity returns fits=False, job fails."""
         host1 = multiple_hosts[0]
-        lab = _make_lab(test_db, test_user)
-        job = _make_job(test_db, lab, test_user)
-        _make_node(test_db, lab, gui_id="n1", name="r1", host_id=host1.id)
+        lab = make_lab(test_db, test_user.id)
+        job = make_job(test_db, lab.id, test_user.id, action="up")
+        make_node(test_db, lab.id, gui_id="n1", display_name="r1", host_id=host1.id)
 
         cap_result = MagicMock()
         cap_result.fits = False
@@ -569,9 +510,9 @@ class TestMultihostDeployCapacity:
     ):
         """Capacity warnings are appended to log without blocking deploy."""
         host1 = multiple_hosts[0]
-        lab = _make_lab(test_db, test_user)
-        job = _make_job(test_db, lab, test_user)
-        _make_node(test_db, lab, gui_id="n1", name="r1", host_id=host1.id)
+        lab = make_lab(test_db, test_user.id)
+        job = make_job(test_db, lab.id, test_user.id, action="up")
+        make_node(test_db, lab.id, gui_id="n1", display_name="r1", host_id=host1.id)
 
         cap_result = MagicMock()
         cap_result.fits = True
@@ -605,9 +546,9 @@ class TestMultihostDeployCapacity:
     ):
         """When resource_validation_enabled=False, no capacity check runs."""
         host1 = multiple_hosts[0]
-        lab = _make_lab(test_db, test_user)
-        job = _make_job(test_db, lab, test_user)
-        _make_node(test_db, lab, gui_id="n1", name="r1", host_id=host1.id)
+        lab = make_lab(test_db, test_user.id)
+        job = make_job(test_db, lab.id, test_user.id, action="up")
+        make_node(test_db, lab.id, gui_id="n1", display_name="r1", host_id=host1.id)
 
         patches = _standard_deploy_patches(test_db)
         with patch(f"{MODULE}.get_session", patches[f"{MODULE}.get_session"]):
@@ -639,9 +580,9 @@ class TestMultihostDeployLinks:
     ):
         """If create_deployment_links reports failures, job is marked failed."""
         host1 = multiple_hosts[0]
-        lab = _make_lab(test_db, test_user)
-        job = _make_job(test_db, lab, test_user)
-        _make_node(test_db, lab, gui_id="n1", name="r1", host_id=host1.id)
+        lab = make_lab(test_db, test_user.id)
+        job = make_job(test_db, lab.id, test_user.id, action="up")
+        make_node(test_db, lab.id, gui_id="n1", display_name="r1", host_id=host1.id)
 
         patches = _standard_deploy_patches(test_db)
         with patch(f"{MODULE}.get_session", patches[f"{MODULE}.get_session"]):
@@ -665,9 +606,9 @@ class TestMultihostDeployLinks:
     ):
         """Lab with no links (0 ok, 0 failed) still succeeds."""
         host1 = multiple_hosts[0]
-        lab = _make_lab(test_db, test_user)
-        job = _make_job(test_db, lab, test_user)
-        _make_node(test_db, lab, gui_id="n1", name="r1", host_id=host1.id)
+        lab = make_lab(test_db, test_user.id)
+        job = make_job(test_db, lab.id, test_user.id, action="up")
+        make_node(test_db, lab.id, gui_id="n1", display_name="r1", host_id=host1.id)
 
         patches = _standard_deploy_patches(test_db)
         with patch(f"{MODULE}.get_session", patches[f"{MODULE}.get_session"]):
@@ -695,9 +636,9 @@ class TestMultihostDeployExceptions:
     ):
         """An unexpected exception in the try block marks the job failed."""
         host1 = multiple_hosts[0]
-        lab = _make_lab(test_db, test_user)
-        job = _make_job(test_db, lab, test_user)
-        _make_node(test_db, lab, gui_id="n1", name="r1", host_id=host1.id)
+        lab = make_lab(test_db, test_user.id)
+        job = make_job(test_db, lab.id, test_user.id, action="up")
+        make_node(test_db, lab.id, gui_id="n1", display_name="r1", host_id=host1.id)
 
         with patch(f"{MODULE}.get_session", _mock_get_session(test_db)):
             with patch(f"{MODULE}._dispatch_webhook", AsyncMock()):
@@ -722,9 +663,9 @@ class TestMultihostDeployExceptions:
     ):
         """On successful deploy, lab.deploy_complete webhook is dispatched."""
         host1 = multiple_hosts[0]
-        lab = _make_lab(test_db, test_user)
-        job = _make_job(test_db, lab, test_user)
-        _make_node(test_db, lab, gui_id="n1", name="r1", host_id=host1.id)
+        lab = make_lab(test_db, test_user.id)
+        job = make_job(test_db, lab.id, test_user.id, action="up")
+        make_node(test_db, lab.id, gui_id="n1", display_name="r1", host_id=host1.id)
 
         mock_webhook = AsyncMock()
         patches = _standard_deploy_patches(test_db)
@@ -764,8 +705,8 @@ class TestMultihostDestroyDispatch:
     @pytest.mark.asyncio
     async def test_lab_not_found_fails_job(self, test_db: Session, test_user):
         """If the lab doesn't exist, the job is marked failed."""
-        lab = _make_lab(test_db, test_user, state="running")
-        job = _make_job(test_db, lab, test_user, action="down")
+        lab = make_lab(test_db, test_user.id, state="running")
+        job = make_job(test_db, lab.id, test_user.id, action="down")
         test_db.delete(lab)
         test_db.commit()
 
@@ -782,9 +723,9 @@ class TestMultihostDestroyDispatch:
     ):
         """Successful destroy on all hosts sets lab to stopped."""
         host1 = multiple_hosts[0]
-        lab = _make_lab(test_db, test_user, state="running")
-        job = _make_job(test_db, lab, test_user, action="down")
-        _make_node(test_db, lab, gui_id="n1", name="r1", host_id=host1.id)
+        lab = make_lab(test_db, test_user.id, state="running")
+        job = make_job(test_db, lab.id, test_user.id, action="down")
+        make_node(test_db, lab.id, gui_id="n1", display_name="r1", host_id=host1.id)
 
         patches = _standard_destroy_patches(test_db)
         with patch(f"{MODULE}.get_session", patches[f"{MODULE}.get_session"]):
@@ -807,10 +748,10 @@ class TestMultihostDestroyDispatch:
     ):
         """Destroy calls destroy_on_agent for each host with nodes."""
         host1, host2 = multiple_hosts[0], multiple_hosts[1]
-        lab = _make_lab(test_db, test_user, state="running")
-        job = _make_job(test_db, lab, test_user, action="down")
-        _make_node(test_db, lab, gui_id="n1", name="r1", host_id=host1.id)
-        _make_node(test_db, lab, gui_id="n2", name="r2", host_id=host2.id)
+        lab = make_lab(test_db, test_user.id, state="running")
+        job = make_job(test_db, lab.id, test_user.id, action="down")
+        make_node(test_db, lab.id, gui_id="n1", display_name="r1", host_id=host1.id)
+        make_node(test_db, lab.id, gui_id="n2", display_name="r2", host_id=host2.id)
 
         mock_destroy = AsyncMock(return_value={"status": "completed"})
 
@@ -838,10 +779,10 @@ class TestMultihostDestroyPartialFailure:
     ):
         """Offline agent during destroy results in completed_with_warnings."""
         host1, _host2, host3 = multiple_hosts[0], multiple_hosts[1], multiple_hosts[2]
-        lab = _make_lab(test_db, test_user, state="running")
-        job = _make_job(test_db, lab, test_user, action="down")
-        _make_node(test_db, lab, gui_id="n1", name="r1", host_id=host1.id)
-        _make_node(test_db, lab, gui_id="n2", name="r2", host_id=host3.id)
+        lab = make_lab(test_db, test_user.id, state="running")
+        job = make_job(test_db, lab.id, test_user.id, action="down")
+        make_node(test_db, lab.id, gui_id="n1", display_name="r1", host_id=host1.id)
+        make_node(test_db, lab.id, gui_id="n2", display_name="r2", host_id=host3.id)
 
         patches = _standard_destroy_patches(test_db)
         with patch(f"{MODULE}.get_session", patches[f"{MODULE}.get_session"]):
@@ -863,9 +804,9 @@ class TestMultihostDestroyPartialFailure:
     ):
         """If no agents are reachable at all, destroy fails."""
         host3 = multiple_hosts[2]  # offline
-        lab = _make_lab(test_db, test_user, state="running")
-        job = _make_job(test_db, lab, test_user, action="down")
-        _make_node(test_db, lab, gui_id="n1", name="r1", host_id=host3.id)
+        lab = make_lab(test_db, test_user.id, state="running")
+        job = make_job(test_db, lab.id, test_user.id, action="down")
+        make_node(test_db, lab.id, gui_id="n1", display_name="r1", host_id=host3.id)
 
         with patch(f"{MODULE}.get_session", _mock_get_session(test_db)):
             with patch(f"{MODULE}._broadcast_job_progress", AsyncMock()):
@@ -882,9 +823,9 @@ class TestMultihostDestroyPartialFailure:
     ):
         """Exception from destroy_on_agent results in completed_with_warnings."""
         host1 = multiple_hosts[0]
-        lab = _make_lab(test_db, test_user, state="running")
-        job = _make_job(test_db, lab, test_user, action="down")
-        _make_node(test_db, lab, gui_id="n1", name="r1", host_id=host1.id)
+        lab = make_lab(test_db, test_user.id, state="running")
+        job = make_job(test_db, lab.id, test_user.id, action="down")
+        make_node(test_db, lab.id, gui_id="n1", display_name="r1", host_id=host1.id)
 
         patches = _standard_destroy_patches(test_db)
         with patch(f"{MODULE}.get_session", patches[f"{MODULE}.get_session"]):
@@ -906,9 +847,9 @@ class TestMultihostDestroyPartialFailure:
     ):
         """Tunnel teardown failures result in completed_with_warnings."""
         host1 = multiple_hosts[0]
-        lab = _make_lab(test_db, test_user, state="running")
-        job = _make_job(test_db, lab, test_user, action="down")
-        _make_node(test_db, lab, gui_id="n1", name="r1", host_id=host1.id)
+        lab = make_lab(test_db, test_user.id, state="running")
+        job = make_job(test_db, lab.id, test_user.id, action="down")
+        make_node(test_db, lab.id, gui_id="n1", display_name="r1", host_id=host1.id)
 
         patches = _standard_destroy_patches(test_db)
         with patch(f"{MODULE}.get_session", patches[f"{MODULE}.get_session"]):
@@ -935,10 +876,10 @@ class TestMultihostDestroyLinkStateCleanup:
     ):
         """On full success, remaining LinkState rows are deleted."""
         host1 = multiple_hosts[0]
-        lab = _make_lab(test_db, test_user, state="running")
-        job = _make_job(test_db, lab, test_user, action="down")
-        _make_node(test_db, lab, gui_id="n1", name="r1", host_id=host1.id)
-        _make_link_state(test_db, lab)
+        lab = make_lab(test_db, test_user.id, state="running")
+        job = make_job(test_db, lab.id, test_user.id, action="down")
+        make_node(test_db, lab.id, gui_id="n1", display_name="r1", host_id=host1.id)
+        make_link_state(test_db, lab.id, link_name="r1:eth1-r2:eth1", source_node="r1", source_interface="eth1", target_node="r2", target_interface="eth1")
 
         patches = _standard_destroy_patches(test_db)
         with patch(f"{MODULE}.get_session", patches[f"{MODULE}.get_session"]):
@@ -963,10 +904,10 @@ class TestMultihostDestroyLinkStateCleanup:
     ):
         """On partial failure, LinkState rows are updated (not deleted)."""
         host1 = multiple_hosts[0]
-        lab = _make_lab(test_db, test_user, state="running")
-        job = _make_job(test_db, lab, test_user, action="down")
-        _make_node(test_db, lab, gui_id="n1", name="r1", host_id=host1.id)
-        ls = _make_link_state(test_db, lab, desired="up", actual="up")
+        lab = make_lab(test_db, test_user.id, state="running")
+        job = make_job(test_db, lab.id, test_user.id, action="down")
+        make_node(test_db, lab.id, gui_id="n1", display_name="r1", host_id=host1.id)
+        ls = make_link_state(test_db, lab.id, link_name="r1:eth1-r2:eth1", source_node="r1", source_interface="eth1", target_node="r2", target_interface="eth1", desired_state="up", actual_state="up")
         ls_id = ls.id
 
         patches = _standard_destroy_patches(test_db)
@@ -996,9 +937,9 @@ class TestMultihostDestroyWebhooks:
     ):
         """Full success dispatches lab.destroy_complete webhook."""
         host1 = multiple_hosts[0]
-        lab = _make_lab(test_db, test_user, state="running")
-        job = _make_job(test_db, lab, test_user, action="down")
-        _make_node(test_db, lab, gui_id="n1", name="r1", host_id=host1.id)
+        lab = make_lab(test_db, test_user.id, state="running")
+        job = make_job(test_db, lab.id, test_user.id, action="down")
+        make_node(test_db, lab.id, gui_id="n1", display_name="r1", host_id=host1.id)
 
         mock_webhook = AsyncMock()
         with patch(f"{MODULE}.get_session", _mock_get_session(test_db)):
@@ -1019,10 +960,10 @@ class TestMultihostDestroyWebhooks:
     ):
         """Partial failure dispatches job.failed webhook."""
         host1, _host2, host3 = multiple_hosts[0], multiple_hosts[1], multiple_hosts[2]
-        lab = _make_lab(test_db, test_user, state="running")
-        job = _make_job(test_db, lab, test_user, action="down")
-        _make_node(test_db, lab, gui_id="n1", name="r1", host_id=host1.id)
-        _make_node(test_db, lab, gui_id="n2", name="r2", host_id=host3.id)
+        lab = make_lab(test_db, test_user.id, state="running")
+        job = make_job(test_db, lab.id, test_user.id, action="down")
+        make_node(test_db, lab.id, gui_id="n1", display_name="r1", host_id=host1.id)
+        make_node(test_db, lab.id, gui_id="n2", display_name="r2", host_id=host3.id)
 
         mock_webhook = AsyncMock()
         with patch(f"{MODULE}.get_session", _mock_get_session(test_db)):
@@ -1047,9 +988,9 @@ class TestMultihostDestroyExceptions:
     ):
         """An unexpected exception marks the destroy job as failed."""
         host1 = multiple_hosts[0]
-        lab = _make_lab(test_db, test_user, state="running")
-        job = _make_job(test_db, lab, test_user, action="down")
-        _make_node(test_db, lab, gui_id="n1", name="r1", host_id=host1.id)
+        lab = make_lab(test_db, test_user.id, state="running")
+        job = make_job(test_db, lab.id, test_user.id, action="down")
+        make_node(test_db, lab.id, gui_id="n1", display_name="r1", host_id=host1.id)
 
         with patch(f"{MODULE}.get_session", _mock_get_session(test_db)):
             with patch(f"{MODULE}._broadcast_job_progress", AsyncMock()):
@@ -1068,9 +1009,9 @@ class TestMultihostDestroyExceptions:
         self, test_db: Session, test_user
     ):
         """Node assigned to a non-existent host record during destroy."""
-        lab = _make_lab(test_db, test_user, state="running")
-        job = _make_job(test_db, lab, test_user, action="down")
-        _make_node(test_db, lab, gui_id="n1", name="r1", host_id="ghost-agent")
+        lab = make_lab(test_db, test_user.id, state="running")
+        job = make_job(test_db, lab.id, test_user.id, action="down")
+        make_node(test_db, lab.id, gui_id="n1", display_name="r1", host_id="ghost-agent")
 
         with patch(f"{MODULE}.get_session", _mock_get_session(test_db)):
             with patch(f"{MODULE}._broadcast_job_progress", AsyncMock()):

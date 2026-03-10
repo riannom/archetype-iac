@@ -179,22 +179,6 @@ class TestJobHealthSettings:
         assert settings.job_timeout_node == 300  # 5 minutes
 
 
-class TestFeatureFlags:
-    """Tests for feature flags."""
-
-    def test_multihost_labs_enabled(self):
-        """Multi-host labs feature is enabled by default."""
-        from app.config import Settings
-        settings = Settings()
-        assert settings.feature_multihost_labs is True
-
-    def test_vxlan_overlay_enabled(self):
-        """VXLAN overlay feature is enabled by default."""
-        from app.config import Settings
-        settings = Settings()
-        assert settings.feature_vxlan_overlay is True
-
-
 class TestLoggingSettings:
     """Tests for logging configuration."""
 
@@ -361,4 +345,3 @@ class TestSettingsTypes:
         settings = Settings()
         assert isinstance(settings.local_auth_enabled, bool)
         assert isinstance(settings.image_sync_enabled, bool)
-        assert isinstance(settings.feature_multihost_labs, bool)

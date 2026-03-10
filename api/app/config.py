@@ -128,8 +128,6 @@ class Settings(BaseSettings):
     placement_scoring_enabled: bool = True         # Feature flag (False = legacy job-count sort)
 
     # Feature flags
-    feature_multihost_labs: bool = True
-    feature_vxlan_overlay: bool = True
     # Auto-extract configs before destroy operations
     feature_auto_extract_on_destroy: bool = True
     # Auto-extract configs before stop operations (unified lifecycle)
@@ -172,9 +170,6 @@ class Settings(BaseSettings):
     image_archive_verify_interval_cycles: int = 6
 
     # Catalog cutover controls
-    # Keep manifest.json mirrored from DB catalog for legacy tooling.
-    # Runtime manifest usage is deprecated and disabled by default.
-    catalog_manifest_mirror_enabled: bool = False
     # Sync runtime vendor/custom-device identity into catalog tables on API startup.
     catalog_identity_startup_sync_enabled: bool = True
 
