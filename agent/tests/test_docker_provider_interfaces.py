@@ -78,10 +78,12 @@ def test_create_lab_networks_starts_at_eth0(monkeypatch):
     docker_client.networks.create = MagicMock()
     provider._docker = docker_client
 
-    async def _sync_to_thread(func, *args, **kwargs):
-        return func(*args, **kwargs)
+    # Must use asyncio.to_thread (like production code) so exceptions
+    # propagate correctly through except clauses on Python 3.14+.
+    async def _passthrough_retry(desc, func, *args, **kwargs):
+        return await asyncio.to_thread(func, *args, **kwargs)
 
-    monkeypatch.setattr(asyncio, "to_thread", _sync_to_thread)
+    provider._retry_docker_call = _passthrough_retry
     # Patch module-level prune function (provider._prune_legacy_lab_networks
     # is an instance method, but create_lab_networks calls the standalone)
     monkeypatch.setattr(
