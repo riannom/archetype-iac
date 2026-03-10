@@ -144,13 +144,14 @@ class TestNodePrecheckSync:
     """Tests for _node_precheck_sync — the pre-deploy domain cleanup routine."""
 
     def test_already_running_returns_uuid(self, monkeypatch):
-        """If domain is already running, returns (True, uuid, status)."""
+        """If domain is already running, returns (True, uuid, status, identity)."""
         provider = _make_provider()
         provider._recover_stale_network = MagicMock()
         provider._undefine_domain = MagicMock()
 
         fake_domain = SimpleNamespace(
             UUIDString=lambda: "abcd1234-5678-9012",
+            XMLDesc=lambda: "<domain><metadata/></domain>",
         )
         monkeypatch.setattr(libvirt_mod, "libvirt", SimpleNamespace(
             libvirtError=type("libvirtError", (Exception,), {}),
@@ -164,7 +165,7 @@ class TestNodePrecheckSync:
         workspace = Path("/tmp/ws")
         disks_dir = Path("/tmp/ws/disks")
 
-        already_running, uuid_short, status = provider._node_precheck_sync(
+        already_running, uuid_short, status, _identity = provider._node_precheck_sync(
             "lab1", "r1", "arch-lab1-r1", workspace, disks_dir,
         )
 
@@ -173,16 +174,15 @@ class TestNodePrecheckSync:
         assert status == NodeStatus.RUNNING
         provider._undefine_domain.assert_not_called()
 
-    def test_stale_shutoff_domain_is_cleaned_up(self, monkeypatch, tmp_path):
-        """Stale (non-running) domain is undefined, disks removed, VLANs cleared."""
+    def test_stale_shutoff_domain_returns_status_and_identity(self, monkeypatch, tmp_path):
+        """Non-running domain returns (False, uuid_short, status, identity)."""
         provider = _make_provider()
         provider._recover_stale_network = MagicMock()
-        provider._clear_vm_post_boot_commands_cache = MagicMock()
-        provider._teardown_n9kv_poap_network = MagicMock()
-        provider._save_vlan_allocations = MagicMock()
-        provider._vlan_allocations = {"lab1": {"r1": [100, 101]}}
 
-        fake_domain = SimpleNamespace(UUIDString=lambda: "1234")
+        fake_domain = SimpleNamespace(
+            UUIDString=lambda: "1234",
+            XMLDesc=lambda: "<domain><metadata/></domain>",
+        )
 
         class FakeLibvirtError(Exception):
             pass
@@ -195,29 +195,20 @@ class TestNodePrecheckSync:
             lookupByName=lambda _name: fake_domain,
         )
         provider._get_domain_status = MagicMock(return_value=NodeStatus.STOPPED)
-        provider._undefine_domain = MagicMock()
 
-        # Create fake disk files
         disks_dir = tmp_path / "disks"
         disks_dir.mkdir()
-        overlay = disks_dir / "r1.qcow2"
-        overlay.write_bytes(b"fake")
-        data_disk = disks_dir / "r1-data.qcow2"
-        data_disk.write_bytes(b"fake")
 
-        result = provider._node_precheck_sync(
+        already_running, uuid_short, status, _identity = provider._node_precheck_sync(
             "lab1", "r1", "arch-lab1-r1", tmp_path, disks_dir,
         )
 
-        assert result == (False, None, None)
-        provider._undefine_domain.assert_called_once_with(fake_domain, "arch-lab1-r1")
-        provider._clear_vm_post_boot_commands_cache.assert_called_once()
-        assert not overlay.exists()
-        assert not data_disk.exists()
-        assert "r1" not in provider._vlan_allocations.get("lab1", {})
+        assert already_running is False
+        assert uuid_short == "1234"[:12]
+        assert status == NodeStatus.STOPPED
 
     def test_domain_not_found_returns_proceed(self, monkeypatch):
-        """When lookupByName raises libvirtError, returns (False, None, None)."""
+        """When lookupByName raises libvirtError, returns (False, None, None, None)."""
         provider = _make_provider()
         provider._recover_stale_network = MagicMock()
 
@@ -235,7 +226,7 @@ class TestNodePrecheckSync:
         result = provider._node_precheck_sync(
             "lab1", "r1", "arch-lab1-r1", Path("/tmp"), Path("/tmp/disks"),
         )
-        assert result == (False, None, None)
+        assert result == (False, None, None, None)
 
 
 # ===========================================================================

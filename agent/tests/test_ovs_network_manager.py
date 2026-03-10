@@ -113,7 +113,7 @@ def _reset_singleton():
     OVSNetworkManager._instance = None
 
 
-def _make_manager(tmp_path: Path) -> OVSNetworkManager:
+def _make_manager(tmp_path: Path, monkeypatch=None) -> OVSNetworkManager:
     """Create an OVSNetworkManager with mocked async primitives."""
     mgr = OVSNetworkManager()
     mgr._initialized = True
@@ -131,6 +131,15 @@ def _make_manager(tmp_path: Path) -> OVSNetworkManager:
     mgr._ip_link_exists = AsyncMock(return_value=False)
     mgr._get_container_pid = AsyncMock(return_value=42)
     return mgr
+
+
+@pytest.fixture(autouse=True)
+def _mock_provision_pid(monkeypatch):
+    """Mock get_container_pid in ovs_provision to avoid Docker dependency."""
+    monkeypatch.setattr(
+        "agent.network.ovs_provision.get_container_pid",
+        AsyncMock(return_value=42),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -161,10 +170,14 @@ class TestProvisionInterface:
         assert v1 == v2
 
     @pytest.mark.asyncio
-    async def test_no_container_raises(self, tmp_path: Path) -> None:
+    async def test_no_container_raises(self, tmp_path: Path, monkeypatch) -> None:
         """RuntimeError when the container is not running."""
         mgr = _make_manager(tmp_path)
-        mgr._get_container_pid = AsyncMock(return_value=None)
+        # Override autouse fixture: module-level get_container_pid returns None
+        monkeypatch.setattr(
+            "agent.network.ovs_provision.get_container_pid",
+            AsyncMock(return_value=None),
+        )
 
         with pytest.raises(RuntimeError, match="not running"):
             await mgr.provision_interface("archetype-lab1-r1", "eth1", "lab1")

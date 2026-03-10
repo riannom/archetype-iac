@@ -25,7 +25,6 @@ from agent.labels import (
     LABEL_LAB_ID,
     LABEL_NODE_INTERFACE_COUNT,
     LABEL_NODE_KIND,
-    LABEL_PROVIDER,
 )
 from agent.network.docker_plugin import get_docker_ovs_plugin
 
@@ -33,6 +32,26 @@ logger = logging.getLogger(__name__)
 
 # Plugin driver name
 PLUGIN_DRIVER = "archetype-ovs"
+
+
+def _is_docker_not_found(exc: Exception) -> bool:
+    """Check if exception is a Docker NotFound error.
+
+    Falls back to class-name check because Python 3.14 breaks class identity
+    for exceptions raised inside asyncio.to_thread.
+    """
+    return isinstance(exc, NotFound) or type(exc).__name__ == "NotFound"
+
+
+def _is_docker_api_error(exc: Exception) -> bool:
+    """Check if exception is a Docker APIError (or subclass like NotFound).
+
+    Falls back to class-name check because Python 3.14 breaks class identity
+    for exceptions raised inside asyncio.to_thread.
+    """
+    return isinstance(exc, APIError) or any(
+        c.__name__ == "APIError" for c in type(exc).__mro__
+    )
 
 
 class DockerNetworkManager:
@@ -297,8 +316,11 @@ async def create_lab_networks(provider: Any, lab_id: str, max_interfaces: int = 
                     )
                     networks[interface_name] = network_name
                     continue
-                except NotFound:
-                    pass
+                except Exception as _inspect_err:
+                    # Use status_code check instead of isinstance — Python 3.14
+                    # breaks class identity for exceptions from asyncio.to_thread.
+                    if not _is_docker_not_found(_inspect_err):
+                        raise
 
                 try:
                     await provider._retry_docker_call(
@@ -306,7 +328,11 @@ async def create_lab_networks(provider: Any, lab_id: str, max_interfaces: int = 
                         provider.docker.networks.create,
                         **provider._lab_network_create_kwargs(network_name, lab_id, interface_name),
                     )
-                except APIError as create_err:
+                except Exception as create_err:
+                    # Use status_code check instead of isinstance — Python 3.14
+                    # breaks class identity for exceptions from asyncio.to_thread.
+                    if not _is_docker_api_error(create_err):
+                        raise
                     if create_err.status_code == 409:
                         action = await provider._resolve_conflicting_lab_network(
                             network_name,

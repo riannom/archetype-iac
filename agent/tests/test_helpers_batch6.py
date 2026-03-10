@@ -307,7 +307,10 @@ def test_get_docker_images_success_and_error(monkeypatch):
         tags=["repo:tag"],
         attrs={"Size": 123, "Created": "2026-03-01T00:00:00Z"},
     )
-    client = SimpleNamespace(images=SimpleNamespace(list=lambda: [img]))
+    client = SimpleNamespace(
+        images=SimpleNamespace(list=lambda: [img]),
+        containers=SimpleNamespace(list=lambda: []),
+    )
     monkeypatch.setattr(helpers, "get_docker_client", lambda: client)
 
     images = helpers._get_docker_images()

@@ -197,9 +197,21 @@ def test_readiness_timeout_and_kind_helpers(monkeypatch):
     assert provider._get_readiness_timeout_sync("iosv", "lab1", "r1") == 120
     assert provider._get_readiness_timeout_sync("iosv", None, None) == 120
 
+    # _get_node_kind_sync now iterates listAllDomains and checks metadata
+    kind_domain = SimpleNamespace(
+        XMLDesc=lambda: (
+            "<domain><metadata>"
+            "<archetype:node xmlns:archetype='http://archetype.io/libvirt/1'>"
+            "<archetype:lab_id>lab1</archetype:lab_id>"
+            "<archetype:node_name>r1</archetype:node_name>"
+            "<archetype:node_definition_id>test-def</archetype:node_definition_id>"
+            "</archetype:node>"
+            "</metadata></domain>"
+        ),
+    )
     provider._conn = SimpleNamespace(
         isAlive=lambda: True,
-        lookupByName=lambda _name: object(),
+        listAllDomains=lambda _flags=0: [kind_domain],
     )
     monkeypatch.setattr(provider, "_get_domain_kind", lambda _domain: "cisco_n9kv")
     assert provider._get_node_kind_sync("lab1", "r1") == "cisco_n9kv"
@@ -207,7 +219,7 @@ def test_readiness_timeout_and_kind_helpers(monkeypatch):
 
     provider._conn = SimpleNamespace(
         isAlive=lambda: True,
-        lookupByName=lambda _name: (_ for _ in ()).throw(RuntimeError("no domain")),
+        listAllDomains=lambda _flags=0: (_ for _ in ()).throw(RuntimeError("no domain")),
     )
     assert provider._get_node_kind_sync("lab1", "r1") is None
 
@@ -624,8 +636,10 @@ def test_cleanup_lab_orphan_domains_sync_removes_orphans_and_disks(monkeypatch, 
     )
 
     class _Domain:
-        def __init__(self, name: str):
+        def __init__(self, name: str, lab_id: str, node_name: str):
             self._name = name
+            self._lab_id = lab_id
+            self._node_name = node_name
             self.destroy = MagicMock()
 
         def name(self):
@@ -634,9 +648,20 @@ def test_cleanup_lab_orphan_domains_sync_removes_orphans_and_disks(monkeypatch, 
         def state(self):
             return (1, 0)
 
-    d_keep = _Domain("arch-lab1-r1")
-    d_remove = _Domain("arch-lab1-r2")
-    d_other = _Domain("arch-lab2-r3")
+        def XMLDesc(self, _flags=0):  # noqa: N802
+            return (
+                "<domain><metadata>"
+                "<archetype:node xmlns:archetype='http://archetype.io/libvirt/1'>"
+                f"<archetype:lab_id>{self._lab_id}</archetype:lab_id>"
+                f"<archetype:node_name>{self._node_name}</archetype:node_name>"
+                "<archetype:node_definition_id>test-def</archetype:node_definition_id>"
+                "</archetype:node>"
+                "</metadata></domain>"
+            )
+
+    d_keep = _Domain("arch-lab1-r1", "lab1", "r1")
+    d_remove = _Domain("arch-lab1-r2", "lab1", "r2")
+    d_other = _Domain("arch-lab2-r3", "lab2", "r3")
     provider._conn = SimpleNamespace(isAlive=lambda: True, listAllDomains=lambda _flags=0: [d_keep, d_remove, d_other])
     provider._undefine_domain = MagicMock()
     provider._clear_vm_post_boot_commands_cache = MagicMock()

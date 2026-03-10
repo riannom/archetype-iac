@@ -56,7 +56,10 @@ class TestListImages:
             DockerImageInfo(id="sha256:bbb", tags=["srlinux:latest"], size_bytes=2048),
         ]
 
-        with patch("agent.routers.images._get_docker_images", return_value=fake_images):
+        with (
+            patch("agent.routers.images._get_docker_images", return_value=fake_images),
+            patch("agent.routers.images._get_file_images", return_value=[]),
+        ):
             resp = client.get("/images")
 
         assert resp.status_code == 200
@@ -67,7 +70,10 @@ class TestListImages:
 
     def test_empty(self, client: TestClient) -> None:
         """Empty image list returns successfully."""
-        with patch("agent.routers.images._get_docker_images", return_value=[]):
+        with (
+            patch("agent.routers.images._get_docker_images", return_value=[]),
+            patch("agent.routers.images._get_file_images", return_value=[]),
+        ):
             resp = client.get("/images")
 
         assert resp.status_code == 200
@@ -210,7 +216,10 @@ class TestReceiveFileBasedImage:
             files={"file": ("evil.qcow2", b"evil", "application/octet-stream")},
         )
 
-        assert resp.status_code == 400
+        # Path traversal now returns 200 with success=False (not HTTP 400)
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["success"] is False
 
     def test_libvirt_disabled(self, client: TestClient, monkeypatch) -> None:
         """qcow2 upload when libvirt is disabled returns error."""

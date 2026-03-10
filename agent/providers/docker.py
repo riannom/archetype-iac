@@ -44,12 +44,8 @@ from agent.labels import (
     LABEL_LAB_ID,
     LABEL_NODE_DEFINITION_ID,
     LABEL_NODE_DISPLAY_NAME,
-    LABEL_NODE_INTERFACE_COUNT,
     LABEL_NODE_KIND,
     LABEL_NODE_NAME,
-    LABEL_NODE_READINESS_PATTERN,
-    LABEL_NODE_READINESS_PROBE,
-    LABEL_NODE_READINESS_TIMEOUT,
     LABEL_PROVIDER,
 )
 from agent.network.local import LocalNetworkManager, get_local_manager
@@ -91,6 +87,7 @@ from agent.providers.docker_config_extract import (
     extract_config_via_nvram,
 )
 from agent.providers.docker_networks import (
+    _is_docker_not_found,
     create_lab_networks as _create_lab_networks_impl,
     delete_lab_networks as _delete_lab_networks_impl,
     recover_stale_networks as _recover_stale_networks_impl,
@@ -504,7 +501,9 @@ class DockerProvider(Provider, VlanPersistenceMixin):
                 self.docker.networks.get,
                 network_name,
             )
-        except NotFound as err:
+        except Exception as err:
+            if not _is_docker_not_found(err):
+                raise
             raise RuntimeError(
                 f"Docker reported conflict for {network_name}, but network lookup failed"
             ) from err

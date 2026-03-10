@@ -331,9 +331,7 @@ async def test_libvirt_start_node_marks_post_boot_console_pending(monkeypatch, t
 def test_libvirt_domain_name_and_prefix() -> None:
     provider = _make_libvirt_provider()
     domain_name = provider._domain_name("lab!@#", "node$%")
-    prefix = provider._lab_prefix("lab!@#")
     assert domain_name.startswith("arch-lab")
-    assert prefix == "arch-lab"
 
 
 def test_libvirt_prepare_startup_config_for_n9kv_strips_console_noise() -> None:
@@ -529,6 +527,10 @@ def test_libvirt_generate_domain_xml(monkeypatch, tmp_path: Path) -> None:
         {
             "memory": 1024,
             "cpu": 2,
+            "lab_id": "test-lab-id",
+            "node_name": "node1",
+            "node_definition_id": "test-node-def",
+            "provider": "libvirt",
             "disk_driver": "virtio",
             "nic_driver": "virtio",
             "readiness_probe": "log_pattern",
@@ -569,6 +571,10 @@ def test_libvirt_generate_domain_xml_with_dedicated_mgmt_interface(monkeypatch, 
         {
             "memory": 1024,
             "cpu": 2,
+            "lab_id": "test-lab-id",
+            "node_name": "node1",
+            "node_definition_id": "test-node-def",
+            "provider": "libvirt",
             "disk_driver": "virtio",
             "nic_driver": "e1000",
         },
@@ -589,19 +595,18 @@ def test_libvirt_generate_domain_xml_with_dedicated_mgmt_interface(monkeypatch, 
 
 
 def test_libvirt_generate_domain_xml_efi_stateless(monkeypatch, tmp_path: Path) -> None:
+    import agent.providers.libvirt_xml as lxml
     provider = _make_libvirt_provider()
     overlay = tmp_path / "overlay.qcow2"
     overlay.touch()
 
     monkeypatch.setattr(
-        libvirt_provider.LibvirtProvider,
-        "_find_ovmf_code_path",
-        lambda self: "/usr/share/OVMF/OVMF_CODE.fd",
+        lxml, "find_ovmf_code_path",
+        lambda: "/usr/share/OVMF/OVMF_CODE.fd",
     )
     monkeypatch.setattr(
-        libvirt_provider.LibvirtProvider,
-        "_find_ovmf_vars_template",
-        lambda self: "/usr/share/OVMF/OVMF_VARS.fd",
+        lxml, "find_ovmf_vars_template",
+        lambda: "/usr/share/OVMF/OVMF_VARS.fd",
     )
 
     xml = provider._generate_domain_xml(
@@ -609,6 +614,10 @@ def test_libvirt_generate_domain_xml_efi_stateless(monkeypatch, tmp_path: Path) 
         {
             "memory": 1024,
             "cpu": 2,
+            "lab_id": "test-lab-id",
+            "node_name": "node1",
+            "node_definition_id": "test-node-def",
+            "provider": "libvirt",
             "disk_driver": "virtio",
             "nic_driver": "e1000",
             "efi_boot": True,
@@ -641,6 +650,10 @@ def test_libvirt_generate_domain_xml_cpu_limit_adds_cputune(tmp_path: Path) -> N
             "memory": 1024,
             "cpu": 2,
             "cpu_limit": 25,
+            "lab_id": "test-lab-id",
+            "node_name": "node1",
+            "node_definition_id": "test-node-def",
+            "provider": "libvirt",
             "disk_driver": "virtio",
             "nic_driver": "e1000",
         },
@@ -667,6 +680,10 @@ def test_libvirt_generate_domain_xml_invalid_cpu_limit_skips_cputune(tmp_path: P
             "memory": 1024,
             "cpu": 2,
             "cpu_limit": "not-a-number",
+            "lab_id": "test-lab-id",
+            "node_name": "node1",
+            "node_definition_id": "test-node-def",
+            "provider": "libvirt",
             "disk_driver": "virtio",
             "nic_driver": "e1000",
         },
@@ -689,6 +706,10 @@ def test_libvirt_generate_domain_xml_invalid_driver_falls_back_to_kvm(tmp_path: 
         {
             "memory": 1024,
             "cpu": 2,
+            "lab_id": "test-lab-id",
+            "node_name": "node1",
+            "node_definition_id": "test-node-def",
+            "provider": "libvirt",
             "disk_driver": "virtio",
             "nic_driver": "e1000",
             "libvirt_driver": "not-valid",

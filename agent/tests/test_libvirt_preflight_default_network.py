@@ -7,6 +7,7 @@ when a VM requires a dedicated mgmt NIC.
 from __future__ import annotations
 
 import agent.providers.libvirt as libvirt_provider
+import agent.providers.libvirt_n9kv as libvirt_n9kv
 
 
 def _make_provider() -> libvirt_provider.LibvirtProvider:
@@ -68,12 +69,20 @@ def test_ensure_libvirt_network_returns_false_when_missing(monkeypatch):
     assert provider._ensure_libvirt_network("default") is False
 
 
+def _fake_conn():
+    """Return a fake libvirt connection that satisfies the conn property."""
+    from types import SimpleNamespace
+    return SimpleNamespace(isAlive=lambda: True)
+
+
 def test_resolve_management_network_prefers_poap_for_n9kv(monkeypatch):
     provider = _make_provider()
+    provider._conn = _fake_conn()
     monkeypatch.setattr(libvirt_provider.settings, "n9kv_boot_modifications_enabled", True, raising=False)
     monkeypatch.setattr(libvirt_provider.settings, "n9kv_poap_preboot_enabled", True, raising=False)
-    monkeypatch.setattr(provider, "_node_uses_dedicated_mgmt_interface", lambda _kind: True)
-    monkeypatch.setattr(provider, "_ensure_n9kv_poap_network", lambda _lab, _node: "ap-poap-123")
+    # Monkeypatch module-level functions in libvirt_n9kv (where the logic now lives)
+    monkeypatch.setattr(libvirt_n9kv, "node_uses_dedicated_mgmt_interface", lambda _kind: True)
+    monkeypatch.setattr(libvirt_n9kv, "ensure_n9kv_poap_network", lambda _conn, _lab, _node: "ap-poap-123")
 
     include, network = provider._resolve_management_network("lab1", "n9k1", "cisco_n9kv")
     assert include is True
@@ -82,11 +91,12 @@ def test_resolve_management_network_prefers_poap_for_n9kv(monkeypatch):
 
 def test_resolve_management_network_falls_back_to_default_when_poap_unavailable(monkeypatch):
     provider = _make_provider()
+    provider._conn = _fake_conn()
     monkeypatch.setattr(libvirt_provider.settings, "n9kv_boot_modifications_enabled", True, raising=False)
     monkeypatch.setattr(libvirt_provider.settings, "n9kv_poap_preboot_enabled", True, raising=False)
-    monkeypatch.setattr(provider, "_node_uses_dedicated_mgmt_interface", lambda _kind: True)
-    monkeypatch.setattr(provider, "_ensure_n9kv_poap_network", lambda _lab, _node: None)
-    monkeypatch.setattr(provider, "_ensure_libvirt_network", lambda _name: True)
+    monkeypatch.setattr(libvirt_n9kv, "node_uses_dedicated_mgmt_interface", lambda _kind: True)
+    monkeypatch.setattr(libvirt_n9kv, "ensure_n9kv_poap_network", lambda _conn, _lab, _node: None)
+    monkeypatch.setattr(libvirt_n9kv, "ensure_libvirt_network", lambda _conn, _name: True)
 
     include, network = provider._resolve_management_network("lab1", "n9k1", "cisco_n9kv")
     assert include is True
@@ -95,11 +105,12 @@ def test_resolve_management_network_falls_back_to_default_when_poap_unavailable(
 
 def test_resolve_management_network_ignores_poap_when_boot_mods_disabled(monkeypatch):
     provider = _make_provider()
+    provider._conn = _fake_conn()
     monkeypatch.setattr(libvirt_provider.settings, "n9kv_boot_modifications_enabled", False, raising=False)
     monkeypatch.setattr(libvirt_provider.settings, "n9kv_poap_preboot_enabled", True, raising=False)
-    monkeypatch.setattr(provider, "_node_uses_dedicated_mgmt_interface", lambda _kind: True)
-    monkeypatch.setattr(provider, "_ensure_n9kv_poap_network", lambda _lab, _node: "ap-poap-123")
-    monkeypatch.setattr(provider, "_ensure_libvirt_network", lambda _name: True)
+    monkeypatch.setattr(libvirt_n9kv, "node_uses_dedicated_mgmt_interface", lambda _kind: True)
+    monkeypatch.setattr(libvirt_n9kv, "ensure_n9kv_poap_network", lambda _conn, _lab, _node: "ap-poap-123")
+    monkeypatch.setattr(libvirt_n9kv, "ensure_libvirt_network", lambda _conn, _name: True)
 
     include, network = provider._resolve_management_network("lab1", "n9k1", "cisco_n9kv")
     assert include is True

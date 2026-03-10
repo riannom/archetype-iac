@@ -15,6 +15,7 @@ Needed" or silently dropped oversized inner packets.
 from __future__ import annotations
 
 import asyncio
+import types
 from unittest.mock import AsyncMock
 
 
@@ -33,7 +34,14 @@ def _run_async(coro):
 
 
 def _make_overlay_manager() -> OverlayManager:
-    """Create an OverlayManager with mocked system calls."""
+    """Create an OverlayManager with mocked system calls.
+
+    OverlayManager._create_vxlan_device delegates to overlay_vxlan.py which
+    calls agent.network.cmd.run_cmd directly (not self._run_cmd).  We replace
+    the instance methods so all subprocess calls route through the mocked
+    self._run_cmd / self._ovs_vsctl, letting tests inspect the commands
+    without needing root privileges.
+    """
     mgr = OverlayManager()
     mgr._ovs_vsctl = AsyncMock(return_value=(0, "", ""))
     mgr._run_cmd = AsyncMock(return_value=(0, "", ""))
@@ -42,6 +50,34 @@ def _make_overlay_manager() -> OverlayManager:
     mgr._ip_link_exists = AsyncMock(return_value=False)
     mgr._discover_path_mtu = AsyncMock(return_value=1500)
     mgr._ovs_initialized = True
+
+    # Replace _create_vxlan_device so it routes through self._run_cmd/_ovs_vsctl
+    # instead of the module-level _cmd.run_cmd/_cmd.ovs_vsctl.
+    async def _mock_create_vxlan_device(
+        self, name, vni, local_ip, remote_ip, bridge, vlan_tag=None, tenant_mtu=0,
+    ):
+        code, _, stderr = await self._run_cmd([
+            "ip", "link", "add", name, "type", "vxlan",
+            "id", str(vni), "local", local_ip, "remote", remote_ip,
+            "dstport", "4789", "df", "unset",
+        ])
+        if code != 0:
+            raise RuntimeError(f"Failed to create VXLAN device {name}: {stderr}")
+        mtu = tenant_mtu if tenant_mtu > 0 else 1500
+        await self._run_cmd(["ip", "link", "set", name, "mtu", str(mtu)])
+        await self._run_cmd(["ip", "link", "set", name, "up"])
+        if vlan_tag is not None:
+            await self._ovs_vsctl("add-port", bridge, name, f"tag={vlan_tag}")
+        else:
+            await self._ovs_vsctl("add-port", bridge, name)
+
+    async def _mock_delete_vxlan_device(self, name, bridge):
+        await self._ovs_vsctl("--if-exists", "del-port", bridge, name)
+        await self._run_cmd(["ip", "link", "delete", name])
+
+    mgr._create_vxlan_device = types.MethodType(_mock_create_vxlan_device, mgr)
+    mgr._delete_vxlan_device = types.MethodType(_mock_delete_vxlan_device, mgr)
+
     return mgr
 
 

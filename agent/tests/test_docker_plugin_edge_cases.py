@@ -616,7 +616,7 @@ class TestPortSwapPrevention:
 
     @pytest.mark.asyncio
     async def test_ifindex_match_selects_correct_port_over_name_match(self):
-        """When multiple vh ports exist, ifindex match wins over name heuristics."""
+        """When exact ifindex lookup returns a port, it is selected directly."""
         with (
             patch("agent.helpers._resolve_ifindex_sync", return_value=55),
             patch("asyncio.create_subprocess_exec") as mock_exec,
@@ -626,33 +626,19 @@ class TestPortSwapPrevention:
                 return_value=500,
             ),
         ):
+            # Exact ifindex lookup finds the correct port
             find_proc = AsyncMock()
-            find_proc.communicate = AsyncMock(return_value=(b"", b""))
+            find_proc.communicate = AsyncMock(return_value=(b"vhswap2\n", b""))
             find_proc.returncode = 0
 
-            list_proc = AsyncMock()
-            list_proc.communicate = AsyncMock(
-                return_value=(b"vhswap1\nvhswap2\nvhswap3\n", b"")
-            )
-            list_proc.returncode = 0
-
-            # vhswap1 ifindex=10 (wrong)
-            p1 = AsyncMock()
-            p1.communicate = AsyncMock(return_value=(b"10\n", b""))
-            p1.returncode = 0
-
-            # vhswap2 ifindex=55 (correct)
-            p2 = AsyncMock()
-            p2.communicate = AsyncMock(return_value=(b"55\n", b""))
-            p2.returncode = 0
-
-            mock_exec.side_effect = [find_proc, list_proc, p1, p2]
+            mock_exec.return_value = find_proc
 
             from agent.helpers import _resolve_ovs_port_via_ifindex
 
             result = await _resolve_ovs_port_via_ifindex("ctr", "eth1")
             assert result is not None
             assert result[0] == "vhswap2"
+            assert result[1] == 500
 
     @pytest.mark.asyncio
     async def test_no_match_returns_none_preventing_wrong_port_use(self):

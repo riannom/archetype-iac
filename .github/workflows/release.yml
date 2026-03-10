@@ -6,9 +6,10 @@ on:
       - 'v*'
 
 jobs:
-  backend-tests:
-    name: Backend Tests
+  api-tests:
+    name: API Tests
     runs-on: ubuntu-latest
+    timeout-minutes: 45
 
     steps:
       - uses: actions/checkout@v4
@@ -18,18 +19,13 @@ jobs:
         with:
           python-version: '3.14'
           cache: 'pip'
-          cache-dependency-path: |
-            api/requirements.txt
-            agent/requirements.txt
+          cache-dependency-path: api/requirements.txt
 
-      - name: Install API dependencies
+      - name: Install dependencies
         run: |
           cd api
           pip install -r requirements.txt
-
-      - name: Install coverage tooling
-        run: |
-          pip install pytest-cov
+          pip install pytest-cov pytest-timeout
 
       - name: Run API tests with coverage
         env:
@@ -38,17 +34,33 @@ jobs:
           WORKSPACE: /tmp/archetype-test
         run: |
           cd api
-          PYTHONPATH="${PYTHONPATH}:$(pwd)/.." pytest tests/ -v --tb=short --cov=app --cov-report=term-missing --cov-report=xml:../reports/api-coverage.xml --cov-fail-under=55
+          PYTHONPATH="${PYTHONPATH}:$(pwd)/.." pytest tests/ -v --tb=short --timeout=60 --cov=app --cov-report=term-missing --cov-report=xml:../reports/api-coverage.xml --cov-fail-under=55
 
-      - name: Install Agent dependencies
+  agent-tests:
+    name: Agent Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+          cache: 'pip'
+          cache-dependency-path: agent/requirements.txt
+
+      - name: Install dependencies
         run: |
           cd agent
           pip install -r requirements.txt
+          pip install pytest-cov pytest-timeout
 
       - name: Run Agent tests with coverage
         run: |
           cd agent
-          pytest tests/ -v --tb=short --cov=agent --cov-report=term-missing --cov-report=xml:../reports/agent-coverage.xml --cov-fail-under=50
+          pytest tests/ -v --tb=short --timeout=60 --cov=agent --cov-report=term-missing --cov-report=xml:../reports/agent-coverage.xml --cov-fail-under=50
 
   frontend-tests:
     name: Frontend Tests
@@ -185,7 +197,7 @@ jobs:
 
   create-release:
     name: Create Release
-    needs: [backend-tests, frontend-tests, lint, version-check, script-tests, smoke-test]
+    needs: [api-tests, agent-tests, frontend-tests, lint, version-check, script-tests, smoke-test]
     runs-on: ubuntu-latest
     permissions:
       contents: write
