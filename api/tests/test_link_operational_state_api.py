@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from app import models
-from app.services.link_operational_state import recompute_link_oper_state
+from app.services.link_manager import recompute_link_oper_state
 
 
 def test_recompute_link_oper_state_peer_host_offline_reason(

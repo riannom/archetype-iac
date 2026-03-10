@@ -1,10 +1,9 @@
-"""Comprehensive tests for agent/network/plugin_handlers.py.
+"""Comprehensive tests for Docker OVS plugin protocol handlers.
 
-Covers all 12 Docker network plugin protocol handler methods in
-PluginHandlersMixin: Activate, GetCapabilities, CreateNetwork,
-DeleteNetwork, CreateEndpoint, DeleteEndpoint, Join, Leave,
-EndpointOperInfo, DiscoverNew, DiscoverDelete,
-ProgramExternalConnectivity, RevokeExternalConnectivity.
+Covers all 12 handle_* methods in DockerOVSPlugin: Activate,
+GetCapabilities, CreateNetwork, DeleteNetwork, CreateEndpoint,
+DeleteEndpoint, Join, Leave, EndpointOperInfo, DiscoverNew,
+DiscoverDelete, ProgramExternalConnectivity, RevokeExternalConnectivity.
 """
 
 from __future__ import annotations

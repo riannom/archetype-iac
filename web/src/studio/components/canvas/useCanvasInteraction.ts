@@ -1,6 +1,8 @@
 import { useState, useCallback, useRef } from 'react';
 import { Node, Annotation, CanvasTool, AnnotationType, DeviceModel } from '../../types';
 import { ResizeHandle, ResizeState } from './types';
+import { useCanvasTouchGestures } from './useCanvasTouchGestures';
+import { useCanvasDragDrop } from './useCanvasDragDrop';
 
 interface UseCanvasInteractionArgs {
   containerRef: React.RefObject<HTMLDivElement | null>;
@@ -60,12 +62,6 @@ export function useCanvasInteraction({
   const [marqueeStart, setMarqueeStart] = useState<{ x: number; y: number } | null>(null);
   const [marqueeEnd, setMarqueeEnd] = useState<{ x: number; y: number } | null>(null);
   const marqueeRef = useRef<{ x: number; y: number } | null>(null);
-  const touchPanRef = useRef<{ x: number; y: number } | null>(null);
-  const pinchRef = useRef<{
-    distance: number;
-    zoom: number;
-    offset: { x: number; y: number };
-  } | null>(null);
 
   const startPan = useCallback((clientX: number, clientY: number) => {
     setIsPanning(true);
@@ -131,7 +127,6 @@ export function useCanvasInteraction({
       return;
     }
 
-    // Marquee selection tracking (pointer tool, empty canvas drag)
     if (marqueeRef.current) {
       if (!didPanRef.current && panStartRef.current) {
         const dx = e.clientX - panStartRef.current.x;
@@ -158,7 +153,6 @@ export function useCanvasInteraction({
       let newY = resizing.startAnnY;
 
       if (ann.type === 'arrow') {
-        // Arrow: 'n' handle moves start, 's' handle moves end
         if (resizing.handle === 'n') {
           onUpdateAnnotation(resizing.id, { x, y });
         } else {
@@ -166,12 +160,10 @@ export function useCanvasInteraction({
         }
         return;
       } else if (ann.type === 'circle') {
-        // For circles, resize uniformly based on drag distance
         const delta = Math.max(Math.abs(dx), Math.abs(dy));
         const sign = (resizing.handle.includes('e') || resizing.handle.includes('s')) ? 1 : -1;
         newWidth = Math.max(20, resizing.startWidth + delta * sign * 2);
       } else if (ann.type === 'rect') {
-        // For rects, resize based on which handle is being dragged
         const handle = resizing.handle;
 
         if (handle.includes('e')) {
@@ -218,7 +210,6 @@ export function useCanvasInteraction({
   }, [zoom, offset, clampZoom, applyZoomAtPoint]);
 
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
-    // Middle-button pan always works regardless of tool
     if (e.button === 1) {
       startPan(e.clientX, e.clientY);
       return;
@@ -233,26 +224,22 @@ export function useCanvasInteraction({
         startPan(e.clientX, e.clientY);
         return;
       }
-      // Tool mode: left-click starts tool gesture
       if (activeTool !== 'pointer' && onToolCreate && containerRef.current) {
         const rect = containerRef.current.getBoundingClientRect();
         const x = (e.clientX - rect.left - offset.x) / zoom;
         const y = (e.clientY - rect.top - offset.y) / zoom;
 
         if (activeTool === 'text') {
-          // Text: single click places and enters edit mode
           pendingTextEditRef.current = true;
           onToolCreate('text', x, y);
           return;
         }
-        // Rect/circle/arrow: start drag gesture
         drawStartRef.current = { x, y };
         setDrawStart({ x, y });
         setDrawEnd({ x, y });
         e.preventDefault();
         return;
       }
-      // Pointer: start marquee tracking (pan via middle-click or scroll)
       if (containerRef.current) {
         const rect = containerRef.current.getBoundingClientRect();
         const cx = (e.clientX - rect.left - offset.x) / zoom;
@@ -268,7 +255,6 @@ export function useCanvasInteraction({
   }, [activeTool, onToolCreate, offset, zoom, containerRef, startPan, startZoomDrag]);
 
   const handleMouseUp = useCallback(() => {
-    // Complete draw gesture for tool mode
     const start = drawStartRef.current;
     if (start && drawEnd && activeTool !== 'pointer' && activeTool !== 'hand' && activeTool !== 'text' && onToolCreate) {
       const dx = drawEnd.x - start.x;
@@ -295,7 +281,6 @@ export function useCanvasInteraction({
     setDrawStart(null);
     setDrawEnd(null);
 
-    // Marquee selection completion
     if (marqueeRef.current) {
       const mStart = marqueeRef.current;
       const mEnd = marqueeEnd;
@@ -364,7 +349,6 @@ export function useCanvasInteraction({
           return;
         }
       }
-      // Small movement or click — deselect
       onSelect(null);
       setDraggingNode(null);
       setDraggingAnnotation(null);
@@ -480,116 +464,24 @@ export function useCanvasInteraction({
     onSelect(id);
   };
 
-  const handleDragOver = useCallback((e: React.DragEvent) => {
-    if (e.dataTransfer.types.includes('application/x-archetype-device') ||
-        e.dataTransfer.types.includes('application/x-archetype-external')) {
-      e.preventDefault();
-      e.dataTransfer.dropEffect = 'copy';
-    }
-  }, []);
+  const { handleDragOver, handleDrop } = useCanvasDragDrop({
+    containerRef,
+    offset,
+    zoom,
+    onDropDevice,
+    onDropExternalNetwork,
+  });
 
-  const handleDrop = useCallback((e: React.DragEvent) => {
-    e.preventDefault();
-    if (!containerRef.current) return;
-    const rect = containerRef.current.getBoundingClientRect();
-    const x = (e.clientX - rect.left - offset.x) / zoom;
-    const y = (e.clientY - rect.top - offset.y) / zoom;
-
-    const deviceData = e.dataTransfer.getData('application/x-archetype-device');
-    if (deviceData && onDropDevice) {
-      try {
-        const model = JSON.parse(deviceData) as DeviceModel;
-        onDropDevice(model, x, y);
-      } catch { /* ignore parse errors */ }
-      return;
-    }
-
-    const externalData = e.dataTransfer.getData('application/x-archetype-external');
-    if (externalData && onDropExternalNetwork) {
-      onDropExternalNetwork(x, y);
-    }
-  }, [offset, zoom, onDropDevice, onDropExternalNetwork]);
-
-  const handleTouchStart = useCallback((e: React.TouchEvent) => {
-    if (!containerRef.current) return;
-    if (e.touches.length >= 2) {
-      const [first, second] = [e.touches[0], e.touches[1]];
-      const distance = Math.hypot(second.clientX - first.clientX, second.clientY - first.clientY);
-      pinchRef.current = {
-        distance,
-        zoom,
-        offset,
-      };
-      touchPanRef.current = null;
-      setIsPanning(false);
-      e.preventDefault();
-      return;
-    }
-
-    if (editingText) return;
-
-    if (e.touches.length === 1) {
-      const touch = e.touches[0];
-      touchPanRef.current = { x: touch.clientX, y: touch.clientY };
-      pinchRef.current = null;
-      setIsPanning(true);
-      e.preventDefault();
-    }
-  }, [containerRef, zoom, offset, editingText]);
-
-  const handleTouchMove = useCallback((e: React.TouchEvent) => {
-    if (e.touches.length >= 2) {
-      const [first, second] = [e.touches[0], e.touches[1]];
-      const distance = Math.hypot(second.clientX - first.clientX, second.clientY - first.clientY);
-      const midpointX = (first.clientX + second.clientX) / 2;
-      const midpointY = (first.clientY + second.clientY) / 2;
-      const pinch = pinchRef.current ?? { distance, zoom, offset };
-      const newZoom = clampZoom(pinch.zoom * (distance / Math.max(pinch.distance, 1)));
-      const newOffset = applyZoomAtPoint(newZoom, midpointX, midpointY, pinch.zoom, pinch.offset);
-      pinchRef.current = {
-        distance,
-        zoom: newZoom,
-        offset: newOffset,
-      };
-      setIsPanning(false);
-      e.preventDefault();
-      return;
-    }
-
-    if (e.touches.length === 1 && touchPanRef.current) {
-      const touch = e.touches[0];
-      const dx = touch.clientX - touchPanRef.current.x;
-      const dy = touch.clientY - touchPanRef.current.y;
-      setOffset(prev => ({ x: prev.x + dx, y: prev.y + dy }));
-      touchPanRef.current = { x: touch.clientX, y: touch.clientY };
-      setIsPanning(true);
-      e.preventDefault();
-    }
-  }, [zoom, offset, clampZoom, applyZoomAtPoint, setOffset]);
-
-  const handleTouchEnd = useCallback((e: React.TouchEvent) => {
-    if (e.touches.length >= 2) {
-      const [first, second] = [e.touches[0], e.touches[1]];
-      pinchRef.current = {
-        distance: Math.hypot(second.clientX - first.clientX, second.clientY - first.clientY),
-        zoom,
-        offset,
-      };
-      return;
-    }
-
-    if (e.touches.length === 1) {
-      const touch = e.touches[0];
-      touchPanRef.current = { x: touch.clientX, y: touch.clientY };
-      pinchRef.current = null;
-      setIsPanning(true);
-      return;
-    }
-
-    touchPanRef.current = null;
-    pinchRef.current = null;
-    setIsPanning(false);
-  }, [zoom, offset]);
+  const { handleTouchStart, handleTouchMove, handleTouchEnd } = useCanvasTouchGestures({
+    containerRef,
+    zoom,
+    offset,
+    setOffset,
+    setIsPanning,
+    editingText,
+    clampZoom,
+    applyZoomAtPoint,
+  });
 
   return {
     draggingNode,

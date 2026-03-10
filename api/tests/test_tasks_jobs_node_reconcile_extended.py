@@ -40,13 +40,13 @@ class TestRunNodeReconcileExtended:
         self, test_db: Session, sample_lab: models.Lab, test_user: models.User
     ):
         """Empty node_ids list should still create manager and call execute."""
-        from app.tasks.jobs_node_reconcile import run_node_reconcile
+        from app.tasks.jobs import run_node_reconcile
 
         job = make_job(test_db, sample_lab.id, test_user.id, status="running")
         mock_manager = MagicMock()
         mock_manager.execute = AsyncMock()
 
-        with patch("app.tasks.jobs_node_reconcile.get_session", _fake_get_session(test_db)):
+        with patch("app.tasks.jobs.get_session", _fake_get_session(test_db)):
             with patch(
                 "app.tasks.node_lifecycle.NodeLifecycleManager",
                 return_value=mock_manager,
@@ -66,13 +66,13 @@ class TestRunNodeReconcileExtended:
         self, test_db: Session, sample_lab: models.Lab, test_user: models.User
     ):
         """Custom provider should be passed through to NodeLifecycleManager."""
-        from app.tasks.jobs_node_reconcile import run_node_reconcile
+        from app.tasks.jobs import run_node_reconcile
 
         job = make_job(test_db, sample_lab.id, test_user.id, status="running")
         mock_manager = MagicMock()
         mock_manager.execute = AsyncMock()
 
-        with patch("app.tasks.jobs_node_reconcile.get_session", _fake_get_session(test_db)):
+        with patch("app.tasks.jobs.get_session", _fake_get_session(test_db)):
             with patch(
                 "app.tasks.node_lifecycle.NodeLifecycleManager",
                 return_value=mock_manager,
@@ -91,7 +91,7 @@ class TestRunNodeReconcileExtended:
         self, test_db: Session, test_user: models.User
     ):
         """If job exists but lab doesn't, job should be failed."""
-        from app.tasks.jobs_node_reconcile import run_node_reconcile
+        from app.tasks.jobs import run_node_reconcile
 
         fake_lab_id = str(uuid4())
         job = models.Job(
@@ -105,7 +105,7 @@ class TestRunNodeReconcileExtended:
         test_db.commit()
         test_db.refresh(job)
 
-        with patch("app.tasks.jobs_node_reconcile.get_session", _fake_get_session(test_db)):
+        with patch("app.tasks.jobs.get_session", _fake_get_session(test_db)):
             await run_node_reconcile(
                 job_id=job.id,
                 lab_id=fake_lab_id,
@@ -129,7 +129,7 @@ class TestCreateCrossHostLinksNewLinks:
         self, test_db: Session, sample_lab: models.Lab
     ):
         """Links in DB that don't have LinkState records should trigger creation."""
-        from app.tasks.jobs_node_reconcile import _create_cross_host_links_if_ready
+        from app.tasks.jobs import _create_cross_host_links_if_ready
 
         host_a = make_host(test_db, "host-a")
         host_b = make_host(test_db, "host-b")
@@ -151,7 +151,7 @@ class TestCreateCrossHostLinksNewLinks:
 
         log_parts = []
 
-        with patch("app.tasks.jobs_node_reconcile.agent_client") as mock_ac:
+        with patch("app.tasks.jobs.agent_client") as mock_ac:
             mock_ac.is_agent_online.return_value = True
             with patch(
                 "app.tasks.link_orchestration.create_deployment_links",
@@ -162,7 +162,7 @@ class TestCreateCrossHostLinksNewLinks:
                     return_value=mock_lock,
                 ):
                     with patch(
-                        "app.tasks.jobs_node_reconcile._release_db_transaction_for_io"
+                        "app.tasks.jobs._release_db_transaction_for_io"
                     ):
                         await _create_cross_host_links_if_ready(
                             test_db, sample_lab.id, log_parts
@@ -183,7 +183,7 @@ class TestCreateCrossHostLinksForceRecreate:
         self, test_db: Session, sample_lab: models.Lab
     ):
         """When link_tunnels are reported for the lab, force_recreate should not trigger."""
-        from app.tasks.jobs_node_reconcile import _create_cross_host_links_if_ready
+        from app.tasks.jobs import _create_cross_host_links_if_ready
 
         host_a = make_host(test_db, "host-c")
         host_b = make_host(test_db, "host-d")
@@ -199,7 +199,7 @@ class TestCreateCrossHostLinksForceRecreate:
 
         log_parts = []
 
-        with patch("app.tasks.jobs_node_reconcile.agent_client") as mock_ac:
+        with patch("app.tasks.jobs.agent_client") as mock_ac:
             mock_ac.is_agent_online.return_value = True
             # Agent reports link_tunnels present for this lab
             mock_ac.get_overlay_status_from_agent = AsyncMock(
@@ -208,7 +208,7 @@ class TestCreateCrossHostLinksForceRecreate:
                     "link_tunnels": [{"lab_id": sample_lab.id, "link_name": "R1:eth1-R3:eth1"}],
                 }
             )
-            with patch("app.tasks.jobs_node_reconcile._release_db_transaction_for_io"):
+            with patch("app.tasks.jobs._release_db_transaction_for_io"):
                 await _create_cross_host_links_if_ready(
                     test_db, sample_lab.id, log_parts
                 )
@@ -221,7 +221,7 @@ class TestCreateCrossHostLinksForceRecreate:
         self, test_db: Session, sample_lab: models.Lab
     ):
         """When both tunnels and link_tunnels are empty, force_recreate should trigger."""
-        from app.tasks.jobs_node_reconcile import _create_cross_host_links_if_ready
+        from app.tasks.jobs import _create_cross_host_links_if_ready
 
         host_a = make_host(test_db, "host-e")
         host_b = make_host(test_db, "host-f")
@@ -241,7 +241,7 @@ class TestCreateCrossHostLinksForceRecreate:
 
         log_parts = []
 
-        with patch("app.tasks.jobs_node_reconcile.agent_client") as mock_ac:
+        with patch("app.tasks.jobs.agent_client") as mock_ac:
             mock_ac.is_agent_online.return_value = True
             mock_ac.get_overlay_status_from_agent = AsyncMock(
                 return_value={"tunnels": [], "link_tunnels": []}
@@ -254,7 +254,7 @@ class TestCreateCrossHostLinksForceRecreate:
                     "app.utils.locks.link_ops_lock",
                     return_value=mock_lock,
                 ):
-                    with patch("app.tasks.jobs_node_reconcile._release_db_transaction_for_io"):
+                    with patch("app.tasks.jobs._release_db_transaction_for_io"):
                         await _create_cross_host_links_if_ready(
                             test_db, sample_lab.id, log_parts
                         )
@@ -274,7 +274,7 @@ class TestCreateCrossHostLinksMultiAgent:
         self, test_db: Session, sample_lab: models.Lab
     ):
         """Only online agents should be included in host_to_agent."""
-        from app.tasks.jobs_node_reconcile import _create_cross_host_links_if_ready
+        from app.tasks.jobs import _create_cross_host_links_if_ready
 
         host_online = make_host(test_db, "host-g", status="online")
         host_offline = make_host(test_db, "host-h", status="offline")
@@ -298,7 +298,7 @@ class TestCreateCrossHostLinksMultiAgent:
             created_host_map.update(host_to_agent)
             return (0, 0)
 
-        with patch("app.tasks.jobs_node_reconcile.agent_client") as mock_ac:
+        with patch("app.tasks.jobs.agent_client") as mock_ac:
             def online_check(agent):
                 return agent.status == "online"
             mock_ac.is_agent_online.side_effect = online_check
@@ -309,7 +309,7 @@ class TestCreateCrossHostLinksMultiAgent:
                 side_effect=capture_create,
             ):
                 with patch("app.utils.locks.link_ops_lock", return_value=mock_lock):
-                    with patch("app.tasks.jobs_node_reconcile._release_db_transaction_for_io"):
+                    with patch("app.tasks.jobs._release_db_transaction_for_io"):
                         await _create_cross_host_links_if_ready(
                             test_db, sample_lab.id, []
                         )
@@ -331,7 +331,7 @@ class TestCreateCrossHostLinksZeroResults:
         self, test_db: Session, sample_lab: models.Lab
     ):
         """When create_deployment_links returns (0, 0), info log should not be emitted."""
-        from app.tasks.jobs_node_reconcile import _create_cross_host_links_if_ready
+        from app.tasks.jobs import _create_cross_host_links_if_ready
 
         make_host(test_db, "host-i")
 
@@ -347,14 +347,14 @@ class TestCreateCrossHostLinksZeroResults:
 
         log_parts = []
 
-        with patch("app.tasks.jobs_node_reconcile.agent_client") as mock_ac:
+        with patch("app.tasks.jobs.agent_client") as mock_ac:
             mock_ac.is_agent_online.return_value = True
             with patch(
                 "app.tasks.link_orchestration.create_deployment_links",
                 mock_create,
             ):
                 with patch("app.utils.locks.link_ops_lock", return_value=mock_lock):
-                    with patch("app.tasks.jobs_node_reconcile._release_db_transaction_for_io"):
+                    with patch("app.tasks.jobs._release_db_transaction_for_io"):
                         await _create_cross_host_links_if_ready(
                             test_db, sample_lab.id, log_parts
                         )
@@ -375,11 +375,11 @@ class TestRunNodeReconcileExceptionHandling:
         self, test_db: Session, sample_lab: models.Lab, test_user: models.User
     ):
         """Unexpected exception during execution should fail the job."""
-        from app.tasks.jobs_node_reconcile import run_node_reconcile
+        from app.tasks.jobs import run_node_reconcile
 
         job = make_job(test_db, sample_lab.id, test_user.id, status="running")
 
-        with patch("app.tasks.jobs_node_reconcile.get_session", _fake_get_session(test_db)):
+        with patch("app.tasks.jobs.get_session", _fake_get_session(test_db)):
             with patch(
                 "app.tasks.node_lifecycle.NodeLifecycleManager",
                 side_effect=RuntimeError("Manager init failed"),
@@ -397,9 +397,9 @@ class TestRunNodeReconcileExceptionHandling:
     @pytest.mark.asyncio
     async def test_missing_job_returns_silently(self, test_db: Session, sample_lab: models.Lab):
         """Non-existent job should return without error."""
-        from app.tasks.jobs_node_reconcile import run_node_reconcile
+        from app.tasks.jobs import run_node_reconcile
 
-        with patch("app.tasks.jobs_node_reconcile.get_session", _fake_get_session(test_db)):
+        with patch("app.tasks.jobs.get_session", _fake_get_session(test_db)):
             # Should not raise
             await run_node_reconcile(
                 job_id="nonexistent-job-id",
@@ -420,7 +420,7 @@ class TestCreateCrossHostLinksNoAgents:
         self, test_db: Session, sample_lab: models.Lab
     ):
         """When no agents are online, should return without creating links."""
-        from app.tasks.jobs_node_reconcile import _create_cross_host_links_if_ready
+        from app.tasks.jobs import _create_cross_host_links_if_ready
 
         make_link_state(
             test_db, sample_lab.id,
@@ -429,9 +429,9 @@ class TestCreateCrossHostLinksNoAgents:
 
         log_parts = []
 
-        with patch("app.tasks.jobs_node_reconcile.agent_client") as mock_ac:
+        with patch("app.tasks.jobs.agent_client") as mock_ac:
             mock_ac.is_agent_online.return_value = False
-            with patch("app.tasks.jobs_node_reconcile._release_db_transaction_for_io"):
+            with patch("app.tasks.jobs._release_db_transaction_for_io"):
                 await _create_cross_host_links_if_ready(
                     test_db, sample_lab.id, log_parts
                 )

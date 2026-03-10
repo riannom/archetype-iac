@@ -95,7 +95,7 @@ class AgentResolutionMixin:
         """Resolve explicit host assignments (Node.host_id). Fail fast on errors."""
         explicit_placement_failures = []
         for ns in self.node_states:
-            db_node = self.db_nodes_map.get(ns.node_name) or self.db_nodes_by_gui_id.get(ns.node_id)
+            db_node = self._resolve_db_node(ns)
             if db_node and db_node.host_id:
                 host_agent = self.session.get(models.Host, db_node.host_id)
                 if not host_agent:

@@ -17,7 +17,7 @@ from uuid import uuid4
 
 import pytest
 
-from app.services.device_resolver import (
+from app.services.device_service import (
     DeviceResolver,
     ResolvedDevice,
     get_resolver,

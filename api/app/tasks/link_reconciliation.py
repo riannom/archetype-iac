@@ -24,7 +24,7 @@ from sqlalchemy.orm import Session, joinedload
 
 from app import agent_client, models
 from app.db import get_session
-from app.services.link_operational_state import recompute_link_oper_state
+from app.services.link_manager import recompute_link_oper_state
 from app.services.link_validator import verify_link_connected, is_vlan_mismatch
 from app.services.link_validator import ensure_link_interface_mappings
 from app.services.link_reservations import reconcile_link_endpoint_reservations

@@ -1,7 +1,9 @@
 import { describe, it, expect, beforeEach, beforeAll } from "vitest";
 import { renderHook } from "@testing-library/react";
 import { usePortManager } from "./usePortManager";
-import { Node, Link, DeviceNode, ExternalNetworkNode, DeviceType, DeviceModel } from "../types";
+import type { Node, Link, DeviceNode, ExternalNetworkNode, DeviceModel } from "../types";
+import { DeviceType } from "../types";
+import { createDeviceNode, createExternalNetworkNode, createLink } from "../../test-utils/factories";
 import { initializePatterns } from "../utils/interfaceRegistry";
 
 // Initialize interface patterns before tests run
@@ -65,41 +67,6 @@ beforeAll(() => {
   initializePatterns(testDeviceModels);
 });
 
-// Factory functions for test data
-const createDeviceNode = (overrides: Partial<DeviceNode> = {}): DeviceNode => ({
-  id: overrides.id || "node-1",
-  name: overrides.name || "Router1",
-  nodeType: "device",
-  type: overrides.type || DeviceType.ROUTER,
-  model: overrides.model || "linux",
-  version: overrides.version || "latest",
-  x: overrides.x ?? 100,
-  y: overrides.y ?? 100,
-  ...overrides,
-});
-
-const createExternalNetworkNode = (
-  overrides: Partial<ExternalNetworkNode> = {}
-): ExternalNetworkNode => ({
-  id: overrides.id || "ext-1",
-  name: overrides.name || "External1",
-  nodeType: "external",
-  connectionType: overrides.connectionType || "vlan",
-  x: overrides.x ?? 200,
-  y: overrides.y ?? 200,
-  vlanId: overrides.vlanId ?? 100,
-  ...overrides,
-});
-
-const createLink = (overrides: Partial<Link> = {}): Link => ({
-  id: overrides.id || "link-1",
-  source: overrides.source || "node-1",
-  target: overrides.target || "node-2",
-  type: overrides.type || "p2p",
-  sourceInterface: overrides.sourceInterface,
-  targetInterface: overrides.targetInterface,
-  ...overrides,
-});
 
 describe("usePortManager", () => {
   describe("Initialization", () => {

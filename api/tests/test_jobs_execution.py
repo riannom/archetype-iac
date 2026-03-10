@@ -724,7 +724,7 @@ class TestRunNodeReconcile:
         test_db.commit()
         test_db.refresh(job)
 
-        with patch("app.tasks.jobs_node_reconcile.get_session", _mock_get_session(test_db)):
+        with patch("app.tasks.jobs.get_session", _mock_get_session(test_db)):
             await run_node_reconcile(job.id, lab.id, ["nonexistent-node"])
 
         test_db.refresh(job)
@@ -778,12 +778,12 @@ class TestRunNodeReconcile:
         test_db.commit()
         test_db.refresh(job)
 
-        with patch("app.tasks.jobs_node_reconcile.get_session", _mock_get_session(test_db)):
-            with patch("app.tasks.jobs_node_reconcile.agent_client.get_agent_for_lab", new_callable=AsyncMock) as mock_get_agent:
+        with patch("app.tasks.jobs.get_session", _mock_get_session(test_db)):
+            with patch("app.tasks.jobs.agent_client.get_agent_for_lab", new_callable=AsyncMock) as mock_get_agent:
                 mock_get_agent.return_value = sample_host
-                with patch("app.tasks.jobs_node_reconcile.agent_client.deploy_to_agent", new_callable=AsyncMock) as mock_deploy:
+                with patch("app.tasks.jobs.agent_client.deploy_to_agent", new_callable=AsyncMock) as mock_deploy:
                     mock_deploy.return_value = {"status": "completed"}
-                    with patch("app.tasks.jobs_node_reconcile.agent_client.is_agent_online", return_value=True):
+                    with patch("app.tasks.jobs.agent_client.is_agent_online", return_value=True):
                         await run_node_reconcile(job.id, lab.id, ["node-1"])
 
         test_db.refresh(job)

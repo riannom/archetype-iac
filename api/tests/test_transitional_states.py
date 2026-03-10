@@ -110,7 +110,7 @@ class TestEarlyTransitionalStateAssignment:
         mock_ac.is_agent_online = MagicMock(return_value=False)
         mock_ac.get_agent_for_node = AsyncMock(return_value=None)
 
-        with patch("app.tasks.jobs_node_reconcile.get_session", mock_get_session(test_db)), \
+        with patch("app.tasks.jobs.get_session", mock_get_session(test_db)), \
              patch("app.tasks.node_lifecycle.agent_client", mock_ac), \
              patch("app.tasks.node_lifecycle_agents.agent_client", mock_ac), \
              patch("app.tasks.node_lifecycle_deploy.agent_client", mock_ac), \
@@ -175,7 +175,7 @@ class TestEarlyTransitionalStateAssignment:
         mock_ac.is_agent_online = MagicMock(return_value=False)
         mock_ac.get_agent_for_node = AsyncMock(return_value=None)
 
-        with patch("app.tasks.jobs_node_reconcile.get_session", mock_get_session(test_db)), \
+        with patch("app.tasks.jobs.get_session", mock_get_session(test_db)), \
              patch("app.tasks.node_lifecycle.agent_client", mock_ac), \
              patch("app.tasks.node_lifecycle_agents.agent_client", mock_ac), \
              patch("app.tasks.node_lifecycle_deploy.agent_client", mock_ac), \
@@ -237,7 +237,7 @@ class TestEarlyTransitionalStateAssignment:
         mock_ac.is_agent_online = MagicMock(return_value=False)
         mock_ac.get_agent_for_node = AsyncMock(return_value=None)
 
-        with patch("app.tasks.jobs_node_reconcile.get_session", mock_get_session(test_db)), \
+        with patch("app.tasks.jobs.get_session", mock_get_session(test_db)), \
              patch("app.tasks.node_lifecycle.agent_client", mock_ac), \
              patch("app.tasks.node_lifecycle_agents.agent_client", mock_ac), \
              patch("app.tasks.node_lifecycle_deploy.agent_client", mock_ac), \
@@ -452,7 +452,7 @@ class TestCategorizationMatchesTransitionalStates:
         mock_settings.image_sync_pre_deploy_check = False
         mock_settings.per_node_lifecycle_enabled = False
 
-        with patch("app.tasks.jobs_node_reconcile.get_session", mock_get_session(test_db)), \
+        with patch("app.tasks.jobs.get_session", mock_get_session(test_db)), \
              patch("app.tasks.node_lifecycle.agent_client", mock_ac), \
              patch("app.tasks.node_lifecycle_agents.agent_client", mock_ac), \
              patch("app.tasks.node_lifecycle_deploy.agent_client", mock_ac), \
@@ -526,7 +526,7 @@ class TestCategorizationMatchesTransitionalStates:
         mock_settings.image_sync_pre_deploy_check = False
         mock_settings.per_node_lifecycle_enabled = False
 
-        with patch("app.tasks.jobs_node_reconcile.get_session", mock_get_session(test_db)), \
+        with patch("app.tasks.jobs.get_session", mock_get_session(test_db)), \
              patch("app.tasks.node_lifecycle.agent_client", mock_ac), \
              patch("app.tasks.node_lifecycle_agents.agent_client", mock_ac), \
              patch("app.tasks.node_lifecycle_deploy.agent_client", mock_ac), \
@@ -635,7 +635,7 @@ class TestExplicitPlacementFailure:
         mock_ac.get_healthy_agent = AsyncMock(return_value=None)
         mock_ac.is_agent_online = MagicMock(return_value=False)
 
-        with patch("app.tasks.jobs_node_reconcile.get_session", mock_get_session(test_db)), \
+        with patch("app.tasks.jobs.get_session", mock_get_session(test_db)), \
              patch("app.tasks.node_lifecycle.agent_client", mock_ac), \
              patch("app.tasks.node_lifecycle_agents.agent_client", mock_ac), \
              patch("app.tasks.node_lifecycle_deploy.agent_client", mock_ac), \
@@ -728,7 +728,7 @@ class TestErrorMessageClearing:
         mock_ac.get_healthy_agent = AsyncMock(return_value=None)
         mock_ac.is_agent_online = MagicMock(return_value=False)
 
-        with patch("app.tasks.jobs_node_reconcile.get_session", mock_get_session(test_db)), \
+        with patch("app.tasks.jobs.get_session", mock_get_session(test_db)), \
              patch("app.tasks.node_lifecycle.agent_client", mock_ac), \
              patch("app.tasks.node_lifecycle_agents.agent_client", mock_ac), \
              patch("app.tasks.node_lifecycle_deploy.agent_client", mock_ac), \
@@ -788,7 +788,7 @@ class TestErrorMessageClearing:
         mock_ac.get_healthy_agent = AsyncMock(return_value=None)
         mock_ac.is_agent_online = MagicMock(return_value=False)
 
-        with patch("app.tasks.jobs_node_reconcile.get_session", mock_get_session(test_db)), \
+        with patch("app.tasks.jobs.get_session", mock_get_session(test_db)), \
              patch("app.tasks.node_lifecycle.agent_client", mock_ac), \
              patch("app.tasks.node_lifecycle_agents.agent_client", mock_ac), \
              patch("app.tasks.node_lifecycle_deploy.agent_client", mock_ac), \
@@ -1004,7 +1004,7 @@ class TestEarlyPlacementUpdate:
         mock_settings.per_node_lifecycle_enabled = False
         mock_settings.placement_scoring_enabled = False
 
-        with patch("app.tasks.jobs_node_reconcile.get_session", mock_get_session(test_db)), \
+        with patch("app.tasks.jobs.get_session", mock_get_session(test_db)), \
              patch("app.tasks.node_lifecycle.agent_client", mock_ac), \
              patch("app.tasks.node_lifecycle_agents.agent_client", mock_ac), \
              patch("app.tasks.node_lifecycle_deploy.agent_client", mock_ac), \

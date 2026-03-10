@@ -8,15 +8,16 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen } from "@testing-library/react";
 import PropertiesPanel from "./PropertiesPanel";
-import {
+import type {
   DeviceNode,
-  DeviceType,
   DeviceModel,
   Link,
   Annotation,
 } from "../types";
+import { DeviceType } from "../types";
 import { RuntimeStatus } from "./RuntimeControl";
 import { PortManager } from "../hooks/usePortManager";
+import { createDeviceNode as baseCreateDeviceNode } from "../../test-utils/factories";
 
 // Mock ExternalNetworkConfig component
 vi.mock("./ExternalNetworkConfig", () => ({
@@ -45,23 +46,15 @@ const mockDeviceModels: DeviceModel[] = [
   },
 ];
 
-const createDeviceNode = (
-  overrides: Partial<DeviceNode> = {}
-): DeviceNode => ({
-  id: "node-1",
-  name: "ceos-2",
-  nodeType: "device",
-  type: DeviceType.ROUTER,
-  model: "ceos",
-  version: "4.28.0F",
-  x: 100,
-  y: 100,
-  cpu: 2,
-  memory: 2048,
-  config: "",
-  container_name: "archetype-lab-ceos-2",
-  ...overrides,
-});
+const createDeviceNode = (overrides: Partial<DeviceNode> = {}): DeviceNode =>
+  baseCreateDeviceNode({
+    name: "ceos-2",
+    cpu: 2,
+    memory: 2048,
+    config: "",
+    container_name: "archetype-lab-ceos-2",
+    ...overrides,
+  });
 
 const createMockPortManager = (): PortManager => ({
   getUsedInterfaces: vi.fn().mockReturnValue(new Set()),

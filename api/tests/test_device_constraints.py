@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from app.services import device_constraints
+from app.services import device_service as device_constraints
 
 
 @pytest.mark.parametrize(

@@ -183,32 +183,35 @@ class NodeLifecycleManager(AgentResolutionMixin, DeploymentMixin, StopMixin):
             "cat9000v", "xrv9k", "asav", "nxosv", "linux", "frr",
         })
 
+    def _resolve_db_node(self, ns: models.NodeState) -> models.Node | None:
+        """Look up the Node definition for a NodeState, with gui_id fallback."""
+        return (
+            self.db_nodes_map.get(ns.node_name)
+            or self.db_nodes_by_gui_id.get(ns.node_id)
+        )
+
+    def _device_type_for_node(self, ns: models.NodeState) -> str:
+        """Return the normalized device type for a node, bounded to known set."""
+        db_node = self._resolve_db_node(ns)
+        raw = (db_node.device if db_node else "linux") or "linux"
+        lowered = raw.lower()
+        return lowered if lowered in self._KNOWN_DEVICE_TYPES else "other"
+
     def _dominant_device_type(self, node_states: list | None = None) -> str:
         """Return the most common device type among target nodes, bounded to known set."""
         states = node_states or self.node_states
-        types: list[str] = []
-        for ns in states:
-            db_node = self.db_nodes_map.get(ns.node_name)
-            device = (db_node.device if db_node else "linux") or "linux"
-            types.append(device.lower())
+        types = [self._device_type_for_node(ns) for ns in states]
         if not types:
             return "other"
-        # Most common type
         from collections import Counter
-        most_common = Counter(types).most_common(1)[0][0]
-        return most_common if most_common in self._KNOWN_DEVICE_TYPES else "other"
+        return Counter(types).most_common(1)[0][0]
 
     def _group_nodes_by_device_type(
         self, node_states: list[models.NodeState],
     ) -> list[tuple[str, list[models.NodeState]]]:
         groups: dict[str, list[models.NodeState]] = {}
         for ns in node_states:
-            db_node = self.db_nodes_map.get(ns.node_name)
-            raw_device = (db_node.device if db_node else "linux") or "linux"
-            device_type = raw_device.lower()
-            if device_type not in self._KNOWN_DEVICE_TYPES:
-                device_type = "other"
-            groups.setdefault(device_type, []).append(ns)
+            groups.setdefault(self._device_type_for_node(ns), []).append(ns)
         return [(k, groups[k]) for k in sorted(groups.keys())]
 
     def _release_db_transaction_for_io(self, reason: str) -> None:
@@ -583,6 +586,25 @@ class NodeLifecycleManager(AgentResolutionMixin, DeploymentMixin, StopMixin):
             return False
         return await self._check_cross_host_link_capacity_gate()
 
+    def _fail_preflight(
+        self,
+        blocked_nodes: dict[str, str] | None = None,
+        extra_log_lines: list[str] | None = None,
+    ) -> bool:
+        """Mark job as FAILED for a preflight gate and commit. Always returns False."""
+        if extra_log_lines:
+            self.log_parts.extend(extra_log_lines)
+        if blocked_nodes:
+            for ns in self.node_states:
+                if ns.node_name in blocked_nodes:
+                    ns.actual_state = NodeActualState.ERROR.value
+                    ns.error_message = blocked_nodes[ns.node_name]
+        self.job.status = JobStatus.FAILED.value
+        self.job.completed_at = utcnow()
+        self.job.log_path = "\n".join(self.log_parts)
+        self.session.commit()
+        return False
+
     def _provider_for_db_node(self, db_node: models.Node | None) -> str:
         """Resolve the provider for a node using image metadata when possible."""
         node_provider = self.provider
@@ -611,9 +633,7 @@ class NodeLifecycleManager(AgentResolutionMixin, DeploymentMixin, StopMixin):
             if ns.actual_state == NodeActualState.RUNNING.value:
                 continue
 
-            db_node = self.db_nodes_map.get(ns.node_name)
-            if not db_node and ns.node_id in self.db_nodes_by_gui_id:
-                db_node = self.db_nodes_by_gui_id[ns.node_id]
+            db_node = self._resolve_db_node(ns)
             if not db_node or not db_node.host_id:
                 continue
 
@@ -642,24 +662,20 @@ class NodeLifecycleManager(AgentResolutionMixin, DeploymentMixin, StopMixin):
         if not blocked:
             return True
 
-        self.log_parts.append("=== Preflight Failed ===")
-        self.log_parts.append(
-            "Assigned host availability check failed before lifecycle changes:"
-        )
+        log_lines = [
+            "=== Preflight Failed ===",
+            "Assigned host availability check failed before lifecycle changes:",
+        ]
+        blocked_with_error: dict[str, str] = {}
         for node_name in sorted(blocked):
             host_label = blocked[node_name]
-            self.log_parts.append(f"  {node_name}: assigned host unavailable ({host_label})")
+            log_lines.append(f"  {node_name}: assigned host unavailable ({host_label})")
+            blocked_with_error[node_name] = f"Assigned host unavailable: {host_label}"
 
-        for ns in self.node_states:
-            if ns.node_name in blocked:
-                ns.actual_state = NodeActualState.ERROR.value
-                ns.error_message = f"Assigned host unavailable: {blocked[ns.node_name]}"
-
-        self.job.status = JobStatus.FAILED.value
-        self.job.completed_at = utcnow()
-        self.job.log_path = "\n".join(self.log_parts)
-        self.session.commit()
-        return False
+        return self._fail_preflight(
+            blocked_nodes=blocked_with_error,
+            extra_log_lines=log_lines,
+        )
 
     def _check_assigned_host_capacity_gate(self) -> bool:
         """Block first-init on explicitly assigned hosts that are catastrophically over capacity."""
@@ -675,9 +691,7 @@ class NodeLifecycleManager(AgentResolutionMixin, DeploymentMixin, StopMixin):
             if ns.actual_state not in (NodeActualState.UNDEPLOYED.value, NodeActualState.PENDING.value):
                 continue
 
-            db_node = self.db_nodes_map.get(ns.node_name)
-            if not db_node and ns.node_id in self.db_nodes_by_gui_id:
-                db_node = self.db_nodes_by_gui_id[ns.node_id]
+            db_node = self._resolve_db_node(ns)
             if not db_node or not db_node.host_id:
                 continue
 
@@ -711,31 +725,26 @@ class NodeLifecycleManager(AgentResolutionMixin, DeploymentMixin, StopMixin):
             return True
 
         error_msg = format_capacity_error(failed_results)
-        self.log_parts.append("=== Preflight Failed ===")
-        self.log_parts.append(
-            "Assigned-host capacity validation failed before lifecycle changes:"
-        )
-        self.log_parts.append(error_msg)
-
         blocked_hosts = set(failed_results.keys())
+        blocked_with_error: dict[str, str] = {}
         for ns in self.node_states:
-            db_node = self.db_nodes_map.get(ns.node_name)
-            if not db_node and ns.node_id in self.db_nodes_by_gui_id:
-                db_node = self.db_nodes_by_gui_id[ns.node_id]
+            db_node = self._resolve_db_node(ns)
             if not db_node or db_node.host_id not in blocked_hosts:
                 continue
             if ns.desired_state != NodeDesiredState.RUNNING.value:
                 continue
             if ns.actual_state not in (NodeActualState.UNDEPLOYED.value, NodeActualState.PENDING.value):
                 continue
-            ns.actual_state = NodeActualState.ERROR.value
-            ns.error_message = "Insufficient resources on assigned host"
+            blocked_with_error[ns.node_name] = "Insufficient resources on assigned host"
 
-        self.job.status = JobStatus.FAILED.value
-        self.job.completed_at = utcnow()
-        self.job.log_path = "\n".join(self.log_parts)
-        self.session.commit()
-        return False
+        return self._fail_preflight(
+            blocked_nodes=blocked_with_error,
+            extra_log_lines=[
+                "=== Preflight Failed ===",
+                "Assigned-host capacity validation failed before lifecycle changes:",
+                error_msg,
+            ],
+        )
 
     async def _check_assigned_host_image_gate(self) -> bool:
         """Verify required images for explicitly assigned hosts before lifecycle mutation."""
@@ -757,9 +766,7 @@ class NodeLifecycleManager(AgentResolutionMixin, DeploymentMixin, StopMixin):
             if ns.actual_state == NodeActualState.RUNNING.value:
                 continue
 
-            db_node = self.db_nodes_map.get(ns.node_name)
-            if not db_node and ns.node_id in self.db_nodes_by_gui_id:
-                db_node = self.db_nodes_by_gui_id[ns.node_id]
+            db_node = self._resolve_db_node(ns)
             if not db_node or not db_node.host_id:
                 continue
 
@@ -775,19 +782,16 @@ class NodeLifecycleManager(AgentResolutionMixin, DeploymentMixin, StopMixin):
             host_image_to_nodes.setdefault(db_node.host_id, {}).setdefault(image, []).append(ns.node_name)
 
         if missing_image_nodes:
-            self.log_parts.append("=== Preflight Failed ===")
-            self.log_parts.append("Assigned-host image validation failed before lifecycle changes:")
+            log_lines = [
+                "=== Preflight Failed ===",
+                "Assigned-host image validation failed before lifecycle changes:",
+            ]
             for node_name in sorted(missing_image_nodes):
-                self.log_parts.append(f"  {node_name}: {missing_image_nodes[node_name]}")
-            for ns in self.node_states:
-                if ns.node_name in missing_image_nodes:
-                    ns.actual_state = NodeActualState.ERROR.value
-                    ns.error_message = missing_image_nodes[ns.node_name]
-            self.job.status = JobStatus.FAILED.value
-            self.job.completed_at = utcnow()
-            self.job.log_path = "\n".join(self.log_parts)
-            self.session.commit()
-            return False
+                log_lines.append(f"  {node_name}: {missing_image_nodes[node_name]}")
+            return self._fail_preflight(
+                blocked_nodes=missing_image_nodes,
+                extra_log_lines=log_lines,
+            )
 
         for host_id, image_refs in host_to_images.items():
             self._release_db_transaction_for_io(
@@ -820,21 +824,16 @@ class NodeLifecycleManager(AgentResolutionMixin, DeploymentMixin, StopMixin):
                 node_error = f"Required image not present in library for assigned host: {host_label}"
             else:
                 node_error = f"Required image not available on assigned host: {host_label}"
-            self.log_parts.append("=== Preflight Failed ===")
-            self.log_parts.append(
-                f"Assigned-host image validation failed on {host_label}: "
-                f"{', '.join(missing[:5])}"
-                + (f" (+{len(missing) - 5} more)" if len(missing) > 5 else "")
+            missing_summary = ", ".join(missing[:5])
+            if len(missing) > 5:
+                missing_summary += f" (+{len(missing) - 5} more)"
+            return self._fail_preflight(
+                blocked_nodes={n: node_error for n in blocked_nodes},
+                extra_log_lines=[
+                    "=== Preflight Failed ===",
+                    f"Assigned-host image validation failed on {host_label}: {missing_summary}",
+                ],
             )
-            for ns in self.node_states:
-                if ns.node_name in blocked_nodes:
-                    ns.actual_state = NodeActualState.ERROR.value
-                    ns.error_message = node_error
-            self.job.status = JobStatus.FAILED.value
-            self.job.completed_at = utcnow()
-            self.job.log_path = "\n".join(self.log_parts)
-            self.session.commit()
-            return False
 
         return True
 
@@ -851,9 +850,7 @@ class NodeLifecycleManager(AgentResolutionMixin, DeploymentMixin, StopMixin):
             ):
                 continue
 
-            db_node = self.db_nodes_map.get(ns.node_name)
-            if not db_node and ns.node_id in self.db_nodes_by_gui_id:
-                db_node = self.db_nodes_by_gui_id[ns.node_id]
+            db_node = self._resolve_db_node(ns)
             if not db_node or not db_node.host_id:
                 continue
             target_host = self.agent if self.agent and db_node.host_id == self.agent.id else self.session.get(
@@ -890,23 +887,17 @@ class NodeLifecycleManager(AgentResolutionMixin, DeploymentMixin, StopMixin):
         if not blocked:
             return True
 
-        self.log_parts.append("=== Preflight Failed ===")
-        self.log_parts.append(
-            "Runtime namespace conflict validation failed before lifecycle changes:"
-        )
+        log_lines = [
+            "=== Preflight Failed ===",
+            "Runtime namespace conflict validation failed before lifecycle changes:",
+        ]
         for node_name in sorted(blocked):
-            self.log_parts.append(f"  {node_name}: {blocked[node_name]}")
+            log_lines.append(f"  {node_name}: {blocked[node_name]}")
 
-        for ns in self.node_states:
-            if ns.node_name in blocked:
-                ns.actual_state = NodeActualState.ERROR.value
-                ns.error_message = blocked[ns.node_name]
-
-        self.job.status = JobStatus.FAILED.value
-        self.job.completed_at = utcnow()
-        self.job.log_path = "\n".join(self.log_parts)
-        self.session.commit()
-        return False
+        return self._fail_preflight(
+            blocked_nodes=blocked,
+            extra_log_lines=log_lines,
+        )
 
     async def _check_cross_host_link_capacity_gate(self) -> bool:
         """Block first-init when required cross-host link allocations cannot fit."""
@@ -993,24 +984,20 @@ class NodeLifecycleManager(AgentResolutionMixin, DeploymentMixin, StopMixin):
         if not blocked:
             return True
 
-        self.log_parts.append("=== Preflight Failed ===")
-        self.log_parts.append(
-            "Cross-host link capacity validation failed before lifecycle changes:"
-        )
+        log_lines = [
+            "=== Preflight Failed ===",
+            "Cross-host link capacity validation failed before lifecycle changes:",
+        ]
         for host_label in sorted(blocked):
-            self.log_parts.append(f"  {host_label}: {blocked[host_label]}")
+            log_lines.append(f"  {host_label}: {blocked[host_label]}")
 
-        for ns in self.node_states:
-            if ns.node_name not in provisioning_nodes:
-                continue
-            ns.actual_state = NodeActualState.ERROR.value
-            ns.error_message = "Cross-host link capacity unavailable"
-
-        self.job.status = JobStatus.FAILED.value
-        self.job.completed_at = utcnow()
-        self.job.log_path = "\n".join(self.log_parts)
-        self.session.commit()
-        return False
+        return self._fail_preflight(
+            blocked_nodes={
+                n: "Cross-host link capacity unavailable"
+                for n in provisioning_nodes
+            },
+            extra_log_lines=log_lines,
+        )
 
     async def _set_transitional_states(self):
         """Set starting/stopping/pending states BEFORE agent lookup.
@@ -1215,29 +1202,10 @@ class NodeLifecycleManager(AgentResolutionMixin, DeploymentMixin, StopMixin):
             # Group by old agent for efficiency
             old_agent_nodes: dict[str, list[str]] = {}
             for placement in migrations_needed:
-                if placement.host_id not in old_agent_nodes:
-                    old_agent_nodes[placement.host_id] = []
-                old_agent_nodes[placement.host_id].append(placement.node_name)
+                old_agent_nodes.setdefault(placement.host_id, []).append(placement.node_name)
 
             def _provider_for_node(node_name: str) -> str:
-                node_provider = self.provider
-                db_node = self.db_nodes_map.get(node_name)
-                if db_node:
-                    kind = db_node.device or "linux"
-                    image = resolve_node_image(
-                        db_node.device,
-                        kind,
-                        db_node.image,
-                        db_node.version,
-                    )
-                    if image:
-                        node_provider = get_image_provider(image)
-                    else:
-                        logger.warning(
-                            f"Migration cleanup: cannot resolve image for {node_name} "
-                            f"(device={db_node.device}), using lab provider '{self.provider}'"
-                        )
-                return node_provider
+                return self._provider_for_db_node(self.db_nodes_map.get(node_name))
 
             for old_agent_id, node_names in old_agent_nodes.items():
                 old_agent = self.session.get(models.Host, old_agent_id)

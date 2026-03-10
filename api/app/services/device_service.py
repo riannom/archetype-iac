@@ -3,6 +3,11 @@
 This service encapsulates all device/vendor-related business logic,
 extracted from main.py to improve maintainability and testability.
 
+Includes:
+- Hardware safety constraints (minimum requirements for memory-intensive devices)
+- Unified device identity resolution (DeviceResolver)
+- Vendor configuration management (DeviceService)
+
 Usage:
     from app.services.device_service import DeviceService
 
@@ -12,12 +17,227 @@ Usage:
 """
 from __future__ import annotations
 
+import functools
 import logging
+import re
+from dataclasses import dataclass
 from pathlib import Path
 
-from app.services.device_constraints import validate_minimum_hardware
-
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Device hardware constraints
+# ---------------------------------------------------------------------------
+
+CAT9K_MIN_MEMORY_MB = 18432
+CAT9K_MIN_CPU = 4
+
+
+def _normalize_device_id(device_id: str | None) -> str:
+    return (device_id or "").strip().lower().replace("_", "-")
+
+
+def is_cat9k_memory_intensive(device_id: str | None) -> bool:
+    """Return True for Cat9k variants known to require high memory."""
+    normalized = _normalize_device_id(device_id)
+    if not normalized:
+        return False
+    return bool(
+        re.search(r"(cat9000v|cat9kv)", normalized)
+        and re.search(r"(uadp|q200|cat9kv)", normalized)
+    )
+
+
+def minimum_hardware_for_device(device_id: str | None) -> dict[str, int] | None:
+    """Return minimum hardware requirements for a device, if constrained."""
+    if is_cat9k_memory_intensive(device_id):
+        return {"memory": CAT9K_MIN_MEMORY_MB, "cpu": CAT9K_MIN_CPU}
+    return None
+
+
+def validate_minimum_hardware(device_id: str | None, memory: int | None, cpu: int | None) -> None:
+    """Raise ValueError when provided hardware is below required minimums."""
+    minimums = minimum_hardware_for_device(device_id)
+    if not minimums:
+        return
+
+    violations: list[str] = []
+    if memory is not None and memory < minimums["memory"]:
+        violations.append(f"memory={memory}MB < required {minimums['memory']}MB")
+    if cpu is not None and cpu < minimums["cpu"]:
+        violations.append(f"cpu={cpu} < required {minimums['cpu']}")
+
+    if violations:
+        raise ValueError(
+            f"Device '{device_id}' is memory intensive and cannot run below minimums: "
+            + ", ".join(violations)
+        )
+
+
+# ---------------------------------------------------------------------------
+# Device identity resolver
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class ResolvedDevice:
+    """Result of device identity resolution."""
+
+    # The canonical VENDOR_CONFIGS key (e.g., "ceos", "cisco_n9kv").
+    # For custom/unknown devices, this is the normalized input.
+    canonical_id: str
+    # The VENDOR_CONFIGS key if the device is a built-in vendor device, else None.
+    vendor_config_key: str | None
+    # Runtime kind (from VendorConfig.kind). Same as vendor_config_key for most entries.
+    kind: str | None
+    # Vendor display name (e.g., "Arista", "Cisco").
+    vendor: str | None
+    # True if this is a custom (user-created) device, not in VENDOR_CONFIGS.
+    is_custom: bool
+
+
+class DeviceResolver:
+    """Unified device identity resolver.
+
+    Resolution order (explicit, documented):
+      1. Exact VENDOR_CONFIGS key match
+      2. Derived alias chain resolution (kinds + aliases)
+      3. Custom device lookup
+      4. Return unresolved (canonical_id = normalized input)
+    """
+
+    def __init__(self) -> None:
+        self._vendor_configs: dict | None = None
+        self._alias_map: dict[str, str] | None = None
+        self._vendor_map: dict[str, str] | None = None
+
+    def _ensure_loaded(self) -> None:
+        """Lazy-load VENDOR_CONFIGS and derived maps."""
+        if self._vendor_configs is not None:
+            return
+        try:
+            from agent.vendors import (
+                VENDOR_CONFIGS,
+                _DERIVED_DEVICE_ID_ALIASES,
+                _DERIVED_DEVICE_VENDOR_MAP,
+            )
+            self._vendor_configs = VENDOR_CONFIGS
+            self._alias_map = _DERIVED_DEVICE_ID_ALIASES
+            self._vendor_map = _DERIVED_DEVICE_VENDOR_MAP
+        except ImportError:
+            self._vendor_configs = {}
+            self._alias_map = {}
+            self._vendor_map = {}
+
+    @functools.lru_cache(maxsize=512)
+    def resolve(self, device_id: str | None) -> ResolvedDevice:
+        """Resolve a device identifier to its canonical form.
+
+        Args:
+            device_id: Any known device identifier (key, kind, alias, custom ID).
+
+        Returns:
+            ResolvedDevice with resolved metadata.
+        """
+        if not device_id:
+            return ResolvedDevice(
+                canonical_id="",
+                vendor_config_key=None,
+                kind=None,
+                vendor=None,
+                is_custom=False,
+            )
+
+        self._ensure_loaded()
+        assert self._vendor_configs is not None
+        assert self._alias_map is not None
+        assert self._vendor_map is not None
+
+        normalized = device_id.strip().lower()
+
+        # 1. Check derived alias map (covers keys, kinds, and aliases).
+        resolved_key = self._alias_map.get(normalized)
+        if resolved_key and resolved_key in self._vendor_configs:
+            cfg = self._vendor_configs[resolved_key]
+            return ResolvedDevice(
+                canonical_id=resolved_key,
+                vendor_config_key=resolved_key,
+                kind=cfg.kind,
+                vendor=cfg.vendor,
+                is_custom=False,
+            )
+
+        # 2. Direct VENDOR_CONFIGS key match (shouldn't miss if alias map is complete).
+        if normalized in self._vendor_configs:
+            cfg = self._vendor_configs[normalized]
+            return ResolvedDevice(
+                canonical_id=normalized,
+                vendor_config_key=normalized,
+                kind=cfg.kind,
+                vendor=cfg.vendor,
+                is_custom=False,
+            )
+
+        # 3. Custom device lookup.
+        try:
+            from app.image_store import find_custom_device
+            custom = find_custom_device(device_id)
+            if custom:
+                return ResolvedDevice(
+                    canonical_id=device_id,
+                    vendor_config_key=None,
+                    kind=custom.get("kind"),
+                    vendor=custom.get("vendor"),
+                    is_custom=True,
+                )
+        except Exception:
+            pass
+
+        # 4. Unresolved — return normalized input.
+        vendor = self._vendor_map.get(normalized)
+        return ResolvedDevice(
+            canonical_id=normalized,
+            vendor_config_key=None,
+            kind=None,
+            vendor=vendor,
+            is_custom=False,
+        )
+
+    def resolve_config(self, device_id: str | None):
+        """Resolve a device identifier to its VendorConfig.
+
+        Args:
+            device_id: Any known device identifier.
+
+        Returns:
+            VendorConfig if found, None otherwise.
+        """
+        if not device_id:
+            return None
+        self._ensure_loaded()
+        assert self._vendor_configs is not None
+
+        resolved = self.resolve(device_id)
+        if resolved.vendor_config_key:
+            return self._vendor_configs.get(resolved.vendor_config_key)
+        return None
+
+
+# Module-level singleton for convenience.
+_resolver: DeviceResolver | None = None
+
+
+def get_resolver() -> DeviceResolver:
+    """Get the module-level DeviceResolver singleton."""
+    global _resolver
+    if _resolver is None:
+        _resolver = DeviceResolver()
+    return _resolver
+
+
+# ---------------------------------------------------------------------------
+# Device service
+# ---------------------------------------------------------------------------
 
 
 def _get_config_by_kind(device_id: str):

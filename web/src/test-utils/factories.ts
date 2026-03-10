@@ -5,6 +5,73 @@
  * that can be overridden as needed.
  */
 
+import type {
+  Annotation,
+  DeviceNode,
+  ExternalNetworkNode,
+  Link,
+} from "../studio/types";
+import { DeviceType } from "../studio/types";
+
+// ── Topology factories ──
+
+export function createDeviceNode(
+  overrides: Partial<DeviceNode> = {}
+): DeviceNode {
+  return {
+    id: "node-1",
+    name: "Router1",
+    nodeType: "device",
+    type: DeviceType.ROUTER,
+    model: "ceos",
+    version: "4.28.0F",
+    x: 100,
+    y: 100,
+    ...overrides,
+  };
+}
+
+export function createExternalNetworkNode(
+  overrides: Partial<ExternalNetworkNode> = {}
+): ExternalNetworkNode {
+  return {
+    id: "ext-1",
+    name: "External1",
+    nodeType: "external",
+    connectionType: "vlan",
+    x: 200,
+    y: 200,
+    vlanId: 100,
+    ...overrides,
+  };
+}
+
+export function createLink(overrides: Partial<Link> = {}): Link {
+  return {
+    id: "link-1",
+    source: "node-1",
+    target: "node-2",
+    type: "p2p",
+    ...overrides,
+  };
+}
+
+export function createAnnotation(
+  overrides: Partial<Annotation> = {}
+): Annotation {
+  return {
+    id: "ann-1",
+    type: "rect",
+    x: 150,
+    y: 150,
+    width: 100,
+    height: 60,
+    ...overrides,
+  };
+}
+
+// ── Host factories ──
+
 /**
  * Host data for InfrastructurePage tests
  */

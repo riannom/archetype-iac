@@ -43,6 +43,8 @@ export const getInterfaceTypeBadge = (type: string): { color: string; text: stri
       return { color: 'bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400', text: 'Transport' };
     case 'external':
       return { color: 'bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-400', text: 'External' };
+    case 'custom':
+      return { color: 'bg-teal-100 dark:bg-teal-900/30 text-teal-700 dark:text-teal-400', text: 'Custom' };
     default:
       return { color: 'bg-stone-100 dark:bg-stone-800 text-stone-500 dark:text-stone-400', text: type };
   }
@@ -52,6 +54,8 @@ export const getManagedIfaceSyncBadge = (status: string): { color: string; icon:
   switch (status) {
     case 'synced':
       return { color: 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400', icon: 'fa-check', text: 'Synced' };
+    case 'mismatch':
+      return { color: 'bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400', icon: 'fa-triangle-exclamation', text: 'Mismatch' };
     case 'provisioning':
       return { color: 'bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400', icon: 'fa-spinner fa-spin', text: 'Provisioning' };
     case 'error':

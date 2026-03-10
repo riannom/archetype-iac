@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from unittest.mock import patch
 
 
-from app.services.device_resolver import DeviceResolver
+from app.services.device_service import DeviceResolver
 
 
 # ---------------------------------------------------------------------------

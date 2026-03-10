@@ -2,17 +2,16 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import Canvas from "./Canvas";
-import {
-  Node,
-  Link,
-  Annotation,
-  DeviceModel,
-  DeviceType,
-  DeviceNode,
-  ExternalNetworkNode,
-} from "../types";
+import type { Node, Link, Annotation, DeviceModel, ExternalNetworkNode } from "../types";
+import { DeviceType } from "../types";
 import { RuntimeStatus } from "./RuntimeControl";
 import { ThemeProvider } from "../../theme/ThemeProvider";
+import {
+  createDeviceNode,
+  createExternalNetworkNode,
+  createLink,
+  createAnnotation,
+} from "../../test-utils/factories";
 
 // Mock getBoundingClientRect for container element
 const mockGetBoundingClientRect = vi.fn(() => ({
@@ -86,53 +85,6 @@ const mockDeviceModels: DeviceModel[] = [
   },
 ];
 
-// Factory functions for test data
-const createDeviceNode = (
-  overrides: Partial<DeviceNode> = {}
-): DeviceNode => ({
-  id: overrides.id || "node-1",
-  name: overrides.name || "Router1",
-  nodeType: "device",
-  type: overrides.type || DeviceType.ROUTER,
-  model: overrides.model || "ceos",
-  version: overrides.version || "4.28.0F",
-  x: overrides.x ?? 100,
-  y: overrides.y ?? 100,
-  ...overrides,
-});
-
-const createExternalNetworkNode = (
-  overrides: Partial<ExternalNetworkNode> = {}
-): ExternalNetworkNode => ({
-  id: overrides.id || "ext-1",
-  name: overrides.name || "External1",
-  nodeType: "external",
-  connectionType: overrides.connectionType || "vlan",
-  x: overrides.x ?? 200,
-  y: overrides.y ?? 200,
-  vlanId: overrides.vlanId ?? 100,
-  ...overrides,
-});
-
-const createLink = (overrides: Partial<Link> = {}): Link => ({
-  id: overrides.id || "link-1",
-  source: overrides.source || "node-1",
-  target: overrides.target || "node-2",
-  type: overrides.type || "p2p",
-  sourceInterface: overrides.sourceInterface,
-  targetInterface: overrides.targetInterface,
-  ...overrides,
-});
-
-const createAnnotation = (overrides: Partial<Annotation> = {}): Annotation => ({
-  id: overrides.id || "ann-1",
-  type: overrides.type || "rect",
-  x: overrides.x ?? 150,
-  y: overrides.y ?? 150,
-  width: overrides.width ?? 100,
-  height: overrides.height ?? 60,
-  ...overrides,
-});
 
 describe("Canvas", () => {
   // Default mock handlers

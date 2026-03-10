@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from app.services.link_operational_state import (
+from app.services.link_manager import (
     OPER_DOWN,
     OPER_UP,
     REASON_ADMIN_DOWN,

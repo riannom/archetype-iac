@@ -274,7 +274,7 @@ def test_detect_qcow2_paths(monkeypatch, tmp_path):
     monkeypatch.setattr(img, "validate_qcow2", lambda _dst: (True, None))
     monkeypatch.setattr(img, "compute_sha256", lambda _dst: "sha256-value")
     monkeypatch.setattr(img, "detect_device_from_filename", lambda _name: ("csr1000v", "17.9"))
-    with patch("app.services.device_resolver.get_resolver", return_value=fake_resolver):
+    with patch("app.services.device_service.get_resolver", return_value=fake_resolver):
         detected = img._detect_qcow2(valid)
 
     assert detected["confidence"] == "high"
