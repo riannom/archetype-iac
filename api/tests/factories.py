@@ -16,11 +16,26 @@ from __future__ import annotations
 import json
 from datetime import datetime, timezone
 
+from sqlalchemy.orm import Session
+
 from app import models
+
+# Pre-serialized defaults to avoid repeated json.dumps() calls.
+_DEFAULT_CAPABILITIES = json.dumps({"providers": ["docker"]})
+_DEFAULT_RESOURCE_USAGE = json.dumps({
+    "cpu_percent": 25.0,
+    "memory_percent": 40.0,
+    "disk_percent": 30.0,
+    "disk_used_gb": 60.0,
+    "disk_total_gb": 200.0,
+    "containers_running": 2,
+    "containers_total": 4,
+    "container_details": [],
+})
 
 
 def make_host(
-    test_db,
+    test_db: Session,
     *,
     host_id: str = "agent-1",
     name: str | None = None,
@@ -34,7 +49,7 @@ def make_host(
     """Create a Host record.
 
     Args:
-        name: Defaults to host_id if not provided.
+        name: Defaults to host_id titlecased if not provided.
         address: Defaults to "{host_id}.local:8080" if not provided.
         capabilities: Dict or JSON string. Defaults to docker provider.
         resource_usage: Dict or JSON string. Defaults to reasonable test values.
@@ -44,21 +59,12 @@ def make_host(
     if address is None:
         address = f"{host_id}.local:8080"
     if capabilities is None:
-        capabilities = {"providers": ["docker"]}
-    if isinstance(capabilities, dict):
+        capabilities = _DEFAULT_CAPABILITIES
+    elif isinstance(capabilities, dict):
         capabilities = json.dumps(capabilities)
     if resource_usage is None:
-        resource_usage = {
-            "cpu_percent": 25.0,
-            "memory_percent": 40.0,
-            "disk_percent": 30.0,
-            "disk_used_gb": 60.0,
-            "disk_total_gb": 200.0,
-            "containers_running": 2,
-            "containers_total": 4,
-            "container_details": [],
-        }
-    if isinstance(resource_usage, dict):
+        resource_usage = _DEFAULT_RESOURCE_USAGE
+    elif isinstance(resource_usage, dict):
         resource_usage = json.dumps(resource_usage)
     if last_heartbeat is None:
         last_heartbeat = datetime.now(timezone.utc)
@@ -74,13 +80,12 @@ def make_host(
         last_heartbeat=last_heartbeat,
     )
     test_db.add(host)
-    test_db.commit()
-    test_db.refresh(host)
+    test_db.flush()
     return host
 
 
 def make_lab(
-    test_db,
+    test_db: Session,
     owner_id: str,
     *,
     name: str = "Test Lab",
@@ -99,13 +104,12 @@ def make_lab(
         agent_id=agent_id,
     )
     test_db.add(lab)
-    test_db.commit()
-    test_db.refresh(lab)
+    test_db.flush()
     return lab
 
 
 def make_job(
-    test_db,
+    test_db: Session,
     lab_id: str,
     user_id: str,
     *,
@@ -116,28 +120,22 @@ def make_job(
     started_at: datetime | None = None,
 ) -> models.Job:
     """Create a Job record."""
-    kwargs: dict = {
-        "lab_id": lab_id,
-        "user_id": user_id,
-        "action": action,
-        "status": status,
-    }
-    if agent_id is not None:
-        kwargs["agent_id"] = agent_id
-    if created_at is not None:
-        kwargs["created_at"] = created_at
-    if started_at is not None:
-        kwargs["started_at"] = started_at
-
-    job = models.Job(**kwargs)
+    job = models.Job(
+        lab_id=lab_id,
+        user_id=user_id,
+        action=action,
+        status=status,
+        agent_id=agent_id,
+        created_at=created_at,
+        started_at=started_at,
+    )
     test_db.add(job)
-    test_db.commit()
-    test_db.refresh(job)
+    test_db.flush()
     return job
 
 
 def make_node_state(
-    test_db,
+    test_db: Session,
     lab_id: str,
     node_id: str,
     node_name: str,
@@ -169,13 +167,12 @@ def make_node_state(
         **kwargs,
     )
     test_db.add(ns)
-    test_db.commit()
-    test_db.refresh(ns)
+    test_db.flush()
     return ns
 
 
 def make_link_state(
-    test_db,
+    test_db: Session,
     lab_id: str,
     *,
     link_name: str = "R1:eth1-R2:eth1",
@@ -220,13 +217,12 @@ def make_link_state(
         **kwargs,
     )
     test_db.add(ls)
-    test_db.commit()
-    test_db.refresh(ls)
+    test_db.flush()
     return ls
 
 
 def make_node(
-    test_db,
+    test_db: Session,
     lab_id: str,
     *,
     gui_id: str = "n1",
@@ -242,30 +238,66 @@ def make_node(
 
     Args:
         container_name: Defaults to display_name if not provided.
+        kind: Alias for node_type (handled by Node constructor).
     """
     if container_name is None:
         container_name = display_name
 
-    node = models.Node(
-        lab_id=lab_id,
-        gui_id=gui_id,
-        display_name=display_name,
-        container_name=container_name,
-        device=device,
-        host_id=host_id,
-        node_type=node_type,
+    # Node constructor handles kind → node_type aliasing
+    ctor_kwargs = {
+        "lab_id": lab_id,
+        "gui_id": gui_id,
+        "display_name": display_name,
+        "container_name": container_name,
+        "device": device,
+        "host_id": host_id,
+        "node_type": node_type,
         **kwargs,
-    )
+    }
     if kind is not None:
-        node.kind = kind
+        ctor_kwargs["kind"] = kind
+
+    node = models.Node(**ctor_kwargs)
     test_db.add(node)
-    test_db.commit()
-    test_db.refresh(node)
+    test_db.flush()
     return node
 
 
+def make_link(
+    test_db: Session,
+    lab_id: str,
+    source_node: models.Node,
+    source_interface: str,
+    target_node: models.Node,
+    target_interface: str,
+    *,
+    link_name: str | None = None,
+) -> models.Link:
+    """Create a Link (definition) record.
+
+    Args:
+        link_name: Defaults to "{source_container}:{src_iface}-{target_container}:{tgt_iface}".
+    """
+    if link_name is None:
+        link_name = (
+            f"{source_node.container_name}:{source_interface}"
+            f"-{target_node.container_name}:{target_interface}"
+        )
+    link = models.Link(
+        lab_id=lab_id,
+        link_name=link_name,
+        source_node_id=source_node.id,
+        source_interface=source_interface,
+        target_node_id=target_node.id,
+        target_interface=target_interface,
+    )
+    test_db.add(link)
+    test_db.flush()
+    return link
+
+
 def make_placement(
-    test_db,
+    test_db: Session,
     lab_id: str,
     node_name: str,
     host_id: str,
@@ -274,17 +306,13 @@ def make_placement(
     node_definition_id: str | None = None,
 ) -> models.NodePlacement:
     """Create a NodePlacement record."""
-    kwargs: dict = {
-        "lab_id": lab_id,
-        "node_name": node_name,
-        "host_id": host_id,
-        "status": status,
-    }
-    if node_definition_id is not None:
-        kwargs["node_definition_id"] = node_definition_id
-
-    p = models.NodePlacement(**kwargs)
+    p = models.NodePlacement(
+        lab_id=lab_id,
+        node_name=node_name,
+        host_id=host_id,
+        status=status,
+        node_definition_id=node_definition_id,
+    )
     test_db.add(p)
-    test_db.commit()
-    test_db.refresh(p)
+    test_db.flush()
     return p

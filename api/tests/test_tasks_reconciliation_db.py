@@ -24,6 +24,7 @@ from app.state import (
 )
 from tests.factories import (
     make_host,
+    make_link,
     make_link_state,
     make_node,
     make_node_state,
@@ -92,22 +93,6 @@ def _disable_reconcile_redis():
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _make_link(test_db: Session, lab_id: str, src_node: models.Node,
-               src_iface: str, tgt_node: models.Node,
-               tgt_iface: str) -> models.Link:
-    """Create and flush a Link definition."""
-    link = models.Link(
-        lab_id=lab_id,
-        link_name=f"{src_node.container_name}:{src_iface}-{tgt_node.container_name}:{tgt_iface}",
-        source_node_id=src_node.id,
-        source_interface=src_iface,
-        target_node_id=tgt_node.id,
-        target_interface=tgt_iface,
-    )
-    test_db.add(link)
-    test_db.flush()
-    return link
-
 
 # ===================================================================
 #  _ensure_link_states_for_lab
@@ -121,7 +106,7 @@ class TestEnsureLinkStatesForLab:
 
         n1 = make_node(test_db, sample_lab.id, gui_id="r1", display_name="R1")
         n2 = make_node(test_db, sample_lab.id, gui_id="r2", display_name="R2")
-        _make_link(test_db, sample_lab.id, n1, "eth1", n2, "eth1")
+        make_link(test_db, sample_lab.id, n1, "eth1", n2, "eth1")
         test_db.commit()
 
         created = _ensure_link_states_for_lab(test_db, sample_lab.id)
@@ -147,7 +132,7 @@ class TestEnsureLinkStatesForLab:
 
         n1 = make_node(test_db, sample_lab.id, gui_id="r1", display_name="R1")
         n2 = make_node(test_db, sample_lab.id, gui_id="r2", display_name="R2")
-        _make_link(test_db, sample_lab.id, n1, "eth1", n2, "eth1")
+        make_link(test_db, sample_lab.id, n1, "eth1", n2, "eth1")
         # Pre-existing state
         make_link_state(test_db, sample_lab.id, link_name="R1:eth1-R2:eth1", source_node="R1", source_interface="eth1", target_node="R2", target_interface="eth1")
         test_db.commit()
@@ -162,8 +147,8 @@ class TestEnsureLinkStatesForLab:
         n1 = make_node(test_db, sample_lab.id, gui_id="r1", display_name="R1")
         n2 = make_node(test_db, sample_lab.id, gui_id="r2", display_name="R2")
         n3 = make_node(test_db, sample_lab.id, gui_id="r3", display_name="R3")
-        _make_link(test_db, sample_lab.id, n1, "eth1", n2, "eth1")
-        _make_link(test_db, sample_lab.id, n2, "eth2", n3, "eth1")
+        make_link(test_db, sample_lab.id, n1, "eth1", n2, "eth1")
+        make_link(test_db, sample_lab.id, n2, "eth2", n3, "eth1")
         test_db.commit()
 
         created = _ensure_link_states_for_lab(test_db, sample_lab.id)
@@ -175,7 +160,7 @@ class TestEnsureLinkStatesForLab:
 
         n1 = make_node(test_db, sample_lab.id, gui_id="r1", display_name="R1")
         n2 = make_node(test_db, sample_lab.id, gui_id="r2", display_name="R2")
-        _make_link(test_db, sample_lab.id, n1, "eth1", n2, "eth1")
+        make_link(test_db, sample_lab.id, n1, "eth1", n2, "eth1")
 
         # Create two link states with same canonical key but different link_names
         # (one in forward order, one reversed — both canonicalize the same)
@@ -221,7 +206,7 @@ class TestEnsureLinkStatesForLab:
 
         n1 = make_node(test_db, sample_lab.id, gui_id="r1", display_name="R1", host_id=h1.id)
         n2 = make_node(test_db, sample_lab.id, gui_id="r2", display_name="R2", host_id=h2.id)
-        _make_link(test_db, sample_lab.id, n1, "eth1", n2, "eth1")
+        make_link(test_db, sample_lab.id, n1, "eth1", n2, "eth1")
         test_db.commit()
 
         created = _ensure_link_states_for_lab(test_db, sample_lab.id)
@@ -242,7 +227,7 @@ class TestEnsureLinkStatesForLab:
 
         n1 = make_node(test_db, sample_lab.id, gui_id="r1", display_name="R1", host_id=h1.id)
         n2 = make_node(test_db, sample_lab.id, gui_id="r2", display_name="R2", host_id=h1.id)
-        _make_link(test_db, sample_lab.id, n1, "eth1", n2, "eth1")
+        make_link(test_db, sample_lab.id, n1, "eth1", n2, "eth1")
         test_db.commit()
 
         _ensure_link_states_for_lab(test_db, sample_lab.id)
@@ -264,7 +249,7 @@ class TestEnsureLinkStatesForLab:
         n2 = make_node(test_db, sample_lab.id, gui_id="r2", display_name="R2")
         make_placement(test_db, sample_lab.id, n1.container_name, h1.id, status="deployed", node_definition_id=n1.id)
         make_placement(test_db, sample_lab.id, n2.container_name, h2.id, status="deployed", node_definition_id=n2.id)
-        _make_link(test_db, sample_lab.id, n1, "eth1", n2, "eth1")
+        make_link(test_db, sample_lab.id, n1, "eth1", n2, "eth1")
         test_db.commit()
 
         _ensure_link_states_for_lab(test_db, sample_lab.id)
@@ -281,7 +266,7 @@ class TestEnsureLinkStatesForLab:
 
         n1 = make_node(test_db, sample_lab.id, gui_id="r1", display_name="R1")
         n2 = make_node(test_db, sample_lab.id, gui_id="r2", display_name="R2")
-        link = _make_link(test_db, sample_lab.id, n1, "eth1", n2, "eth1")
+        link = make_link(test_db, sample_lab.id, n1, "eth1", n2, "eth1")
         test_db.commit()
 
         _ensure_link_states_for_lab(test_db, sample_lab.id)

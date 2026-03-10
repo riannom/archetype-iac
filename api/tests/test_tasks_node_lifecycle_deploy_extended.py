@@ -1269,8 +1269,8 @@ class TestConnectSameHostLinksExtended:
         ns2 = make_node_state(test_db, lab.id, "n2", "R2", actual_state="stopped")  # Not running
         ns1.is_ready = True
         test_db.commit()
-        make_placement(test_db, lab.id,"R1", host.id)
-        make_placement(test_db, lab.id,"R2", host.id)
+        make_placement(test_db, lab.id, "R1", host.id)
+        make_placement(test_db, lab.id, "R2", host.id)
 
         manager = _make_manager(test_db, lab, job, ["n1", "n2"], agent=host)
         manager.all_lab_states = {"R1": ns1, "R2": ns2}
@@ -1321,8 +1321,8 @@ class TestConnectSameHostLinksExtended:
         ns1.is_ready = True
         ns2.is_ready = True
         test_db.commit()
-        make_placement(test_db, lab.id,"R1", host.id)
-        make_placement(test_db, lab.id,"R2", host.id)
+        make_placement(test_db, lab.id, "R1", host.id)
+        make_placement(test_db, lab.id, "R2", host.id)
 
         manager = _make_manager(test_db, lab, job, ["n1", "n2"], agent=host)
         manager.all_lab_states = {"R1": ns1, "R2": ns2}
@@ -1421,8 +1421,8 @@ class TestConnectSameHostLinksExtended:
         ns1.is_ready = True
         ns2.is_ready = True
         test_db.commit()
-        make_placement(test_db, lab.id,"R1", host.id)
-        make_placement(test_db, lab.id,"R2", host.id)
+        make_placement(test_db, lab.id, "R1", host.id)
+        make_placement(test_db, lab.id, "R2", host.id)
 
         manager = _make_manager(test_db, lab, job, ["n1", "n2"], agent=host)
         manager.all_lab_states = {"R1": ns1, "R2": ns2}
@@ -1474,8 +1474,8 @@ class TestConnectSameHostLinksExtended:
         ns1.is_ready = True
         ns2.is_ready = True
         test_db.commit()
-        make_placement(test_db, lab.id,"R1", host.id)
-        make_placement(test_db, lab.id,"R2", host.id)
+        make_placement(test_db, lab.id, "R1", host.id)
+        make_placement(test_db, lab.id, "R2", host.id)
 
         node1 = make_node(test_db, lab.id, gui_id="n1", display_name="R1", container_name="R1", host_id=host.id)
         node2 = make_node(test_db, lab.id, gui_id="n2", display_name="R2", container_name="R2", host_id=host.id)
@@ -1531,9 +1531,9 @@ class TestConnectSameHostLinksExtended:
         ns2.is_ready = True
         ns3.is_ready = True
         test_db.commit()
-        make_placement(test_db, lab.id,"R1", host.id)
-        make_placement(test_db, lab.id,"R2", host.id)
-        make_placement(test_db, lab.id,"R3", host.id)
+        make_placement(test_db, lab.id, "R1", host.id)
+        make_placement(test_db, lab.id, "R2", host.id)
+        make_placement(test_db, lab.id, "R3", host.id)
 
         manager = _make_manager(test_db, lab, job, ["n1", "n2", "n3"], agent=host)
         manager.all_lab_states = {"R1": ns1, "R2": ns2, "R3": ns3}
@@ -1588,8 +1588,8 @@ class TestConnectSameHostLinksExtended:
         ns1.is_ready = True
         ns2.is_ready = True
         test_db.commit()
-        make_placement(test_db, lab.id,"R1", host.id)
-        make_placement(test_db, lab.id,"R2", host.id)
+        make_placement(test_db, lab.id, "R1", host.id)
+        make_placement(test_db, lab.id, "R2", host.id)
 
         manager = _make_manager(test_db, lab, job, ["n1", "n2"], agent=host)
         manager.all_lab_states = {"R1": ns1, "R2": ns2}
@@ -1632,8 +1632,8 @@ class TestConnectSameHostLinksExtended:
         ns1.is_ready = True
         ns2.is_ready = False
         test_db.commit()
-        make_placement(test_db, lab.id,"R1", host.id)
-        make_placement(test_db, lab.id,"R2", host.id)
+        make_placement(test_db, lab.id, "R1", host.id)
+        make_placement(test_db, lab.id, "R2", host.id)
 
         manager = _make_manager(test_db, lab, job, ["n1", "n2"], agent=host)
         manager.all_lab_states = {"R1": ns1, "R2": ns2}

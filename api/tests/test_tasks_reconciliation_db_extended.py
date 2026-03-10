@@ -15,11 +15,10 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
-from uuid import uuid4
-
 import pytest
 
 from app import models
+from tests.factories import make_host, make_lab, make_link_state, make_node, make_node_state, make_placement
 from app.state import (
     LabState,
     LinkActualState,
@@ -69,37 +68,6 @@ def _disable_external_reconcile_actions():
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _make_lab(db, user, *, state="stopped", agent_id=None, name=None):
-    lab = models.Lab(
-        name=name or f"Lab-{uuid4().hex[:8]}",
-        owner_id=user.id,
-        provider="docker",
-        state=state,
-        workspace_path="/tmp/test-lab",
-        agent_id=agent_id,
-    )
-    db.add(lab)
-    db.commit()
-    db.refresh(lab)
-    return lab
-
-
-def _make_node(db, lab_id, container_name, *, device="linux", host_id=None, image=None):
-    n = models.Node(
-        lab_id=lab_id,
-        gui_id=container_name.lower(),
-        display_name=container_name,
-        container_name=container_name,
-        node_type="device",
-        device=device,
-        host_id=host_id,
-        image=image,
-    )
-    db.add(n)
-    db.commit()
-    db.refresh(n)
-    return n
-
 
 def _make_link(db, lab_id, src_node_id, src_iface, tgt_node_id, tgt_iface, *, link_name=None):
     lnk = models.Link(
@@ -114,109 +82,6 @@ def _make_link(db, lab_id, src_node_id, src_iface, tgt_node_id, tgt_iface, *, li
     db.commit()
     db.refresh(lnk)
     return lnk
-
-
-def _make_node_state(
-    db, lab_id, node_name, *,
-    node_id=None, desired="stopped", actual="undeployed",
-    node_definition_id=None, enforcement_failed_at=None,
-    image_sync_status=None, stopping_started_at=None,
-    starting_started_at=None, is_ready=False, boot_started_at=None,
-    error_message=None,
-):
-    ns = models.NodeState(
-        lab_id=lab_id,
-        node_id=node_id or node_name.lower(),
-        node_name=node_name,
-        desired_state=desired,
-        actual_state=actual,
-        node_definition_id=node_definition_id,
-        enforcement_failed_at=enforcement_failed_at,
-        image_sync_status=image_sync_status,
-        stopping_started_at=stopping_started_at,
-        starting_started_at=starting_started_at,
-        is_ready=is_ready,
-        boot_started_at=boot_started_at,
-        error_message=error_message,
-    )
-    db.add(ns)
-    db.commit()
-    db.refresh(ns)
-    return ns
-
-
-def _make_link_state(
-    db, lab_id, src_node, src_iface, tgt_node, tgt_iface, *,
-    desired="up", actual="unknown", is_cross_host=False,
-    source_host_id=None, target_host_id=None,
-    source_carrier_state=None, target_carrier_state=None,
-    link_definition_id=None, vni=None,
-):
-    ls = models.LinkState(
-        lab_id=lab_id,
-        link_name=f"{src_node}:{src_iface}-{tgt_node}:{tgt_iface}",
-        source_node=src_node,
-        source_interface=src_iface,
-        target_node=tgt_node,
-        target_interface=tgt_iface,
-        desired_state=desired,
-        actual_state=actual,
-        is_cross_host=is_cross_host,
-        source_host_id=source_host_id,
-        target_host_id=target_host_id,
-        source_carrier_state=source_carrier_state,
-        target_carrier_state=target_carrier_state,
-        link_definition_id=link_definition_id,
-        vni=vni,
-    )
-    db.add(ls)
-    db.commit()
-    db.refresh(ls)
-    return ls
-
-
-def _make_placement(
-    db,
-    lab_id,
-    node_name,
-    host_id,
-    *,
-    node_definition_id=None,
-    status="pending",
-    runtime_id=None,
-):
-    p = models.NodePlacement(
-        lab_id=lab_id,
-        node_name=node_name,
-        host_id=host_id,
-        node_definition_id=node_definition_id,
-        status=status,
-        runtime_id=runtime_id,
-    )
-    db.add(p)
-    db.commit()
-    db.refresh(p)
-    return p
-
-
-def _make_host(db, host_id, *, name=None, status="online"):
-    import json
-    from datetime import datetime, timezone
-
-    h = models.Host(
-        id=host_id,
-        name=name or host_id,
-        address=f"{host_id}:8080",
-        status=status,
-        capabilities=json.dumps({"providers": ["docker"]}),
-        version="1.0.0",
-        last_heartbeat=datetime.now(timezone.utc),
-        resource_usage=json.dumps({}),
-    )
-    db.add(h)
-    db.commit()
-    db.refresh(h)
-    return h
 
 
 def _make_vxlan_tunnel(db, lab_id, link_state_id, agent_a_id, agent_b_id, *, status="active"):
@@ -456,15 +321,11 @@ class TestDoReconcileLabContainerMapping:
         """A container with 'exited' status should set actual_state=stopped."""
         from app.tasks.reconciliation_db import _do_reconcile_lab
 
-        host = _make_host(test_db, "host-a")
-        lab = _make_lab(test_db, test_user, state="running", agent_id=host.id)
-        node_def = _make_node(test_db, lab.id, "R1", host_id=host.id)
-        ns = _make_node_state(
-            test_db, lab.id, "R1",
-            actual="running", desired="running",
-            node_definition_id=node_def.id,
-        )
-        _make_placement(test_db, lab.id, "R1", host.id, node_definition_id=node_def.id)
+        host = make_host(test_db, host_id="host-a")
+        lab = make_lab(test_db, test_user.id, state="running", agent_id=host.id)
+        node_def = make_node(test_db, lab.id, gui_id="r1", display_name="R1", host_id=host.id)
+        ns = make_node_state(test_db, lab.id, "r1", "R1", actual_state="running", desired_state="running", node_definition_id=node_def.id, )
+        make_placement(test_db, lab.id, "R1", host.id, node_definition_id=node_def.id, status="pending")
 
         with _ReconcileContext(agent_status_nodes=[{"name": "R1", "status": "exited"}]):
             await _do_reconcile_lab(test_db, lab, lab.id)
@@ -479,15 +340,11 @@ class TestDoReconcileLabContainerMapping:
         """A container with 'dead' status should set actual_state=error."""
         from app.tasks.reconciliation_db import _do_reconcile_lab
 
-        host = _make_host(test_db, "host-b")
-        lab = _make_lab(test_db, test_user, state="running", agent_id=host.id)
-        node_def = _make_node(test_db, lab.id, "R1", host_id=host.id)
-        ns = _make_node_state(
-            test_db, lab.id, "R1",
-            actual="running", desired="running",
-            node_definition_id=node_def.id, is_ready=True,
-        )
-        _make_placement(test_db, lab.id, "R1", host.id, node_definition_id=node_def.id)
+        host = make_host(test_db, host_id="host-b")
+        lab = make_lab(test_db, test_user.id, state="running", agent_id=host.id)
+        node_def = make_node(test_db, lab.id, gui_id="r1", display_name="R1", host_id=host.id)
+        ns = make_node_state(test_db, lab.id, "r1", "R1", actual_state="running", desired_state="running", node_definition_id=node_def.id, is_ready=True, )
+        make_placement(test_db, lab.id, "R1", host.id, node_definition_id=node_def.id, status="pending")
 
         with _ReconcileContext(agent_status_nodes=[{"name": "R1", "status": "dead"}]):
             await _do_reconcile_lab(test_db, lab, lab.id)
@@ -505,15 +362,11 @@ class TestDoReconcileLabContainerMapping:
         """If expected agent was not queried, node state should be preserved."""
         from app.tasks.reconciliation_db import _do_reconcile_lab
 
-        host = _make_host(test_db, "host-c", status="offline")
-        lab = _make_lab(test_db, test_user, state="running", agent_id=host.id)
-        node_def = _make_node(test_db, lab.id, "R1", host_id=host.id)
-        ns = _make_node_state(
-            test_db, lab.id, "R1",
-            actual="running", desired="running",
-            node_definition_id=node_def.id,
-        )
-        _make_placement(test_db, lab.id, "R1", host.id, node_definition_id=node_def.id)
+        host = make_host(test_db, host_id="host-c", status="offline")
+        lab = make_lab(test_db, test_user.id, state="running", agent_id=host.id)
+        node_def = make_node(test_db, lab.id, gui_id="r1", display_name="R1", host_id=host.id)
+        ns = make_node_state(test_db, lab.id, "r1", "R1", actual_state="running", desired_state="running", node_definition_id=node_def.id, )
+        make_placement(test_db, lab.id, "R1", host.id, node_definition_id=node_def.id, status="pending")
 
         with _ReconcileContext(is_online=False):
             with patch("app.tasks.reconciliation_db.agent_client.get_agent_for_lab", new_callable=AsyncMock, return_value=None):
@@ -529,15 +382,11 @@ class TestDoReconcileLabContainerMapping:
         """Container absent from queried agent should become undeployed and clear placement."""
         from app.tasks.reconciliation_db import _do_reconcile_lab
 
-        host = _make_host(test_db, "host-undeployed")
-        lab = _make_lab(test_db, test_user, state="running", agent_id=host.id)
-        node_def = _make_node(test_db, lab.id, "R1", host_id=host.id)
-        ns = _make_node_state(
-            test_db, lab.id, "R1",
-            actual="running", desired="running",
-            node_definition_id=node_def.id, is_ready=True,
-        )
-        _make_placement(test_db, lab.id, "R1", host.id, node_definition_id=node_def.id)
+        host = make_host(test_db, host_id="host-undeployed")
+        lab = make_lab(test_db, test_user.id, state="running", agent_id=host.id)
+        node_def = make_node(test_db, lab.id, gui_id="r1", display_name="R1", host_id=host.id)
+        ns = make_node_state(test_db, lab.id, "r1", "R1", actual_state="running", desired_state="running", node_definition_id=node_def.id, is_ready=True, )
+        make_placement(test_db, lab.id, "R1", host.id, node_definition_id=node_def.id, status="pending")
 
         # Agent responds with empty nodes list
         with _ReconcileContext(agent_status_nodes=[]):
@@ -561,33 +410,13 @@ class TestDoReconcileLabContainerMapping:
         """Stopped libvirt nodes should not keep stale runtimes or placements."""
         from app.tasks.reconciliation_db import _do_reconcile_lab
 
-        host = _make_host(test_db, "host-libvirt-stale")
-        lab = _make_lab(test_db, test_user, state="running", agent_id=host.id)
-        node_def = _make_node(
-            test_db,
-            lab.id,
-            "R1",
-            host_id=host.id,
-            image="device.qcow2",
-        )
-        ns = _make_node_state(
-            test_db,
-            lab.id,
-            "R1",
-            actual="running",
-            desired="stopped",
-            node_definition_id=node_def.id,
-            is_ready=True,
-        )
-        _make_placement(
-            test_db,
-            lab.id,
-            "R1",
-            host.id,
-            node_definition_id=node_def.id,
-            status="deployed",
-            runtime_id="runtime-stale",
-        )
+        host = make_host(test_db, host_id="host-libvirt-stale")
+        lab = make_lab(test_db, test_user.id, state="running", agent_id=host.id)
+        node_def = make_node(test_db, lab.id, gui_id="r1", display_name="R1", host_id=host.id, image="device.qcow2", )
+        ns = make_node_state(test_db, lab.id, "r1", "R1", actual_state="running", desired_state="stopped", node_definition_id=node_def.id, is_ready=True, )
+        _p = make_placement(test_db, lab.id, "R1", host.id, node_definition_id=node_def.id, status="deployed")
+        _p.runtime_id = "runtime-stale"
+        test_db.commit()
 
         with _ReconcileContext(
             agent_status_nodes=[{
@@ -620,16 +449,11 @@ class TestDoReconcileLabContainerMapping:
         """Running container with no boot_started_at should get it backfilled."""
         from app.tasks.reconciliation_db import _do_reconcile_lab
 
-        host = _make_host(test_db, "host-boot")
-        lab = _make_lab(test_db, test_user, state="running", agent_id=host.id)
-        node_def = _make_node(test_db, lab.id, "R1", host_id=host.id)
-        ns = _make_node_state(
-            test_db, lab.id, "R1",
-            actual="stopped", desired="running",
-            node_definition_id=node_def.id,
-            boot_started_at=None,
-        )
-        _make_placement(test_db, lab.id, "R1", host.id, node_definition_id=node_def.id)
+        host = make_host(test_db, host_id="host-boot")
+        lab = make_lab(test_db, test_user.id, state="running", agent_id=host.id)
+        node_def = make_node(test_db, lab.id, gui_id="r1", display_name="R1", host_id=host.id)
+        ns = make_node_state(test_db, lab.id, "r1", "R1", actual_state="stopped", desired_state="running", node_definition_id=node_def.id, boot_started_at=None, )
+        make_placement(test_db, lab.id, "R1", host.id, node_definition_id=node_def.id, status="pending")
 
         with _ReconcileContext(agent_status_nodes=[{"name": "R1", "status": "running"}]):
             with patch(
@@ -648,17 +472,12 @@ class TestDoReconcileLabContainerMapping:
         """Running node not yet ready should become ready when agent confirms."""
         from app.tasks.reconciliation_db import _do_reconcile_lab
 
-        host = _make_host(test_db, "host-ready")
-        lab = _make_lab(test_db, test_user, state="running", agent_id=host.id)
-        node_def = _make_node(test_db, lab.id, "R1", host_id=host.id)
-        ns = _make_node_state(
-            test_db, lab.id, "R1",
-            actual="running", desired="running",
-            node_definition_id=node_def.id,
-            is_ready=False,
-            boot_started_at=datetime.now(timezone.utc) - timedelta(seconds=30),
+        host = make_host(test_db, host_id="host-ready")
+        lab = make_lab(test_db, test_user.id, state="running", agent_id=host.id)
+        node_def = make_node(test_db, lab.id, gui_id="r1", display_name="R1", host_id=host.id)
+        ns = make_node_state(test_db, lab.id, "r1", "R1", actual_state="running", desired_state="running", node_definition_id=node_def.id, is_ready=False, boot_started_at=datetime.now(timezone.utc) - timedelta(seconds=30),
         )
-        _make_placement(test_db, lab.id, "R1", host.id, node_definition_id=node_def.id)
+        make_placement(test_db, lab.id, "R1", host.id, node_definition_id=node_def.id, status="pending")
 
         with _ReconcileContext(agent_status_nodes=[{"name": "R1", "status": "running"}]):
             with patch(
@@ -676,15 +495,11 @@ class TestDoReconcileLabContainerMapping:
         """Container with unknown/unexpected status should increment stopped_count."""
         from app.tasks.reconciliation_db import _do_reconcile_lab
 
-        host = _make_host(test_db, "host-unk")
-        lab = _make_lab(test_db, test_user, state="running", agent_id=host.id)
-        node_def = _make_node(test_db, lab.id, "R1", host_id=host.id)
-        ns = _make_node_state(
-            test_db, lab.id, "R1",
-            actual="running", desired="running",
-            node_definition_id=node_def.id,
-        )
-        _make_placement(test_db, lab.id, "R1", host.id, node_definition_id=node_def.id)
+        host = make_host(test_db, host_id="host-unk")
+        lab = make_lab(test_db, test_user.id, state="running", agent_id=host.id)
+        node_def = make_node(test_db, lab.id, gui_id="r1", display_name="R1", host_id=host.id)
+        ns = make_node_state(test_db, lab.id, "r1", "R1", actual_state="running", desired_state="running", node_definition_id=node_def.id, )
+        make_placement(test_db, lab.id, "R1", host.id, node_definition_id=node_def.id, status="pending")
 
         with _ReconcileContext(agent_status_nodes=[{"name": "R1", "status": "restarting"}]):
             await _do_reconcile_lab(test_db, lab, lab.id)
@@ -708,26 +523,13 @@ class TestDoReconcileLabRuntimeIdentity:
     async def test_runtime_id_mismatch_flags_placement_drift(self, test_db, test_user):
         from app.tasks.reconciliation_db import _do_reconcile_lab
 
-        host = _make_host(test_db, "host-runtime-drift")
-        lab = _make_lab(test_db, test_user, state="running", agent_id=host.id)
-        node_def = _make_node(test_db, lab.id, "R1", host_id=host.id)
-        _make_node_state(
-            test_db,
-            lab.id,
-            "R1",
-            actual="running",
-            desired="running",
-            node_definition_id=node_def.id,
-        )
-        placement = _make_placement(
-            test_db,
-            lab.id,
-            "R1",
-            host.id,
-            node_definition_id=node_def.id,
-            status="deployed",
-            runtime_id="runtime-old",
-        )
+        host = make_host(test_db, host_id="host-runtime-drift")
+        lab = make_lab(test_db, test_user.id, state="running", agent_id=host.id)
+        node_def = make_node(test_db, lab.id, gui_id="r1", display_name="R1", host_id=host.id)
+        make_node_state(test_db, lab.id, "r1", "R1", actual_state="running", desired_state="running", node_definition_id=node_def.id, )
+        placement = make_placement(test_db, lab.id, "R1", host.id, node_definition_id=node_def.id, status="deployed")
+        placement.runtime_id = "runtime-old"
+        test_db.commit()
 
         with _ReconcileContext(agent_status_nodes=[{
             "name": "R1",
@@ -745,26 +547,11 @@ class TestDoReconcileLabRuntimeIdentity:
     async def test_runtime_id_mismatch_during_starting_is_adopted(self, test_db, test_user):
         from app.tasks.reconciliation_db import _do_reconcile_lab
 
-        host = _make_host(test_db, "host-runtime-replace")
-        lab = _make_lab(test_db, test_user, state="running", agent_id=host.id)
-        node_def = _make_node(test_db, lab.id, "R1", host_id=host.id)
-        _make_node_state(
-            test_db,
-            lab.id,
-            "R1",
-            actual="starting",
-            desired="running",
-            node_definition_id=node_def.id,
-        )
-        placement = _make_placement(
-            test_db,
-            lab.id,
-            "R1",
-            host.id,
-            node_definition_id=node_def.id,
-            status="starting",
-            runtime_id="runtime-old",
-        )
+        host = make_host(test_db, host_id="host-runtime-replace")
+        lab = make_lab(test_db, test_user.id, state="running", agent_id=host.id)
+        node_def = make_node(test_db, lab.id, gui_id="r1", display_name="R1", host_id=host.id)
+        make_node_state(test_db, lab.id, "r1", "R1", actual_state="starting", desired_state="running", node_definition_id=node_def.id, )
+        placement = make_placement(test_db, lab.id, "R1", host.id, node_definition_id=node_def.id, status="starting", runtime_id="runtime-old", )
 
         with _ReconcileContext(agent_status_nodes=[{
             "name": "R1",
@@ -784,26 +571,11 @@ class TestDoReconcileLabRuntimeIdentity:
     ):
         from app.tasks.reconciliation_db import _do_reconcile_lab
 
-        host = _make_host(test_db, "host-runtime-replace-state")
-        lab = _make_lab(test_db, test_user, state="running", agent_id=host.id)
-        node_def = _make_node(test_db, lab.id, "R1", host_id=host.id)
-        _make_node_state(
-            test_db,
-            lab.id,
-            "R1",
-            actual="starting",
-            desired="running",
-            node_definition_id=node_def.id,
-        )
-        placement = _make_placement(
-            test_db,
-            lab.id,
-            "R1",
-            host.id,
-            node_definition_id=node_def.id,
-            status="deployed",
-            runtime_id="runtime-old",
-        )
+        host = make_host(test_db, host_id="host-runtime-replace-state")
+        lab = make_lab(test_db, test_user.id, state="running", agent_id=host.id)
+        node_def = make_node(test_db, lab.id, gui_id="r1", display_name="R1", host_id=host.id)
+        make_node_state(test_db, lab.id, "r1", "R1", actual_state="starting", desired_state="running", node_definition_id=node_def.id, )
+        placement = make_placement(test_db, lab.id, "R1", host.id, node_definition_id=node_def.id, status="deployed", runtime_id="runtime-old", )
 
         with _ReconcileContext(agent_status_nodes=[{
             "name": "R1",
@@ -821,26 +593,11 @@ class TestDoReconcileLabRuntimeIdentity:
     async def test_metadata_node_definition_id_canonicalizes_reported_name(self, test_db, test_user):
         from app.tasks.reconciliation_db import _do_reconcile_lab
 
-        host = _make_host(test_db, "host-runtime-canonical")
-        lab = _make_lab(test_db, test_user, state="running", agent_id=host.id)
-        node_def = _make_node(test_db, lab.id, "R1", host_id=host.id)
-        node_state = _make_node_state(
-            test_db,
-            lab.id,
-            "R1",
-            actual="stopped",
-            desired="running",
-            node_definition_id=node_def.id,
-        )
-        placement = _make_placement(
-            test_db,
-            lab.id,
-            "R1",
-            host.id,
-            node_definition_id=node_def.id,
-            status="deployed",
-            runtime_id="runtime-123",
-        )
+        host = make_host(test_db, host_id="host-runtime-canonical")
+        lab = make_lab(test_db, test_user.id, state="running", agent_id=host.id)
+        node_def = make_node(test_db, lab.id, gui_id="r1", display_name="R1", host_id=host.id)
+        node_state = make_node_state(test_db, lab.id, "r1", "R1", actual_state="stopped", desired_state="running", node_definition_id=node_def.id, )
+        placement = make_placement(test_db, lab.id, "R1", host.id, node_definition_id=node_def.id, status="deployed", runtime_id="runtime-123", )
 
         with _ReconcileContext(agent_status_nodes=[{
             "name": "wrong-name",
@@ -874,16 +631,12 @@ class TestDoReconcileLabTransitionalRecovery:
         """Nodes with fresh starting_started_at should not be reconciled."""
         from app.tasks.reconciliation_db import _do_reconcile_lab
 
-        host = _make_host(test_db, "host-d")
-        lab = _make_lab(test_db, test_user, state="starting", agent_id=host.id)
-        node_def = _make_node(test_db, lab.id, "R1", host_id=host.id)
-        ns = _make_node_state(
-            test_db, lab.id, "R1",
-            actual="starting", desired="running",
-            node_definition_id=node_def.id,
-            starting_started_at=datetime.now(timezone.utc),
+        host = make_host(test_db, host_id="host-d")
+        lab = make_lab(test_db, test_user.id, state="starting", agent_id=host.id)
+        node_def = make_node(test_db, lab.id, gui_id="r1", display_name="R1", host_id=host.id)
+        ns = make_node_state(test_db, lab.id, "r1", "R1", actual_state="starting", desired_state="running", node_definition_id=node_def.id, starting_started_at=datetime.now(timezone.utc),
         )
-        _make_placement(test_db, lab.id, "R1", host.id, node_definition_id=node_def.id)
+        make_placement(test_db, lab.id, "R1", host.id, node_definition_id=node_def.id, status="pending")
 
         with _ReconcileContext(agent_status_nodes=[{"name": "R1", "status": "running"}]):
             await _do_reconcile_lab(test_db, lab, lab.id)
@@ -897,20 +650,15 @@ class TestDoReconcileLabTransitionalRecovery:
         from app.tasks.reconciliation_db import _do_reconcile_lab
         from app.config import settings
 
-        host = _make_host(test_db, "host-stale-start")
-        lab = _make_lab(test_db, test_user, state="running", agent_id=host.id)
-        node_def = _make_node(test_db, lab.id, "R1", host_id=host.id)
+        host = make_host(test_db, host_id="host-stale-start")
+        lab = make_lab(test_db, test_user.id, state="running", agent_id=host.id)
+        node_def = make_node(test_db, lab.id, gui_id="r1", display_name="R1", host_id=host.id)
         # Use naive datetime since SQLite strips timezone info on round-trip
         stale_time = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(
             seconds=settings.stale_node_starting_threshold + 60
         )
-        ns = _make_node_state(
-            test_db, lab.id, "R1",
-            actual="starting", desired="running",
-            node_definition_id=node_def.id,
-            starting_started_at=stale_time,
-        )
-        _make_placement(test_db, lab.id, "R1", host.id, node_definition_id=node_def.id)
+        ns = make_node_state(test_db, lab.id, "r1", "R1", actual_state="starting", desired_state="running", node_definition_id=node_def.id, starting_started_at=stale_time, )
+        make_placement(test_db, lab.id, "R1", host.id, node_definition_id=node_def.id, status="pending")
 
         # Mock utcnow to return naive datetime for consistent comparison
         # (SQLite strips tzinfo from stored datetimes)
@@ -938,20 +686,15 @@ class TestDoReconcileLabTransitionalRecovery:
         from app.tasks.reconciliation_db import _do_reconcile_lab
         from app.config import settings
 
-        host = _make_host(test_db, "host-stale-stop")
-        lab = _make_lab(test_db, test_user, state="running", agent_id=host.id)
-        node_def = _make_node(test_db, lab.id, "R1", host_id=host.id)
+        host = make_host(test_db, host_id="host-stale-stop")
+        lab = make_lab(test_db, test_user.id, state="running", agent_id=host.id)
+        node_def = make_node(test_db, lab.id, gui_id="r1", display_name="R1", host_id=host.id)
         # Use naive datetime since SQLite strips timezone info on round-trip
         stale_time = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(
             seconds=settings.stale_stopping_threshold + 60
         )
-        ns = _make_node_state(
-            test_db, lab.id, "R1",
-            actual="stopping", desired="stopped",
-            node_definition_id=node_def.id,
-            stopping_started_at=stale_time,
-        )
-        _make_placement(test_db, lab.id, "R1", host.id, node_definition_id=node_def.id)
+        ns = make_node_state(test_db, lab.id, "r1", "R1", actual_state="stopping", desired_state="stopped", node_definition_id=node_def.id, stopping_started_at=stale_time, )
+        make_placement(test_db, lab.id, "R1", host.id, node_definition_id=node_def.id, status="pending")
 
         # Mock utcnow to return naive datetime for consistent comparison
         mock_now = datetime.now(timezone.utc).replace(tzinfo=None)
@@ -971,16 +714,11 @@ class TestDoReconcileLabTransitionalRecovery:
         """Node in 'stopping' state without timestamp and no active job should recover."""
         from app.tasks.reconciliation_db import _do_reconcile_lab
 
-        host = _make_host(test_db, "host-stop-nots")
-        lab = _make_lab(test_db, test_user, state="running", agent_id=host.id)
-        node_def = _make_node(test_db, lab.id, "R1", host_id=host.id)
-        ns = _make_node_state(
-            test_db, lab.id, "R1",
-            actual="stopping", desired="stopped",
-            node_definition_id=node_def.id,
-            stopping_started_at=None,
-        )
-        _make_placement(test_db, lab.id, "R1", host.id, node_definition_id=node_def.id)
+        host = make_host(test_db, host_id="host-stop-nots")
+        lab = make_lab(test_db, test_user.id, state="running", agent_id=host.id)
+        node_def = make_node(test_db, lab.id, gui_id="r1", display_name="R1", host_id=host.id)
+        ns = make_node_state(test_db, lab.id, "r1", "R1", actual_state="stopping", desired_state="stopped", node_definition_id=node_def.id, stopping_started_at=None, )
+        make_placement(test_db, lab.id, "R1", host.id, node_definition_id=node_def.id, status="pending")
 
         with _ReconcileContext(agent_status_nodes=[{"name": "R1", "status": "stopped"}]):
             await _do_reconcile_lab(test_db, lab, lab.id)
@@ -994,16 +732,11 @@ class TestDoReconcileLabTransitionalRecovery:
         """Node in 'starting' with active job but no timestamp should be skipped."""
         from app.tasks.reconciliation_db import _do_reconcile_lab
 
-        host = _make_host(test_db, "host-start-job")
-        lab = _make_lab(test_db, test_user, state="running", agent_id=host.id)
-        node_def = _make_node(test_db, lab.id, "R1", host_id=host.id)
-        ns = _make_node_state(
-            test_db, lab.id, "R1",
-            actual="starting", desired="running",
-            node_definition_id=node_def.id,
-            starting_started_at=None,
-        )
-        _make_placement(test_db, lab.id, "R1", host.id, node_definition_id=node_def.id)
+        host = make_host(test_db, host_id="host-start-job")
+        lab = make_lab(test_db, test_user.id, state="running", agent_id=host.id)
+        node_def = make_node(test_db, lab.id, gui_id="r1", display_name="R1", host_id=host.id)
+        ns = make_node_state(test_db, lab.id, "r1", "R1", actual_state="starting", desired_state="running", node_definition_id=node_def.id, starting_started_at=None, )
+        make_placement(test_db, lab.id, "R1", host.id, node_definition_id=node_def.id, status="pending")
 
         # Create an active sync job (doesn't block reconciliation at the top level
         # but is picked up as check_active_job inside _do_reconcile_lab)
@@ -1029,17 +762,13 @@ class TestDoReconcileLabTransitionalRecovery:
         """Nodes with enforcement_failed_at should be skipped by reconciliation."""
         from app.tasks.reconciliation_db import _do_reconcile_lab
 
-        host = _make_host(test_db, "host-enf")
-        lab = _make_lab(test_db, test_user, state="error", agent_id=host.id)
-        node_def = _make_node(test_db, lab.id, "R1", host_id=host.id)
-        ns = _make_node_state(
-            test_db, lab.id, "R1",
-            actual="error", desired="running",
-            node_definition_id=node_def.id,
-            enforcement_failed_at=datetime.now(timezone.utc),
+        host = make_host(test_db, host_id="host-enf")
+        lab = make_lab(test_db, test_user.id, state="error", agent_id=host.id)
+        node_def = make_node(test_db, lab.id, gui_id="r1", display_name="R1", host_id=host.id)
+        ns = make_node_state(test_db, lab.id, "r1", "R1", actual_state="error", desired_state="running", node_definition_id=node_def.id, enforcement_failed_at=datetime.now(timezone.utc),
             error_message="enforcement exhausted",
         )
-        _make_placement(test_db, lab.id, "R1", host.id, node_definition_id=node_def.id)
+        make_placement(test_db, lab.id, "R1", host.id, node_definition_id=node_def.id, status="pending")
 
         with _ReconcileContext(agent_status_nodes=[{"name": "R1", "status": "running"}]):
             await _do_reconcile_lab(test_db, lab, lab.id)
@@ -1054,16 +783,11 @@ class TestDoReconcileLabTransitionalRecovery:
         """Nodes with active image sync should be skipped."""
         from app.tasks.reconciliation_db import _do_reconcile_lab
 
-        host = _make_host(test_db, "host-sync")
-        lab = _make_lab(test_db, test_user, state="running", agent_id=host.id)
-        node_def = _make_node(test_db, lab.id, "R1", host_id=host.id)
-        ns = _make_node_state(
-            test_db, lab.id, "R1",
-            actual="undeployed", desired="running",
-            node_definition_id=node_def.id,
-            image_sync_status="syncing",
-        )
-        _make_placement(test_db, lab.id, "R1", host.id, node_definition_id=node_def.id)
+        host = make_host(test_db, host_id="host-sync")
+        lab = make_lab(test_db, test_user.id, state="running", agent_id=host.id)
+        node_def = make_node(test_db, lab.id, gui_id="r1", display_name="R1", host_id=host.id)
+        ns = make_node_state(test_db, lab.id, "r1", "R1", actual_state="undeployed", desired_state="running", node_definition_id=node_def.id, image_sync_status="syncing", )
+        make_placement(test_db, lab.id, "R1", host.id, node_definition_id=node_def.id, status="pending")
 
         with _ReconcileContext(agent_status_nodes=[]):
             await _do_reconcile_lab(test_db, lab, lab.id)
@@ -1085,25 +809,16 @@ class TestDoReconcileLabLinkStatesExtended:
         """When carrier is off on one endpoint, link should be DOWN."""
         from app.tasks.reconciliation_db import _do_reconcile_lab
 
-        host = _make_host(test_db, "host-e")
-        lab = _make_lab(test_db, test_user, state="running", agent_id=host.id)
-        n1 = _make_node(test_db, lab.id, "R1", host_id=host.id)
-        n2 = _make_node(test_db, lab.id, "R2", host_id=host.id)
-        _make_node_state(
-            test_db, lab.id, "R1", actual="running", desired="running",
-            node_definition_id=n1.id,
-        )
-        _make_node_state(
-            test_db, lab.id, "R2", node_id="r2", actual="running", desired="running",
-            node_definition_id=n2.id,
-        )
-        _make_placement(test_db, lab.id, "R1", host.id, node_definition_id=n1.id)
-        _make_placement(test_db, lab.id, "R2", host.id, node_definition_id=n2.id)
+        host = make_host(test_db, host_id="host-e")
+        lab = make_lab(test_db, test_user.id, state="running", agent_id=host.id)
+        n1 = make_node(test_db, lab.id, gui_id="r1", display_name="R1", host_id=host.id)
+        n2 = make_node(test_db, lab.id, gui_id="r2", display_name="R2", host_id=host.id)
+        make_node_state(test_db, lab.id, "r1", "R1", actual_state="running", desired_state="running", node_definition_id=n1.id, )
+        make_node_state(test_db, lab.id, "r2", "R2", actual_state="running", desired_state="running", node_definition_id=n2.id, )
+        make_placement(test_db, lab.id, "R1", host.id, node_definition_id=n1.id, status="pending")
+        make_placement(test_db, lab.id, "R2", host.id, node_definition_id=n2.id, status="pending")
 
-        ls = _make_link_state(
-            test_db, lab.id, "R1", "eth1", "R2", "eth1",
-            actual="up", source_carrier_state="off",
-        )
+        ls = make_link_state(test_db, lab.id, link_name="R1:eth1-R2:eth1", source_node="R1", source_interface="eth1", target_node="R2", target_interface="eth1", actual_state="up", source_carrier_state="off", )
 
         with _ReconcileContext(agent_status_nodes=[
             {"name": "R1", "status": "running"},
@@ -1120,27 +835,17 @@ class TestDoReconcileLabLinkStatesExtended:
         """Cross-host link without active tunnel should be marked error."""
         from app.tasks.reconciliation_db import _do_reconcile_lab
 
-        host_a = _make_host(test_db, "host-f")
-        host_b = _make_host(test_db, "host-g")
-        lab = _make_lab(test_db, test_user, state="running", agent_id=host_a.id)
-        n1 = _make_node(test_db, lab.id, "R1", host_id=host_a.id)
-        n2 = _make_node(test_db, lab.id, "R2", host_id=host_b.id)
-        _make_node_state(
-            test_db, lab.id, "R1", actual="running", desired="running",
-            node_definition_id=n1.id,
-        )
-        _make_node_state(
-            test_db, lab.id, "R2", node_id="r2", actual="running", desired="running",
-            node_definition_id=n2.id,
-        )
-        _make_placement(test_db, lab.id, "R1", host_a.id, node_definition_id=n1.id)
-        _make_placement(test_db, lab.id, "R2", host_b.id, node_definition_id=n2.id)
+        host_a = make_host(test_db, host_id="host-f")
+        host_b = make_host(test_db, host_id="host-g")
+        lab = make_lab(test_db, test_user.id, state="running", agent_id=host_a.id)
+        n1 = make_node(test_db, lab.id, gui_id="r1", display_name="R1", host_id=host_a.id)
+        n2 = make_node(test_db, lab.id, gui_id="r2", display_name="R2", host_id=host_b.id)
+        make_node_state(test_db, lab.id, "r1", "R1", actual_state="running", desired_state="running", node_definition_id=n1.id, )
+        make_node_state(test_db, lab.id, "r2", "R2", actual_state="running", desired_state="running", node_definition_id=n2.id, )
+        make_placement(test_db, lab.id, "R1", host_a.id, node_definition_id=n1.id, status="pending")
+        make_placement(test_db, lab.id, "R2", host_b.id, node_definition_id=n2.id, status="pending")
 
-        ls = _make_link_state(
-            test_db, lab.id, "R1", "eth1", "R2", "eth1",
-            actual="pending", is_cross_host=True,
-            source_host_id=host_a.id, target_host_id=host_b.id,
-        )
+        ls = make_link_state(test_db, lab.id, link_name="R1:eth1-R2:eth1", source_node="R1", source_interface="eth1", target_node="R2", target_interface="eth1", actual_state="pending", is_cross_host=True, source_host_id=host_a.id, target_host_id=host_b.id, )
 
         with _ReconcileContext(agent_status_nodes=[
             {"name": "R1", "status": "running"},
@@ -1157,27 +862,17 @@ class TestDoReconcileLabLinkStatesExtended:
         """Cross-host link with active tunnel should be marked UP."""
         from app.tasks.reconciliation_db import _do_reconcile_lab
 
-        host_a = _make_host(test_db, "host-tun-a")
-        host_b = _make_host(test_db, "host-tun-b")
-        lab = _make_lab(test_db, test_user, state="running", agent_id=host_a.id)
-        n1 = _make_node(test_db, lab.id, "R1", host_id=host_a.id)
-        n2 = _make_node(test_db, lab.id, "R2", host_id=host_b.id)
-        _make_node_state(
-            test_db, lab.id, "R1", actual="running", desired="running",
-            node_definition_id=n1.id,
-        )
-        _make_node_state(
-            test_db, lab.id, "R2", node_id="r2", actual="running", desired="running",
-            node_definition_id=n2.id,
-        )
-        _make_placement(test_db, lab.id, "R1", host_a.id, node_definition_id=n1.id)
-        _make_placement(test_db, lab.id, "R2", host_b.id, node_definition_id=n2.id)
+        host_a = make_host(test_db, host_id="host-tun-a")
+        host_b = make_host(test_db, host_id="host-tun-b")
+        lab = make_lab(test_db, test_user.id, state="running", agent_id=host_a.id)
+        n1 = make_node(test_db, lab.id, gui_id="r1", display_name="R1", host_id=host_a.id)
+        n2 = make_node(test_db, lab.id, gui_id="r2", display_name="R2", host_id=host_b.id)
+        make_node_state(test_db, lab.id, "r1", "R1", actual_state="running", desired_state="running", node_definition_id=n1.id, )
+        make_node_state(test_db, lab.id, "r2", "R2", actual_state="running", desired_state="running", node_definition_id=n2.id, )
+        make_placement(test_db, lab.id, "R1", host_a.id, node_definition_id=n1.id, status="pending")
+        make_placement(test_db, lab.id, "R2", host_b.id, node_definition_id=n2.id, status="pending")
 
-        ls = _make_link_state(
-            test_db, lab.id, "R1", "eth1", "R2", "eth1",
-            actual="pending", is_cross_host=True,
-            source_host_id=host_a.id, target_host_id=host_b.id,
-        )
+        ls = make_link_state(test_db, lab.id, link_name="R1:eth1-R2:eth1", source_node="R1", source_interface="eth1", target_node="R2", target_interface="eth1", actual_state="pending", is_cross_host=True, source_host_id=host_a.id, target_host_id=host_b.id, )
         _make_vxlan_tunnel(test_db, lab.id, ls.id, host_a.id, host_b.id, status="active")
 
         with _ReconcileContext(agent_status_nodes=[
@@ -1195,25 +890,16 @@ class TestDoReconcileLabLinkStatesExtended:
         """Link with one error node should be marked ERROR."""
         from app.tasks.reconciliation_db import _do_reconcile_lab
 
-        host = _make_host(test_db, "host-lnk-err")
-        lab = _make_lab(test_db, test_user, state="error", agent_id=host.id)
-        n1 = _make_node(test_db, lab.id, "R1", host_id=host.id)
-        n2 = _make_node(test_db, lab.id, "R2", host_id=host.id)
-        _make_node_state(
-            test_db, lab.id, "R1", actual="running", desired="running",
-            node_definition_id=n1.id,
-        )
-        _make_node_state(
-            test_db, lab.id, "R2", node_id="r2", actual="error", desired="running",
-            node_definition_id=n2.id,
-        )
-        _make_placement(test_db, lab.id, "R1", host.id, node_definition_id=n1.id)
-        _make_placement(test_db, lab.id, "R2", host.id, node_definition_id=n2.id)
+        host = make_host(test_db, host_id="host-lnk-err")
+        lab = make_lab(test_db, test_user.id, state="error", agent_id=host.id)
+        n1 = make_node(test_db, lab.id, gui_id="r1", display_name="R1", host_id=host.id)
+        n2 = make_node(test_db, lab.id, gui_id="r2", display_name="R2", host_id=host.id)
+        make_node_state(test_db, lab.id, "r1", "R1", actual_state="running", desired_state="running", node_definition_id=n1.id, )
+        make_node_state(test_db, lab.id, "r2", "R2", actual_state="error", desired_state="running", node_definition_id=n2.id, )
+        make_placement(test_db, lab.id, "R1", host.id, node_definition_id=n1.id, status="pending")
+        make_placement(test_db, lab.id, "R2", host.id, node_definition_id=n2.id, status="pending")
 
-        ls = _make_link_state(
-            test_db, lab.id, "R1", "eth1", "R2", "eth1",
-            actual="up",
-        )
+        ls = make_link_state(test_db, lab.id, link_name="R1:eth1-R2:eth1", source_node="R1", source_interface="eth1", target_node="R2", target_interface="eth1", actual_state="up", )
 
         with _ReconcileContext(agent_status_nodes=[
             {"name": "R1", "status": "running"},
@@ -1230,25 +916,16 @@ class TestDoReconcileLabLinkStatesExtended:
         """Link with one stopped node should be marked DOWN."""
         from app.tasks.reconciliation_db import _do_reconcile_lab
 
-        host = _make_host(test_db, "host-lnk-dn")
-        lab = _make_lab(test_db, test_user, state="running", agent_id=host.id)
-        n1 = _make_node(test_db, lab.id, "R1", host_id=host.id)
-        n2 = _make_node(test_db, lab.id, "R2", host_id=host.id)
-        _make_node_state(
-            test_db, lab.id, "R1", actual="running", desired="running",
-            node_definition_id=n1.id,
-        )
-        _make_node_state(
-            test_db, lab.id, "R2", node_id="r2", actual="stopped", desired="stopped",
-            node_definition_id=n2.id,
-        )
-        _make_placement(test_db, lab.id, "R1", host.id, node_definition_id=n1.id)
-        _make_placement(test_db, lab.id, "R2", host.id, node_definition_id=n2.id)
+        host = make_host(test_db, host_id="host-lnk-dn")
+        lab = make_lab(test_db, test_user.id, state="running", agent_id=host.id)
+        n1 = make_node(test_db, lab.id, gui_id="r1", display_name="R1", host_id=host.id)
+        n2 = make_node(test_db, lab.id, gui_id="r2", display_name="R2", host_id=host.id)
+        make_node_state(test_db, lab.id, "r1", "R1", actual_state="running", desired_state="running", node_definition_id=n1.id, )
+        make_node_state(test_db, lab.id, "r2", "R2", actual_state="stopped", desired_state="stopped", node_definition_id=n2.id, )
+        make_placement(test_db, lab.id, "R1", host.id, node_definition_id=n1.id, status="pending")
+        make_placement(test_db, lab.id, "R2", host.id, node_definition_id=n2.id, status="pending")
 
-        ls = _make_link_state(
-            test_db, lab.id, "R1", "eth1", "R2", "eth1",
-            actual="up",
-        )
+        ls = make_link_state(test_db, lab.id, link_name="R1:eth1-R2:eth1", source_node="R1", source_interface="eth1", target_node="R2", target_interface="eth1", actual_state="up", )
 
         with _ReconcileContext(agent_status_nodes=[
             {"name": "R1", "status": "running"},
@@ -1265,25 +942,16 @@ class TestDoReconcileLabLinkStatesExtended:
         """Same-host link with desired=down should be actual=down."""
         from app.tasks.reconciliation_db import _do_reconcile_lab
 
-        host = _make_host(test_db, "host-lnk-dd")
-        lab = _make_lab(test_db, test_user, state="running", agent_id=host.id)
-        n1 = _make_node(test_db, lab.id, "R1", host_id=host.id)
-        n2 = _make_node(test_db, lab.id, "R2", host_id=host.id)
-        _make_node_state(
-            test_db, lab.id, "R1", actual="running", desired="running",
-            node_definition_id=n1.id,
-        )
-        _make_node_state(
-            test_db, lab.id, "R2", node_id="r2", actual="running", desired="running",
-            node_definition_id=n2.id,
-        )
-        _make_placement(test_db, lab.id, "R1", host.id, node_definition_id=n1.id)
-        _make_placement(test_db, lab.id, "R2", host.id, node_definition_id=n2.id)
+        host = make_host(test_db, host_id="host-lnk-dd")
+        lab = make_lab(test_db, test_user.id, state="running", agent_id=host.id)
+        n1 = make_node(test_db, lab.id, gui_id="r1", display_name="R1", host_id=host.id)
+        n2 = make_node(test_db, lab.id, gui_id="r2", display_name="R2", host_id=host.id)
+        make_node_state(test_db, lab.id, "r1", "R1", actual_state="running", desired_state="running", node_definition_id=n1.id, )
+        make_node_state(test_db, lab.id, "r2", "R2", actual_state="running", desired_state="running", node_definition_id=n2.id, )
+        make_placement(test_db, lab.id, "R1", host.id, node_definition_id=n1.id, status="pending")
+        make_placement(test_db, lab.id, "R2", host.id, node_definition_id=n2.id, status="pending")
 
-        ls = _make_link_state(
-            test_db, lab.id, "R1", "eth1", "R2", "eth1",
-            desired="down", actual="up",
-        )
+        ls = make_link_state(test_db, lab.id, link_name="R1:eth1-R2:eth1", source_node="R1", source_interface="eth1", target_node="R2", target_interface="eth1", desired_state="down", actual_state="up", )
 
         with _ReconcileContext(agent_status_nodes=[
             {"name": "R1", "status": "running"},
@@ -1299,25 +967,16 @@ class TestDoReconcileLabLinkStatesExtended:
         """Same-host link already UP should stay UP."""
         from app.tasks.reconciliation_db import _do_reconcile_lab
 
-        host = _make_host(test_db, "host-lnk-up")
-        lab = _make_lab(test_db, test_user, state="running", agent_id=host.id)
-        n1 = _make_node(test_db, lab.id, "R1", host_id=host.id)
-        n2 = _make_node(test_db, lab.id, "R2", host_id=host.id)
-        _make_node_state(
-            test_db, lab.id, "R1", actual="running", desired="running",
-            node_definition_id=n1.id,
-        )
-        _make_node_state(
-            test_db, lab.id, "R2", node_id="r2", actual="running", desired="running",
-            node_definition_id=n2.id,
-        )
-        _make_placement(test_db, lab.id, "R1", host.id, node_definition_id=n1.id)
-        _make_placement(test_db, lab.id, "R2", host.id, node_definition_id=n2.id)
+        host = make_host(test_db, host_id="host-lnk-up")
+        lab = make_lab(test_db, test_user.id, state="running", agent_id=host.id)
+        n1 = make_node(test_db, lab.id, gui_id="r1", display_name="R1", host_id=host.id)
+        n2 = make_node(test_db, lab.id, gui_id="r2", display_name="R2", host_id=host.id)
+        make_node_state(test_db, lab.id, "r1", "R1", actual_state="running", desired_state="running", node_definition_id=n1.id, )
+        make_node_state(test_db, lab.id, "r2", "R2", actual_state="running", desired_state="running", node_definition_id=n2.id, )
+        make_placement(test_db, lab.id, "R1", host.id, node_definition_id=n1.id, status="pending")
+        make_placement(test_db, lab.id, "R2", host.id, node_definition_id=n2.id, status="pending")
 
-        ls = _make_link_state(
-            test_db, lab.id, "R1", "eth1", "R2", "eth1",
-            desired="up", actual="up",
-        )
+        ls = make_link_state(test_db, lab.id, link_name="R1:eth1-R2:eth1", source_node="R1", source_interface="eth1", target_node="R2", target_interface="eth1", desired_state="up", actual_state="up", )
 
         with _ReconcileContext(agent_status_nodes=[
             {"name": "R1", "status": "running"},
@@ -1333,19 +992,13 @@ class TestDoReconcileLabLinkStatesExtended:
         """Link states with desired_state='deleted' should be removed."""
         from app.tasks.reconciliation_db import _do_reconcile_lab
 
-        host = _make_host(test_db, "host-h")
-        lab = _make_lab(test_db, test_user, state="running", agent_id=host.id)
-        n1 = _make_node(test_db, lab.id, "R1", host_id=host.id)
-        _make_node_state(
-            test_db, lab.id, "R1", actual="running", desired="running",
-            node_definition_id=n1.id,
-        )
-        _make_placement(test_db, lab.id, "R1", host.id, node_definition_id=n1.id)
+        host = make_host(test_db, host_id="host-h")
+        lab = make_lab(test_db, test_user.id, state="running", agent_id=host.id)
+        n1 = make_node(test_db, lab.id, gui_id="r1", display_name="R1", host_id=host.id)
+        make_node_state(test_db, lab.id, "r1", "R1", actual_state="running", desired_state="running", node_definition_id=n1.id, )
+        make_placement(test_db, lab.id, "R1", host.id, node_definition_id=n1.id, status="pending")
 
-        ls = _make_link_state(
-            test_db, lab.id, "R1", "eth1", "R2", "eth1",
-            desired="deleted", actual="down",
-        )
+        ls = make_link_state(test_db, lab.id, link_name="R1:eth1-R2:eth1", source_node="R1", source_interface="eth1", target_node="R2", target_interface="eth1", desired_state="deleted", actual_state="down", )
         ls_id = ls.id
 
         with _ReconcileContext(agent_status_nodes=[{"name": "R1", "status": "running"}]):
@@ -1367,14 +1020,11 @@ class TestDoReconcileLabStateComputation:
         """Lab with all running nodes should have state=running."""
         from app.tasks.reconciliation_db import _do_reconcile_lab
 
-        host = _make_host(test_db, "host-run")
-        lab = _make_lab(test_db, test_user, state="stopped", agent_id=host.id)
-        n1 = _make_node(test_db, lab.id, "R1", host_id=host.id)
-        _make_node_state(
-            test_db, lab.id, "R1", actual="running", desired="running",
-            node_definition_id=n1.id, is_ready=True,
-        )
-        _make_placement(test_db, lab.id, "R1", host.id, node_definition_id=n1.id)
+        host = make_host(test_db, host_id="host-run")
+        lab = make_lab(test_db, test_user.id, state="stopped", agent_id=host.id)
+        n1 = make_node(test_db, lab.id, gui_id="r1", display_name="R1", host_id=host.id)
+        make_node_state(test_db, lab.id, "r1", "R1", actual_state="running", desired_state="running", node_definition_id=n1.id, is_ready=True, )
+        make_placement(test_db, lab.id, "R1", host.id, node_definition_id=n1.id, status="pending")
 
         with _ReconcileContext(agent_status_nodes=[{"name": "R1", "status": "running"}]):
             await _do_reconcile_lab(test_db, lab, lab.id)
@@ -1388,14 +1038,11 @@ class TestDoReconcileLabStateComputation:
         """Lab with all stopped nodes should have state=stopped."""
         from app.tasks.reconciliation_db import _do_reconcile_lab
 
-        host = _make_host(test_db, "host-stp")
-        lab = _make_lab(test_db, test_user, state="running", agent_id=host.id)
-        n1 = _make_node(test_db, lab.id, "R1", host_id=host.id)
-        _make_node_state(
-            test_db, lab.id, "R1", actual="running", desired="stopped",
-            node_definition_id=n1.id,
-        )
-        _make_placement(test_db, lab.id, "R1", host.id, node_definition_id=n1.id)
+        host = make_host(test_db, host_id="host-stp")
+        lab = make_lab(test_db, test_user.id, state="running", agent_id=host.id)
+        n1 = make_node(test_db, lab.id, gui_id="r1", display_name="R1", host_id=host.id)
+        make_node_state(test_db, lab.id, "r1", "R1", actual_state="running", desired_state="stopped", node_definition_id=n1.id, )
+        make_placement(test_db, lab.id, "R1", host.id, node_definition_id=n1.id, status="pending")
 
         with _ReconcileContext(agent_status_nodes=[{"name": "R1", "status": "stopped"}]):
             await _do_reconcile_lab(test_db, lab, lab.id)
@@ -1408,14 +1055,11 @@ class TestDoReconcileLabStateComputation:
         """Lab with error node should have state=error and state_error message."""
         from app.tasks.reconciliation_db import _do_reconcile_lab
 
-        host = _make_host(test_db, "host-lerr")
-        lab = _make_lab(test_db, test_user, state="running", agent_id=host.id)
-        n1 = _make_node(test_db, lab.id, "R1", host_id=host.id)
-        _make_node_state(
-            test_db, lab.id, "R1", actual="running", desired="running",
-            node_definition_id=n1.id,
-        )
-        _make_placement(test_db, lab.id, "R1", host.id, node_definition_id=n1.id)
+        host = make_host(test_db, host_id="host-lerr")
+        lab = make_lab(test_db, test_user.id, state="running", agent_id=host.id)
+        n1 = make_node(test_db, lab.id, gui_id="r1", display_name="R1", host_id=host.id)
+        make_node_state(test_db, lab.id, "r1", "R1", actual_state="running", desired_state="running", node_definition_id=n1.id, )
+        make_placement(test_db, lab.id, "R1", host.id, node_definition_id=n1.id, status="pending")
 
         with _ReconcileContext(agent_status_nodes=[{"name": "R1", "status": "dead"}]):
             await _do_reconcile_lab(test_db, lab, lab.id)
@@ -1473,7 +1117,7 @@ class TestDoReconcileLabExceptionPaths:
         """Failure in _ensure_link_states_for_lab should be caught and logged."""
         from app.tasks.reconciliation_db import _do_reconcile_lab
 
-        lab = _make_lab(test_db, test_user, state="running")
+        lab = make_lab(test_db, test_user.id, state="running")
 
         with _ReconcileContext(
             ensure_link_states=patch(
@@ -1491,7 +1135,7 @@ class TestDoReconcileLabExceptionPaths:
         """Failure in TopologyService.normalize_links_for_lab should be caught."""
         from app.tasks.reconciliation_db import _do_reconcile_lab
 
-        lab = _make_lab(test_db, test_user, state="running")
+        lab = make_lab(test_db, test_user.id, state="running")
 
         with _ReconcileContext() as mocks:
             ts = mocks["topo_service"].return_value
@@ -1506,10 +1150,10 @@ class TestDoReconcileLabExceptionPaths:
         from app.services.topology import TopologyService
         from app.tasks.reconciliation_db import _do_reconcile_lab
 
-        host = _make_host(test_db, "host-normalize-fail")
-        lab = _make_lab(test_db, test_user, state="running", agent_id=host.id)
-        node1 = _make_node(test_db, lab.id, "R1", host_id=host.id)
-        node2 = _make_node(test_db, lab.id, "R2", host_id=host.id)
+        host = make_host(test_db, host_id="host-normalize-fail")
+        lab = make_lab(test_db, test_user.id, state="running", agent_id=host.id)
+        node1 = make_node(test_db, lab.id, gui_id="r1", display_name="R1", host_id=host.id)
+        node2 = make_node(test_db, lab.id, gui_id="r2", display_name="R2", host_id=host.id)
         _make_link(
             test_db,
             lab.id,
@@ -1567,7 +1211,7 @@ class TestDoReconcileLabExceptionPaths:
         """Failure in cleanup_orphaned_node_states should be caught."""
         from app.tasks.reconciliation_db import _do_reconcile_lab
 
-        lab = _make_lab(test_db, test_user, state="running")
+        lab = make_lab(test_db, test_user.id, state="running")
 
         with _ReconcileContext(
             cleanup_orphans=patch(
@@ -1591,11 +1235,7 @@ class TestCleanupOrphanedNodeStates:
         """Undeployed orphan (no node_definition_id) should be deleted."""
         from app.tasks.reconciliation_db import cleanup_orphaned_node_states
 
-        ns = _make_node_state(
-            test_db, sample_lab.id, "Orphan1",
-            actual=NodeActualState.UNDEPLOYED.value,
-            node_definition_id=None,
-        )
+        ns = make_node_state(test_db, sample_lab.id, "orphan1", "Orphan1", actual_state=NodeActualState.UNDEPLOYED.value, node_definition_id=None, )
         ns_id = ns.id
 
         count = cleanup_orphaned_node_states(test_db, sample_lab.id)
@@ -1606,11 +1246,7 @@ class TestCleanupOrphanedNodeStates:
         """Stopped orphan should be deleted."""
         from app.tasks.reconciliation_db import cleanup_orphaned_node_states
 
-        ns = _make_node_state(
-            test_db, sample_lab.id, "OrphanStopped",
-            actual=NodeActualState.STOPPED.value,
-            node_definition_id=None,
-        )
+        ns = make_node_state(test_db, sample_lab.id, "orphanstopped", "OrphanStopped", actual_state=NodeActualState.STOPPED.value, node_definition_id=None, )
         ns_id = ns.id
 
         count = cleanup_orphaned_node_states(test_db, sample_lab.id)
@@ -1621,11 +1257,7 @@ class TestCleanupOrphanedNodeStates:
         """Error orphan should be deleted."""
         from app.tasks.reconciliation_db import cleanup_orphaned_node_states
 
-        ns = _make_node_state(
-            test_db, sample_lab.id, "Orphan2",
-            actual=NodeActualState.ERROR.value,
-            node_definition_id=None,
-        )
+        ns = make_node_state(test_db, sample_lab.id, "orphan2", "Orphan2", actual_state=NodeActualState.ERROR.value, node_definition_id=None, )
         ns_id = ns.id
 
         count = cleanup_orphaned_node_states(test_db, sample_lab.id)
@@ -1636,11 +1268,7 @@ class TestCleanupOrphanedNodeStates:
         """Running orphan should NOT be deleted (active container)."""
         from app.tasks.reconciliation_db import cleanup_orphaned_node_states
 
-        ns = _make_node_state(
-            test_db, sample_lab.id, "Orphan3",
-            actual=NodeActualState.RUNNING.value,
-            node_definition_id=None,
-        )
+        ns = make_node_state(test_db, sample_lab.id, "orphan3", "Orphan3", actual_state=NodeActualState.RUNNING.value, node_definition_id=None, )
 
         count = cleanup_orphaned_node_states(test_db, sample_lab.id)
         assert count == 0
@@ -1651,11 +1279,7 @@ class TestCleanupOrphanedNodeStates:
         """Nodes in STOPPING state should be preserved even if orphaned."""
         from app.tasks.reconciliation_db import cleanup_orphaned_node_states
 
-        ns = _make_node_state(
-            test_db, sample_lab.id, "R1",
-            actual=NodeActualState.STOPPING.value,
-            node_definition_id=None,
-        )
+        ns = make_node_state(test_db, sample_lab.id, "r1", "R1", actual_state=NodeActualState.STOPPING.value, node_definition_id=None, )
 
         count = cleanup_orphaned_node_states(test_db, sample_lab.id)
         assert count == 0
@@ -1666,11 +1290,7 @@ class TestCleanupOrphanedNodeStates:
         """Starting orphan should NOT be deleted (in transition)."""
         from app.tasks.reconciliation_db import cleanup_orphaned_node_states
 
-        _make_node_state(
-            test_db, sample_lab.id, "Orphan4",
-            actual=NodeActualState.STARTING.value,
-            node_definition_id=None,
-        )
+        make_node_state(test_db, sample_lab.id, "orphan4", "Orphan4", actual_state=NodeActualState.STARTING.value, node_definition_id=None, )
 
         count = cleanup_orphaned_node_states(test_db, sample_lab.id)
         assert count == 0
@@ -1679,11 +1299,7 @@ class TestCleanupOrphanedNodeStates:
         """Nodes in PENDING state should be preserved even if orphaned."""
         from app.tasks.reconciliation_db import cleanup_orphaned_node_states
 
-        _make_node_state(
-            test_db, sample_lab.id, "R1",
-            actual=NodeActualState.PENDING.value,
-            node_definition_id=None,
-        )
+        make_node_state(test_db, sample_lab.id, "r1", "R1", actual_state=NodeActualState.PENDING.value, node_definition_id=None, )
 
         count = cleanup_orphaned_node_states(test_db, sample_lab.id)
         assert count == 0
@@ -1699,23 +1315,9 @@ class TestCleanupOrphanedNodeStates:
         """Multiple orphans in safe states should all be deleted."""
         from app.tasks.reconciliation_db import cleanup_orphaned_node_states
 
-        _make_node_state(
-            test_db, sample_lab.id, "OrpA",
-            actual=NodeActualState.UNDEPLOYED.value,
-            node_definition_id=None,
-        )
-        _make_node_state(
-            test_db, sample_lab.id, "OrpB",
-            actual=NodeActualState.STOPPED.value,
-            node_definition_id=None,
-            node_id="orpb",
-        )
-        _make_node_state(
-            test_db, sample_lab.id, "OrpC",
-            actual=NodeActualState.ERROR.value,
-            node_definition_id=None,
-            node_id="orpc",
-        )
+        make_node_state(test_db, sample_lab.id, "orpa", "OrpA", actual_state=NodeActualState.UNDEPLOYED.value, node_definition_id=None, )
+        make_node_state(test_db, sample_lab.id, "orpb", "OrpB", actual_state=NodeActualState.STOPPED.value, node_definition_id=None, )
+        make_node_state(test_db, sample_lab.id, "orpc", "OrpC", actual_state=NodeActualState.ERROR.value, node_definition_id=None, )
 
         count = cleanup_orphaned_node_states(test_db, sample_lab.id)
         assert count == 3
@@ -1732,7 +1334,7 @@ class TestBackfillPlacementNodeIds:
         """Should log warning but return 0 (no-op)."""
         from app.tasks.reconciliation_db import _backfill_placement_node_ids
 
-        _make_placement(test_db, sample_lab.id, "R1", "host-xyz", node_definition_id=None)
+        make_placement(test_db, sample_lab.id, "R1", "host-xyz", node_definition_id=None, status="pending")
 
         result = _backfill_placement_node_ids(test_db, sample_lab.id)
         assert result == 0
@@ -1763,7 +1365,7 @@ class TestEnsureLinkStatesForLab:
         """Links where source node definition is deleted should be skipped."""
         from app.tasks.reconciliation_db import _ensure_link_states_for_lab
 
-        n2 = _make_node(test_db, sample_lab.id, "R2")
+        n2 = make_node(test_db, sample_lab.id, gui_id="r2", display_name="R2")
         lnk = models.Link(
             lab_id=sample_lab.id,
             link_name="fake:eth1-R2:eth1",
@@ -1782,11 +1384,11 @@ class TestEnsureLinkStatesForLab:
         """When canonical ordering swaps source/target, host IDs should also swap."""
         from app.tasks.reconciliation_db import _ensure_link_states_for_lab
 
-        host_a = _make_host(test_db, "host-swap-a")
-        host_b = _make_host(test_db, "host-swap-b")
+        host_a = make_host(test_db, host_id="host-swap-a")
+        host_b = make_host(test_db, host_id="host-swap-b")
 
-        n_z = _make_node(test_db, sample_lab.id, "Z1", host_id=host_a.id)
-        n_a = _make_node(test_db, sample_lab.id, "A1", host_id=host_b.id)
+        n_z = make_node(test_db, sample_lab.id, gui_id="z1", display_name="Z1", host_id=host_a.id)
+        n_a = make_node(test_db, sample_lab.id, gui_id="a1", display_name="A1", host_id=host_b.id)
 
         _make_link(test_db, sample_lab.id, n_z.id, "eth1", n_a.id, "eth1",
                    link_name="Z1:eth1-A1:eth1")
@@ -1808,11 +1410,11 @@ class TestEnsureLinkStatesForLab:
         """When source and target are on different hosts, is_cross_host should be True."""
         from app.tasks.reconciliation_db import _ensure_link_states_for_lab
 
-        host_a = _make_host(test_db, "host-cross-a")
-        host_b = _make_host(test_db, "host-cross-b")
+        host_a = make_host(test_db, host_id="host-cross-a")
+        host_b = make_host(test_db, host_id="host-cross-b")
 
-        n1 = _make_node(test_db, sample_lab.id, "R1", host_id=host_a.id)
-        n2 = _make_node(test_db, sample_lab.id, "R2", host_id=host_b.id)
+        n1 = make_node(test_db, sample_lab.id, gui_id="r1", display_name="R1", host_id=host_a.id)
+        n2 = make_node(test_db, sample_lab.id, gui_id="r2", display_name="R2", host_id=host_b.id)
         _make_link(test_db, sample_lab.id, n1.id, "eth1", n2.id, "eth1",
                    link_name="R1:eth1-R2:eth1")
 
@@ -1832,10 +1434,10 @@ class TestEnsureLinkStatesForLab:
         """When source and target are on the same host, is_cross_host should be False."""
         from app.tasks.reconciliation_db import _ensure_link_states_for_lab
 
-        host = _make_host(test_db, "host-same")
+        host = make_host(test_db, host_id="host-same")
 
-        n1 = _make_node(test_db, sample_lab.id, "R1", host_id=host.id)
-        n2 = _make_node(test_db, sample_lab.id, "R2", host_id=host.id)
+        n1 = make_node(test_db, sample_lab.id, gui_id="r1", display_name="R1", host_id=host.id)
+        n2 = make_node(test_db, sample_lab.id, gui_id="r2", display_name="R2", host_id=host.id)
         _make_link(test_db, sample_lab.id, n1.id, "eth1", n2.id, "eth1",
                    link_name="R1:eth1-R2:eth1")
 
@@ -1855,12 +1457,11 @@ class TestEnsureLinkStatesForLab:
         """Existing link state with same canonical key should not be recreated."""
         from app.tasks.reconciliation_db import _ensure_link_states_for_lab
 
-        n1 = _make_node(test_db, sample_lab.id, "R1")
-        n2 = _make_node(test_db, sample_lab.id, "R2")
+        n1 = make_node(test_db, sample_lab.id, gui_id="r1", display_name="R1")
+        n2 = make_node(test_db, sample_lab.id, gui_id="r2", display_name="R2")
         _make_link(test_db, sample_lab.id, n1.id, "eth1", n2.id, "eth1",
                    link_name="R1:eth1-R2:eth1")
-        _make_link_state(test_db, sample_lab.id, "R1", "eth1", "R2", "eth1",
-                         actual="up")
+        make_link_state(test_db, sample_lab.id, link_name="R1:eth1-R2:eth1", source_node="R1", source_interface="eth1", target_node="R2", target_interface="eth1", actual_state="up")
 
         result = _ensure_link_states_for_lab(test_db, sample_lab.id)
         assert result == 0
@@ -1869,16 +1470,16 @@ class TestEnsureLinkStatesForLab:
         """When node.host_id is None, should resolve via placement."""
         from app.tasks.reconciliation_db import _ensure_link_states_for_lab
 
-        host_a = _make_host(test_db, "host-plc-a")
-        host_b = _make_host(test_db, "host-plc-b")
+        host_a = make_host(test_db, host_id="host-plc-a")
+        host_b = make_host(test_db, host_id="host-plc-b")
 
         # Nodes without host_id
-        n1 = _make_node(test_db, sample_lab.id, "R1", host_id=None)
-        n2 = _make_node(test_db, sample_lab.id, "R2", host_id=None)
+        n1 = make_node(test_db, sample_lab.id, gui_id="r1", display_name="R1", host_id=None)
+        n2 = make_node(test_db, sample_lab.id, gui_id="r2", display_name="R2", host_id=None)
 
         # Placements provide host info
-        _make_placement(test_db, sample_lab.id, "R1", host_a.id, node_definition_id=n1.id)
-        _make_placement(test_db, sample_lab.id, "R2", host_b.id, node_definition_id=n2.id)
+        make_placement(test_db, sample_lab.id, "R1", host_a.id, node_definition_id=n1.id, status="pending")
+        make_placement(test_db, sample_lab.id, "R2", host_b.id, node_definition_id=n2.id, status="pending")
 
         _make_link(test_db, sample_lab.id, n1.id, "eth1", n2.id, "eth1",
                    link_name="R1:eth1-R2:eth1")
