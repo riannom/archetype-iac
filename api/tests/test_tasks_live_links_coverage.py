@@ -165,8 +165,8 @@ class TestCreateLinkIfReady:
     ):
         from app.tasks.live_links import create_link_if_ready
 
-        make_node_state(test_db, sample_lab.id, "R1", "stopped")
-        make_node_state(test_db, sample_lab.id, "R2", "stopped")
+        make_node_state(test_db, sample_lab.id, "R1", actual_state="stopped", desired="running")
+        make_node_state(test_db, sample_lab.id, "R2", actual_state="stopped", desired="running")
 
         log_parts = []
         with (
@@ -186,8 +186,8 @@ class TestCreateLinkIfReady:
     ):
         from app.tasks.live_links import create_link_if_ready
 
-        make_node_state(test_db, sample_lab.id, "R1", NodeActualState.RUNNING, is_ready=True)
-        make_node_state(test_db, sample_lab.id, "R2", NodeActualState.RUNNING, is_ready=True)
+        make_node_state(test_db, sample_lab.id, "R1", actual_state=NodeActualState.RUNNING, is_ready=True, desired="running")
+        make_node_state(test_db, sample_lab.id, "R2", actual_state=NodeActualState.RUNNING, is_ready=True, desired="running")
 
         log_parts = []
         with (

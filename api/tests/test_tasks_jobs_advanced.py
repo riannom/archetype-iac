@@ -64,7 +64,7 @@ class TestCaptureNodeIps:
     ):
         """IPs from agent status are persisted to NodeState records."""
         lab = make_lab(test_db, test_user)
-        ns = make_node_state(test_db, lab, node_id="n1", node_name="r1")
+        ns = make_node_state(test_db, lab, node_id="n1", node_name="r1", desired="running", actual="running")
 
         agent_status = {
             "nodes": [
@@ -89,7 +89,7 @@ class TestCaptureNodeIps:
     ):
         """Empty nodes list from agent does not crash."""
         lab = make_lab(test_db, test_user)
-        make_node_state(test_db, lab, node_id="n1", node_name="r1")
+        make_node_state(test_db, lab, node_id="n1", node_name="r1", desired="running", actual="running")
 
         with patch(
             "app.tasks.jobs.agent_client.get_lab_status_from_agent",
@@ -127,8 +127,8 @@ class TestCaptureNodeIps:
     ):
         """Nodes without IPs are skipped; nodes with IPs are updated."""
         lab = make_lab(test_db, test_user)
-        ns1 = make_node_state(test_db, lab, node_id="n1", node_name="r1")
-        ns2 = make_node_state(test_db, lab, node_id="n2", node_name="r2")
+        ns1 = make_node_state(test_db, lab, node_id="n1", node_name="r1", desired="running", actual="running")
+        ns2 = make_node_state(test_db, lab, node_id="n2", node_name="r2", desired="running", actual="running")
 
         agent_status = {
             "nodes": [
@@ -177,7 +177,7 @@ class TestCaptureNodeIps:
     ):
         """Commit failures trigger rollback in best-effort IP capture."""
         lab = make_lab(test_db, test_user)
-        ns = make_node_state(test_db, lab, node_id="n1", node_name="r1")
+        ns = make_node_state(test_db, lab, node_id="n1", node_name="r1", desired="running", actual="running")
 
         agent_status = {
             "nodes": [
@@ -214,7 +214,7 @@ class TestDispatchWebhook:
         """Webhook is dispatched with correct payload."""
         lab = make_lab(test_db, test_user)
         job = make_job(test_db, lab, test_user, action="up")
-        make_node_state(test_db, lab, node_id="n1", node_name="r1")
+        make_node_state(test_db, lab, node_id="n1", node_name="r1", desired="running", actual="running")
 
         with patch(
             "app.tasks.jobs.webhooks.dispatch_webhook_event",
@@ -272,7 +272,7 @@ class TestGetNodeInfoForWebhook:
     def test_correct_fields(self, test_db: Session, test_user: models.User):
         """Returned dicts contain the expected keys."""
         lab = make_lab(test_db, test_user)
-        ns = make_node_state(test_db, lab, node_id="n1", node_name="r1")
+        ns = make_node_state(test_db, lab, node_id="n1", node_name="r1", desired="running", actual="running")
         ns.management_ip = "10.0.0.1"
         test_db.commit()
 
@@ -292,9 +292,9 @@ class TestGetNodeInfoForWebhook:
     def test_multiple_nodes(self, test_db: Session, test_user: models.User):
         """Multiple nodes are all returned."""
         lab = make_lab(test_db, test_user)
-        make_node_state(test_db, lab, node_id="n1", node_name="r1")
-        make_node_state(test_db, lab, node_id="n2", node_name="r2")
-        make_node_state(test_db, lab, node_id="n3", node_name="r3")
+        make_node_state(test_db, lab, node_id="n1", node_name="r1", desired="running", actual="running")
+        make_node_state(test_db, lab, node_id="n2", node_name="r2", desired="running", actual="running")
+        make_node_state(test_db, lab, node_id="n3", node_name="r3", desired="running", actual="running")
 
         result = _get_node_info_for_webhook(test_db, lab.id)
         assert len(result) == 3

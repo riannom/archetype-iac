@@ -59,7 +59,7 @@ class TestDeploySingleNode:
         host = make_host(test_db)
         lab = make_lab(test_db, test_user, agent_id=host.id)
         job = make_job(test_db, lab, test_user)
-        ns = make_node_state(test_db, lab, "n1", "R1")
+        ns = make_node_state(test_db, lab, "n1", "R1", desired="running")
 
         manager = _make_manager(test_db, lab, job, ["n1"], agent=host)
         manager.db_nodes_map = {}  # no entry for R1
@@ -76,7 +76,7 @@ class TestDeploySingleNode:
         host = make_host(test_db)
         lab = make_lab(test_db, test_user, agent_id=host.id)
         job = make_job(test_db, lab, test_user)
-        ns = make_node_state(test_db, lab, "n1", "R1")
+        ns = make_node_state(test_db, lab, "n1", "R1", desired="running")
         node_def = make_node(test_db, lab, "n1", "R1", "R1", host_id=host.id)
 
         manager = _make_manager(test_db, lab, job, ["n1"], agent=host)
@@ -102,7 +102,7 @@ class TestDeploySingleNode:
         host = make_host(test_db)
         lab = make_lab(test_db, test_user, agent_id=host.id)
         job = make_job(test_db, lab, test_user)
-        ns = make_node_state(test_db, lab, "n1", "R1")
+        ns = make_node_state(test_db, lab, "n1", "R1", desired="running")
         node_def = make_node(test_db, lab, "n1", "R1", "R1", host_id=host.id)
 
         manager = _make_manager(test_db, lab, job, ["n1"], agent=host)
@@ -136,7 +136,7 @@ class TestDeploySingleNode:
         host = make_host(test_db)
         lab = make_lab(test_db, test_user, agent_id=host.id)
         job = make_job(test_db, lab, test_user)
-        ns = make_node_state(test_db, lab, "n1", "R1")
+        ns = make_node_state(test_db, lab, "n1", "R1", desired="running")
         node_def = make_node(test_db, lab, "n1", "R1", "R1", host_id=host.id)
 
         manager = _make_manager(test_db, lab, job, ["n1"], agent=host)
@@ -170,7 +170,7 @@ class TestDeploySingleNode:
         host = make_host(test_db)
         lab = make_lab(test_db, test_user, agent_id=host.id)
         job = make_job(test_db, lab, test_user)
-        ns = make_node_state(test_db, lab, "n1", "R1")
+        ns = make_node_state(test_db, lab, "n1", "R1", desired="running")
         node_def = make_node(test_db, lab, "n1", "R1", "R1", host_id=host.id)
 
         manager = _make_manager(test_db, lab, job, ["n1"], agent=host)
@@ -206,7 +206,7 @@ class TestDeploySingleNode:
         host = make_host(test_db)
         lab = make_lab(test_db, test_user, agent_id=host.id)
         job = make_job(test_db, lab, test_user)
-        ns = make_node_state(test_db, lab, "n1", "R1")
+        ns = make_node_state(test_db, lab, "n1", "R1", desired="running")
         node_def = make_node(test_db, lab, "n1", "R1", "R1", host_id=host.id)
 
         manager = _make_manager(test_db, lab, job, ["n1"], agent=host)
@@ -250,7 +250,7 @@ class TestDeploySingleNode:
         host = make_host(test_db)
         lab = make_lab(test_db, test_user, agent_id=host.id)
         job = make_job(test_db, lab, test_user)
-        ns = make_node_state(test_db, lab, "n1", "R1")
+        ns = make_node_state(test_db, lab, "n1", "R1", desired="running")
         node_def = make_node(
             test_db,
             lab,
@@ -303,7 +303,7 @@ class TestDeploySingleNode:
         host = make_host(test_db)
         lab = make_lab(test_db, test_user, agent_id=host.id)
         job = make_job(test_db, lab, test_user)
-        ns = make_node_state(test_db, lab, "n1", "R1")
+        ns = make_node_state(test_db, lab, "n1", "R1", desired="running")
         node_def = make_node(test_db, lab, "n1", "R1", "R1", host_id=host.id)
 
         manager = _make_manager(test_db, lab, job, ["n1"], agent=host)
@@ -343,7 +343,7 @@ class TestDeploySingleNode:
         host = make_host(test_db)
         lab = make_lab(test_db, test_user, agent_id=host.id)
         job = make_job(test_db, lab, test_user)
-        ns = make_node_state(test_db, lab, "n1", "R1")
+        ns = make_node_state(test_db, lab, "n1", "R1", desired="running")
         node_def = make_node(test_db, lab, "n1", "R1", "R1", host_id=host.id)
 
         manager = _make_manager(test_db, lab, job, ["n1"], agent=host)
@@ -385,7 +385,7 @@ class TestDeploySingleNode:
         host = make_host(test_db)
         lab = make_lab(test_db, test_user, agent_id=host.id)
         job = make_job(test_db, lab, test_user)
-        ns = make_node_state(test_db, lab, "n1", "R1")
+        ns = make_node_state(test_db, lab, "n1", "R1", desired="running")
         node_def = make_node(test_db, lab, "n1", "R1", "R1", host_id=host.id)
 
         manager = _make_manager(test_db, lab, job, ["n1"], agent=host)
@@ -417,7 +417,7 @@ class TestDeploySingleNode:
         host = make_host(test_db)
         lab = make_lab(test_db, test_user, agent_id=host.id)
         job = make_job(test_db, lab, test_user)
-        ns = make_node_state(test_db, lab, "n1", "R1")
+        ns = make_node_state(test_db, lab, "n1", "R1", desired="running")
         node_def = make_node(test_db, lab, "n1", "R1", "R1", host_id=host.id)
 
         manager = _make_manager(test_db, lab, job, ["n1"], agent=host)
@@ -580,7 +580,7 @@ class TestDeploySingleNodeWithRetry:
         host = make_host(test_db)
         lab = make_lab(test_db, test_user, agent_id=host.id)
         job = make_job(test_db, lab, test_user)
-        ns = make_node_state(test_db, lab, "n1", "R1")
+        ns = make_node_state(test_db, lab, "n1", "R1", desired="running")
 
         manager = _make_manager(test_db, lab, job, ["n1"], agent=host)
         call_count = 0
@@ -605,7 +605,7 @@ class TestDeploySingleNodeWithRetry:
         host = make_host(test_db)
         lab = make_lab(test_db, test_user, agent_id=host.id)
         job = make_job(test_db, lab, test_user)
-        ns = make_node_state(test_db, lab, "n1", "R1")
+        ns = make_node_state(test_db, lab, "n1", "R1", desired="running")
 
         manager = _make_manager(test_db, lab, job, ["n1"], agent=host)
         call_count = 0
@@ -639,7 +639,7 @@ class TestDeploySingleNodeWithRetry:
         host = make_host(test_db)
         lab = make_lab(test_db, test_user, agent_id=host.id)
         job = make_job(test_db, lab, test_user)
-        ns = make_node_state(test_db, lab, "n1", "R1")
+        ns = make_node_state(test_db, lab, "n1", "R1", desired="running")
 
         manager = _make_manager(test_db, lab, job, ["n1"], agent=host)
 
@@ -667,7 +667,7 @@ class TestDeploySingleNodeWithRetry:
         host = make_host(test_db)
         lab = make_lab(test_db, test_user, agent_id=host.id)
         job = make_job(test_db, lab, test_user)
-        ns = make_node_state(test_db, lab, "n1", "R1")
+        ns = make_node_state(test_db, lab, "n1", "R1", desired="running")
 
         manager = _make_manager(test_db, lab, job, ["n1"], agent=host)
         call_count = 0
@@ -1270,8 +1270,8 @@ class TestConnectSameHostLinksExtended:
         lab = make_lab(test_db, test_user, agent_id=host.id)
         job = make_job(test_db, lab, test_user)
 
-        ns1 = make_node_state(test_db, lab, "n1", "R1", actual="running")
-        ns2 = make_node_state(test_db, lab, "n2", "R2", actual="stopped")  # Not running
+        ns1 = make_node_state(test_db, lab, "n1", "R1", actual="running", desired="running")
+        ns2 = make_node_state(test_db, lab, "n2", "R2", actual="stopped")  # Not running, desired="running")
         ns1.is_ready = True
         test_db.commit()
         make_placement(test_db, lab, "R1", host.id)
@@ -1321,8 +1321,8 @@ class TestConnectSameHostLinksExtended:
         lab = make_lab(test_db, test_user, agent_id=host.id)
         job = make_job(test_db, lab, test_user)
 
-        ns1 = make_node_state(test_db, lab, "n1", "R1", actual="running")
-        ns2 = make_node_state(test_db, lab, "n2", "R2", actual="running")
+        ns1 = make_node_state(test_db, lab, "n1", "R1", actual="running", desired="running")
+        ns2 = make_node_state(test_db, lab, "n2", "R2", actual="running", desired="running")
         ns1.is_ready = True
         ns2.is_ready = True
         test_db.commit()
@@ -1373,8 +1373,8 @@ class TestConnectSameHostLinksExtended:
         lab = make_lab(test_db, test_user, agent_id=host.id)
         job = make_job(test_db, lab, test_user)
 
-        ns1 = make_node_state(test_db, lab, "n1", "R1", actual="running")
-        ns2 = make_node_state(test_db, lab, "n2", "R2", actual="running")
+        ns1 = make_node_state(test_db, lab, "n1", "R1", actual="running", desired="running")
+        ns2 = make_node_state(test_db, lab, "n2", "R2", actual="running", desired="running")
         ns1.is_ready = True
         ns2.is_ready = True
         test_db.commit()
@@ -1421,8 +1421,8 @@ class TestConnectSameHostLinksExtended:
         lab = make_lab(test_db, test_user, agent_id=host.id)
         job = make_job(test_db, lab, test_user)
 
-        ns1 = make_node_state(test_db, lab, "n1", "R1", actual="running")
-        ns2 = make_node_state(test_db, lab, "n2", "R2", actual="running")
+        ns1 = make_node_state(test_db, lab, "n1", "R1", actual="running", desired="running")
+        ns2 = make_node_state(test_db, lab, "n2", "R2", actual="running", desired="running")
         ns1.is_ready = True
         ns2.is_ready = True
         test_db.commit()
@@ -1474,8 +1474,8 @@ class TestConnectSameHostLinksExtended:
         lab = make_lab(test_db, test_user, agent_id=host.id)
         job = make_job(test_db, lab, test_user)
 
-        ns1 = make_node_state(test_db, lab, "n1", "R1", actual="running")
-        ns2 = make_node_state(test_db, lab, "n2", "R2", actual="running")
+        ns1 = make_node_state(test_db, lab, "n1", "R1", actual="running", desired="running")
+        ns2 = make_node_state(test_db, lab, "n2", "R2", actual="running", desired="running")
         ns1.is_ready = True
         ns2.is_ready = True
         test_db.commit()
@@ -1529,9 +1529,9 @@ class TestConnectSameHostLinksExtended:
         lab = make_lab(test_db, test_user, agent_id=host.id)
         job = make_job(test_db, lab, test_user)
 
-        ns1 = make_node_state(test_db, lab, "n1", "R1", actual="running")
-        ns2 = make_node_state(test_db, lab, "n2", "R2", actual="running")
-        ns3 = make_node_state(test_db, lab, "n3", "R3", actual="running")
+        ns1 = make_node_state(test_db, lab, "n1", "R1", actual="running", desired="running")
+        ns2 = make_node_state(test_db, lab, "n2", "R2", actual="running", desired="running")
+        ns3 = make_node_state(test_db, lab, "n3", "R3", actual="running", desired="running")
         ns1.is_ready = True
         ns2.is_ready = True
         ns3.is_ready = True
@@ -1588,8 +1588,8 @@ class TestConnectSameHostLinksExtended:
         lab = make_lab(test_db, test_user, agent_id=host.id)
         job = make_job(test_db, lab, test_user)
 
-        ns1 = make_node_state(test_db, lab, "n1", "R1", actual="running")
-        ns2 = make_node_state(test_db, lab, "n2", "R2", actual="running")
+        ns1 = make_node_state(test_db, lab, "n1", "R1", actual="running", desired="running")
+        ns2 = make_node_state(test_db, lab, "n2", "R2", actual="running", desired="running")
         ns1.is_ready = True
         ns2.is_ready = True
         test_db.commit()
@@ -1632,8 +1632,8 @@ class TestConnectSameHostLinksExtended:
         lab = make_lab(test_db, test_user, agent_id=host.id)
         job = make_job(test_db, lab, test_user)
 
-        ns1 = make_node_state(test_db, lab, "n1", "R1", actual="running")
-        ns2 = make_node_state(test_db, lab, "n2", "R2", actual="running")
+        ns1 = make_node_state(test_db, lab, "n1", "R1", actual="running", desired="running")
+        ns2 = make_node_state(test_db, lab, "n2", "R2", actual="running", desired="running")
         ns1.is_ready = True
         ns2.is_ready = False
         test_db.commit()

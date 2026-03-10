@@ -90,7 +90,7 @@ class TestCheckNodesReady:
             test_db, sample_lab.id, "n1", "R1",
             desired="running", actual="running", is_ready=True,
         )
-        make_node(test_db, sample_lab.id, "nd1", "n1", "R1", "R1", device="linux")
+        make_node(test_db, sample_lab.id, "n1", "R1", "R1", device="linux", node_id="nd1")
 
         mock_ac = MagicMock()
         mock_ac.is_agent_online = MagicMock(return_value=False)
@@ -122,7 +122,7 @@ class TestCheckNodesReady:
             test_db, sample_lab.id, "n1", "R1",
             desired="running", actual="running", is_ready=False,
         )
-        make_node(test_db, sample_lab.id, "nd1", "n1", "R1", "R1", device="linux")
+        make_node(test_db, sample_lab.id, "n1", "R1", "R1", device="linux", node_id="nd1")
 
         mock_ac = MagicMock()
         mock_ac.is_agent_online = MagicMock(return_value=True)
@@ -154,7 +154,7 @@ class TestCheckNodesReady:
             test_db, sample_lab.id, "n1", "R1",
             desired="running", actual="running", is_ready=False,
         )
-        make_node(test_db, sample_lab.id, "nd1", "n1", "R1", "R1")
+        make_node(test_db, sample_lab.id, "n1", "R1", "R1", node_id="nd1")
 
         mock_ac = MagicMock()
         mock_ac.is_agent_online = MagicMock(return_value=True)
@@ -358,7 +358,7 @@ class TestGetNodeInterfaces:
     ):
         """Returns interface mappings for a specific node."""
         node = make_node(
-            test_db, sample_lab.id, "nd1", "n1", "R1", "R1", device="ceos"
+            test_db, sample_lab.id, "n1", "R1", "R1", device="ceos", node_id="nd1"
         )
         mapping = models.InterfaceMapping(
             lab_id=sample_lab.id,
@@ -396,7 +396,7 @@ class TestGetNodeInterfaces:
         self, test_client, auth_headers, sample_lab, test_db
     ):
         """Node with no mappings returns empty list."""
-        make_node(test_db, sample_lab.id, "nd1", "n1", "R1", "R1")
+        make_node(test_db, sample_lab.id, "n1", "R1", "R1", node_id="nd1")
 
         resp = test_client.get(
             f"/labs/{sample_lab.id}/nodes/n1/interfaces", headers=auth_headers
@@ -448,7 +448,7 @@ class TestSyncInterfaceMappings:
         self, test_client, auth_headers, sample_lab, test_db, sample_host, monkeypatch
     ):
         """Node-scoped sync uses the placement host and returns counts."""
-        node = make_node(test_db, sample_lab.id, "nd1", "n1", "R1", "R1")
+        node = make_node(test_db, sample_lab.id, "n1", "R1", "R1", node_id="nd1")
         placement = models.NodePlacement(
             lab_id=sample_lab.id,
             node_name=node.display_name,
@@ -479,7 +479,7 @@ class TestSyncInterfaceMappings:
         self, test_client, auth_headers, sample_lab, test_db, monkeypatch
     ):
         """Node-scoped sync returns conflict when no placement exists."""
-        node = make_node(test_db, sample_lab.id, "nd1", "n1", "R1", "R1")
+        node = make_node(test_db, sample_lab.id, "n1", "R1", "R1", node_id="nd1")
         mock_svc = MagicMock()
         monkeypatch.setattr("app.routers.labs.interface_mapping_service", mock_svc)
 
@@ -494,7 +494,7 @@ class TestNodeInterfaceDiagnostics:
     def test_returns_controller_and_agent_diagnostics(
         self, test_client, auth_headers, sample_lab, test_db, sample_host, monkeypatch
     ):
-        node = make_node(test_db, sample_lab.id, "nd1", "n1", "R1", "R1")
+        node = make_node(test_db, sample_lab.id, "n1", "R1", "R1", node_id="nd1")
         node_state = models.NodeState(
             lab_id=sample_lab.id,
             node_id=node.gui_id,

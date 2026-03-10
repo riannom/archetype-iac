@@ -113,7 +113,7 @@ class TestReleaseDbTransactionForIo:
         self, test_db: Session, ext_lab: models.Lab, ext_job: models.Job,
     ):
         """When session is None the method should be a complete no-op."""
-        ns = make_node_state(test_db, ext_lab, "R1")
+        ns = make_node_state(test_db, ext_lab, "R1", desired="running")
         mixin = _make_mixin(test_db, ext_lab, ext_job, [ns])
         mixin.session = None  # type: ignore[assignment]
 
@@ -124,7 +124,7 @@ class TestReleaseDbTransactionForIo:
         self, test_db: Session, ext_lab: models.Lab, ext_job: models.Job,
     ):
         """Session with pending new objects should be committed."""
-        ns = make_node_state(test_db, ext_lab, "R1")
+        ns = make_node_state(test_db, ext_lab, "R1", desired="running")
         mixin = _make_mixin(test_db, ext_lab, ext_job, [ns])
 
         mock_session = MagicMock()
@@ -142,7 +142,7 @@ class TestReleaseDbTransactionForIo:
         self, test_db: Session, ext_lab: models.Lab, ext_job: models.Job,
     ):
         """Session with no pending writes should be rolled back."""
-        ns = make_node_state(test_db, ext_lab, "R1")
+        ns = make_node_state(test_db, ext_lab, "R1", desired="running")
         mixin = _make_mixin(test_db, ext_lab, ext_job, [ns])
 
         mock_session = MagicMock()
@@ -160,7 +160,7 @@ class TestReleaseDbTransactionForIo:
         self, test_db: Session, ext_lab: models.Lab, ext_job: models.Job,
     ):
         """If commit raises, a rollback attempt should be made and the error re-raised."""
-        ns = make_node_state(test_db, ext_lab, "R1")
+        ns = make_node_state(test_db, ext_lab, "R1", desired="running")
         mixin = _make_mixin(test_db, ext_lab, ext_job, [ns])
 
         mock_session = MagicMock()
@@ -181,7 +181,7 @@ class TestReleaseDbTransactionForIo:
         self, test_db: Session, ext_lab: models.Lab, ext_job: models.Job,
     ):
         """Session with dirty (modified) objects is considered to have pending writes."""
-        ns = make_node_state(test_db, ext_lab, "R1")
+        ns = make_node_state(test_db, ext_lab, "R1", desired="running")
         mixin = _make_mixin(test_db, ext_lab, ext_job, [ns])
 
         mock_session = MagicMock()
@@ -210,7 +210,7 @@ class TestRunBinPackPlacement:
         """When all candidate agents fail ping, no buckets are built and None
         is returned (fallthrough to fallback, not a hard failure)."""
         host = make_host(test_db, name="unreachable-agent")
-        ns = make_node_state(test_db, ext_lab, "R1")
+        ns = make_node_state(test_db, ext_lab, "R1", desired="running")
         mixin = _make_mixin(test_db, ext_lab, ext_job, [ns])
 
         all_node_agents: dict[str, str] = {}
@@ -244,7 +244,7 @@ class TestRunBinPackPlacement:
     ):
         """When capacity query fails for an agent, that agent is skipped."""
         make_host(test_db, name="cap-fail-agent")
-        ns = make_node_state(test_db, ext_lab, "R1")
+        ns = make_node_state(test_db, ext_lab, "R1", desired="running")
         mixin = _make_mixin(test_db, ext_lab, ext_job, [ns])
 
         all_node_agents: dict[str, str] = {}
@@ -278,7 +278,7 @@ class TestRunBinPackPlacement:
     ):
         """Capacity response with 'error' key or missing memory_total_gb is skipped."""
         make_host(test_db, name="bad-cap-agent")
-        ns = make_node_state(test_db, ext_lab, "R1")
+        ns = make_node_state(test_db, ext_lab, "R1", desired="running")
         mixin = _make_mixin(test_db, ext_lab, ext_job, [ns])
 
         all_node_agents: dict[str, str] = {}
@@ -312,7 +312,7 @@ class TestRunBinPackPlacement:
     ):
         """When bin-packer reports unplaceable nodes the job is marked FAILED."""
         make_host(test_db, name="tight-agent")
-        ns = make_node_state(test_db, ext_lab, "R1")
+        ns = make_node_state(test_db, ext_lab, "R1", desired="running")
         mixin = _make_mixin(test_db, ext_lab, ext_job, [ns])
 
         all_node_agents: dict[str, str] = {}
@@ -364,7 +364,7 @@ class TestRunBinPackPlacement:
     ):
         """Successful bin-pack populates all_node_agents and returns None."""
         host = make_host(test_db, name="ok-agent")
-        ns = make_node_state(test_db, ext_lab, "R1")
+        ns = make_node_state(test_db, ext_lab, "R1", desired="running")
         mixin = _make_mixin(test_db, ext_lab, ext_job, [ns])
 
         all_node_agents: dict[str, str] = {}
@@ -416,8 +416,8 @@ class TestRunBinPackPlacement:
     ):
         """Sticky node that exceeds its agent's capacity overflows to bin-packer pool."""
         host = make_host(test_db, name="tight-sticky-agent")
-        ns_sticky = make_node_state(test_db, ext_lab, "R1")
-        ns_new = make_node_state(test_db, ext_lab, "R2")
+        ns_sticky = make_node_state(test_db, ext_lab, "R1", desired="running")
+        ns_new = make_node_state(test_db, ext_lab, "R2", desired="running")
         mixin = _make_mixin(test_db, ext_lab, ext_job, [ns_sticky, ns_new])
 
         # Pre-assign R1 as "sticky"
@@ -476,8 +476,8 @@ class TestGroupAndDispatch:
         self, test_db: Session, ext_lab: models.Lab, ext_job: models.Job,
     ):
         """When no nodes have an agent assigned, all are returned as without-agent."""
-        ns1 = make_node_state(test_db, ext_lab, "R1")
-        ns2 = make_node_state(test_db, ext_lab, "R2")
+        ns1 = make_node_state(test_db, ext_lab, "R1", desired="running")
+        ns2 = make_node_state(test_db, ext_lab, "R2", desired="running")
         mixin = _make_mixin(test_db, ext_lab, ext_job, [ns1, ns2])
 
         without_agent = mixin._group_and_dispatch({})
@@ -492,8 +492,8 @@ class TestGroupAndDispatch:
     ):
         """With one agent, target_agent_id is set and no sub-jobs are spawned."""
         host = make_host(test_db, name="single-agent")
-        ns1 = make_node_state(test_db, ext_lab, "R1")
-        ns2 = make_node_state(test_db, ext_lab, "R2")
+        ns1 = make_node_state(test_db, ext_lab, "R1", desired="running")
+        ns2 = make_node_state(test_db, ext_lab, "R2", desired="running")
         mixin = _make_mixin(test_db, ext_lab, ext_job, [ns1, ns2])
 
         all_node_agents = {"R1": host.id, "R2": host.id}
@@ -513,8 +513,8 @@ class TestGroupAndDispatch:
         """With two agents, the second gets a sub-job spawned via safe_create_task."""
         host1 = make_host(test_db, name="primary-agent")
         host2 = make_host(test_db, name="secondary-agent")
-        ns1 = make_node_state(test_db, ext_lab, "R1")
-        ns2 = make_node_state(test_db, ext_lab, "R2")
+        ns1 = make_node_state(test_db, ext_lab, "R1", desired="running")
+        ns2 = make_node_state(test_db, ext_lab, "R2", desired="running")
         mixin = _make_mixin(test_db, ext_lab, ext_job, [ns1, ns2])
 
         # Stable ordering: R1 → host1, R2 → host2 (dict insertion order)
@@ -543,8 +543,8 @@ class TestGroupAndDispatch:
         """A Job row should be persisted for each additional agent."""
         host1 = make_host(test_db, name="agent-a")
         host2 = make_host(test_db, name="agent-b")
-        ns1 = make_node_state(test_db, ext_lab, "R1")
-        ns2 = make_node_state(test_db, ext_lab, "R2")
+        ns1 = make_node_state(test_db, ext_lab, "R1", desired="running")
+        ns2 = make_node_state(test_db, ext_lab, "R2", desired="running")
         mixin = _make_mixin(test_db, ext_lab, ext_job, [ns1, ns2])
 
         all_node_agents = {"R1": host1.id, "R2": host2.id}
@@ -569,8 +569,8 @@ class TestGroupAndDispatch:
     ):
         """Nodes without agent go into the without-agent list, assigned ones are grouped."""
         host = make_host(test_db, name="one-agent")
-        ns1 = make_node_state(test_db, ext_lab, "R1")
-        ns2 = make_node_state(test_db, ext_lab, "R2")
+        ns1 = make_node_state(test_db, ext_lab, "R1", desired="running")
+        ns2 = make_node_state(test_db, ext_lab, "R2", desired="running")
         mixin = _make_mixin(test_db, ext_lab, ext_job, [ns1, ns2])
 
         # Only R1 has an agent
@@ -595,7 +595,7 @@ class TestHandleUnassignedNodes:
         self, test_db: Session, ext_lab: models.Lab, ext_job: models.Job,
     ):
         """Empty without-agent list should not modify anything."""
-        ns = make_node_state(test_db, ext_lab, "R1")
+        ns = make_node_state(test_db, ext_lab, "R1", desired="running")
         mixin = _make_mixin(test_db, ext_lab, ext_job, [ns])
 
         mixin._handle_unassigned_nodes([])
@@ -610,7 +610,7 @@ class TestHandleUnassignedNodes:
     ):
         """Unassigned nodes that need action (desired=running, actual!=running)
         should be set to error state."""
-        ns_primary = make_node_state(test_db, ext_lab, "R1")
+        ns_primary = make_node_state(test_db, ext_lab, "R1", desired="running")
         ns_orphan = make_node_state(
             test_db, ext_lab, "R2",
             desired="running",
@@ -629,7 +629,7 @@ class TestHandleUnassignedNodes:
     ):
         """Unassigned node that is already running (desired=running, actual=running)
         should not be marked error."""
-        ns_primary = make_node_state(test_db, ext_lab, "R1")
+        ns_primary = make_node_state(test_db, ext_lab, "R1", desired="running")
         ns_already_ok = make_node_state(
             test_db, ext_lab, "R2",
             desired="running",
@@ -646,7 +646,7 @@ class TestHandleUnassignedNodes:
         self, test_db: Session, ext_lab: models.Lab, ext_job: models.Job,
     ):
         """Unassigned node with desired=stopped and actual=undeployed needs no action."""
-        ns_primary = make_node_state(test_db, ext_lab, "R1")
+        ns_primary = make_node_state(test_db, ext_lab, "R1", desired="running")
         ns_stopped = make_node_state(
             test_db, ext_lab, "R2",
             desired="stopped",
@@ -681,7 +681,7 @@ class TestHandleUnassignedNodes:
         self, test_db: Session, ext_lab: models.Lab, ext_job: models.Job,
     ):
         """Node desired=stopped but actual=running is still running — needs action."""
-        ns_primary = make_node_state(test_db, ext_lab, "R1")
+        ns_primary = make_node_state(test_db, ext_lab, "R1", desired="running")
         ns_running = make_node_state(
             test_db, ext_lab, "R2",
             desired="stopped",
@@ -709,7 +709,7 @@ class TestResolveFinalAgent:
     ):
         """When target_agent_id points to an online host, self.agent is set."""
         host = make_host(test_db, name="target-online")
-        ns = make_node_state(test_db, ext_lab, "R1")
+        ns = make_node_state(test_db, ext_lab, "R1", desired="running")
         mixin = _make_mixin(
             test_db, ext_lab, ext_job, [ns],
             target_agent_id=host.id,
@@ -732,7 +732,7 @@ class TestResolveFinalAgent:
     ):
         """When target_agent_id points to an offline host, job is marked FAILED."""
         host = make_host(test_db, name="target-offline", status="online")
-        ns = make_node_state(test_db, ext_lab, "R1")
+        ns = make_node_state(test_db, ext_lab, "R1", desired="running")
         mixin = _make_mixin(
             test_db, ext_lab, ext_job, [ns],
             target_agent_id=host.id,
@@ -757,7 +757,7 @@ class TestResolveFinalAgent:
     ):
         """Without target_agent_id, a single active placement's host is used."""
         host = make_host(test_db, name="placement-host")
-        ns = make_node_state(test_db, ext_lab, "R1")
+        ns = make_node_state(test_db, ext_lab, "R1", desired="running")
 
         placement = models.NodePlacement(
             lab_id=ext_lab.id,
@@ -795,7 +795,7 @@ class TestResolveFinalAgent:
         ext_lab.agent_id = host.id
         test_db.commit()
 
-        ns = make_node_state(test_db, ext_lab, "R1")
+        ns = make_node_state(test_db, ext_lab, "R1", desired="running")
         mixin = _make_mixin(
             test_db, ext_lab, ext_job, [ns],
             target_agent_id=None,
@@ -818,7 +818,7 @@ class TestResolveFinalAgent:
     ):
         """When lab.agent_id is None, get_healthy_agent is tried as last resort."""
         host = make_host(test_db, name="healthy-fallback")
-        ns = make_node_state(test_db, ext_lab, "R1")
+        ns = make_node_state(test_db, ext_lab, "R1", desired="running")
         mixin = _make_mixin(
             test_db, ext_lab, ext_job, [ns],
             target_agent_id=None,
@@ -845,7 +845,7 @@ class TestResolveFinalAgent:
         self, test_db: Session, ext_lab: models.Lab, ext_job: models.Job,
     ):
         """When no agent can be found anywhere, job is marked FAILED."""
-        ns = make_node_state(test_db, ext_lab, "R1")
+        ns = make_node_state(test_db, ext_lab, "R1", desired="running")
         mixin = _make_mixin(
             test_db, ext_lab, ext_job, [ns],
             target_agent_id=None,
@@ -873,7 +873,7 @@ class TestResolveFinalAgent:
         self, test_db: Session, ext_lab: models.Lab, ext_job: models.Job,
     ):
         """target_agent_id that doesn't exist in DB → agent stays None → job fails."""
-        ns = make_node_state(test_db, ext_lab, "R1")
+        ns = make_node_state(test_db, ext_lab, "R1", desired="running")
         mixin = _make_mixin(
             test_db, ext_lab, ext_job, [ns],
             target_agent_id="nonexistent-host-id",
@@ -898,7 +898,7 @@ class TestResolveFinalAgent:
         """Placements with status='failed' should not be used as fallback."""
         host = make_host(test_db, name="failed-placement-host")
         healthy = make_host(test_db, name="healthy-agent")
-        ns = make_node_state(test_db, ext_lab, "R1")
+        ns = make_node_state(test_db, ext_lab, "R1", desired="running")
 
         placement = models.NodePlacement(
             lab_id=ext_lab.id,
@@ -949,7 +949,7 @@ class TestResolveAgentsIntegration:
         ext_lab.agent_id = host.id
         test_db.commit()
 
-        ns = make_node_state(test_db, ext_lab, "R1")
+        ns = make_node_state(test_db, ext_lab, "R1", desired="running")
         mixin = _make_mixin(test_db, ext_lab, ext_job, [ns])
         mixin.lab = ext_lab
 
@@ -979,7 +979,7 @@ class TestResolveAgentsIntegration:
     ):
         """Explicit host_id is respected and agent is resolved via that host."""
         host = make_host(test_db, name="explicit-integration-host")
-        ns = make_node_state(test_db, ext_lab, "R1")
+        ns = make_node_state(test_db, ext_lab, "R1", desired="running")
 
         node_def = models.Node(
             lab_id=ext_lab.id,
@@ -1022,7 +1022,7 @@ class TestResolveAgentsIntegration:
         self, test_db: Session, ext_lab: models.Lab, ext_job: models.Job,
     ):
         """Full _resolve_agents with no available agents marks job FAILED."""
-        ns = make_node_state(test_db, ext_lab, "R1")
+        ns = make_node_state(test_db, ext_lab, "R1", desired="running")
         ext_lab.agent_id = None
         test_db.commit()
         test_db.refresh(ext_lab)

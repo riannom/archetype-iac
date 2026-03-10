@@ -54,7 +54,7 @@ class TestCheckStuckStoppingNodes:
             test_db,
             sample_lab.id,
             "R1",
-            NodeActualState.STOPPING.value,
+            actual_state=NodeActualState.STOPPING.value,
             stopping_started_at=now - timedelta(seconds=400),
         )
 
@@ -80,7 +80,7 @@ class TestCheckStuckStoppingNodes:
             test_db,
             sample_lab.id,
             "R1",
-            NodeActualState.STOPPING.value,
+            actual_state=NodeActualState.STOPPING.value,
             stopping_started_at=now - timedelta(seconds=300),  # 5 minutes, below 6-min threshold
         )
 
@@ -103,7 +103,7 @@ class TestCheckStuckStoppingNodes:
             test_db,
             sample_lab.id,
             "R1",
-            NodeActualState.STOPPING.value,
+            actual_state=NodeActualState.STOPPING.value,
             stopping_started_at=now - timedelta(seconds=360),
         )
 
@@ -127,7 +127,7 @@ class TestCheckStuckStoppingNodes:
             test_db,
             sample_lab.id,
             "R1",
-            NodeActualState.STOPPING.value,
+            actual_state=NodeActualState.STOPPING.value,
             stopping_started_at=now - timedelta(seconds=400),
         )
         make_job(test_db, sample_lab.id, test_user.id, JobStatus.RUNNING.value)
@@ -150,7 +150,7 @@ class TestCheckStuckStoppingNodes:
             test_db,
             sample_lab.id,
             "R1",
-            NodeActualState.STOPPING.value,
+            actual_state=NodeActualState.STOPPING.value,
             stopping_started_at=now - timedelta(seconds=400),
         )
         make_job(test_db, sample_lab.id, test_user.id, JobStatus.QUEUED.value)
@@ -173,14 +173,14 @@ class TestCheckStuckStoppingNodes:
             test_db,
             sample_lab.id,
             "R1",
-            NodeActualState.STOPPING.value,
+            actual_state=NodeActualState.STOPPING.value,
             stopping_started_at=now - timedelta(seconds=500),
         )
         ns2 = make_node_state(
             test_db,
             sample_lab.id,
             "R2",
-            NodeActualState.STOPPING.value,
+            actual_state=NodeActualState.STOPPING.value,
             stopping_started_at=now - timedelta(seconds=600),
         )
 
@@ -200,10 +200,10 @@ class TestCheckStuckStoppingNodes:
         from app.tasks.stuck_nodes import check_stuck_stopping_nodes
 
         ns_running = make_node_state(
-            test_db, sample_lab.id, "R1", NodeActualState.RUNNING.value
+            test_db, sample_lab.id, "R1", actual_state=NodeActualState.RUNNING.value
         )
         ns_stopped = make_node_state(
-            test_db, sample_lab.id, "R2", NodeActualState.STOPPED.value
+            test_db, sample_lab.id, "R2", actual_state=NodeActualState.STOPPED.value
         )
 
         with patch("app.tasks.stuck_nodes.get_session", _fake_get_session(test_db)):
@@ -256,7 +256,7 @@ class TestCheckStuckStartingNodes:
             test_db,
             sample_lab.id,
             "R1",
-            NodeActualState.STARTING.value,
+            actual_state=NodeActualState.STARTING.value,
             starting_started_at=now - timedelta(seconds=400),
         )
 
@@ -281,7 +281,7 @@ class TestCheckStuckStartingNodes:
             test_db,
             sample_lab.id,
             "R1",
-            NodeActualState.STARTING.value,
+            actual_state=NodeActualState.STARTING.value,
             starting_started_at=now - timedelta(seconds=300),
         )
 
@@ -303,7 +303,7 @@ class TestCheckStuckStartingNodes:
             test_db,
             sample_lab.id,
             "R1",
-            NodeActualState.STARTING.value,
+            actual_state=NodeActualState.STARTING.value,
             starting_started_at=now - timedelta(seconds=400),
             image_sync_status="syncing",
         )
@@ -311,7 +311,7 @@ class TestCheckStuckStartingNodes:
             test_db,
             sample_lab.id,
             "R2",
-            NodeActualState.STARTING.value,
+            actual_state=NodeActualState.STARTING.value,
             starting_started_at=now - timedelta(seconds=400),
             image_sync_status="checking",
         )
@@ -336,7 +336,7 @@ class TestCheckStuckStartingNodes:
             test_db,
             sample_lab.id,
             "R1",
-            NodeActualState.STARTING.value,
+            actual_state=NodeActualState.STARTING.value,
             starting_started_at=now - timedelta(seconds=400),
         )
         make_job(test_db, sample_lab.id, test_user.id, JobStatus.RUNNING.value)
@@ -359,7 +359,7 @@ class TestCheckStuckStartingNodes:
             test_db,
             sample_lab.id,
             "R1",
-            NodeActualState.STARTING.value,
+            actual_state=NodeActualState.STARTING.value,
             starting_started_at=now - timedelta(seconds=400),
             image_sync_status=None,
         )
@@ -382,7 +382,7 @@ class TestCheckStuckStartingNodes:
             test_db,
             sample_lab.id,
             "R1",
-            NodeActualState.STARTING.value,
+            actual_state=NodeActualState.STARTING.value,
             starting_started_at=now - timedelta(seconds=400),
             image_sync_status=None,
         )
@@ -390,7 +390,7 @@ class TestCheckStuckStartingNodes:
             test_db,
             sample_lab.id,
             "R2",
-            NodeActualState.STARTING.value,
+            actual_state=NodeActualState.STARTING.value,
             starting_started_at=now - timedelta(seconds=400),
             image_sync_status="syncing",
         )
@@ -415,7 +415,7 @@ class TestCheckStuckStartingNodes:
             test_db,
             sample_lab.id,
             "R1",
-            NodeActualState.STARTING.value,
+            actual_state=NodeActualState.STARTING.value,
             starting_started_at=now - timedelta(seconds=400),
         )
         make_job(test_db, sample_lab.id, test_user.id, JobStatus.COMPLETED.value)
