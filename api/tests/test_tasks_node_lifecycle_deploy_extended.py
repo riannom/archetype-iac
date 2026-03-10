@@ -395,8 +395,8 @@ class TestDeploySingleNode:
 
         assert result == "R1"
         create_kwargs = mock_ac.create_node_on_agent.await_args.kwargs
-        assert create_kwargs["env"]["CPTX_CHANNELIZED"] == "1"
-        assert create_kwargs["env"]["CPTX_COSIM"] == "BT"
+        assert create_kwargs["env"]["CPTX_COSIM"] == "BT|BX"
+        assert create_kwargs["env"]["CLAB_LABEL_CLAB_NODE_KIND"] == "juniper_cjunos"
 
     @pytest.mark.asyncio
     async def test_start_success_waits_for_runtime_identity_stabilization(self, test_db, test_user):
