@@ -144,10 +144,11 @@ def test_domain_xml_uses_virtio_nic_model_by_default(monkeypatch):
 
 def test_domain_xml_efi_boot_sets_firmware_attribute(monkeypatch):
     """efi_boot=True should add firmware='efi' to the <os> element."""
+    import agent.providers.libvirt_xml as lxml
     provider = _make_provider()
     # Stub OVMF path lookups so the code path runs without real files
-    monkeypatch.setattr(provider, "_find_ovmf_code_path", lambda: None)
-    monkeypatch.setattr(provider, "_find_ovmf_vars_template", lambda: None)
+    monkeypatch.setattr(lxml, "find_ovmf_code_path", lambda: None)
+    monkeypatch.setattr(lxml, "find_ovmf_vars_template", lambda: None)
 
     xml = _generate_xml(provider, efi_boot=True)
     root = ET.fromstring(xml)
@@ -166,12 +167,13 @@ def test_domain_xml_no_efi_by_default():
 
 def test_domain_xml_efi_boot_with_ovmf_adds_loader(monkeypatch):
     """When OVMF firmware exists, efi_boot should add <loader> element."""
+    import agent.providers.libvirt_xml as lxml
     provider = _make_provider()
     monkeypatch.setattr(
-        provider, "_find_ovmf_code_path",
+        lxml, "find_ovmf_code_path",
         lambda: "/usr/share/OVMF/OVMF_CODE.fd",
     )
-    monkeypatch.setattr(provider, "_find_ovmf_vars_template", lambda: None)
+    monkeypatch.setattr(lxml, "find_ovmf_vars_template", lambda: None)
 
     xml = _generate_xml(provider, efi_boot=True)
     root = ET.fromstring(xml)

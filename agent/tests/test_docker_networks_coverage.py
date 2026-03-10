@@ -46,7 +46,7 @@ def _make_provider(
     async def _passthrough_retry(desc, func, *args, **kwargs):
         return func(*args, **kwargs)
 
-    provider._retry_docker_call = AsyncMock(side_effect=_passthrough_retry)
+    provider._retry_docker_call = _passthrough_retry
     provider.docker = MagicMock()
     return provider
 
@@ -126,7 +126,7 @@ class TestCreateLabNetworks:
                 raise APIError("conflict", response=resp)
             return func(*args, **kwargs)
 
-        provider._retry_docker_call = AsyncMock(side_effect=_retry)
+        provider._retry_docker_call = _retry
 
         with patch("agent.providers.docker_networks.prune_legacy_lab_networks", new_callable=AsyncMock, return_value=0):
             result = asyncio.run(create_lab_networks(provider, "lab1", max_interfaces=0))
@@ -139,7 +139,7 @@ class TestCreateLabNetworks:
         async def _retry_raise(desc, func, *args, **kwargs):
             return func(*args, **kwargs)
 
-        provider._retry_docker_call = AsyncMock(side_effect=_retry_raise)
+        provider._retry_docker_call = _retry_raise
         provider.docker.networks.get.side_effect = NotFound("not found")
         provider.docker.networks.create.side_effect = RuntimeError("docker broken")
         provider._lab_network_create_kwargs.return_value = {"name": "test"}
@@ -195,7 +195,7 @@ class TestDeleteLabNetworks:
         async def _retry_raise(desc, func, *args, **kwargs):
             return func(*args, **kwargs)
 
-        provider._retry_docker_call = AsyncMock(side_effect=_retry_raise)
+        provider._retry_docker_call = _retry_raise
         provider.docker.networks.list.side_effect = APIError("daemon error")
 
         with patch("agent.providers.docker_networks.prune_legacy_lab_networks", new_callable=AsyncMock, return_value=0):

@@ -512,12 +512,13 @@ class TestStatelessEFI:
     """Tests for stateless EFI boot via QEMU commandline."""
 
     def test_stateless_efi_uses_qemu_commandline(self, monkeypatch):
+        import agent.providers.libvirt_xml as lxml
         p = _make_provider()
         monkeypatch.setattr(
-            p, "_find_ovmf_code_path",
+            lxml, "find_ovmf_code_path",
             lambda: "/usr/share/OVMF/OVMF_CODE.fd",
         )
-        monkeypatch.setattr(p, "_find_ovmf_vars_template", lambda: None)
+        monkeypatch.setattr(lxml, "find_ovmf_vars_template", lambda: None)
 
         xml = _gen_xml(provider=p, efi_boot=True, efi_vars="stateless")
         root = ET.fromstring(xml)
@@ -532,12 +533,13 @@ class TestStatelessEFI:
 
     def test_stateless_efi_no_firmware_attribute(self, monkeypatch):
         """Stateless EFI should NOT set firmware='efi' on <os>."""
+        import agent.providers.libvirt_xml as lxml
         p = _make_provider()
         monkeypatch.setattr(
-            p, "_find_ovmf_code_path",
+            lxml, "find_ovmf_code_path",
             lambda: "/usr/share/OVMF/OVMF_CODE.fd",
         )
-        monkeypatch.setattr(p, "_find_ovmf_vars_template", lambda: None)
+        monkeypatch.setattr(lxml, "find_ovmf_vars_template", lambda: None)
 
         xml = _gen_xml(provider=p, efi_boot=True, efi_vars="stateless")
         root = ET.fromstring(xml)
@@ -546,9 +548,10 @@ class TestStatelessEFI:
 
     def test_stateless_efi_without_ovmf_still_generates(self, monkeypatch):
         """Missing OVMF should log warning but still generate valid XML."""
+        import agent.providers.libvirt_xml as lxml
         p = _make_provider()
-        monkeypatch.setattr(p, "_find_ovmf_code_path", lambda: None)
-        monkeypatch.setattr(p, "_find_ovmf_vars_template", lambda: None)
+        monkeypatch.setattr(lxml, "find_ovmf_code_path", lambda: None)
+        monkeypatch.setattr(lxml, "find_ovmf_vars_template", lambda: None)
 
         xml = _gen_xml(provider=p, efi_boot=True, efi_vars="stateless")
         root = ET.fromstring(xml)
@@ -557,13 +560,14 @@ class TestStatelessEFI:
 
     def test_stateful_efi_sets_firmware_attribute(self, monkeypatch):
         """Stateful EFI should set firmware='efi' and add <loader>."""
+        import agent.providers.libvirt_xml as lxml
         p = _make_provider()
         monkeypatch.setattr(
-            p, "_find_ovmf_code_path",
+            lxml, "find_ovmf_code_path",
             lambda: "/usr/share/OVMF/OVMF_CODE.fd",
         )
         monkeypatch.setattr(
-            p, "_find_ovmf_vars_template",
+            lxml, "find_ovmf_vars_template",
             lambda: "/usr/share/OVMF/OVMF_VARS.fd",
         )
 
@@ -810,17 +814,18 @@ class TestVendorRoundTrip:
 
     def _xml_for_vendor(self, vendor_key, monkeypatch):
         """Generate domain XML using real vendor config values."""
+        import agent.providers.libvirt_xml as lxml
         from agent.vendors import get_libvirt_config
 
         lc = get_libvirt_config(vendor_key)
 
         p = _make_provider()
         monkeypatch.setattr(
-            p, "_find_ovmf_code_path",
+            lxml, "find_ovmf_code_path",
             lambda: "/usr/share/OVMF/OVMF_CODE.fd",
         )
         monkeypatch.setattr(
-            p, "_find_ovmf_vars_template",
+            lxml, "find_ovmf_vars_template",
             lambda: "/usr/share/OVMF/OVMF_VARS.fd",
         )
 

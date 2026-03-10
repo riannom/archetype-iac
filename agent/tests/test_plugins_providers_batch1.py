@@ -595,19 +595,18 @@ def test_libvirt_generate_domain_xml_with_dedicated_mgmt_interface(monkeypatch, 
 
 
 def test_libvirt_generate_domain_xml_efi_stateless(monkeypatch, tmp_path: Path) -> None:
+    import agent.providers.libvirt_xml as lxml
     provider = _make_libvirt_provider()
     overlay = tmp_path / "overlay.qcow2"
     overlay.touch()
 
     monkeypatch.setattr(
-        libvirt_provider.LibvirtProvider,
-        "_find_ovmf_code_path",
-        lambda self: "/usr/share/OVMF/OVMF_CODE.fd",
+        lxml, "find_ovmf_code_path",
+        lambda: "/usr/share/OVMF/OVMF_CODE.fd",
     )
     monkeypatch.setattr(
-        libvirt_provider.LibvirtProvider,
-        "_find_ovmf_vars_template",
-        lambda self: "/usr/share/OVMF/OVMF_VARS.fd",
+        lxml, "find_ovmf_vars_template",
+        lambda: "/usr/share/OVMF/OVMF_VARS.fd",
     )
 
     xml = provider._generate_domain_xml(

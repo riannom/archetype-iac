@@ -59,7 +59,7 @@ class TestStartSpecificErrors:
         console = SSHConsole("10.0.0.1", "admin", "wrongpass")
         err = asyncssh.PermissionDenied(1, "Permission denied")
 
-        with patch("asyncssh.connect", AsyncMock(side_effect=err)):
+        with patch("agent.console.ssh_console.asyncssh.connect", AsyncMock(side_effect=err)):
             result = await console.start()
 
         assert result is False
@@ -72,7 +72,7 @@ class TestStartSpecificErrors:
         console = SSHConsole("10.0.0.1", "admin", "cisco")
         err = asyncssh.HostKeyNotVerifiable(1, "Host key mismatch")
 
-        with patch("asyncssh.connect", AsyncMock(side_effect=err)):
+        with patch("agent.console.ssh_console.asyncssh.connect", AsyncMock(side_effect=err)):
             result = await console.start()
 
         assert result is False
@@ -84,7 +84,7 @@ class TestStartSpecificErrors:
         console = SSHConsole("10.0.0.1", "admin", "cisco")
         err = asyncssh.ConnectionLost(1, "Connection lost")
 
-        with patch("asyncssh.connect", AsyncMock(side_effect=err)):
+        with patch("agent.console.ssh_console.asyncssh.connect", AsyncMock(side_effect=err)):
             result = await console.start()
 
         assert result is False
@@ -94,7 +94,7 @@ class TestStartSpecificErrors:
         """ConnectionRefusedError (subclass of OSError) returns False."""
         console = SSHConsole("10.0.0.1", "admin", "cisco")
 
-        with patch("asyncssh.connect", AsyncMock(side_effect=ConnectionRefusedError("Connection refused"))):
+        with patch("agent.console.ssh_console.asyncssh.connect", AsyncMock(side_effect=ConnectionRefusedError("Connection refused"))):
             result = await console.start()
 
         assert result is False
@@ -110,7 +110,7 @@ class TestStartSpecificErrors:
             side_effect=asyncssh.ChannelOpenError(1, "session request failed")
         )
 
-        with patch("asyncssh.connect", AsyncMock(return_value=mock_conn)):
+        with patch("agent.console.ssh_console.asyncssh.connect", AsyncMock(return_value=mock_conn)):
             result = await console.start()
 
         assert result is False
@@ -197,7 +197,7 @@ class TestAuthAndPort:
         mock_conn = AsyncMock()
         mock_conn.create_process = AsyncMock(return_value=MagicMock())
 
-        with patch("asyncssh.connect", AsyncMock(return_value=mock_conn)) as mock_connect:
+        with patch("agent.console.ssh_console.asyncssh.connect", AsyncMock(return_value=mock_conn)) as mock_connect:
             await console.start()
 
             call_kwargs = mock_connect.call_args[1]

@@ -39,6 +39,15 @@ def test_create_lab_networks_uses_sanitized_prefix_and_labels(monkeypatch):
     docker_client.networks.create = MagicMock()
     provider._docker = docker_client
 
+    async def _sync_to_thread(func, *args, **kwargs):
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr(asyncio, "to_thread", _sync_to_thread)
+    monkeypatch.setattr(
+        "agent.providers.docker_networks.prune_legacy_lab_networks",
+        AsyncMock(return_value=0),
+    )
+
     lab_id = "lab$with#bad!chars-and-very-very-long-name"
     _run(provider._create_lab_networks(lab_id, max_interfaces=1))
 
@@ -49,7 +58,6 @@ def test_create_lab_networks_uses_sanitized_prefix_and_labels(monkeypatch):
 
 def test_create_lab_networks_reuses_valid_network_on_409(monkeypatch):
     provider = DockerProvider()
-    provider._prune_legacy_lab_networks = AsyncMock(return_value=None)
 
     existing = MagicMock()
     existing.attrs = {
@@ -75,6 +83,10 @@ def test_create_lab_networks_reuses_valid_network_on_409(monkeypatch):
         return func(*args, **kwargs)
 
     monkeypatch.setattr(asyncio, "to_thread", _sync_to_thread)
+    monkeypatch.setattr(
+        "agent.providers.docker_networks.prune_legacy_lab_networks",
+        AsyncMock(return_value=0),
+    )
 
     result = _run(provider._create_lab_networks("lab1", max_interfaces=0))
 
@@ -85,7 +97,6 @@ def test_create_lab_networks_reuses_valid_network_on_409(monkeypatch):
 
 def test_create_lab_networks_recreates_stale_unused_network_on_409(monkeypatch):
     provider = DockerProvider()
-    provider._prune_legacy_lab_networks = AsyncMock(return_value=None)
 
     stale = MagicMock()
     stale.attrs = {
@@ -104,6 +115,10 @@ def test_create_lab_networks_recreates_stale_unused_network_on_409(monkeypatch):
         return func(*args, **kwargs)
 
     monkeypatch.setattr(asyncio, "to_thread", _sync_to_thread)
+    monkeypatch.setattr(
+        "agent.providers.docker_networks.prune_legacy_lab_networks",
+        AsyncMock(return_value=0),
+    )
 
     result = _run(provider._create_lab_networks("lab1", max_interfaces=0))
 
@@ -114,7 +129,6 @@ def test_create_lab_networks_recreates_stale_unused_network_on_409(monkeypatch):
 
 def test_create_lab_networks_refuses_delete_for_in_use_stale_network_on_409(monkeypatch):
     provider = DockerProvider()
-    provider._prune_legacy_lab_networks = AsyncMock(return_value=None)
 
     stale_in_use = MagicMock()
     stale_in_use.attrs = {
@@ -133,6 +147,10 @@ def test_create_lab_networks_refuses_delete_for_in_use_stale_network_on_409(monk
         return func(*args, **kwargs)
 
     monkeypatch.setattr(asyncio, "to_thread", _sync_to_thread)
+    monkeypatch.setattr(
+        "agent.providers.docker_networks.prune_legacy_lab_networks",
+        AsyncMock(return_value=0),
+    )
 
     with pytest.raises(RuntimeError, match="active endpoints"):
         _run(provider._create_lab_networks("lab1", max_interfaces=0))
@@ -223,7 +241,6 @@ def test_retry_docker_call_stops_after_max_retries(monkeypatch):
 
 def test_create_lab_networks_recreates_stale_existing_network_without_409(monkeypatch):
     provider = DockerProvider()
-    provider._prune_legacy_lab_networks = AsyncMock(return_value=None)
 
     stale = MagicMock()
     stale.attrs = {
@@ -242,6 +259,10 @@ def test_create_lab_networks_recreates_stale_existing_network_without_409(monkey
         return func(*args, **kwargs)
 
     monkeypatch.setattr(asyncio, "to_thread", _sync_to_thread)
+    monkeypatch.setattr(
+        "agent.providers.docker_networks.prune_legacy_lab_networks",
+        AsyncMock(return_value=0),
+    )
 
     result = _run(provider._create_lab_networks("lab1", max_interfaces=0))
 
@@ -306,12 +327,16 @@ async def test_create_lab_networks_serializes_concurrent_calls_per_lab(monkeypat
         finally:
             active_calls["current"] -= 1
 
-    provider._retry_docker_call = AsyncMock(side_effect=_tracked_retry)
+    provider._retry_docker_call = _tracked_retry
 
     async def _sync_to_thread(func, *args, **kwargs):
         return func(*args, **kwargs)
 
     monkeypatch.setattr(asyncio, "to_thread", _sync_to_thread)
+    monkeypatch.setattr(
+        "agent.providers.docker_networks.prune_legacy_lab_networks",
+        AsyncMock(return_value=0),
+    )
 
     await asyncio.gather(
         provider._create_lab_networks("lab-lock", max_interfaces=0),
