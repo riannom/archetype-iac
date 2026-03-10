@@ -68,7 +68,7 @@ from app.utils.async_tasks import safe_create_task  # noqa: E402,F401
 from app.tasks.jobs import run_agent_job  # noqa: E402,F401
 from app.tasks.link_reconciliation import reconcile_lab_links  # noqa: E402,F401
 from app.services.link_reservations import sync_link_endpoint_reservations  # noqa: E402,F401
-from app.services.link_operational_state import recompute_link_oper_state  # noqa: E402,F401
+from app.services.link_manager import recompute_link_oper_state  # noqa: E402,F401
 from app.services import interface_mapping as interface_mapping_service  # noqa: E402,F401
 
 # Shared utilities (used by labs_node_states, labs_configs, jobs, tests)

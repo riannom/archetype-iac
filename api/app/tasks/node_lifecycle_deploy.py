@@ -926,97 +926,6 @@ class DeploymentMixin:
             nodes_need_deploy, "=== Phase 1: Deploy (per-node) ==="
         )
 
-    async def _start_single_node(self, ns: models.NodeState) -> str | None:
-        """Start a single node and update its state.
-
-        DEPRECATED: Unified lifecycle always uses _deploy_single_node() for
-        fresh container creation. Kept temporarily for reference.
-        """
-        db_node = self.db_nodes_map.get(ns.node_name)
-        kind = db_node.device if db_node else "linux"
-
-        # Determine provider from image type
-        image = resolve_node_image(
-            db_node.device, kind, db_node.image, db_node.version
-        ) if db_node else None
-        node_provider = get_image_provider(image)
-
-        try:
-            result = await agent_client.start_node_on_agent(
-                self.agent,
-                self.lab.id,
-                ns.node_name,
-                provider=node_provider,
-            )
-
-            if result.get("success"):
-                old_state = ns.actual_state
-                ns.actual_state = NodeActualState.RUNNING.value
-                ns.starting_started_at = None
-                ns.error_message = None
-                if not ns.boot_started_at:
-                    ns.boot_started_at = utcnow()
-                self.log_parts.append(f"  {ns.node_name}: started")
-                self._broadcast_state(ns, name_suffix="started")
-                logger.info(
-                    "Node state transition",
-                    extra={
-                        "event": "node_state_transition",
-                        "lab_id": self.lab.id,
-                        "node_id": ns.node_id,
-                        "node_name": ns.node_name,
-                        "old_state": old_state,
-                        "new_state": "running",
-                        "trigger": "agent_response",
-                        "agent_id": self.agent.id,
-                        "job_id": self.job.id,
-                    },
-                )
-                return ns.node_name
-            else:
-                error_msg = result.get("error", "Start failed")
-                error_lc = error_msg.lower()
-                # Self-heal drift: start requested but runtime object is missing
-                # (e.g., libvirt domain deleted). Fall back to full deploy.
-                if "not found" in error_lc:
-                    self.log_parts.append(
-                        f"  {ns.node_name}: start target missing, attempting redeploy..."
-                    )
-                    return await self._deploy_single_node(ns)
-
-                old_state = ns.actual_state
-                ns.actual_state = NodeActualState.ERROR.value
-                ns.starting_started_at = None
-                ns.error_message = error_msg
-                self.log_parts.append(f"  {ns.node_name}: FAILED - {error_msg}")
-                logger.info(
-                    "Node state transition",
-                    extra={
-                        "event": "node_state_transition",
-                        "lab_id": self.lab.id,
-                        "node_id": ns.node_id,
-                        "node_name": ns.node_name,
-                        "old_state": old_state,
-                        "new_state": "error",
-                        "trigger": "agent_response",
-                        "agent_id": self.agent.id,
-                        "job_id": self.job.id,
-                        "error_message": error_msg,
-                    },
-                )
-                return None
-
-        except AgentUnavailableError as e:
-            self._handle_transient_failure(ns, f"Agent unreachable: {e.message}")
-            return None
-        except Exception as e:
-            ns.actual_state = NodeActualState.ERROR.value
-            ns.starting_started_at = None
-            ns.error_message = str(e)
-            self.log_parts.append(f"  {ns.node_name}: FAILED - {e}")
-            logger.exception(f"Start node {ns.node_name} failed: {e}")
-            return None
-
     async def _start_nodes_per_node(self, nodes_need_start: list[models.NodeState]):
         """Start stopped nodes via fresh container/VM creation."""
         self.log_parts.append("")
@@ -1219,26 +1128,16 @@ class DeploymentMixin:
 
         # Connect links serially because the orchestration helper mutates the
         # shared DB session (LinkState + InterfaceMapping updates).
-        async def _connect_one(link_state: models.LinkState):
-            success = await _create_same_host_link(
-                self.session,
-                self.lab.id,
-                link_state,
-                {self.agent.id: self.agent},
-                [],
-            )
-            if success:
-                return True
-            logger.warning(
-                "Failed to connect same-host link %s during initial provisioning",
-                link_state.link_name,
-            )
-            return False
-
         links_connected = 0
         for link_state in link_tasks:
             try:
-                result = await _connect_one(link_state)
+                success = await _create_same_host_link(
+                    self.session,
+                    self.lab.id,
+                    link_state,
+                    {self.agent.id: self.agent},
+                    [],
+                )
             except Exception as exc:
                 logger.warning(
                     "Failed to connect same-host link %s: %s",
@@ -1246,8 +1145,13 @@ class DeploymentMixin:
                     exc,
                 )
                 continue
-            if result:
+            if success:
                 links_connected += 1
+            else:
+                logger.warning(
+                    "Failed to connect same-host link %s during initial provisioning",
+                    link_state.link_name,
+                )
 
         if links_connected:
             self.log_parts.append(f"  Connected {links_connected} same-host link(s)")

@@ -12,13 +12,12 @@ from __future__ import annotations
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
-from uuid import uuid4
 
 import pytest
 from sqlalchemy.orm import Session
 
-from app import models
 from app.state import LabState, NodeActualState, NodeDesiredState
+from tests.factories import make_host, make_lab, make_node, make_node_state, make_placement
 
 
 # ---------------------------------------------------------------------------
@@ -83,99 +82,6 @@ def _override_get_session(test_db: Session):
     return _session_ctx
 
 
-def _make_lab(
-    test_db, test_user, *, state="stopped",
-    state_updated_at=None, name=None, agent_id=None,
-):
-    lab = models.Lab(
-        name=name or f"Lab-{uuid4().hex[:8]}",
-        owner_id=test_user.id,
-        provider="docker",
-        state=state,
-        workspace_path="/tmp/test-lab",
-        state_updated_at=state_updated_at,
-        agent_id=agent_id,
-    )
-    test_db.add(lab)
-    test_db.commit()
-    test_db.refresh(lab)
-    return lab
-
-
-def _make_node_state(
-    test_db, lab_id, *, node_name="R1", node_id=None,
-    desired_state="stopped", actual_state="undeployed",
-    is_ready=False, boot_started_at=None, updated_at=None,
-):
-    ns = models.NodeState(
-        lab_id=lab_id,
-        node_id=node_id or node_name.lower(),
-        node_name=node_name,
-        desired_state=desired_state,
-        actual_state=actual_state,
-        is_ready=is_ready,
-        boot_started_at=boot_started_at,
-    )
-    test_db.add(ns)
-    test_db.commit()
-    if updated_at is not None:
-        test_db.execute(
-            models.NodeState.__table__.update()
-            .where(models.NodeState.id == ns.id)
-            .values(updated_at=updated_at)
-        )
-        test_db.commit()
-    test_db.refresh(ns)
-    return ns
-
-
-def _make_node_def(test_db, lab_id, *, container_name="R1", device="linux", image=None):
-    node = models.Node(
-        lab_id=lab_id,
-        gui_id=container_name.lower(),
-        display_name=container_name,
-        container_name=container_name,
-        node_type="device",
-        device=device,
-        image=image,
-    )
-    test_db.add(node)
-    test_db.commit()
-    test_db.refresh(node)
-    return node
-
-
-def _make_placement(test_db, lab_id, node_name, host_id):
-    placement = models.NodePlacement(
-        lab_id=lab_id,
-        node_name=node_name,
-        host_id=host_id,
-    )
-    test_db.add(placement)
-    test_db.commit()
-    test_db.refresh(placement)
-    return placement
-
-
-def _make_host(test_db, host_id, *, name=None, status="online"):
-    import json
-
-    host = models.Host(
-        id=host_id,
-        name=name or host_id,
-        address=f"{host_id}:8080",
-        status=status,
-        capabilities=json.dumps({"providers": ["docker"]}),
-        version="1.0.0",
-        last_heartbeat=datetime.now(timezone.utc),
-        resource_usage=json.dumps({}),
-    )
-    test_db.add(host)
-    test_db.commit()
-    test_db.refresh(host)
-    return host
-
-
 # ---------------------------------------------------------------------------
 # Tests: _check_readiness_for_nodes
 # ---------------------------------------------------------------------------
@@ -188,9 +94,9 @@ class TestCheckReadinessForNodes:
         """Should set boot_started_at if not already set."""
         from app.tasks.reconciliation_refresh import _check_readiness_for_nodes
 
-        host = _make_host(test_db, "host-a")
-        lab = _make_lab(test_db, test_user, state="running", agent_id=host.id)
-        ns = _make_node_state(
+        host = make_host(test_db, "host-a")
+        lab = make_lab(test_db, test_user, state="running", agent_id=host.id)
+        ns = make_node_state(
             test_db, lab.id, node_name="R1",
             actual_state="running", desired_state="running",
             is_ready=False, boot_started_at=None,
@@ -216,15 +122,15 @@ class TestCheckReadinessForNodes:
         """Should set is_ready=True when agent reports readiness."""
         from app.tasks.reconciliation_refresh import _check_readiness_for_nodes
 
-        host = _make_host(test_db, "host-b")
-        lab = _make_lab(test_db, test_user, state="running", agent_id=host.id)
-        _make_node_def(test_db, lab.id, container_name="R1", device="ceos")
-        ns = _make_node_state(
+        host = make_host(test_db, "host-b")
+        lab = make_lab(test_db, test_user, state="running", agent_id=host.id)
+        make_node(test_db, lab.id, container_name="R1", device="ceos")
+        ns = make_node_state(
             test_db, lab.id, node_name="R1",
             actual_state="running", desired_state="running",
             is_ready=False,
         )
-        _make_placement(test_db, lab.id, "R1", host.id)
+        make_placement(test_db, lab.id, "R1", host.id)
 
         with patch(
             "app.tasks.reconciliation_refresh.agent_client.check_node_readiness",
@@ -244,15 +150,15 @@ class TestCheckReadinessForNodes:
         """Readiness checks should not hold node_state transactions across agent I/O."""
         from app.tasks.reconciliation_refresh import _check_readiness_for_nodes
 
-        host = _make_host(test_db, "host-b1")
-        lab = _make_lab(test_db, test_user, state="running", agent_id=host.id)
-        _make_node_def(test_db, lab.id, container_name="R1", device="ceos")
-        ns = _make_node_state(
+        host = make_host(test_db, "host-b1")
+        lab = make_lab(test_db, test_user, state="running", agent_id=host.id)
+        make_node(test_db, lab.id, container_name="R1", device="ceos")
+        ns = make_node_state(
             test_db, lab.id, node_name="R1",
             actual_state="running", desired_state="running",
             is_ready=False,
         )
-        _make_placement(test_db, lab.id, "R1", host.id)
+        make_placement(test_db, lab.id, "R1", host.id)
 
         with patch(
             "app.tasks.reconciliation_refresh._release_db_transaction_for_io",
@@ -291,8 +197,8 @@ class TestCheckReadinessForNodes:
         """Should skip readiness check when no agent is reachable."""
         from app.tasks.reconciliation_refresh import _check_readiness_for_nodes
 
-        lab = _make_lab(test_db, test_user, state="running")
-        ns = _make_node_state(
+        lab = make_lab(test_db, test_user, state="running")
+        ns = make_node_state(
             test_db, lab.id, node_name="R1",
             actual_state="running", desired_state="running",
             is_ready=False,
@@ -312,15 +218,15 @@ class TestCheckReadinessForNodes:
         """Exception during readiness check should be caught."""
         from app.tasks.reconciliation_refresh import _check_readiness_for_nodes
 
-        host = _make_host(test_db, "host-c")
-        lab = _make_lab(test_db, test_user, state="running", agent_id=host.id)
-        _make_node_def(test_db, lab.id, container_name="R1")
-        ns = _make_node_state(
+        host = make_host(test_db, "host-c")
+        lab = make_lab(test_db, test_user, state="running", agent_id=host.id)
+        make_node(test_db, lab.id, container_name="R1")
+        ns = make_node_state(
             test_db, lab.id, node_name="R1",
             actual_state="running", desired_state="running",
             is_ready=False,
         )
-        _make_placement(test_db, lab.id, "R1", host.id)
+        make_placement(test_db, lab.id, "R1", host.id)
 
         with patch(
             "app.tasks.reconciliation_refresh.agent_client.check_node_readiness",
@@ -341,15 +247,15 @@ class TestCheckReadinessForNodes:
         """Nodes with qcow2 images should pass provider_type='libvirt'."""
         from app.tasks.reconciliation_refresh import _check_readiness_for_nodes
 
-        host = _make_host(test_db, "host-d")
-        lab = _make_lab(test_db, test_user, state="running", agent_id=host.id)
-        _make_node_def(test_db, lab.id, container_name="R1", device="iosv", image="iosv.qcow2")
-        ns = _make_node_state(
+        host = make_host(test_db, "host-d")
+        lab = make_lab(test_db, test_user, state="running", agent_id=host.id)
+        make_node(test_db, lab.id, container_name="R1", device="iosv", image="iosv.qcow2")
+        ns = make_node_state(
             test_db, lab.id, node_name="R1",
             actual_state="running", desired_state="running",
             is_ready=False,
         )
-        _make_placement(test_db, lab.id, "R1", host.id)
+        make_placement(test_db, lab.id, "R1", host.id)
 
         check_kwargs = {}
 
@@ -376,16 +282,16 @@ class TestCheckReadinessForNodes:
         """Exception in one lab's readiness check should not affect others."""
         from app.tasks.reconciliation_refresh import _check_readiness_for_nodes
 
-        host = _make_host(test_db, "host-e")
-        lab1 = _make_lab(test_db, test_user, state="running", agent_id=host.id, name="Lab1")
-        lab2 = _make_lab(test_db, test_user, state="running", agent_id=host.id, name="Lab2")
+        host = make_host(test_db, "host-e")
+        lab1 = make_lab(test_db, test_user, state="running", agent_id=host.id, name="Lab1")
+        lab2 = make_lab(test_db, test_user, state="running", agent_id=host.id, name="Lab2")
 
-        ns1 = _make_node_state(
+        ns1 = make_node_state(
             test_db, lab1.id, node_name="R1",
             actual_state="running", desired_state="running",
             is_ready=False,
         )
-        ns2 = _make_node_state(
+        ns2 = make_node_state(
             test_db, lab2.id, node_name="R2", node_id="r2",
             actual_state="running", desired_state="running",
             is_ready=False,
@@ -420,8 +326,8 @@ class TestRefreshAdditionalTriggers:
         """Nodes where desired=running but actual=exited should trigger reconciliation."""
         from app.tasks.reconciliation_refresh import refresh_states_from_agents
 
-        lab = _make_lab(test_db, test_user, state="running")
-        _make_node_state(
+        lab = make_lab(test_db, test_user, state="running")
+        make_node_state(
             test_db, lab.id,
             node_name="R1",
             desired_state=NodeDesiredState.RUNNING.value,
@@ -449,8 +355,8 @@ class TestRefreshAdditionalTriggers:
         """Stopped lab with error nodes should be selected."""
         from app.tasks.reconciliation_refresh import refresh_states_from_agents
 
-        lab = _make_lab(test_db, test_user, state="stopped")
-        _make_node_state(
+        lab = make_lab(test_db, test_user, state="stopped")
+        make_node_state(
             test_db, lab.id,
             node_name="R1",
             actual_state=NodeActualState.ERROR.value,
@@ -477,8 +383,8 @@ class TestRefreshAdditionalTriggers:
         """Nodes with desired=running and actual=undeployed should trigger reconciliation."""
         from app.tasks.reconciliation_refresh import refresh_states_from_agents
 
-        lab = _make_lab(test_db, test_user, state="running")
-        _make_node_state(
+        lab = make_lab(test_db, test_user, state="running")
+        make_node_state(
             test_db, lab.id,
             node_name="R1",
             desired_state=NodeDesiredState.RUNNING.value,
@@ -515,12 +421,12 @@ class TestMetricsRecording:
         from app.tasks.reconciliation_refresh import refresh_states_from_agents
 
         stale_time = datetime.now(timezone.utc) - timedelta(seconds=1200)
-        _make_lab(
+        make_lab(
             test_db, test_user,
             state=LabState.STARTING.value,
             state_updated_at=stale_time,
         )
-        _make_lab(
+        make_lab(
             test_db, test_user,
             state=LabState.STOPPING.value,
             state_updated_at=stale_time,
@@ -562,12 +468,12 @@ class TestRefreshDeduplication:
 
         # Lab matches both "transitional" (starting) and "error nodes" triggers
         stale_time = datetime.now(timezone.utc) - timedelta(seconds=1200)
-        lab = _make_lab(
+        lab = make_lab(
             test_db, test_user,
             state=LabState.STARTING.value,
             state_updated_at=stale_time,
         )
-        _make_node_state(
+        make_node_state(
             test_db, lab.id, node_name="R1",
             actual_state=NodeActualState.ERROR.value,
         )
@@ -597,8 +503,8 @@ class TestRefreshDeduplication:
         """A running lab where all nodes are ready should NOT be triggered."""
         from app.tasks.reconciliation_refresh import refresh_states_from_agents
 
-        lab = _make_lab(test_db, test_user, state=LabState.RUNNING.value)
-        _make_node_state(
+        lab = make_lab(test_db, test_user, state=LabState.RUNNING.value)
+        make_node_state(
             test_db, lab.id, node_name="R1",
             desired_state="running",
             actual_state="running",
@@ -632,8 +538,8 @@ class TestRefreshDeduplication:
         """Stopped lab with nodes still in running state should be triggered."""
         from app.tasks.reconciliation_refresh import refresh_states_from_agents
 
-        lab = _make_lab(test_db, test_user, state=LabState.STOPPED.value)
-        _make_node_state(
+        lab = make_lab(test_db, test_user, state=LabState.STOPPED.value)
+        make_node_state(
             test_db, lab.id, node_name="R1",
             desired_state="stopped",
             actual_state="running",

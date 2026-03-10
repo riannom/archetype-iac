@@ -8,7 +8,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 
-from app.services.link_operational_state import (
+from app.services.link_manager import (
     REASON_ADMIN_DOWN,
     REASON_LOCAL_INTERFACE_DOWN,
     REASON_LOCAL_NODE_DOWN,

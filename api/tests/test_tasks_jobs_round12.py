@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -27,6 +26,7 @@ from app.tasks.jobs import (
     _reset_session_after_db_error,
     run_agent_job,
 )
+from tests.factories import make_host, make_job, make_lab, make_node, make_node_state, make_placement
 
 
 # ---------------------------------------------------------------------------
@@ -36,68 +36,6 @@ from app.tasks.jobs import (
 
 def _run(coro):
     return asyncio.run(coro)
-
-
-def _make_lab(db, owner_id, state="running"):
-    lab = models.Lab(name="Test", owner_id=owner_id, provider="docker", state=state)
-    db.add(lab)
-    db.commit()
-    db.refresh(lab)
-    return lab
-
-
-def _make_host(db, host_id="h1", status="online"):
-    h = models.Host(
-        id=host_id, name=f"Agent-{host_id}", address="localhost:8080",
-        status=status, capabilities="{}", last_heartbeat=datetime.now(timezone.utc),
-    )
-    db.add(h)
-    db.commit()
-    db.refresh(h)
-    return h
-
-
-def _make_node(db, lab_id, gui_id, display_name, container_name, device="linux"):
-    n = models.Node(
-        lab_id=lab_id, gui_id=gui_id, display_name=display_name,
-        container_name=container_name, device=device,
-    )
-    db.add(n)
-    db.commit()
-    db.refresh(n)
-    return n
-
-
-def _make_node_state(db, lab_id, node_id, node_name, node_definition_id=None,
-                     desired="running", actual="running"):
-    ns = models.NodeState(
-        lab_id=lab_id, node_id=node_id, node_name=node_name,
-        node_definition_id=node_definition_id,
-        desired_state=desired, actual_state=actual,
-    )
-    db.add(ns)
-    db.commit()
-    db.refresh(ns)
-    return ns
-
-
-def _make_job(db, lab_id, user_id, action="up", status="queued"):
-    j = models.Job(lab_id=lab_id, user_id=user_id, action=action, status=status)
-    db.add(j)
-    db.commit()
-    db.refresh(j)
-    return j
-
-
-def _make_placement(db, lab_id, node_name, host_id, node_definition_id=None):
-    p = models.NodePlacement(
-        lab_id=lab_id, node_name=node_name,
-        node_definition_id=node_definition_id, host_id=host_id,
-    )
-    db.add(p)
-    db.commit()
-    db.refresh(p)
-    return p
 
 
 # ---------------------------------------------------------------------------
@@ -110,13 +48,13 @@ class TestAutoExtractMultiHost:
 
     def test_multihost_extracts_from_all_agents(self, test_db: Session, test_user: models.User):
         """When nodes are placed on multiple agents, extraction happens concurrently."""
-        lab = _make_lab(test_db, test_user.id)
-        h1 = _make_host(test_db, "h1")
-        h2 = _make_host(test_db, "h2")
-        n1 = _make_node(test_db, lab.id, "n1", "R1", "archetype-test-r1", "ceos")
-        n2 = _make_node(test_db, lab.id, "n2", "R2", "archetype-test-r2", "ceos")
-        _make_placement(test_db, lab.id, n1.container_name, h1.id, n1.id)
-        _make_placement(test_db, lab.id, n2.container_name, h2.id, n2.id)
+        lab = make_lab(test_db, test_user.id)
+        h1 = make_host(test_db, "h1")
+        h2 = make_host(test_db, "h2")
+        n1 = make_node(test_db, lab.id, "n1", "R1", "archetype-test-r1", "ceos")
+        n2 = make_node(test_db, lab.id, "n2", "R2", "archetype-test-r2", "ceos")
+        make_placement(test_db, lab.id, n1.container_name, h1.id, n1.id)
+        make_placement(test_db, lab.id, n2.container_name, h2.id, n2.id)
 
         with patch("app.tasks.jobs.settings") as mock_settings, \
              patch("app.tasks.jobs.agent_client") as mock_ac, \
@@ -137,13 +75,13 @@ class TestAutoExtractMultiHost:
 
     def test_one_agent_offline_still_extracts_from_healthy(self, test_db: Session, test_user: models.User):
         """When one agent is offline, extraction proceeds with healthy agents only."""
-        lab = _make_lab(test_db, test_user.id)
-        h1 = _make_host(test_db, "h1")
-        h2 = _make_host(test_db, "h2", status="offline")
-        n1 = _make_node(test_db, lab.id, "n1", "R1", "archetype-test-r1")
-        n2 = _make_node(test_db, lab.id, "n2", "R2", "archetype-test-r2")
-        _make_placement(test_db, lab.id, n1.container_name, h1.id, n1.id)
-        _make_placement(test_db, lab.id, n2.container_name, h2.id, n2.id)
+        lab = make_lab(test_db, test_user.id)
+        h1 = make_host(test_db, "h1")
+        h2 = make_host(test_db, "h2", status="offline")
+        n1 = make_node(test_db, lab.id, "n1", "R1", "archetype-test-r1")
+        n2 = make_node(test_db, lab.id, "n2", "R2", "archetype-test-r2")
+        make_placement(test_db, lab.id, n1.container_name, h1.id, n1.id)
+        make_placement(test_db, lab.id, n2.container_name, h2.id, n2.id)
 
         with patch("app.tasks.jobs.settings") as mock_settings, \
              patch("app.tasks.jobs.agent_client") as mock_ac, \
@@ -167,10 +105,10 @@ class TestAutoExtractMultiHost:
 
     def test_all_agents_offline_returns_early(self, test_db: Session, test_user: models.User):
         """When all agents are offline, extraction is skipped gracefully."""
-        lab = _make_lab(test_db, test_user.id)
-        h1 = _make_host(test_db, "h1", status="offline")
-        n1 = _make_node(test_db, lab.id, "n1", "R1", "archetype-test-r1")
-        _make_placement(test_db, lab.id, n1.container_name, h1.id, n1.id)
+        lab = make_lab(test_db, test_user.id)
+        h1 = make_host(test_db, "h1", status="offline")
+        n1 = make_node(test_db, lab.id, "n1", "R1", "archetype-test-r1")
+        make_placement(test_db, lab.id, n1.container_name, h1.id, n1.id)
 
         with patch("app.tasks.jobs.settings") as mock_settings, \
              patch("app.tasks.jobs.agent_client") as mock_ac:
@@ -185,13 +123,13 @@ class TestAutoExtractMultiHost:
 
     def test_agent_extract_returns_exception_continues(self, test_db: Session, test_user: models.User):
         """When asyncio.gather returns an exception for one agent, other configs are still saved."""
-        lab = _make_lab(test_db, test_user.id)
-        h1 = _make_host(test_db, "h1")
-        h2 = _make_host(test_db, "h2")
-        n1 = _make_node(test_db, lab.id, "n1", "R1", "archetype-test-r1", "ceos")
-        n2 = _make_node(test_db, lab.id, "n2", "R2", "archetype-test-r2", "ceos")
-        _make_placement(test_db, lab.id, n1.container_name, h1.id, n1.id)
-        _make_placement(test_db, lab.id, n2.container_name, h2.id, n2.id)
+        lab = make_lab(test_db, test_user.id)
+        h1 = make_host(test_db, "h1")
+        h2 = make_host(test_db, "h2")
+        n1 = make_node(test_db, lab.id, "n1", "R1", "archetype-test-r1", "ceos")
+        n2 = make_node(test_db, lab.id, "n2", "R2", "archetype-test-r2", "ceos")
+        make_placement(test_db, lab.id, n1.container_name, h1.id, n1.id)
+        make_placement(test_db, lab.id, n2.container_name, h2.id, n2.id)
 
         with patch("app.tasks.jobs.settings") as mock_settings, \
              patch("app.tasks.jobs.agent_client") as mock_ac, \
@@ -214,9 +152,9 @@ class TestAutoExtractMultiHost:
 
     def test_extract_empty_content_skipped(self, test_db: Session, test_user: models.User):
         """Configs with empty content are skipped."""
-        lab = _make_lab(test_db, test_user.id)
-        h1 = _make_host(test_db, "h1")
-        _make_node(test_db, lab.id, "n1", "R1", "archetype-test-r1")
+        lab = make_lab(test_db, test_user.id)
+        h1 = make_host(test_db, "h1")
+        make_node(test_db, lab.id, "n1", "R1", "archetype-test-r1")
 
         with patch("app.tasks.jobs.settings") as mock_settings, \
              patch("app.tasks.jobs.agent_client") as mock_ac, \
@@ -245,10 +183,10 @@ class TestCaptureNodeIps:
 
     def test_captures_ips_for_matching_nodes(self, test_db: Session, test_user: models.User):
         """IPs are stored on NodeState when agent reports them."""
-        lab = _make_lab(test_db, test_user.id)
-        host = _make_host(test_db)
-        node_def = _make_node(test_db, lab.id, "n1", "R1", "archetype-test-r1")
-        ns = _make_node_state(test_db, lab.id, "n1", "R1",
+        lab = make_lab(test_db, test_user.id)
+        host = make_host(test_db)
+        node_def = make_node(test_db, lab.id, "n1", "R1", "archetype-test-r1")
+        ns = make_node_state(test_db, lab.id, "n1", "R1",
                               node_definition_id=node_def.id)
 
         with patch("app.tasks.jobs.agent_client") as mock_ac:
@@ -265,8 +203,8 @@ class TestCaptureNodeIps:
 
     def test_no_nodes_in_status_skips(self, test_db: Session, test_user: models.User):
         """When agent returns no nodes, nothing happens."""
-        lab = _make_lab(test_db, test_user.id)
-        host = _make_host(test_db)
+        lab = make_lab(test_db, test_user.id)
+        host = make_host(test_db)
 
         with patch("app.tasks.jobs.agent_client") as mock_ac:
             mock_ac.get_lab_status_from_agent = AsyncMock(return_value={"nodes": []})
@@ -275,8 +213,8 @@ class TestCaptureNodeIps:
 
     def test_missing_node_def_skips_gracefully(self, test_db: Session, test_user: models.User):
         """Nodes returned by agent without matching Node definition are skipped."""
-        lab = _make_lab(test_db, test_user.id)
-        host = _make_host(test_db)
+        lab = make_lab(test_db, test_user.id)
+        host = make_host(test_db)
 
         with patch("app.tasks.jobs.agent_client") as mock_ac:
             mock_ac.get_lab_status_from_agent = AsyncMock(return_value={
@@ -289,10 +227,10 @@ class TestCaptureNodeIps:
 
     def test_node_without_ip_addresses_skipped(self, test_db: Session, test_user: models.User):
         """Nodes with empty ip_addresses list do not update NodeState."""
-        lab = _make_lab(test_db, test_user.id)
-        host = _make_host(test_db)
-        node_def = _make_node(test_db, lab.id, "n1", "R1", "archetype-test-r1")
-        ns = _make_node_state(test_db, lab.id, "n1", "R1",
+        lab = make_lab(test_db, test_user.id)
+        host = make_host(test_db)
+        node_def = make_node(test_db, lab.id, "n1", "R1", "archetype-test-r1")
+        ns = make_node_state(test_db, lab.id, "n1", "R1",
                               node_definition_id=node_def.id)
 
         with patch("app.tasks.jobs.agent_client") as mock_ac:
@@ -308,8 +246,8 @@ class TestCaptureNodeIps:
 
     def test_agent_exception_does_not_propagate(self, test_db: Session, test_user: models.User):
         """Agent errors during IP capture are swallowed (best-effort)."""
-        lab = _make_lab(test_db, test_user.id)
-        host = _make_host(test_db)
+        lab = make_lab(test_db, test_user.id)
+        host = make_host(test_db)
 
         with patch("app.tasks.jobs.agent_client") as mock_ac:
             mock_ac.get_lab_status_from_agent = AsyncMock(
@@ -346,8 +284,8 @@ class TestRunAgentJobErrors:
 
     def test_no_agent_available_fails_job(self, test_db: Session, test_user: models.User):
         """When no healthy agent is available, the job is marked failed."""
-        lab = _make_lab(test_db, test_user.id)
-        job = _make_job(test_db, lab.id, test_user.id)
+        lab = make_lab(test_db, test_user.id)
+        job = make_job(test_db, lab.id, test_user.id)
 
         mock_session = MagicMock()
         mock_session.get = lambda model, id_: (
@@ -380,9 +318,9 @@ class TestRunAgentJobErrors:
 
     def test_agent_unavailable_during_deploy(self, test_db: Session, test_user: models.User):
         """AgentUnavailableError during deploy sets lab state to unknown."""
-        lab = _make_lab(test_db, test_user.id)
-        job = _make_job(test_db, lab.id, test_user.id)
-        host = _make_host(test_db)
+        lab = make_lab(test_db, test_user.id)
+        job = make_job(test_db, lab.id, test_user.id)
+        host = make_host(test_db)
 
         mock_session = MagicMock()
         mock_session.get = lambda model, id_: (
@@ -428,9 +366,9 @@ class TestRunAgentJobErrors:
 
     def test_agent_job_error_captures_stdout_stderr(self, test_db: Session, test_user: models.User):
         """AgentJobError includes stdout/stderr in the job log."""
-        lab = _make_lab(test_db, test_user.id)
-        job = _make_job(test_db, lab.id, test_user.id)
-        host = _make_host(test_db)
+        lab = make_lab(test_db, test_user.id)
+        job = make_job(test_db, lab.id, test_user.id)
+        host = make_host(test_db)
 
         mock_session = MagicMock()
         mock_session.get = lambda model, id_: (
@@ -485,8 +423,8 @@ class TestCleanupNetworkRecordsAfterDestroy:
 
     def test_no_tunnels_deletes_linkstates(self, test_db: Session, test_user: models.User):
         """When no VXLAN tunnels exist, same-host LinkState records are deleted."""
-        lab = _make_lab(test_db, test_user.id)
-        host = _make_host(test_db)
+        lab = make_lab(test_db, test_user.id)
+        host = make_host(test_db)
         ls = models.LinkState(
             lab_id=lab.id, link_name="R1:eth1-R2:eth1",
             source_node="R1", source_interface="eth1",
@@ -503,8 +441,8 @@ class TestCleanupNetworkRecordsAfterDestroy:
 
     def test_exception_does_not_propagate(self, test_db: Session, test_user: models.User):
         """Exceptions during cleanup are caught and logged, not propagated."""
-        lab = _make_lab(test_db, test_user.id)
-        host = _make_host(test_db)
+        lab = make_lab(test_db, test_user.id)
+        host = make_host(test_db)
 
         with patch.object(test_db, "query", side_effect=RuntimeError("DB exploded")):
             # Should not raise
@@ -630,8 +568,8 @@ class TestSessionHelpers:
 class TestGetNodeInfoForWebhook:
 
     def test_returns_node_info_list(self, test_db: Session, test_user: models.User):
-        lab = _make_lab(test_db, test_user.id)
-        ns = _make_node_state(test_db, lab.id, "n1", "R1")
+        lab = make_lab(test_db, test_user.id)
+        ns = make_node_state(test_db, lab.id, "n1", "R1")
         ns.management_ip = "10.0.0.1"
         ns.is_ready = True
         test_db.commit()
@@ -643,6 +581,6 @@ class TestGetNodeInfoForWebhook:
         assert result[0]["ready"] is True
 
     def test_returns_empty_for_no_nodes(self, test_db: Session, test_user: models.User):
-        lab = _make_lab(test_db, test_user.id)
+        lab = make_lab(test_db, test_user.id)
         result = _get_node_info_for_webhook(test_db, lab.id)
         assert result == []

@@ -11,33 +11,11 @@ from app.tasks.link_orchestration import (
     create_external_network_links,
     teardown_deployment_links,
 )
+from tests.factories import make_link_state
 
 
 def _run(coro):
     return asyncio.run(coro)
-
-
-def _make_host(db, host_id, name="Agent"):
-    from datetime import datetime, timezone
-    h = models.Host(
-        id=host_id, name=name, address="localhost:8080",
-        status="online", capabilities="{}", last_heartbeat=datetime.now(timezone.utc),
-    )
-    db.add(h)
-    db.flush()
-    return h
-
-
-def _make_link_state(db, lab_id, link_name, desired="up", actual="pending"):
-    ls = models.LinkState(
-        lab_id=lab_id, link_name=link_name,
-        source_node="R1", source_interface="eth1",
-        target_node="R2", target_interface="eth1",
-        desired_state=desired, actual_state=actual,
-    )
-    db.add(ls)
-    db.flush()
-    return ls
 
 
 # ---------------------------------------------------------------------------
@@ -58,7 +36,7 @@ class TestCreateExternalLinks:
         ext_node.managed_interface_id = None
         ext_node.display_name = "EXT"
 
-        ls = _make_link_state(test_db, sample_lab.id, "R1:eth1-EXT:eth0")
+        ls = make_link_state(test_db, sample_lab.id, "R1:eth1-EXT:eth0")
         link = MagicMock()
 
         log_parts = []
@@ -76,7 +54,7 @@ class TestCreateExternalLinks:
         ext_node.managed_interface_id = "mi-nonexistent"
         ext_node.display_name = "EXT"
 
-        ls = _make_link_state(test_db, sample_lab.id, "R1:eth1-EXT:eth0")
+        ls = make_link_state(test_db, sample_lab.id, "R1:eth1-EXT:eth0")
         link = MagicMock()
         log_parts = []
 
@@ -101,7 +79,7 @@ class TestCreateExternalLinks:
         ext_node.managed_interface_id = "mi-1"
         ext_node.display_name = "EXT"
 
-        ls = _make_link_state(test_db, sample_lab.id, "R1:eth1-EXT:eth0")
+        ls = make_link_state(test_db, sample_lab.id, "R1:eth1-EXT:eth0")
         log_parts = []
 
         with patch("app.tasks.link_orchestration._sync_oper_state"):

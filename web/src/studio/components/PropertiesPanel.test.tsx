@@ -2,16 +2,22 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import PropertiesPanel from "./PropertiesPanel";
-import {
+import type {
   DeviceNode,
-  DeviceType,
   DeviceModel,
   Link,
   Annotation,
   ExternalNetworkNode,
 } from "../types";
+import { DeviceType } from "../types";
 import { RuntimeStatus } from "./RuntimeControl";
 import { PortManager } from "../hooks/usePortManager";
+import {
+  createDeviceNode as baseCreateDeviceNode,
+  createExternalNetworkNode as baseCreateExternalNetworkNode,
+  createLink as baseCreateLink,
+  createAnnotation as baseCreateAnnotation,
+} from "../../test-utils/factories";
 
 // Mock ExternalNetworkConfig component
 vi.mock("./ExternalNetworkConfig", () => ({
@@ -124,56 +130,44 @@ const mockDeviceModels: DeviceModel[] = [
   },
 ];
 
-const createDeviceNode = (overrides: Partial<DeviceNode> = {}): DeviceNode => ({
-  id: "node-1",
-  name: "Router1",
-  nodeType: "device",
-  type: DeviceType.ROUTER,
-  model: "ceos",
-  version: "4.28.0F",
-  x: 100,
-  y: 100,
-  cpu: 2,
-  memory: 2048,
-  config: "hostname router1",
-  container_name: "archetype-lab1-router1",
-  ...overrides,
-});
+const createDeviceNode = (overrides: Partial<DeviceNode> = {}): DeviceNode =>
+  baseCreateDeviceNode({
+    cpu: 2,
+    memory: 2048,
+    config: "hostname router1",
+    container_name: "archetype-lab1-router1",
+    ...overrides,
+  });
 
 const createExternalNetworkNode = (
   overrides: Partial<ExternalNetworkNode> = {}
-): ExternalNetworkNode => ({
-  id: "ext-1",
-  name: "Production Network",
-  nodeType: "external",
-  connectionType: "vlan",
-  parentInterface: "ens192",
-  vlanId: 100,
-  x: 300,
-  y: 300,
-  ...overrides,
-});
+): ExternalNetworkNode =>
+  baseCreateExternalNetworkNode({
+    name: "Production Network",
+    connectionType: "vlan",
+    parentInterface: "ens192",
+    x: 300,
+    y: 300,
+    ...overrides,
+  });
 
-const createLink = (overrides: Partial<Link> = {}): Link => ({
-  id: "link-1",
-  source: "node-1",
-  target: "node-2",
-  type: "p2p",
-  sourceInterface: "eth1",
-  targetInterface: "eth1",
-  ...overrides,
-});
+const createLink = (overrides: Partial<Link> = {}): Link =>
+  baseCreateLink({
+    sourceInterface: "eth1",
+    targetInterface: "eth1",
+    ...overrides,
+  });
 
-const createAnnotation = (overrides: Partial<Annotation> = {}): Annotation => ({
-  id: "ann-1",
-  type: "text",
-  x: 50,
-  y: 50,
-  text: "Test Label",
-  color: "#65A30D",
-  fontSize: 14,
-  ...overrides,
-});
+const createAnnotation = (overrides: Partial<Annotation> = {}): Annotation =>
+  baseCreateAnnotation({
+    type: "text",
+    x: 50,
+    y: 50,
+    text: "Test Label",
+    color: "#65A30D",
+    fontSize: 14,
+    ...overrides,
+  });
 
 const createMockPortManager = (): PortManager => ({
   getUsedInterfaces: vi.fn().mockReturnValue(new Set(["eth1"])),

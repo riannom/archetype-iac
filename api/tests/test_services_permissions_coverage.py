@@ -11,6 +11,7 @@ from app import models
 from app.auth import hash_password
 from app.enums import LabRole
 from app.services.permissions import PermissionService
+from tests.factories import make_lab
 
 
 def _make_user(
@@ -31,21 +32,6 @@ def _make_user(
     test_db.commit()
     test_db.refresh(user)
     return user
-
-
-def _make_lab(test_db: Session, owner: models.User) -> models.Lab:
-    """Create a lab owned by the given user."""
-    lab = models.Lab(
-        name=f"Lab-{uuid4().hex[:8]}",
-        owner_id=owner.id,
-        provider="docker",
-        state="stopped",
-        workspace_path="/tmp/test",
-    )
-    test_db.add(lab)
-    test_db.commit()
-    test_db.refresh(lab)
-    return lab
 
 
 def _make_permission(
@@ -73,7 +59,7 @@ class TestGetEffectiveLabRole:
         """Global admin should have owner-level access to any lab."""
         admin = _make_user(test_db, global_role="admin")
         owner = _make_user(test_db, global_role="operator")
-        lab = _make_lab(test_db, owner)
+        lab = make_lab(test_db, owner)
 
         role = PermissionService.get_effective_lab_role(admin, lab, test_db)
         assert role == LabRole.OWNER
@@ -82,7 +68,7 @@ class TestGetEffectiveLabRole:
         """Global super_admin should also have owner-level access."""
         super_admin = _make_user(test_db, global_role="super_admin")
         owner = _make_user(test_db, global_role="operator")
-        lab = _make_lab(test_db, owner)
+        lab = make_lab(test_db, owner)
 
         role = PermissionService.get_effective_lab_role(super_admin, lab, test_db)
         assert role == LabRole.OWNER
@@ -90,7 +76,7 @@ class TestGetEffectiveLabRole:
     def test_lab_owner_gets_owner_role(self, test_db: Session):
         """The lab owner should get the owner role."""
         user = _make_user(test_db, global_role="operator")
-        lab = _make_lab(test_db, user)
+        lab = make_lab(test_db, user)
 
         role = PermissionService.get_effective_lab_role(user, lab, test_db)
         assert role == LabRole.OWNER
@@ -99,7 +85,7 @@ class TestGetEffectiveLabRole:
         """User with explicit editor permission gets editor role."""
         owner = _make_user(test_db, global_role="operator")
         editor_user = _make_user(test_db, global_role="operator")
-        lab = _make_lab(test_db, owner)
+        lab = make_lab(test_db, owner)
         _make_permission(test_db, lab, editor_user, "editor")
 
         role = PermissionService.get_effective_lab_role(editor_user, lab, test_db)
@@ -109,7 +95,7 @@ class TestGetEffectiveLabRole:
         """User with explicit viewer permission gets viewer role."""
         owner = _make_user(test_db, global_role="operator")
         viewer_user = _make_user(test_db, global_role="operator")
-        lab = _make_lab(test_db, owner)
+        lab = make_lab(test_db, owner)
         _make_permission(test_db, lab, viewer_user, "viewer")
 
         role = PermissionService.get_effective_lab_role(viewer_user, lab, test_db)
@@ -119,7 +105,7 @@ class TestGetEffectiveLabRole:
         """User with explicit owner permission gets owner role."""
         owner = _make_user(test_db, global_role="operator")
         co_owner = _make_user(test_db, global_role="operator")
-        lab = _make_lab(test_db, owner)
+        lab = make_lab(test_db, owner)
         _make_permission(test_db, lab, co_owner, "owner")
 
         role = PermissionService.get_effective_lab_role(co_owner, lab, test_db)
@@ -129,7 +115,7 @@ class TestGetEffectiveLabRole:
         """Permission with unknown role string falls back to viewer."""
         owner = _make_user(test_db, global_role="operator")
         other = _make_user(test_db, global_role="operator")
-        lab = _make_lab(test_db, owner)
+        lab = make_lab(test_db, owner)
         _make_permission(test_db, lab, other, "unknown_role_xyz")
 
         role = PermissionService.get_effective_lab_role(other, lab, test_db)
@@ -139,7 +125,7 @@ class TestGetEffectiveLabRole:
         """User with no relationship to a lab gets None."""
         owner = _make_user(test_db, global_role="operator")
         stranger = _make_user(test_db, global_role="operator")
-        lab = _make_lab(test_db, owner)
+        lab = make_lab(test_db, owner)
 
         role = PermissionService.get_effective_lab_role(stranger, lab, test_db)
         assert role is None
@@ -148,7 +134,7 @@ class TestGetEffectiveLabRole:
         """Global admin bypasses explicit permission check entirely."""
         admin = _make_user(test_db, global_role="admin")
         owner = _make_user(test_db, global_role="operator")
-        lab = _make_lab(test_db, owner)
+        lab = make_lab(test_db, owner)
         # Even if admin has a viewer permission record, admin trumps
         _make_permission(test_db, lab, admin, "viewer")
 
@@ -159,7 +145,7 @@ class TestGetEffectiveLabRole:
         """Global viewer without explicit permission gets None."""
         owner = _make_user(test_db, global_role="operator")
         viewer = _make_user(test_db, global_role="viewer")
-        lab = _make_lab(test_db, owner)
+        lab = make_lab(test_db, owner)
 
         role = PermissionService.get_effective_lab_role(viewer, lab, test_db)
         assert role is None
@@ -175,7 +161,7 @@ class TestRequireLabRole:
         """Raises 403 when user has no access to the lab."""
         owner = _make_user(test_db, global_role="operator")
         stranger = _make_user(test_db, global_role="operator")
-        lab = _make_lab(test_db, owner)
+        lab = make_lab(test_db, owner)
 
         with pytest.raises(HTTPException) as exc_info:
             PermissionService.require_lab_role(
@@ -188,7 +174,7 @@ class TestRequireLabRole:
         """Raises 403 when user's role is below minimum required."""
         owner = _make_user(test_db, global_role="operator")
         viewer_user = _make_user(test_db, global_role="operator")
-        lab = _make_lab(test_db, owner)
+        lab = make_lab(test_db, owner)
         _make_permission(test_db, lab, viewer_user, "viewer")
 
         with pytest.raises(HTTPException) as exc_info:
@@ -202,7 +188,7 @@ class TestRequireLabRole:
         """Custom message is used when role is below minimum."""
         owner = _make_user(test_db, global_role="operator")
         viewer_user = _make_user(test_db, global_role="operator")
-        lab = _make_lab(test_db, owner)
+        lab = make_lab(test_db, owner)
         _make_permission(test_db, lab, viewer_user, "viewer")
 
         with pytest.raises(HTTPException) as exc_info:
@@ -217,7 +203,7 @@ class TestRequireLabRole:
         """Returns the effective role when access is granted."""
         owner = _make_user(test_db, global_role="operator")
         editor_user = _make_user(test_db, global_role="operator")
-        lab = _make_lab(test_db, owner)
+        lab = make_lab(test_db, owner)
         _make_permission(test_db, lab, editor_user, "editor")
 
         result = PermissionService.require_lab_role(
@@ -228,7 +214,7 @@ class TestRequireLabRole:
     def test_owner_passes_any_minimum(self, test_db: Session):
         """Lab owner passes any minimum role check."""
         owner = _make_user(test_db, global_role="operator")
-        lab = _make_lab(test_db, owner)
+        lab = make_lab(test_db, owner)
 
         result = PermissionService.require_lab_role(
             owner, lab, test_db, LabRole.OWNER,
@@ -239,7 +225,7 @@ class TestRequireLabRole:
         """User with exactly the minimum role passes."""
         owner = _make_user(test_db, global_role="operator")
         editor_user = _make_user(test_db, global_role="operator")
-        lab = _make_lab(test_db, owner)
+        lab = make_lab(test_db, owner)
         _make_permission(test_db, lab, editor_user, "editor")
 
         result = PermissionService.require_lab_role(

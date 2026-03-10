@@ -1,119 +1,18 @@
 """Tests for private helpers in app/routers/callbacks.py and the heartbeat endpoint."""
 from __future__ import annotations
 
-import json
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
-from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
 from app import models
+from tests.factories import make_host, make_lab, make_link_state, make_node_state
 
 
 # ── Helpers ─────────────────────────────────────────────────────────────
-
-
-def _make_host(
-    test_db: Session,
-    *,
-    host_id: str | None = None,
-    status: str = "online",
-    address: str = "localhost:8080",
-) -> models.Host:
-    h = models.Host(
-        id=host_id or str(uuid4()),
-        name=f"Agent-{uuid4().hex[:4]}",
-        address=address,
-        status=status,
-        capabilities=json.dumps({"providers": ["docker"]}),
-        version="1.0.0",
-        resource_usage=json.dumps({}),
-        last_heartbeat=datetime.now(timezone.utc),
-    )
-    test_db.add(h)
-    test_db.commit()
-    test_db.refresh(h)
-    return h
-
-
-def _make_node_state(
-    test_db: Session,
-    lab_id: str,
-    node_name: str,
-    *,
-    actual_state: str = "running",
-    desired_state: str = "running",
-) -> models.NodeState:
-    ns = models.NodeState(
-        id=str(uuid4()),
-        lab_id=lab_id,
-        node_id=node_name.lower(),
-        node_name=node_name,
-        desired_state=desired_state,
-        actual_state=actual_state,
-    )
-    test_db.add(ns)
-    test_db.commit()
-    test_db.refresh(ns)
-    return ns
-
-
-def _make_link_state(
-    test_db: Session,
-    lab_id: str,
-    *,
-    source_node: str = "R1",
-    source_interface: str = "eth1",
-    target_node: str = "R2",
-    target_interface: str = "eth1",
-    desired_state: str = "up",
-    actual_state: str = "pending",
-    is_cross_host: bool = False,
-    source_host_id: str | None = None,
-    target_host_id: str | None = None,
-    vni: int | None = None,
-) -> models.LinkState:
-    ls = models.LinkState(
-        id=str(uuid4()),
-        lab_id=lab_id,
-        link_name=f"{source_node}:{source_interface}-{target_node}:{target_interface}",
-        source_node=source_node,
-        source_interface=source_interface,
-        target_node=target_node,
-        target_interface=target_interface,
-        desired_state=desired_state,
-        actual_state=actual_state,
-        is_cross_host=is_cross_host,
-        source_host_id=source_host_id,
-        target_host_id=target_host_id,
-        vni=vni,
-    )
-    test_db.add(ls)
-    test_db.commit()
-    test_db.refresh(ls)
-    return ls
-
-
-def _make_lab(
-    test_db: Session,
-    owner_id: str,
-    *,
-    state: str = "running",
-) -> models.Lab:
-    lab = models.Lab(
-        name=f"Lab-{uuid4().hex[:6]}",
-        owner_id=owner_id,
-        provider="docker",
-        state=state,
-        workspace_path="/tmp/test",
-    )
-    test_db.add(lab)
-    test_db.commit()
-    test_db.refresh(lab)
-    return lab
 
 
 # ── _auto_connect_pending_links ─────────────────────────────────────────
@@ -127,7 +26,7 @@ class TestAutoConnectPendingLinks:
         """When _build_host_to_agent_map returns empty, function exits."""
         from app.routers.callbacks import _auto_connect_pending_links
 
-        lab = _make_lab(test_db, test_user.id)
+        lab = make_lab(test_db, test_user.id)
 
         with patch(
             "app.routers.callbacks._build_host_to_agent_map",
@@ -142,9 +41,9 @@ class TestAutoConnectPendingLinks:
         """Pending links involving newly-ready nodes are connected."""
         from app.routers.callbacks import _auto_connect_pending_links
 
-        host = _make_host(test_db)
-        lab = _make_lab(test_db, test_user.id)
-        _make_link_state(
+        host = make_host(test_db)
+        lab = make_lab(test_db, test_user.id)
+        make_link_state(
             test_db, lab.id,
             source_node="R1", target_node="R2",
             desired_state="up", actual_state="pending",
@@ -173,9 +72,9 @@ class TestAutoConnectPendingLinks:
         """Links not involving any newly-ready node are skipped."""
         from app.routers.callbacks import _auto_connect_pending_links
 
-        host = _make_host(test_db)
-        lab = _make_lab(test_db, test_user.id)
-        _make_link_state(
+        host = make_host(test_db)
+        lab = make_lab(test_db, test_user.id)
+        make_link_state(
             test_db, lab.id,
             source_node="R3", target_node="R4",
             desired_state="up", actual_state="pending",
@@ -201,9 +100,9 @@ class TestAutoConnectPendingLinks:
         """Links with desired_state=down are not auto-connected."""
         from app.routers.callbacks import _auto_connect_pending_links
 
-        host = _make_host(test_db)
-        lab = _make_lab(test_db, test_user.id)
-        _make_link_state(
+        host = make_host(test_db)
+        lab = make_lab(test_db, test_user.id)
+        make_link_state(
             test_db, lab.id,
             source_node="R1", target_node="R2",
             desired_state="down", actual_state="pending",
@@ -229,11 +128,11 @@ class TestAutoConnectPendingLinks:
         """Links in any of pending/unknown/down/error states are candidates."""
         from app.routers.callbacks import _auto_connect_pending_links
 
-        host = _make_host(test_db)
-        lab = _make_lab(test_db, test_user.id)
+        host = make_host(test_db)
+        lab = make_lab(test_db, test_user.id)
 
         for actual in ["pending", "unknown", "down", "error"]:
-            _make_link_state(
+            make_link_state(
                 test_db, lab.id,
                 source_node="R1",
                 source_interface=f"eth{actual}",
@@ -271,7 +170,7 @@ class TestAutoReattachOverlayEndpoints:
         """Empty host map means no work to do."""
         from app.routers.callbacks import _auto_reattach_overlay_endpoints
 
-        lab = _make_lab(test_db, test_user.id)
+        lab = make_lab(test_db, test_user.id)
 
         with patch(
             "app.routers.callbacks._build_host_to_agent_map",
@@ -286,10 +185,10 @@ class TestAutoReattachOverlayEndpoints:
         """No cross-host links means nothing to reattach."""
         from app.routers.callbacks import _auto_reattach_overlay_endpoints
 
-        host = _make_host(test_db)
-        lab = _make_lab(test_db, test_user.id)
+        host = make_host(test_db)
+        lab = make_lab(test_db, test_user.id)
         # Only same-host links
-        _make_link_state(
+        make_link_state(
             test_db, lab.id,
             source_node="R1", target_node="R2",
             is_cross_host=False,
@@ -316,10 +215,10 @@ class TestAutoReattachOverlayEndpoints:
         """Source endpoint of a cross-host link is reattached when node becomes ready."""
         from app.routers.callbacks import _auto_reattach_overlay_endpoints
 
-        host_a = _make_host(test_db, host_id="host-a")
-        host_b = _make_host(test_db, host_id="host-b")
-        lab = _make_lab(test_db, test_user.id)
-        _make_link_state(
+        host_a = make_host(test_db, host_id="host-a")
+        host_b = make_host(test_db, host_id="host-b")
+        lab = make_lab(test_db, test_user.id)
+        make_link_state(
             test_db, lab.id,
             source_node="R1", target_node="R2",
             is_cross_host=True,
@@ -353,9 +252,9 @@ class TestAutoReattachOverlayEndpoints:
         """Cross-host link is skipped when one host is not in the agent map."""
         from app.routers.callbacks import _auto_reattach_overlay_endpoints
 
-        host_a = _make_host(test_db, host_id="host-a")
-        lab = _make_lab(test_db, test_user.id)
-        _make_link_state(
+        host_a = make_host(test_db, host_id="host-a")
+        lab = make_lab(test_db, test_user.id)
+        make_link_state(
             test_db, lab.id,
             source_node="R1", target_node="R2",
             is_cross_host=True,
@@ -385,10 +284,10 @@ class TestAutoReattachOverlayEndpoints:
         """VNI is allocated and stored when link has no VNI."""
         from app.routers.callbacks import _auto_reattach_overlay_endpoints
 
-        host_a = _make_host(test_db, host_id="host-a")
-        host_b = _make_host(test_db, host_id="host-b")
-        lab = _make_lab(test_db, test_user.id)
-        ls = _make_link_state(
+        host_a = make_host(test_db, host_id="host-a")
+        host_b = make_host(test_db, host_id="host-b")
+        lab = make_lab(test_db, test_user.id)
+        ls = make_link_state(
             test_db, lab.id,
             source_node="R1", target_node="R2",
             is_cross_host=True,
@@ -429,8 +328,8 @@ class TestUpdateNodeStates:
         """Node state is updated from callback payload."""
         from app.routers.callbacks import _update_node_states
 
-        lab = _make_lab(test_db, test_user.id)
-        ns = _make_node_state(test_db, lab.id, "R1", actual_state="starting")
+        lab = make_lab(test_db, test_user.id)
+        ns = make_node_state(test_db, lab.id, "R1", actual_state="starting")
 
         with patch(
             "app.routers.callbacks._auto_connect_pending_links",
@@ -452,8 +351,8 @@ class TestUpdateNodeStates:
         """Error message is cleared when state transitions to running."""
         from app.routers.callbacks import _update_node_states
 
-        lab = _make_lab(test_db, test_user.id)
-        ns = _make_node_state(test_db, lab.id, "R1", actual_state="error")
+        lab = make_lab(test_db, test_user.id)
+        ns = make_node_state(test_db, lab.id, "R1", actual_state="error")
         ns.error_message = "Previous error"
         test_db.commit()
 
@@ -477,8 +376,8 @@ class TestUpdateNodeStates:
         """Error message is cleared when state transitions to stopped."""
         from app.routers.callbacks import _update_node_states
 
-        lab = _make_lab(test_db, test_user.id)
-        ns = _make_node_state(test_db, lab.id, "R1", actual_state="error")
+        lab = make_lab(test_db, test_user.id)
+        ns = make_node_state(test_db, lab.id, "R1", actual_state="error")
         ns.error_message = "Previous error"
         test_db.commit()
 
@@ -502,8 +401,8 @@ class TestUpdateNodeStates:
         """Auto-connect is triggered when a node transitions to running."""
         from app.routers.callbacks import _update_node_states
 
-        lab = _make_lab(test_db, test_user.id)
-        _make_node_state(test_db, lab.id, "R1", actual_state="starting")
+        lab = make_lab(test_db, test_user.id)
+        make_node_state(test_db, lab.id, "R1", actual_state="starting")
 
         mock_connect = AsyncMock()
         mock_reattach = AsyncMock()
@@ -527,8 +426,8 @@ class TestUpdateNodeStates:
         """Auto-connect is NOT triggered when state doesn't change."""
         from app.routers.callbacks import _update_node_states
 
-        lab = _make_lab(test_db, test_user.id)
-        _make_node_state(test_db, lab.id, "R1", actual_state="running")
+        lab = make_lab(test_db, test_user.id)
+        make_node_state(test_db, lab.id, "R1", actual_state="running")
 
         mock_connect = AsyncMock()
         mock_reattach = AsyncMock()
@@ -549,7 +448,7 @@ class TestUpdateNodeStates:
         """Node names not in the database are silently ignored."""
         from app.routers.callbacks import _update_node_states
 
-        lab = _make_lab(test_db, test_user.id)
+        lab = make_lab(test_db, test_user.id)
 
         # No node state for "R99" in DB — should not raise
         await _update_node_states(test_db, lab.id, {"R99": "running"})
@@ -560,8 +459,8 @@ class TestUpdateNodeStates:
         """Failure in auto_connect_pending_links is caught and logged."""
         from app.routers.callbacks import _update_node_states
 
-        lab = _make_lab(test_db, test_user.id)
-        _make_node_state(test_db, lab.id, "R1", actual_state="starting")
+        lab = make_lab(test_db, test_user.id)
+        make_node_state(test_db, lab.id, "R1", actual_state="starting")
 
         with patch(
             "app.routers.callbacks._auto_connect_pending_links",

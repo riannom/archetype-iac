@@ -10,7 +10,6 @@ Covers all 18 endpoints in api/app/routers/agents.py:
 """
 from __future__ import annotations
 
-import json
 from datetime import datetime, timezone, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
@@ -21,43 +20,13 @@ from sqlalchemy.orm import Session
 
 from app import models
 from app.state import HostStatus, JobStatus, LabState
+from tests.factories import make_host
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _make_host(
-    db: Session,
-    *,
-    name: str = "agent-1",
-    address: str = "10.0.0.1:8001",
-    status: str = HostStatus.ONLINE,
-    version: str = "0.4.0",
-    deployment_mode: str = "systemd",
-    is_local: bool = False,
-    capabilities: dict | None = None,
-    resource_usage: dict | None = None,
-    started_at: datetime | None = None,
-) -> models.Host:
-    caps = capabilities or {"providers": ["docker"], "features": []}
-    host = models.Host(
-        id=str(uuid4())[:8],
-        name=name,
-        address=address,
-        status=status,
-        capabilities=json.dumps(caps),
-        version=version,
-        deployment_mode=deployment_mode,
-        is_local=is_local,
-        last_heartbeat=datetime.now(timezone.utc),
-        resource_usage=json.dumps(resource_usage or {}),
-        started_at=started_at or datetime.now(timezone.utc),
-    )
-    db.add(host)
-    db.commit()
-    db.refresh(host)
-    return host
 
 
 def _make_update_job(
@@ -118,7 +87,7 @@ class TestRegisterAgent:
     def test_register_existing_agent_updates(
         self, test_client: TestClient, agent_auth_headers: dict, test_db: Session,
     ):
-        host = _make_host(test_db, name="existing", version="0.3.0")
+        host = make_host(test_db, name="existing", version="0.3.0")
         resp = test_client.post(
             "/agents/register",
             json={
@@ -164,7 +133,7 @@ class TestHeartbeat:
     def test_heartbeat_success(
         self, test_client: TestClient, agent_auth_headers: dict, test_db: Session,
     ):
-        host = _make_host(test_db)
+        host = make_host(test_db)
         resp = test_client.post(
             f"/agents/{host.id}/heartbeat",
             json={
@@ -182,7 +151,7 @@ class TestHeartbeat:
     def test_heartbeat_updates_data_plane_ip(
         self, test_client: TestClient, agent_auth_headers: dict, test_db: Session,
     ):
-        host = _make_host(test_db)
+        host = make_host(test_db)
         test_client.post(
             f"/agents/{host.id}/heartbeat",
             json={
@@ -225,8 +194,8 @@ class TestListAgents:
     def test_list_agents_returns_hosts(
         self, test_client: TestClient, auth_headers: dict, test_db: Session,
     ):
-        _make_host(test_db, name="alpha")
-        _make_host(test_db, name="bravo", address="10.0.0.2:8001")
+        make_host(test_db, name="alpha")
+        make_host(test_db, name="bravo", address="10.0.0.2:8001")
         resp = test_client.get("/agents", headers=auth_headers)
         assert resp.status_code == 200
         names = [a["name"] for a in resp.json()]
@@ -249,7 +218,7 @@ class TestListAgentsDetailed:
     def test_detailed_returns_role_agent(
         self, test_client: TestClient, auth_headers: dict, test_db: Session,
     ):
-        _make_host(test_db, capabilities={"providers": ["docker"], "features": []})
+        make_host(test_db, capabilities={"providers": ["docker"], "features": []})
         resp = test_client.get("/agents/detailed", headers=auth_headers)
         assert resp.status_code == 200
         data = resp.json()
@@ -261,7 +230,7 @@ class TestListAgentsDetailed:
     def test_detailed_controller_role(
         self, test_client: TestClient, auth_headers: dict, test_db: Session,
     ):
-        _make_host(
+        make_host(
             test_db, name="ctrl", address="10.0.0.5:8001",
             capabilities={"providers": [], "features": []},
         )
@@ -274,7 +243,7 @@ class TestListAgentsDetailed:
     def test_detailed_agent_controller_role(
         self, test_client: TestClient, auth_headers: dict, test_db: Session,
     ):
-        _make_host(
+        make_host(
             test_db, name="local", address="10.0.0.6:8001",
             capabilities={"providers": ["docker"], "features": []},
             is_local=True,
@@ -297,7 +266,7 @@ class TestGetAgent:
     def test_get_agent_success(
         self, test_client: TestClient, auth_headers: dict, test_db: Session,
     ):
-        host = _make_host(test_db, name="lookup-me")
+        host = make_host(test_db, name="lookup-me")
         resp = test_client.get(f"/agents/{host.id}", headers=auth_headers)
         assert resp.status_code == 200
         assert resp.json()["name"] == "lookup-me"
@@ -320,7 +289,7 @@ class TestDeregisterInfo:
     def test_deregister_info_empty_agent(
         self, test_client: TestClient, admin_auth_headers: dict, test_db: Session,
     ):
-        host = _make_host(test_db)
+        host = make_host(test_db)
         resp = test_client.get(
             f"/agents/{host.id}/deregister-info", headers=admin_auth_headers,
         )
@@ -335,7 +304,7 @@ class TestDeregisterInfo:
         self, test_client: TestClient, admin_auth_headers: dict, test_db: Session,
         test_user: models.User,
     ):
-        host = _make_host(test_db)
+        host = make_host(test_db)
         lab = models.Lab(
             name="test-lab", owner_id=test_user.id, provider="docker",
             agent_id=host.id, state=LabState.RUNNING,
@@ -371,7 +340,7 @@ class TestUnregisterAgent:
     def test_unregister_agent_success(
         self, test_client: TestClient, admin_auth_headers: dict, test_db: Session,
     ):
-        host = _make_host(test_db, name="to-delete")
+        host = make_host(test_db, name="to-delete")
         resp = test_client.delete(
             f"/agents/{host.id}", headers=admin_auth_headers,
         )
@@ -385,7 +354,7 @@ class TestUnregisterAgent:
         self, test_client: TestClient, admin_auth_headers: dict, test_db: Session,
         test_user: models.User,
     ):
-        host = _make_host(test_db)
+        host = make_host(test_db)
         lab = models.Lab(
             name="orphan-lab", owner_id=test_user.id, provider="docker",
             agent_id=host.id,
@@ -413,7 +382,7 @@ class TestUnregisterAgent:
     def test_unregister_requires_admin(
         self, test_client: TestClient, auth_headers: dict, test_db: Session,
     ):
-        host = _make_host(test_db)
+        host = make_host(test_db)
         resp = test_client.delete(
             f"/agents/{host.id}", headers=auth_headers,
         )
@@ -433,7 +402,7 @@ class TestUpdateSyncStrategy:
         self, test_client: TestClient, admin_auth_headers: dict, test_db: Session,
         strategy: str,
     ):
-        host = _make_host(test_db)
+        host = make_host(test_db)
         resp = test_client.put(
             f"/agents/{host.id}/sync-strategy",
             json={"strategy": strategy},
@@ -445,7 +414,7 @@ class TestUpdateSyncStrategy:
     def test_invalid_strategy(
         self, test_client: TestClient, admin_auth_headers: dict, test_db: Session,
     ):
-        host = _make_host(test_db)
+        host = make_host(test_db)
         resp = test_client.put(
             f"/agents/{host.id}/sync-strategy",
             json={"strategy": "invalid"},
@@ -475,7 +444,7 @@ class TestListAgentImages:
     def test_list_images_empty(
         self, test_client: TestClient, auth_headers: dict, test_db: Session,
     ):
-        host = _make_host(test_db)
+        host = make_host(test_db)
         resp = test_client.get(
             f"/agents/{host.id}/images", headers=auth_headers,
         )
@@ -487,7 +456,7 @@ class TestListAgentImages:
     def test_list_images_with_records(
         self, test_client: TestClient, auth_headers: dict, test_db: Session,
     ):
-        host = _make_host(test_db)
+        host = make_host(test_db)
         ih = models.ImageHost(
             image_id="docker:ceos:4.28", host_id=host.id,
             reference="ceos:4.28.0F", status="synced",
@@ -523,7 +492,7 @@ class TestReconcileAgentImages:
         assert resp.status_code == 404
 
     def test_reconcile_offline_agent(self, test_client: TestClient, test_db: Session):
-        host = _make_host(test_db, status=HostStatus.OFFLINE)
+        host = make_host(test_db, status=HostStatus.OFFLINE)
         resp = test_client.post(f"/agents/{host.id}/images/reconcile")
         assert resp.status_code == 503
 
@@ -545,7 +514,7 @@ class TestListAgentInterfaces:
     def test_interfaces_offline_agent(
         self, test_client: TestClient, auth_headers: dict, test_db: Session,
     ):
-        host = _make_host(test_db, status=HostStatus.OFFLINE)
+        host = make_host(test_db, status=HostStatus.OFFLINE)
         resp = test_client.get(
             f"/agents/{host.id}/interfaces", headers=auth_headers,
         )
@@ -569,7 +538,7 @@ class TestListAgentBridges:
     def test_bridges_offline_agent(
         self, test_client: TestClient, auth_headers: dict, test_db: Session,
     ):
-        host = _make_host(test_db, status=HostStatus.OFFLINE)
+        host = make_host(test_db, status=HostStatus.OFFLINE)
         resp = test_client.get(
             f"/agents/{host.id}/bridges", headers=auth_headers,
         )
@@ -618,7 +587,7 @@ class TestTriggerAgentUpdate:
     def test_update_offline_agent(
         self, test_client: TestClient, admin_auth_headers: dict, test_db: Session,
     ):
-        host = _make_host(test_db, status=HostStatus.OFFLINE)
+        host = make_host(test_db, status=HostStatus.OFFLINE)
         resp = test_client.post(
             f"/agents/{host.id}/update",
             json={"target_version": "0.5.0"},
@@ -629,7 +598,7 @@ class TestTriggerAgentUpdate:
     def test_update_docker_agent_rejected(
         self, test_client: TestClient, admin_auth_headers: dict, test_db: Session,
     ):
-        host = _make_host(test_db, deployment_mode="docker")
+        host = make_host(test_db, deployment_mode="docker")
         resp = test_client.post(
             f"/agents/{host.id}/update",
             json={"target_version": "0.5.0"},
@@ -641,7 +610,7 @@ class TestTriggerAgentUpdate:
     def test_update_already_at_version(
         self, test_client: TestClient, admin_auth_headers: dict, test_db: Session,
     ):
-        host = _make_host(test_db, version="0.5.0")
+        host = make_host(test_db, version="0.5.0")
         resp = test_client.post(
             f"/agents/{host.id}/update",
             json={"target_version": "0.5.0"},
@@ -653,7 +622,7 @@ class TestTriggerAgentUpdate:
     def test_update_concurrent_conflict(
         self, test_client: TestClient, admin_auth_headers: dict, test_db: Session,
     ):
-        host = _make_host(test_db, version="0.3.0")
+        host = make_host(test_db, version="0.3.0")
         _make_update_job(
             test_db, host.id, status="downloading",
             created_at=datetime.now(timezone.utc),
@@ -669,7 +638,7 @@ class TestTriggerAgentUpdate:
     def test_update_auto_expires_stale_job(
         self, test_client: TestClient, admin_auth_headers: dict, test_db: Session,
     ):
-        host = _make_host(test_db, version="0.3.0")
+        host = make_host(test_db, version="0.3.0")
         stale_job = _make_update_job(
             test_db, host.id, status="downloading",
             created_at=datetime.now(timezone.utc) - timedelta(minutes=10),
@@ -709,7 +678,7 @@ class TestGetUpdateStatus:
     def test_update_status_with_job(
         self, test_client: TestClient, auth_headers: dict, test_db: Session,
     ):
-        host = _make_host(test_db)
+        host = make_host(test_db)
         job = _make_update_job(test_db, host.id)
         resp = test_client.get(
             f"/agents/{host.id}/update-status", headers=auth_headers,
@@ -722,7 +691,7 @@ class TestGetUpdateStatus:
     def test_update_status_no_jobs(
         self, test_client: TestClient, auth_headers: dict, test_db: Session,
     ):
-        host = _make_host(test_db)
+        host = make_host(test_db)
         resp = test_client.get(
             f"/agents/{host.id}/update-status", headers=auth_headers,
         )
@@ -747,7 +716,7 @@ class TestListUpdateJobs:
     def test_list_update_jobs(
         self, test_client: TestClient, auth_headers: dict, test_db: Session,
     ):
-        host = _make_host(test_db)
+        host = make_host(test_db)
         _make_update_job(test_db, host.id, status="completed")
         _make_update_job(
             test_db, host.id, status="failed",
@@ -763,7 +732,7 @@ class TestListUpdateJobs:
     def test_list_update_jobs_respects_limit(
         self, test_client: TestClient, auth_headers: dict, test_db: Session,
     ):
-        host = _make_host(test_db)
+        host = make_host(test_db)
         for i in range(5):
             _make_update_job(
                 test_db, host.id,
@@ -793,9 +762,9 @@ class TestBulkUpdate:
     def test_bulk_update_validation_failures(
         self, test_client: TestClient, admin_auth_headers: dict, test_db: Session,
     ):
-        offline = _make_host(test_db, name="off", address="10.0.0.10:8001", status=HostStatus.OFFLINE)
-        docker_host = _make_host(test_db, name="dock", address="10.0.0.11:8001", deployment_mode="docker")
-        same_ver = _make_host(test_db, name="same", address="10.0.0.12:8001", version="0.5.0")
+        offline = make_host(test_db, name="off", address="10.0.0.10:8001", status=HostStatus.OFFLINE)
+        docker_host = make_host(test_db, name="dock", address="10.0.0.11:8001", deployment_mode="docker")
+        same_ver = make_host(test_db, name="same", address="10.0.0.12:8001", version="0.5.0")
 
         resp = test_client.post(
             "/agents/updates/bulk",
@@ -840,7 +809,7 @@ class TestRebuildDockerAgent:
     def test_rebuild_non_docker_rejected(
         self, test_client: TestClient, admin_auth_headers: dict, test_db: Session,
     ):
-        host = _make_host(test_db, deployment_mode="systemd")
+        host = make_host(test_db, deployment_mode="systemd")
         resp = test_client.post(
             f"/agents/{host.id}/rebuild", headers=admin_auth_headers,
         )
@@ -850,7 +819,7 @@ class TestRebuildDockerAgent:
     def test_rebuild_remote_docker_rejected(
         self, test_client: TestClient, admin_auth_headers: dict, test_db: Session,
     ):
-        host = _make_host(test_db, deployment_mode="docker", is_local=False)
+        host = make_host(test_db, deployment_mode="docker", is_local=False)
         resp = test_client.post(
             f"/agents/{host.id}/rebuild", headers=admin_auth_headers,
         )
@@ -860,7 +829,7 @@ class TestRebuildDockerAgent:
     def test_rebuild_requires_admin(
         self, test_client: TestClient, auth_headers: dict, test_db: Session,
     ):
-        host = _make_host(test_db, deployment_mode="docker", is_local=True)
+        host = make_host(test_db, deployment_mode="docker", is_local=True)
         resp = test_client.post(
             f"/agents/{host.id}/rebuild", headers=auth_headers,
         )

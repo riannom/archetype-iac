@@ -8,93 +8,12 @@ import pytest
 from sqlalchemy.orm import Session
 
 from app import models
+from tests.factories import make_link, make_link_state, make_node
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-def _make_node(
-    test_db: Session,
-    lab: models.Lab,
-    host: models.Host,
-    *,
-    gui_id: str,
-    display_name: str,
-    container_name: str,
-    device: str = "linux",
-    node_type: str = "device",
-    managed_interface_id: str | None = None,
-) -> models.Node:
-    node = models.Node(
-        id=str(uuid4()),
-        lab_id=lab.id,
-        gui_id=gui_id,
-        display_name=display_name,
-        container_name=container_name,
-        device=device,
-        node_type=node_type,
-        managed_interface_id=managed_interface_id,
-        host_id=host.id,
-    )
-    test_db.add(node)
-    return node
-
-
-def _make_link(
-    test_db: Session,
-    lab: models.Lab,
-    source: models.Node,
-    source_iface: str,
-    target: models.Node,
-    target_iface: str,
-) -> models.Link:
-    link = models.Link(
-        id=str(uuid4()),
-        lab_id=lab.id,
-        link_name=f"{source.display_name}:{source_iface}-{target.display_name}:{target_iface}",
-        source_node_id=source.id,
-        source_interface=source_iface,
-        target_node_id=target.id,
-        target_interface=target_iface,
-    )
-    test_db.add(link)
-    return link
-
-
-def _make_link_state(
-    test_db: Session,
-    lab: models.Lab,
-    *,
-    link_name: str,
-    source_node: str,
-    source_interface: str,
-    target_node: str,
-    target_interface: str,
-    source_host_id: str | None = None,
-    target_host_id: str | None = None,
-    actual_state: str = "pending",
-    desired_state: str = "up",
-    is_cross_host: bool = False,
-    link_definition_id: str | None = None,
-) -> models.LinkState:
-    ls = models.LinkState(
-        id=str(uuid4()),
-        lab_id=lab.id,
-        link_definition_id=link_definition_id,
-        link_name=link_name,
-        source_node=source_node,
-        source_interface=source_interface,
-        target_node=target_node,
-        target_interface=target_interface,
-        source_host_id=source_host_id,
-        target_host_id=target_host_id,
-        actual_state=actual_state,
-        desired_state=desired_state,
-        is_cross_host=is_cross_host,
-    )
-    test_db.add(ls)
-    return ls
 
 
 # ---------------------------------------------------------------------------
@@ -119,17 +38,17 @@ class TestCreateExternalNetworkLinksExtended:
             sync_status="synced",
             is_up=True,
         )
-        device_node = _make_node(
+        device_node = make_node(
             test_db, sample_lab, sample_host,
             gui_id="n1", display_name="R1", container_name="r1",
         )
-        ext_node = _make_node(
+        ext_node = make_node(
             test_db, sample_lab, sample_host,
             gui_id="ext1", display_name="External", container_name="ext1",
             node_type="external", managed_interface_id=managed_iface.id,
         )
-        link_def = _make_link(test_db, sample_lab, device_node, "eth1", ext_node, "_external")
-        link_state = _make_link_state(
+        link_def = make_link(test_db, sample_lab, device_node, "eth1", ext_node, "_external")
+        link_state = make_link_state(
             test_db, sample_lab,
             link_name="r1:eth1-_ext:ext1:_external",
             source_node="r1", source_interface="eth1",
@@ -168,29 +87,29 @@ class TestCreateExternalNetworkLinksExtended:
             sync_status="synced",
             is_up=True,
         )
-        device1 = _make_node(
+        device1 = make_node(
             test_db, sample_lab, sample_host,
             gui_id="n1", display_name="R1", container_name="r1",
         )
-        device2 = _make_node(
+        device2 = make_node(
             test_db, sample_lab, sample_host,
             gui_id="n2", display_name="R2", container_name="r2",
         )
-        ext_node = _make_node(
+        ext_node = make_node(
             test_db, sample_lab, sample_host,
             gui_id="ext1", display_name="External", container_name="ext1",
             node_type="external", managed_interface_id=managed_iface.id,
         )
-        link_def1 = _make_link(test_db, sample_lab, device1, "eth1", ext_node, "_external")
-        link_def2 = _make_link(test_db, sample_lab, device2, "eth1", ext_node, "_external")
-        ls1 = _make_link_state(
+        link_def1 = make_link(test_db, sample_lab, device1, "eth1", ext_node, "_external")
+        link_def2 = make_link(test_db, sample_lab, device2, "eth1", ext_node, "_external")
+        ls1 = make_link_state(
             test_db, sample_lab,
             link_name="r1:eth1-_ext:eth99:_external",
             source_node="r1", source_interface="eth1",
             target_node="_ext:eth99", target_interface="_external",
             source_host_id=sample_host.id, target_host_id=sample_host.id,
         )
-        ls2 = _make_link_state(
+        ls2 = make_link_state(
             test_db, sample_lab,
             link_name="r2:eth1-_ext:eth99:_external",
             source_node="r2", source_interface="eth1",
@@ -262,17 +181,17 @@ class TestCreateExternalNetworkLinksExtended:
             sync_status="synced",
             is_up=True,
         )
-        device_node = _make_node(
+        device_node = make_node(
             test_db, sample_lab, sample_host,
             gui_id="n1", display_name="R1", container_name="r1",
         )
-        ext_node = _make_node(
+        ext_node = make_node(
             test_db, sample_lab, sample_host,
             gui_id="ext1", display_name="External", container_name="ext1",
             node_type="external", managed_interface_id=managed_iface.id,
         )
-        link_def = _make_link(test_db, sample_lab, device_node, "eth1", ext_node, "_external")
-        link_state = _make_link_state(
+        link_def = make_link(test_db, sample_lab, device_node, "eth1", ext_node, "_external")
+        link_state = make_link_state(
             test_db, sample_lab,
             link_name="r1:eth1-_ext:eth99:_external",
             source_node="r1", source_interface="eth1",
@@ -317,17 +236,17 @@ class TestCreateExternalNetworkLinksExtended:
             sync_status="synced",
             is_up=True,
         )
-        ext_node = _make_node(
+        ext_node = make_node(
             test_db, sample_lab, host_a,
             gui_id="ext1", display_name="External", container_name="ext1",
             node_type="external", managed_interface_id=managed_iface.id,
         )
-        device_node = _make_node(
+        device_node = make_node(
             test_db, sample_lab, host_b,
             gui_id="n1", display_name="R1", container_name="r1",
         )
-        link_def = _make_link(test_db, sample_lab, device_node, "eth1", ext_node, "_external")
-        link_state = _make_link_state(
+        link_def = make_link(test_db, sample_lab, device_node, "eth1", ext_node, "_external")
+        link_state = make_link_state(
             test_db, sample_lab,
             link_name="r1:eth1-_ext:eth99:_external",
             source_node="r1", source_interface="eth1",
@@ -382,17 +301,17 @@ class TestCreateExternalNetworkLinksExtended:
             sync_status="synced",
             is_up=True,
         )
-        ext_node = _make_node(
+        ext_node = make_node(
             test_db, sample_lab, host_a,
             gui_id="ext1", display_name="External", container_name="ext1",
             node_type="external", managed_interface_id=managed_iface.id,
         )
-        device_node = _make_node(
+        device_node = make_node(
             test_db, sample_lab, host_b,
             gui_id="n1", display_name="R1", container_name="r1",
         )
-        link_def = _make_link(test_db, sample_lab, device_node, "eth1", ext_node, "_external")
-        link_state = _make_link_state(
+        link_def = make_link(test_db, sample_lab, device_node, "eth1", ext_node, "_external")
+        link_state = make_link_state(
             test_db, sample_lab,
             link_name="r1:eth1-_ext:eth99:_external",
             source_node="r1", source_interface="eth1",
@@ -433,15 +352,15 @@ class TestCreateDeploymentLinksExtended:
         """Interface names should be normalised (Ethernet1 -> eth1) in the created LinkState."""
         from app.tasks.link_orchestration import create_deployment_links
 
-        node1 = _make_node(
+        node1 = make_node(
             test_db, sample_lab, sample_host,
             gui_id="n1", display_name="R1", container_name="r1", device="ceos",
         )
-        node2 = _make_node(
+        node2 = make_node(
             test_db, sample_lab, sample_host,
             gui_id="n2", display_name="R2", container_name="r2", device="ceos",
         )
-        _make_link(test_db, sample_lab, node1, "Ethernet1", node2, "Ethernet2")
+        make_link(test_db, sample_lab, node1, "Ethernet1", node2, "Ethernet2")
         test_db.commit()
 
         host_to_agent = {sample_host.id: sample_host}
@@ -474,15 +393,15 @@ class TestCreateDeploymentLinksExtended:
         """When both endpoints are stopped, the link is deferred (not a failure)."""
         from app.tasks.link_orchestration import create_deployment_links
 
-        node1 = _make_node(
+        node1 = make_node(
             test_db, sample_lab, sample_host,
             gui_id="n1", display_name="R1", container_name="r1",
         )
-        node2 = _make_node(
+        node2 = make_node(
             test_db, sample_lab, sample_host,
             gui_id="n2", display_name="R2", container_name="r2",
         )
-        _make_link(test_db, sample_lab, node1, "eth1", node2, "eth1")
+        make_link(test_db, sample_lab, node1, "eth1", node2, "eth1")
         test_db.add_all([
             models.NodeState(
                 lab_id=sample_lab.id, node_id="n1", node_name="r1",
@@ -550,15 +469,15 @@ class TestCreateDeploymentLinksExtended:
         """An existing LinkState tied to a link_definition_id should be reused, not duplicated."""
         from app.tasks.link_orchestration import create_deployment_links
 
-        node1 = _make_node(
+        node1 = make_node(
             test_db, sample_lab, sample_host,
             gui_id="n1", display_name="R1", container_name="r1",
         )
-        node2 = _make_node(
+        node2 = make_node(
             test_db, sample_lab, sample_host,
             gui_id="n2", display_name="R2", container_name="r2",
         )
-        link = _make_link(test_db, sample_lab, node1, "eth1", node2, "eth1")
+        link = make_link(test_db, sample_lab, node1, "eth1", node2, "eth1")
         test_db.flush()
 
         # Pre-existing LinkState tied to this link_definition
@@ -618,7 +537,7 @@ class TestCreateSameHostLinkExtended:
         from app.tasks.link_orchestration import create_same_host_link
 
         # Store vendor names in LinkState (as would happen for cEOS devices)
-        link_state = _make_link_state(
+        link_state = make_link_state(
             test_db, sample_lab,
             link_name="R1:Ethernet3-R2:Ethernet3",
             source_node="r1", source_interface="Ethernet3",
@@ -656,7 +575,7 @@ class TestCreateSameHostLinkExtended:
         """An unexpected exception from the agent should mark the link as error."""
         from app.tasks.link_orchestration import create_same_host_link
 
-        link_state = _make_link_state(
+        link_state = make_link_state(
             test_db, sample_lab,
             link_name="R1:eth1-R2:eth1",
             source_node="r1", source_interface="eth1",
@@ -690,7 +609,7 @@ class TestCreateSameHostLinkExtended:
         """When verify_link_connected returns False, the link must be marked error."""
         from app.tasks.link_orchestration import create_same_host_link
 
-        link_state = _make_link_state(
+        link_state = make_link_state(
             test_db, sample_lab,
             link_name="R1:eth1-R2:eth1",
             source_node="r1", source_interface="eth1",
@@ -727,7 +646,7 @@ class TestCreateSameHostLinkExtended:
         """Missing OVS ports are treated as interface-readiness lag, not hard failure."""
         from app.tasks.link_orchestration import create_same_host_link
 
-        link_state = _make_link_state(
+        link_state = make_link_state(
             test_db, sample_lab,
             link_name="R1:eth1-R2:eth1",
             source_node="r1", source_interface="eth1",
@@ -759,7 +678,7 @@ class TestCreateSameHostLinkExtended:
         """Unreadable VLAN tags are treated as VLAN readiness lag, not hard failure."""
         from app.tasks.link_orchestration import create_same_host_link
 
-        link_state = _make_link_state(
+        link_state = make_link_state(
             test_db, sample_lab,
             link_name="R1:eth1-R2:eth1",
             source_node="r1", source_interface="eth1",
@@ -799,15 +718,15 @@ class TestCreateSameHostLinkExtended:
         sample_host.version = "0.5.1-rc1"
         sample_host.git_sha = "2a2e4f7b18b512faf1802f60303a0e8a77a0e0d1"
 
-        _make_node(
+        make_node(
             test_db, sample_lab, sample_host,
             gui_id="n1", display_name="CEOS-5", container_name="ceos_5", device="ceos",
         )
-        _make_node(
+        make_node(
             test_db, sample_lab, sample_host,
             gui_id="n2", display_name="CISCO_N9KV-4", container_name="cisco_n9kv_4", device="cisco_n9kv",
         )
-        link_state = _make_link_state(
+        link_state = make_link_state(
             test_db, sample_lab,
             link_name="ceos_5:eth4-cisco_n9kv_4:eth1",
             source_node="ceos_5", source_interface="eth4",
@@ -863,7 +782,7 @@ class TestCreateCrossHostLinkExtended:
         from app.tasks.link_orchestration import create_cross_host_link
 
         host_a, host_b = multiple_hosts[:2]
-        link_state = _make_link_state(
+        link_state = make_link_state(
             test_db, sample_lab,
             link_name="R1:eth1-R3:eth1",
             source_node="r1", source_interface="eth1",
@@ -913,7 +832,7 @@ class TestCreateCrossHostLinkExtended:
         from app.tasks.link_orchestration import create_cross_host_link
 
         host_a, host_b = multiple_hosts[:2]
-        link_state = _make_link_state(
+        link_state = make_link_state(
             test_db, sample_lab,
             link_name="R1:eth1-R3:eth1",
             source_node="r1", source_interface="eth1",
@@ -977,7 +896,7 @@ class TestCreateCrossHostLinkExtended:
         from app.tasks.link_orchestration import create_cross_host_link
 
         host_a, host_b = multiple_hosts[:2]
-        link_state = _make_link_state(
+        link_state = make_link_state(
             test_db, sample_lab,
             link_name="R1:eth1-R3:eth1",
             source_node="r1", source_interface="eth1",
@@ -1004,7 +923,7 @@ class TestCreateCrossHostLinkExtended:
         from app.tasks.link_orchestration import create_cross_host_link
 
         host_a, host_b = multiple_hosts[:2]
-        link_state = _make_link_state(
+        link_state = make_link_state(
             test_db, sample_lab,
             link_name="R1:eth1-R3:eth1",
             source_node="r1", source_interface="eth1",
@@ -1040,7 +959,7 @@ class TestCreateCrossHostLinkExtended:
         from app.tasks.link_orchestration import create_cross_host_link
 
         host_a, host_b = multiple_hosts[:2]
-        link_state = _make_link_state(
+        link_state = make_link_state(
             test_db, sample_lab,
             link_name="R1:eth1-R3:eth1",
             source_node="r1", source_interface="eth1",
@@ -1074,7 +993,7 @@ class TestCreateCrossHostLinkExtended:
         from app.tasks.link_orchestration import create_cross_host_link
 
         host_a, host_b = multiple_hosts[:2]
-        link_state = _make_link_state(
+        link_state = make_link_state(
             test_db, sample_lab,
             link_name="R1:eth1-R3:eth1",
             source_node="r1", source_interface="eth1",
@@ -1135,7 +1054,7 @@ class TestTeardownDeploymentLinksExtended:
         from app.tasks.link_orchestration import teardown_deployment_links
 
         host_a, host_b = multiple_hosts[:2]
-        ls = _make_link_state(
+        ls = make_link_state(
             test_db, sample_lab,
             link_name="R1:eth1-R3:eth1",
             source_node="r1", source_interface="eth1",
@@ -1188,7 +1107,7 @@ class TestTeardownDeploymentLinksExtended:
         from app.tasks.link_orchestration import teardown_deployment_links
 
         host_a, host_b = multiple_hosts[:2]
-        ls = _make_link_state(
+        ls = make_link_state(
             test_db, sample_lab,
             link_name="R1:eth1-R3:eth1",
             source_node="r1", source_interface="eth1",
@@ -1250,7 +1169,7 @@ class TestTeardownDeploymentLinksExtended:
 
         host_a, host_b = multiple_hosts[:2]
         # Create two link states: one cross-host, one same-host
-        cross_ls = _make_link_state(
+        cross_ls = make_link_state(
             test_db, sample_lab,
             link_name="R1:eth1-R3:eth1",
             source_node="r1", source_interface="eth1",
@@ -1260,7 +1179,7 @@ class TestTeardownDeploymentLinksExtended:
             actual_state="up",
             is_cross_host=True,
         )
-        _make_link_state(
+        make_link_state(
             test_db, sample_lab,
             link_name="R1:eth2-R1:eth3",
             source_node="r1", source_interface="eth2",
@@ -1316,7 +1235,7 @@ class TestSyncOperState:
         """_sync_oper_state should call recompute_link_oper_state with the same args."""
         from app.tasks.link_orchestration import _sync_oper_state
 
-        link_state = _make_link_state(
+        link_state = make_link_state(
             test_db, sample_lab,
             link_name="R1:eth1-R2:eth1",
             source_node="r1", source_interface="eth1",
@@ -1337,7 +1256,7 @@ class TestSyncOperState:
         """Calling _sync_oper_state with a valid session and link_state must not raise."""
         from app.tasks.link_orchestration import _sync_oper_state
 
-        link_state = _make_link_state(
+        link_state = make_link_state(
             test_db, sample_lab,
             link_name="R1:eth1-R2:eth1",
             source_node="r1", source_interface="eth1",

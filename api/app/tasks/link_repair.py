@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 from app import agent_client, models
 from app.services.interface_naming import normalize_for_node
 from app.services.link_validator import verify_link_connected, is_vlan_mismatch
-from app.services.link_operational_state import recompute_link_oper_state
+from app.services.link_manager import recompute_link_oper_state
 from app.tasks.link_orchestration import create_same_host_link, create_cross_host_link
 from app.utils.locks import get_link_state_by_id_for_update
 

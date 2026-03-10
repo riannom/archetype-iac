@@ -18,82 +18,12 @@ from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
 from app import models
+from tests.factories import make_host, make_job, make_lab
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-
-def _make_host(
-    test_db: Session,
-    host_id: str = "agent-1",
-    name: str = "Agent One",
-    status: str = "online",
-    last_error: str | None = None,
-    data_plane_address: str | None = None,
-) -> models.Host:
-    """Persist and return a Host record."""
-    host = models.Host(
-        id=host_id,
-        name=name,
-        address=f"{host_id}.local:8001",
-        status=status,
-        capabilities=json.dumps({"providers": ["docker"]}),
-        version="1.0.0",
-        resource_usage=json.dumps({}),
-        last_heartbeat=datetime.now(timezone.utc),
-        last_error=last_error,
-        error_since=datetime.now(timezone.utc) if last_error else None,
-        data_plane_address=data_plane_address,
-    )
-    test_db.add(host)
-    test_db.commit()
-    test_db.refresh(host)
-    return host
-
-
-def _make_lab(
-    test_db: Session,
-    owner_id: str,
-    lab_id: str = "lab-1",
-    state: str = "stopped",
-) -> models.Lab:
-    """Persist and return a Lab record."""
-    lab = models.Lab(
-        id=lab_id,
-        name="Test Lab",
-        owner_id=owner_id,
-        provider="docker",
-        state=state,
-        workspace_path=f"/tmp/{lab_id}",
-    )
-    test_db.add(lab)
-    test_db.commit()
-    test_db.refresh(lab)
-    return lab
-
-
-def _make_job(
-    test_db: Session,
-    lab_id: str,
-    job_id: str = "job-1",
-    status: str = "running",
-    action: str = "deploy",
-    created_at: datetime | None = None,
-) -> models.Job:
-    """Persist and return a Job record."""
-    job = models.Job(
-        id=job_id,
-        lab_id=lab_id,
-        action=action,
-        status=status,
-        created_at=created_at or datetime.now(timezone.utc),
-    )
-    test_db.add(job)
-    test_db.commit()
-    test_db.refresh(job)
-    return job
 
 
 def _make_audit_log(
@@ -155,8 +85,8 @@ class TestReconcileEndpoint:
         admin_auth_headers: dict,
         admin_user: models.User,
     ) -> None:
-        _make_host(test_db, status="online")
-        _make_lab(test_db, owner_id=admin_user.id, state="running")
+        make_host(test_db, status="online")
+        make_lab(test_db, owner_id=admin_user.id, state="running")
 
         with patch(
             "app.routers.admin.agent_client.discover_labs_on_agent",
@@ -177,7 +107,7 @@ class TestReconcileEndpoint:
         test_db: Session,
         admin_auth_headers: dict,
     ) -> None:
-        _make_host(test_db, status="online")
+        make_host(test_db, status="online")
 
         discover_result = {"labs": [{"lab_id": "orphan-lab", "nodes": [{"status": "running"}]}]}
         cleanup_result = {"removed_containers": ["orphan-lab-router1"]}
@@ -214,7 +144,7 @@ class TestAuditLabRuntimeDrift:
         auth_headers: dict,
         test_user: models.User,
     ) -> None:
-        lab = _make_lab(test_db, owner_id=test_user.id)
+        lab = make_lab(test_db, owner_id=test_user.id)
         resp = test_client.get(
             f"/labs/{lab.id}/runtime-drift", headers=auth_headers
         )
@@ -237,7 +167,7 @@ class TestAuditLabRuntimeDrift:
         admin_auth_headers: dict,
         admin_user: models.User,
     ) -> None:
-        lab = _make_lab(test_db, owner_id=admin_user.id)
+        lab = make_lab(test_db, owner_id=admin_user.id)
         resp = test_client.get(
             f"/labs/{lab.id}/runtime-drift", headers=admin_auth_headers
         )
@@ -258,7 +188,7 @@ class TestRefreshLabState:
         auth_headers: dict,
         test_user: models.User,
     ) -> None:
-        lab = _make_lab(test_db, owner_id=test_user.id)
+        lab = make_lab(test_db, owner_id=test_user.id)
         resp = test_client.post(
             f"/labs/{lab.id}/refresh-state", headers=auth_headers
         )
@@ -281,7 +211,7 @@ class TestRefreshLabState:
         admin_auth_headers: dict,
         admin_user: models.User,
     ) -> None:
-        lab = _make_lab(test_db, owner_id=admin_user.id)
+        lab = make_lab(test_db, owner_id=admin_user.id)
 
         with patch(
             "app.routers.admin.agent_client.get_healthy_agent",
@@ -303,8 +233,8 @@ class TestRefreshLabState:
         admin_auth_headers: dict,
         admin_user: models.User,
     ) -> None:
-        host = _make_host(test_db, status="online")
-        lab = _make_lab(test_db, owner_id=admin_user.id, state="stopped")
+        host = make_host(test_db, status="online")
+        lab = make_lab(test_db, owner_id=admin_user.id, state="stopped")
         lab.agent_id = host.id
         test_db.commit()
 
@@ -456,9 +386,9 @@ class TestCleanupStuckJobs:
     ) -> None:
         from datetime import timedelta
 
-        lab = _make_lab(test_db, owner_id=admin_user.id)
+        lab = make_lab(test_db, owner_id=admin_user.id)
         old_time = datetime.now(timezone.utc) - timedelta(minutes=30)
-        _make_job(test_db, lab_id=lab.id, status="running", created_at=old_time)
+        make_job(test_db, lab_id=lab.id, status="running", created_at=old_time)
 
         resp = test_client.post(
             "/cleanup-stuck-jobs?max_age_minutes=5", headers=admin_auth_headers
@@ -475,8 +405,8 @@ class TestCleanupStuckJobs:
         admin_auth_headers: dict,
         admin_user: models.User,
     ) -> None:
-        lab = _make_lab(test_db, owner_id=admin_user.id)
-        _make_job(test_db, lab_id=lab.id, status="running")  # recent
+        lab = make_lab(test_db, owner_id=admin_user.id)
+        make_job(test_db, lab_id=lab.id, status="running")  # recent
 
         resp = test_client.post(
             "/cleanup-stuck-jobs?max_age_minutes=5", headers=admin_auth_headers
@@ -680,7 +610,7 @@ class TestSystemAlerts:
     def test_alerts_shows_agents_with_errors(
         self, test_client: TestClient, test_db: Session
     ) -> None:
-        _make_host(
+        make_host(
             test_db,
             host_id="broken-agent",
             status="degraded",
@@ -695,7 +625,7 @@ class TestSystemAlerts:
     def test_alerts_excludes_healthy_agents(
         self, test_client: TestClient, test_db: Session
     ) -> None:
-        _make_host(test_db, host_id="healthy", status="online", last_error=None)
+        make_host(test_db, host_id="healthy", status="online", last_error=None)
 
         resp = test_client.get("/system/alerts")
         body = resp.json()
@@ -726,8 +656,8 @@ class TestSystemDiagnostics:
         test_db: Session,
         admin_user: models.User,
     ) -> None:
-        lab = _make_lab(test_db, owner_id=admin_user.id)
-        _make_job(test_db, lab_id=lab.id, status="failed", action="deploy")
+        lab = make_lab(test_db, owner_id=admin_user.id)
+        make_job(test_db, lab_id=lab.id, status="failed", action="deploy")
 
         resp = test_client.get("/system/diagnostics")
         body = resp.json()
@@ -849,7 +779,7 @@ class TestInfrastructureMesh:
     def test_get_mesh_with_single_agent(
         self, test_client: TestClient, test_db: Session, auth_headers: dict
     ) -> None:
-        _make_host(test_db, host_id="solo-agent", name="Solo")
+        make_host(test_db, host_id="solo-agent", name="Solo")
 
         resp = test_client.get("/infrastructure/mesh", headers=auth_headers)
         assert resp.status_code == 200
@@ -862,8 +792,8 @@ class TestInfrastructureMesh:
     def test_get_mesh_two_agents_creates_links(
         self, test_client: TestClient, test_db: Session, auth_headers: dict
     ) -> None:
-        _make_host(test_db, host_id="alpha", name="Alpha")
-        _make_host(test_db, host_id="beta", name="Beta")
+        make_host(test_db, host_id="alpha", name="Alpha")
+        make_host(test_db, host_id="beta", name="Beta")
 
         resp = test_client.get("/infrastructure/mesh", headers=auth_headers)
         assert resp.status_code == 200
@@ -899,8 +829,8 @@ class TestMeshTestMtu:
         test_db: Session,
         auth_headers: dict,
     ) -> None:
-        src = _make_host(test_db, host_id="src", status="offline")
-        tgt = _make_host(test_db, host_id="tgt", status="online")
+        src = make_host(test_db, host_id="src", status="offline")
+        tgt = make_host(test_db, host_id="tgt", status="online")
 
         with patch(
             "app.routers.infrastructure.agent_client.is_agent_online",
@@ -926,8 +856,8 @@ class TestMeshTestMtu:
         test_db: Session,
         auth_headers: dict,
     ) -> None:
-        src = _make_host(test_db, host_id="src2", status="online")
-        tgt = _make_host(test_db, host_id="tgt2", status="online")
+        src = make_host(test_db, host_id="src2", status="online")
+        tgt = make_host(test_db, host_id="tgt2", status="online")
 
         mtu_result = {
             "success": True,
@@ -980,7 +910,7 @@ class TestMeshTestAll:
         test_db: Session,
         auth_headers: dict,
     ) -> None:
-        _make_host(test_db, host_id="lone-agent", status="online")
+        make_host(test_db, host_id="lone-agent", status="online")
 
         with patch(
             "app.routers.infrastructure.agent_client.is_agent_online",

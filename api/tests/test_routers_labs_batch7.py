@@ -12,105 +12,19 @@ Covers 8 untested endpoints in api/app/routers/labs.py:
 """
 from __future__ import annotations
 
-import json
-from datetime import datetime, timezone
 from unittest.mock import AsyncMock, patch
-from uuid import uuid4
 
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
 from app import models, schemas
-from app.state import HostStatus, LabState, NodeActualState, NodeDesiredState
+from app.state import LabState, NodeActualState, NodeDesiredState
+from tests.factories import make_host, make_lab, make_node, make_node_state
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-def _make_lab(
-    db: Session,
-    user: models.User,
-    *,
-    name: str = "test-lab",
-    state: str = LabState.STOPPED,
-    agent_id: str | None = None,
-) -> models.Lab:
-    lab = models.Lab(
-        name=name, owner_id=user.id, provider="docker",
-        state=state, agent_id=agent_id,
-    )
-    db.add(lab)
-    db.commit()
-    db.refresh(lab)
-    return lab
-
-
-def _make_node(
-    db: Session,
-    lab: models.Lab,
-    *,
-    name: str = "r1",
-    device: str = "ceos",
-    gui_id: str | None = None,
-) -> models.Node:
-    node = models.Node(
-        lab_id=lab.id,
-        name=name,
-        container_name=name,
-        kind="container",
-        device=device,
-        gui_id=gui_id or str(uuid4())[:8],
-    )
-    db.add(node)
-    db.commit()
-    db.refresh(node)
-    return node
-
-
-def _make_node_state(
-    db: Session,
-    lab: models.Lab,
-    node_name: str,
-    *,
-    actual_state: str = NodeActualState.RUNNING,
-    desired_state: str = NodeDesiredState.RUNNING,
-    is_ready: bool = False,
-) -> models.NodeState:
-    ns = models.NodeState(
-        lab_id=lab.id,
-        node_name=node_name,
-        node_id=str(uuid4())[:8],
-        actual_state=actual_state,
-        desired_state=desired_state,
-        is_ready=is_ready,
-    )
-    db.add(ns)
-    db.commit()
-    db.refresh(ns)
-    return ns
-
-
-def _make_host(
-    db: Session,
-    *,
-    name: str = "agent-1",
-    address: str = "10.0.0.1:8001",
-    status: str = HostStatus.ONLINE,
-) -> models.Host:
-    host = models.Host(
-        id=str(uuid4())[:8],
-        name=name,
-        address=address,
-        status=status,
-        capabilities=json.dumps({"providers": ["docker"], "features": []}),
-        version="0.4.0",
-        last_heartbeat=datetime.now(timezone.utc),
-    )
-    db.add(host)
-    db.commit()
-    db.refresh(host)
-    return host
 
 
 # ---------------------------------------------------------------------------
@@ -125,7 +39,7 @@ class TestUpdateLab:
         self, test_client: TestClient, auth_headers: dict, test_db: Session,
         test_user: models.User,
     ):
-        lab = _make_lab(test_db, test_user)
+        lab = make_lab(test_db, test_user)
         resp = test_client.put(
             f"/labs/{lab.id}",
             json={"name": "Renamed Lab"},
@@ -162,7 +76,7 @@ class TestExportGraph:
         self, test_client: TestClient, auth_headers: dict, test_db: Session,
         test_user: models.User,
     ):
-        lab = _make_lab(test_db, test_user)
+        lab = make_lab(test_db, test_user)
         resp = test_client.get(
             f"/labs/{lab.id}/export-graph", headers=auth_headers,
         )
@@ -173,8 +87,8 @@ class TestExportGraph:
         self, test_client: TestClient, auth_headers: dict, test_db: Session,
         test_user: models.User,
     ):
-        lab = _make_lab(test_db, test_user)
-        _make_node(test_db, lab, name="r1")
+        lab = make_lab(test_db, test_user)
+        make_node(test_db, lab, name="r1")
         resp = test_client.get(
             f"/labs/{lab.id}/export-graph", headers=auth_headers,
         )
@@ -187,8 +101,8 @@ class TestExportGraph:
         self, test_client: TestClient, auth_headers: dict, test_db: Session,
         test_user: models.User,
     ):
-        lab = _make_lab(test_db, test_user)
-        _make_node(test_db, lab, name="r1")
+        lab = make_lab(test_db, test_user)
+        make_node(test_db, lab, name="r1")
 
         with patch("app.routers.labs.read_layout") as mock_layout:
             mock_layout.return_value = schemas.LabLayout(version=1)
@@ -219,7 +133,7 @@ class TestDownloadBundle:
         self, test_client: TestClient, auth_headers: dict, test_db: Session,
         test_user: models.User,
     ):
-        lab = _make_lab(test_db, test_user)
+        lab = make_lab(test_db, test_user)
         with patch("app.routers.labs.read_layout", return_value=None), \
              patch("app.routers.labs.lab_workspace", return_value="/tmp/fake-workspace"):
             resp = test_client.get(
@@ -252,7 +166,7 @@ class TestRemoveLayout:
         self, test_client: TestClient, auth_headers: dict, test_db: Session,
         test_user: models.User,
     ):
-        lab = _make_lab(test_db, test_user)
+        lab = make_lab(test_db, test_user)
         with patch("app.routers.labs.delete_layout", return_value=True):
             resp = test_client.delete(
                 f"/labs/{lab.id}/layout", headers=auth_headers,
@@ -264,7 +178,7 @@ class TestRemoveLayout:
         self, test_client: TestClient, auth_headers: dict, test_db: Session,
         test_user: models.User,
     ):
-        lab = _make_lab(test_db, test_user)
+        lab = make_lab(test_db, test_user)
         with patch("app.routers.labs.delete_layout", return_value=False):
             resp = test_client.delete(
                 f"/labs/{lab.id}/layout", headers=auth_headers,
@@ -290,7 +204,7 @@ class TestCheckNodesReady:
         self, test_client: TestClient, auth_headers: dict, test_db: Session,
         test_user: models.User,
     ):
-        lab = _make_lab(test_db, test_user)
+        lab = make_lab(test_db, test_user)
         resp = test_client.get(
             f"/labs/{lab.id}/nodes/ready", headers=auth_headers,
         )
@@ -305,10 +219,10 @@ class TestCheckNodesReady:
         self, test_client: TestClient, auth_headers: dict, test_db: Session,
         test_user: models.User,
     ):
-        host = _make_host(test_db)
-        lab = _make_lab(test_db, test_user, state=LabState.RUNNING, agent_id=host.id)
-        _make_node(test_db, lab, name="r1")
-        _make_node_state(
+        host = make_host(test_db)
+        lab = make_lab(test_db, test_user, state=LabState.RUNNING, agent_id=host.id)
+        make_node(test_db, lab, name="r1")
+        make_node_state(
             test_db, lab, "r1",
             actual_state=NodeActualState.RUNNING,
             desired_state=NodeDesiredState.RUNNING,
@@ -331,10 +245,10 @@ class TestCheckNodesReady:
         self, test_client: TestClient, auth_headers: dict, test_db: Session,
         test_user: models.User,
     ):
-        host = _make_host(test_db)
-        lab = _make_lab(test_db, test_user, state=LabState.RUNNING, agent_id=host.id)
-        _make_node(test_db, lab, name="r1")
-        _make_node_state(
+        host = make_host(test_db)
+        lab = make_lab(test_db, test_user, state=LabState.RUNNING, agent_id=host.id)
+        make_node(test_db, lab, name="r1")
+        make_node_state(
             test_db, lab, "r1",
             actual_state=NodeActualState.RUNNING,
             desired_state=NodeDesiredState.RUNNING,
@@ -373,7 +287,7 @@ class TestPollNodesReady:
         self, test_client: TestClient, auth_headers: dict, test_db: Session,
         test_user: models.User,
     ):
-        lab = _make_lab(test_db, test_user)
+        lab = make_lab(test_db, test_user)
         resp = test_client.get(
             f"/labs/{lab.id}/nodes/ready/poll?timeout=10&interval=5",
             headers=auth_headers,
@@ -393,10 +307,10 @@ class TestPollNodesReady:
         self, test_client: TestClient, auth_headers: dict, test_db: Session,
         test_user: models.User,
     ):
-        host = _make_host(test_db)
-        lab = _make_lab(test_db, test_user, state=LabState.RUNNING, agent_id=host.id)
-        _make_node(test_db, lab, name="r1")
-        _make_node_state(
+        host = make_host(test_db)
+        lab = make_lab(test_db, test_user, state=LabState.RUNNING, agent_id=host.id)
+        make_node(test_db, lab, name="r1")
+        make_node_state(
             test_db, lab, "r1",
             actual_state=NodeActualState.RUNNING,
             desired_state=NodeDesiredState.RUNNING,
@@ -428,8 +342,8 @@ class TestGetNodeInterfaces:
         self, test_client: TestClient, auth_headers: dict, test_db: Session,
         test_user: models.User,
     ):
-        lab = _make_lab(test_db, test_user)
-        node = _make_node(test_db, lab, name="r1")
+        lab = make_lab(test_db, test_user)
+        node = make_node(test_db, lab, name="r1")
         resp = test_client.get(
             f"/labs/{lab.id}/nodes/{node.gui_id}/interfaces",
             headers=auth_headers,
@@ -443,7 +357,7 @@ class TestGetNodeInterfaces:
         self, test_client: TestClient, auth_headers: dict, test_db: Session,
         test_user: models.User,
     ):
-        lab = _make_lab(test_db, test_user)
+        lab = make_lab(test_db, test_user)
         resp = test_client.get(
             f"/labs/{lab.id}/nodes/nonexistent/interfaces",
             headers=auth_headers,
@@ -462,8 +376,8 @@ class TestGetNodeInterfaces:
         self, test_client: TestClient, auth_headers: dict, test_db: Session,
         test_user: models.User,
     ):
-        lab = _make_lab(test_db, test_user)
-        node = _make_node(test_db, lab, name="r1")
+        lab = make_lab(test_db, test_user)
+        node = make_node(test_db, lab, name="r1")
         mapping = models.InterfaceMapping(
             lab_id=lab.id,
             node_id=node.id,
@@ -506,7 +420,7 @@ class TestSyncInterfaceMappings:
         self, test_client: TestClient, auth_headers: dict, test_db: Session,
         test_user: models.User,
     ):
-        lab = _make_lab(test_db, test_user)
+        lab = make_lab(test_db, test_user)
         with patch("app.routers.labs.interface_mapping_service") as mock_svc:
             mock_svc.populate_all_agents = AsyncMock(return_value={
                 "created": 3, "updated": 1, "errors": 0, "agents_queried": 1,

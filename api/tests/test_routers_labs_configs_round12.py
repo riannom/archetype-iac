@@ -23,56 +23,12 @@ from sqlalchemy.orm import Session
 
 from app import models
 from app.config import settings
+from tests.factories import make_node, make_placement
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-
-def _make_node(
-    db: Session,
-    lab: models.Lab,
-    gui_id: str = "n1",
-    display_name: str = "R1",
-    container_name: str = "archetype-test-r1",
-    device: str = "ceos",
-    host_id: str | None = None,
-    node_type: str = "device",
-) -> models.Node:
-    node = models.Node(
-        id=str(uuid4()),
-        lab_id=lab.id,
-        gui_id=gui_id,
-        display_name=display_name,
-        container_name=container_name,
-        device=device,
-        host_id=host_id,
-        node_type=node_type,
-    )
-    db.add(node)
-    db.commit()
-    db.refresh(node)
-    return node
-
-
-def _make_placement(
-    db: Session,
-    lab: models.Lab,
-    host: models.Host,
-    node: models.Node,
-) -> models.NodePlacement:
-    placement = models.NodePlacement(
-        id=str(uuid4()),
-        lab_id=lab.id,
-        host_id=host.id,
-        node_name=node.container_name,
-        node_definition_id=node.id,
-    )
-    db.add(placement)
-    db.commit()
-    db.refresh(placement)
-    return placement
 
 
 def _make_snapshot(
@@ -151,8 +107,8 @@ class TestExtractNodeConfig:
         auth_headers: dict,
     ):
         """Successful single-node extraction returns node details and snapshot count."""
-        node = _make_node(test_db, sample_lab, host_id=sample_host.id)
-        _make_placement(test_db, sample_lab, sample_host, node)
+        node = make_node(test_db, sample_lab, host_id=sample_host.id)
+        make_placement(test_db, sample_lab, sample_host, node)
 
         mock = _mock_agent_client(
             extract_node_result={"success": True, "content": "hostname R1\ninterface Ethernet1\n"},
@@ -179,12 +135,12 @@ class TestExtractNodeConfig:
         auth_headers: dict,
     ):
         """External nodes cannot have configs extracted — returns 400."""
-        node = _make_node(
+        node = make_node(
             test_db, sample_lab, gui_id="ext1", display_name="External",
             container_name="archetype-test-ext1", device="external",
             host_id=sample_host.id, node_type="external",
         )
-        _make_placement(test_db, sample_lab, sample_host, node)
+        make_placement(test_db, sample_lab, sample_host, node)
 
         mock = _mock_agent_client()
         with patch("app.routers.labs.agent_client", mock):
@@ -221,7 +177,7 @@ class TestExtractNodeConfig:
         auth_headers: dict,
     ):
         """Node with no placement raises AttributeError (unguarded None)."""
-        node = _make_node(test_db, sample_lab, host_id=None)
+        node = make_node(test_db, sample_lab, host_id=None)
         # No placement created — code hits placement.host_id on None
 
         mock = _mock_agent_client()
@@ -244,8 +200,8 @@ class TestExtractNodeConfig:
         auth_headers: dict,
     ):
         """Offline agent for the node's host returns 503."""
-        node = _make_node(test_db, sample_lab, host_id=sample_host.id)
-        _make_placement(test_db, sample_lab, sample_host, node)
+        node = make_node(test_db, sample_lab, host_id=sample_host.id)
+        make_placement(test_db, sample_lab, sample_host, node)
 
         mock = _mock_agent_client(online=False)
         with patch("app.routers.labs.agent_client", mock):
@@ -265,8 +221,8 @@ class TestExtractNodeConfig:
         auth_headers: dict,
     ):
         """Agent returning success=False raises 500."""
-        node = _make_node(test_db, sample_lab, host_id=sample_host.id)
-        _make_placement(test_db, sample_lab, sample_host, node)
+        node = make_node(test_db, sample_lab, host_id=sample_host.id)
+        make_placement(test_db, sample_lab, sample_host, node)
 
         mock = _mock_agent_client(
             extract_node_result={"success": False, "error": "Node not running"},
@@ -289,8 +245,8 @@ class TestExtractNodeConfig:
         auth_headers: dict,
     ):
         """Agent returning empty content raises 500."""
-        node = _make_node(test_db, sample_lab, host_id=sample_host.id)
-        _make_placement(test_db, sample_lab, sample_host, node)
+        node = make_node(test_db, sample_lab, host_id=sample_host.id)
+        make_placement(test_db, sample_lab, sample_host, node)
 
         mock = _mock_agent_client(
             extract_node_result={"success": True, "content": ""},
@@ -313,8 +269,8 @@ class TestExtractNodeConfig:
         auth_headers: dict,
     ):
         """create_snapshot=False still saves but does not set as active."""
-        node = _make_node(test_db, sample_lab, host_id=sample_host.id)
-        _make_placement(test_db, sample_lab, sample_host, node)
+        node = make_node(test_db, sample_lab, host_id=sample_host.id)
+        make_placement(test_db, sample_lab, sample_host, node)
 
         mock = _mock_agent_client(
             extract_node_result={"success": True, "content": "hostname R1\n"},
@@ -342,8 +298,8 @@ class TestExtractNodeConfig:
         auth_headers: dict,
     ):
         """Agent config push failure is reported but doesn't fail the endpoint."""
-        node = _make_node(test_db, sample_lab, host_id=sample_host.id)
-        _make_placement(test_db, sample_lab, sample_host, node)
+        node = make_node(test_db, sample_lab, host_id=sample_host.id)
+        make_placement(test_db, sample_lab, sample_host, node)
 
         mock = _mock_agent_client(
             extract_node_result={"success": True, "content": "hostname R1\n"},
@@ -378,9 +334,9 @@ class TestSetActiveConfigDeep:
         auth_headers: dict,
     ):
         """When an online agent is available, the config is pushed via HTTP PUT."""
-        node = _make_node(test_db, sample_lab, host_id=sample_host.id)
+        node = make_node(test_db, sample_lab, host_id=sample_host.id)
         snapshot = _make_snapshot(test_db, sample_lab.id, node.container_name)
-        _make_placement(test_db, sample_lab, sample_host, node)
+        make_placement(test_db, sample_lab, sample_host, node)
 
         put_mock = AsyncMock(return_value=MagicMock(status_code=200))
         mock = _mock_agent_client(online=True)
@@ -409,8 +365,8 @@ class TestSetActiveConfigDeep:
         auth_headers: dict,
     ):
         """Clearing active config (null snapshot_id) pushes empty content to agent."""
-        node = _make_node(test_db, sample_lab, host_id=sample_host.id)
-        _make_placement(test_db, sample_lab, sample_host, node)
+        node = make_node(test_db, sample_lab, host_id=sample_host.id)
+        make_placement(test_db, sample_lab, sample_host, node)
 
         put_mock = AsyncMock(return_value=MagicMock(status_code=200))
         mock = _mock_agent_client(online=True)
@@ -441,9 +397,9 @@ class TestSetActiveConfigDeep:
         auth_headers: dict,
     ):
         """Agent push failure is silently ignored (best-effort)."""
-        node = _make_node(test_db, sample_lab, host_id=sample_host.id)
+        node = make_node(test_db, sample_lab, host_id=sample_host.id)
         snapshot = _make_snapshot(test_db, sample_lab.id, node.container_name)
-        _make_placement(test_db, sample_lab, sample_host, node)
+        make_placement(test_db, sample_lab, sample_host, node)
 
         mock = _mock_agent_client(online=True, put_side_effect=Exception("connection refused"))
 
@@ -466,7 +422,7 @@ class TestSetActiveConfigDeep:
         auth_headers: dict,
     ):
         """Without a placement, no agent push happens but the operation succeeds."""
-        node = _make_node(test_db, sample_lab)
+        node = make_node(test_db, sample_lab)
         snapshot = _make_snapshot(test_db, sample_lab.id, node.container_name)
 
         mock = _mock_agent_client(online=False)
@@ -502,8 +458,8 @@ class TestExtractConfigsDeep:
         auth_headers: dict,
     ):
         """create_snapshot=false skips snapshot creation."""
-        node = _make_node(test_db, sample_lab, host_id=sample_host.id)
-        _make_placement(test_db, sample_lab, sample_host, node)
+        node = make_node(test_db, sample_lab, host_id=sample_host.id)
+        make_placement(test_db, sample_lab, sample_host, node)
 
         mock = _mock_agent_client(
             extract_result={
@@ -533,8 +489,8 @@ class TestExtractConfigsDeep:
         auth_headers: dict,
     ):
         """When all agents fail extraction, returns 500."""
-        node = _make_node(test_db, sample_lab, host_id=sample_host.id)
-        _make_placement(test_db, sample_lab, sample_host, node)
+        node = make_node(test_db, sample_lab, host_id=sample_host.id)
+        make_placement(test_db, sample_lab, sample_host, node)
 
         mock = _mock_agent_client(
             extract_result={"success": False, "error": "Docker daemon not responding"},
@@ -557,8 +513,8 @@ class TestExtractConfigsDeep:
         auth_headers: dict,
     ):
         """When agent raises an exception during extraction, returns 500."""
-        node = _make_node(test_db, sample_lab, host_id=sample_host.id)
-        _make_placement(test_db, sample_lab, sample_host, node)
+        node = make_node(test_db, sample_lab, host_id=sample_host.id)
+        make_placement(test_db, sample_lab, sample_host, node)
 
         mock = _mock_agent_client()
         mock.extract_configs_on_agent = AsyncMock(side_effect=ConnectionError("Agent down"))
@@ -595,8 +551,8 @@ class TestExtractConfigsDeep:
         auth_headers: dict,
     ):
         """Sync errors to agents are reported in the response."""
-        node = _make_node(test_db, sample_lab, host_id=sample_host.id)
-        _make_placement(test_db, sample_lab, sample_host, node)
+        node = make_node(test_db, sample_lab, host_id=sample_host.id)
+        make_placement(test_db, sample_lab, sample_host, node)
 
         mock = _mock_agent_client(
             extract_result={
@@ -627,8 +583,8 @@ class TestExtractConfigsDeep:
         auth_headers: dict,
     ):
         """Config entries with missing node_name or content are silently skipped."""
-        node = _make_node(test_db, sample_lab, host_id=sample_host.id)
-        _make_placement(test_db, sample_lab, sample_host, node)
+        node = make_node(test_db, sample_lab, host_id=sample_host.id)
+        make_placement(test_db, sample_lab, sample_host, node)
 
         mock = _mock_agent_client(
             extract_result={
@@ -738,7 +694,7 @@ class TestListSnapshotsDeep:
     ):
         """orphaned_only=true returns only snapshots for nodes not in topology."""
         # Snapshot for a real node
-        node = _make_node(test_db, sample_lab)
+        node = make_node(test_db, sample_lab)
         _make_snapshot(test_db, sample_lab.id, node.container_name, content="real config\n")
 
         # Snapshot for a deleted node (orphaned)

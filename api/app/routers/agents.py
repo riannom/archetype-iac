@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
@@ -23,10 +24,13 @@ from app.metrics import record_agent_stale_image_cleanup, set_agent_stale_image_
 from app.routers.system import get_commit
 from app.state import HostStatus, JobStatus, LabState, LinkActualState
 from app.utils.http import require_admin
+from app.utils.time import utcnow
 
 
 router = APIRouter(prefix="/agents", tags=["agents"])
 logger = logging.getLogger(__name__)
+
+_ACTIVE_UPDATE_STATUSES = ("pending", "downloading", "installing", "restarting")
 
 
 async def verify_agent_secret_required(request: Request) -> None:
@@ -57,6 +61,172 @@ def _get_agent_auth_headers() -> dict[str, str]:
     from app.agent_client import _get_agent_auth_headers as _agent_auth_headers
 
     return _agent_auth_headers()
+
+
+def _get_agent_or_404(database: Session, agent_id: str) -> models.Host:
+    host = database.get(models.Host, agent_id)
+    if not host:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    return host
+
+
+def _require_agent_online(host: models.Host) -> None:
+    if host.status != HostStatus.ONLINE:
+        raise HTTPException(status_code=503, detail="Agent is offline")
+
+
+def _resolve_checkout_ref(target_version: str) -> str:
+    if re.fullmatch(r'[0-9a-f]{7,40}', target_version):
+        return target_version
+    return get_commit()
+
+
+def _update_host_fields(
+    database: Session, host: models.Host, agent: AgentInfo
+) -> None:
+    previous_snapshotter_mode = host.docker_snapshotter_mode
+    host.name = agent.name
+    host.address = agent.address
+    host.status = HostStatus.ONLINE
+    host.capabilities = json.dumps(agent.capabilities.model_dump())
+    host.version = agent.version
+    host.git_sha = agent.commit or host.git_sha
+    host.started_at = agent.started_at
+    host.is_local = agent.is_local
+    host.deployment_mode = agent.deployment_mode or host.deployment_mode
+    host.last_heartbeat = utcnow()
+    host.data_plane_address = getattr(agent, "data_plane_ip", None)
+    host.docker_snapshotter_mode = getattr(agent, "docker_snapshotter_mode", None)
+    _invalidate_host_images_for_snapshotter_change(
+        database, host, previous_snapshotter_mode, host.docker_snapshotter_mode,
+    )
+
+
+def _host_to_out(host: models.Host) -> HostOut:
+    return HostOut(
+        id=host.id,
+        name=host.name,
+        address=host.address,
+        status=host.status,
+        capabilities=host.get_capabilities(),
+        version=host.version,
+        git_sha=host.git_sha,
+        image_sync_strategy=host.image_sync_strategy or "on_demand",
+        last_heartbeat=host.last_heartbeat,
+        last_error=host.last_error,
+        error_since=host.error_since,
+        data_plane_address=host.data_plane_address,
+        docker_snapshotter_mode=host.docker_snapshotter_mode,
+        created_at=host.created_at,
+    )
+
+
+def _update_job_to_status(job: models.AgentUpdateJob, agent_id: str) -> UpdateStatusResponse:
+    return UpdateStatusResponse(
+        job_id=job.id,
+        agent_id=agent_id,
+        from_version=job.from_version,
+        to_version=job.to_version,
+        status=job.status,
+        progress_percent=job.progress_percent,
+        error_message=job.error_message,
+        started_at=job.started_at,
+        completed_at=job.completed_at,
+        created_at=job.created_at,
+    )
+
+
+def _find_active_update_job(
+    database: Session, agent_id: str,
+) -> models.AgentUpdateJob | None:
+    return (
+        database.query(models.AgentUpdateJob)
+        .filter(
+            models.AgentUpdateJob.host_id == agent_id,
+            models.AgentUpdateJob.status.in_(_ACTIVE_UPDATE_STATUSES),
+        )
+        .first()
+    )
+
+
+def _create_update_job(
+    database: Session, agent_id: str, from_version: str, to_version: str,
+) -> tuple[str, models.AgentUpdateJob]:
+    job_id = str(uuid4())
+    job = models.AgentUpdateJob(
+        id=job_id,
+        host_id=agent_id,
+        from_version=from_version,
+        to_version=to_version,
+        status="pending",
+    )
+    database.add(job)
+    return job_id, job
+
+
+async def _send_update_to_agent(
+    address: str, job_id: str, checkout_ref: str,
+) -> dict:
+    callback_url = f"{settings.internal_url}/callbacks/update/{job_id}"
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        resp = await client.post(
+            f"http://{address}/update",
+            json={
+                "job_id": job_id,
+                "target_version": checkout_ref,
+                "callback_url": callback_url,
+            },
+            headers=_get_agent_auth_headers(),
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+
+def _fail_update_job(
+    database: Session, job: models.AgentUpdateJob, error: str,
+) -> None:
+    job.status = JobStatus.FAILED
+    job.error_message = error
+    job.completed_at = utcnow()
+    database.commit()
+
+
+def _image_host_to_dict(ih: models.ImageHost) -> dict:
+    return {
+        "image_id": ih.image_id,
+        "reference": ih.reference,
+        "status": ih.status,
+        "size_bytes": ih.size_bytes,
+        "synced_at": ih.synced_at.isoformat() if ih.synced_at else None,
+        "error_message": ih.error_message,
+    }
+
+
+def _extract_inventory_error(details: dict) -> str | None:
+    return next(
+        (
+            str(entry.get("reason"))
+            for entry in details["stale_images"]
+            if entry.get("reference") == "" and entry.get("reason")
+        ),
+        None,
+    )
+
+
+async def _proxy_agent_get(host: models.Host, path: str) -> dict:
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.get(
+                f"{host.address}/{path}", headers=_get_agent_auth_headers()
+            )
+            response.raise_for_status()
+            return response.json()
+    except httpx.RequestError as e:
+        raise HTTPException(status_code=502, detail=f"Failed to contact agent: {e}")
+    except httpx.HTTPStatusError as e:
+        raise HTTPException(
+            status_code=e.response.status_code, detail=f"Agent error: {e}"
+        )
 
 
 # --- Request/Response Schemas ---
@@ -217,29 +387,11 @@ async def register_agent(
             existing = database.get(models.Host, agent.agent_id)
 
             if existing:
-                previous_snapshotter_mode = existing.docker_snapshotter_mode
                 if existing.started_at and agent.started_at:
                     if agent.started_at > existing.started_at:
                         is_restart = True
 
-                existing.name = agent.name
-                existing.address = agent.address
-                existing.status = HostStatus.ONLINE
-                existing.capabilities = json.dumps(agent.capabilities.model_dump())
-                existing.version = agent.version
-                existing.git_sha = agent.commit or existing.git_sha
-                existing.started_at = agent.started_at
-                existing.is_local = agent.is_local
-                existing.deployment_mode = agent.deployment_mode or existing.deployment_mode
-                existing.last_heartbeat = datetime.now(timezone.utc)
-                existing.data_plane_address = getattr(agent, "data_plane_ip", None)
-                existing.docker_snapshotter_mode = getattr(agent, "docker_snapshotter_mode", None)
-                _invalidate_host_images_for_snapshotter_change(
-                    database,
-                    existing,
-                    previous_snapshotter_mode,
-                    existing.docker_snapshotter_mode,
-                )
+                _update_host_fields(database, existing, agent)
                 database.commit()
                 host_id = agent.agent_id
 
@@ -249,38 +401,17 @@ async def register_agent(
                     assigned_id=agent.agent_id,
                 )
             else:
-                existing_by_name = (
+                existing_duplicate = (
                     database.query(models.Host)
-                    .filter(models.Host.name == agent.name)
+                    .filter(or_(
+                        models.Host.name == agent.name,
+                        models.Host.address == agent.address,
+                    ))
                     .first()
                 )
-                existing_by_address = (
-                    database.query(models.Host)
-                    .filter(models.Host.address == agent.address)
-                    .first()
-                )
-                existing_duplicate = existing_by_name or existing_by_address
 
                 if existing_duplicate:
-                    previous_snapshotter_mode = existing_duplicate.docker_snapshotter_mode
-                    existing_duplicate.name = agent.name
-                    existing_duplicate.address = agent.address
-                    existing_duplicate.status = HostStatus.ONLINE
-                    existing_duplicate.capabilities = json.dumps(agent.capabilities.model_dump())
-                    existing_duplicate.version = agent.version
-                    existing_duplicate.git_sha = agent.commit or existing_duplicate.git_sha
-                    existing_duplicate.started_at = agent.started_at
-                    existing_duplicate.is_local = agent.is_local
-                    existing_duplicate.deployment_mode = agent.deployment_mode or existing_duplicate.deployment_mode
-                    existing_duplicate.last_heartbeat = datetime.now(timezone.utc)
-                    existing_duplicate.data_plane_address = getattr(agent, "data_plane_ip", None)
-                    existing_duplicate.docker_snapshotter_mode = getattr(agent, "docker_snapshotter_mode", None)
-                    _invalidate_host_images_for_snapshotter_change(
-                        database,
-                        existing_duplicate,
-                        previous_snapshotter_mode,
-                        existing_duplicate.docker_snapshotter_mode,
-                    )
+                    _update_host_fields(database, existing_duplicate, agent)
                     database.commit()
                     host_id = existing_duplicate.id
 
@@ -301,7 +432,7 @@ async def register_agent(
                         started_at=agent.started_at,
                         is_local=agent.is_local,
                         deployment_mode=agent.deployment_mode or "unknown",
-                        last_heartbeat=datetime.now(timezone.utc),
+                        last_heartbeat=utcnow(),
                         data_plane_address=getattr(agent, "data_plane_ip", None),
                         docker_snapshotter_mode=getattr(agent, "docker_snapshotter_mode", None),
                     )
@@ -344,9 +475,6 @@ async def register_agent(
 
     # Trigger overlay convergence (already uses its own session)
     if host_id:
-        import logging
-        _logger = logging.getLogger(__name__)
-
         async def _converge_agent():
             try:
                 from app.db import get_session
@@ -368,7 +496,7 @@ async def register_agent(
                         await process_pending_migration_cleanups_for_agent(sess, ag, limit=50)
                         sess.commit()
             except Exception as e:
-                _logger.warning(f"Post-registration convergence for {host_id}: {e}")
+                logger.warning(f"Post-registration convergence for {host_id}: {e}")
 
         asyncio.create_task(_converge_agent())
 
@@ -389,9 +517,6 @@ def _handle_agent_restart_cleanup_sync(database: Session, agent_id: str) -> None
         database: Database session (caller manages lifecycle)
         agent_id: ID of the restarted agent
     """
-    import logging
-    logger = logging.getLogger(__name__)
-
     stale_jobs = (
         database.query(models.Job)
         .filter(
@@ -406,7 +531,7 @@ def _handle_agent_restart_cleanup_sync(database: Session, agent_id: str) -> None
             f"Agent {agent_id} restarted - marking {len(stale_jobs)} running jobs as failed"
         )
 
-        now = datetime.now(timezone.utc)
+        now = utcnow()
         for job in stale_jobs:
             job.status = JobStatus.FAILED
             job.completed_at = now
@@ -443,9 +568,6 @@ def _mark_links_for_recovery_sync(database: Session, agent_id: str) -> None:
         database: Database session (caller manages lifecycle)
         agent_id: ID of the restarted agent
     """
-    import logging
-    logger = logging.getLogger(__name__)
-
     links = (
         database.query(models.LinkState)
         .filter(
@@ -491,21 +613,17 @@ def _check_update_completion(
     match the update job target. If so, mark the job as completed.
     Also sweeps any stuck "restarting" jobs older than 10 minutes.
     """
-    import logging
-    logger = logging.getLogger(__name__)
-
-    active_statuses = ("pending", "downloading", "installing", "restarting")
     active_jobs = (
         database.query(models.AgentUpdateJob)
         .filter(
             models.AgentUpdateJob.host_id == agent_id,
-            models.AgentUpdateJob.status.in_(active_statuses),
+            models.AgentUpdateJob.status.in_(_ACTIVE_UPDATE_STATUSES),
         )
         .order_by(models.AgentUpdateJob.created_at.desc())
         .all()
     )
 
-    now = datetime.now(timezone.utc)
+    now = utcnow()
     for job in active_jobs:
         # Check version match: exact version match or commit SHA prefix match
         version_match = new_version == job.to_version
@@ -556,14 +674,13 @@ def heartbeat(
 ) -> HeartbeatResponse:
     """Receive heartbeat from agent."""
     host = database.get(models.Host, agent_id)
-
     if not host:
         raise HTTPException(status_code=404, detail="Agent not registered")
 
     # Update status and resource usage
     host.status = request.status
     host.resource_usage = json.dumps(request.resource_usage)
-    host.last_heartbeat = datetime.now(timezone.utc)
+    host.last_heartbeat = utcnow()
     # Update data plane address if agent reports one
     if request.data_plane_ip is not None:
         host.data_plane_address = request.data_plane_ip or None
@@ -594,29 +711,7 @@ def list_agents(
 ) -> list[HostOut]:
     """List all registered agents."""
     hosts = database.query(models.Host).order_by(models.Host.name).all()
-
-    result = []
-    for host in hosts:
-        capabilities = host.get_capabilities()
-
-        result.append(HostOut(
-            id=host.id,
-            name=host.name,
-            address=host.address,
-            status=host.status,
-            capabilities=capabilities,
-            version=host.version,
-            git_sha=host.git_sha,
-            image_sync_strategy=host.image_sync_strategy or "on_demand",
-            last_heartbeat=host.last_heartbeat,
-            last_error=host.last_error,
-            error_since=host.error_since,
-            data_plane_address=host.data_plane_address,
-            docker_snapshotter_mode=host.docker_snapshotter_mode,
-            created_at=host.created_at,
-        ))
-
-    return result
+    return [_host_to_out(host) for host in hosts]
 
 
 def _enrich_details(
@@ -657,9 +752,7 @@ def list_agents_detailed(
     labs_by_agent: dict[str, list[dict]] = {}
     for lab in all_labs:
         if lab.agent_id:
-            if lab.agent_id not in labs_by_agent:
-                labs_by_agent[lab.agent_id] = []
-            labs_by_agent[lab.agent_id].append({
+            labs_by_agent.setdefault(lab.agent_id, []).append({
                 "id": lab.id,
                 "name": lab.name,
                 "state": lab.state,
@@ -675,16 +768,7 @@ def list_agents_detailed(
     ).all()
     images_by_host: dict[str, list[dict]] = {}
     for ih in image_hosts:
-        if ih.host_id not in images_by_host:
-            images_by_host[ih.host_id] = []
-        images_by_host[ih.host_id].append({
-            "image_id": ih.image_id,
-            "reference": ih.reference,
-            "status": ih.status,
-            "size_bytes": ih.size_bytes,
-            "synced_at": ih.synced_at.isoformat() if ih.synced_at else None,
-            "error_message": ih.error_message,
-        })
+        images_by_host.setdefault(ih.host_id, []).append(_image_host_to_dict(ih))
 
     result = []
     for host in hosts:
@@ -692,10 +776,7 @@ def list_agents_detailed(
         resource_usage = host.get_resource_usage()
 
         # Determine role based on capabilities and is_local flag
-        providers = capabilities.get("providers", [])
-        has_provider = len(providers) > 0
-
-        if has_provider:
+        if capabilities.get("providers"):
             role = "agent+controller" if host.is_local else "agent"
         else:
             role = "controller"
@@ -758,29 +839,8 @@ def get_agent(
     current_user: models.User = Depends(get_current_user),
 ) -> HostOut:
     """Get details of a specific agent."""
-    host = database.get(models.Host, agent_id)
-
-    if not host:
-        raise HTTPException(status_code=404, detail="Agent not found")
-
-    capabilities = host.get_capabilities()
-
-    return HostOut(
-        id=host.id,
-        name=host.name,
-        address=host.address,
-        status=host.status,
-        capabilities=capabilities,
-        version=host.version,
-        git_sha=host.git_sha,
-        image_sync_strategy=host.image_sync_strategy or "on_demand",
-        last_heartbeat=host.last_heartbeat,
-        last_error=host.last_error,
-        error_since=host.error_since,
-        data_plane_address=host.data_plane_address,
-        docker_snapshotter_mode=host.docker_snapshotter_mode,
-        created_at=host.created_at,
-    )
+    host = _get_agent_or_404(database, agent_id)
+    return _host_to_out(host)
 
 
 @router.get("/{agent_id}/deregister-info")
@@ -795,9 +855,7 @@ def get_deregister_info(
     informed confirmation dialog.
     """
 
-    host = database.get(models.Host, agent_id)
-    if not host:
-        raise HTTPException(status_code=404, detail="Agent not found")
+    host = _get_agent_or_404(database, agent_id)
 
     # Count affected resources
     labs = (
@@ -864,15 +922,9 @@ def unregister_agent(
 
     Requires admin access.
     """
-    import logging
-    logger = logging.getLogger(__name__)
-
     require_admin(current_user)
 
-    host = database.get(models.Host, agent_id)
-    if not host:
-        raise HTTPException(status_code=404, detail="Agent not found")
-
+    host = _get_agent_or_404(database, agent_id)
     host_name = host.name
     cleanup = {}
 
@@ -981,10 +1033,7 @@ def update_sync_strategy(
             detail=f"Invalid strategy. Must be one of: {', '.join(valid_strategies)}"
         )
 
-    host = database.get(models.Host, agent_id)
-    if not host:
-        raise HTTPException(status_code=404, detail="Agent not found")
-
+    host = _get_agent_or_404(database, agent_id)
     host.image_sync_strategy = request.strategy
     database.commit()
 
@@ -1006,10 +1055,7 @@ async def list_agent_images(
     Returns the status of each library image on this specific agent,
     including whether it's synced, missing, or in progress.
     """
-    host = database.get(models.Host, agent_id)
-    if not host:
-        raise HTTPException(status_code=404, detail="Agent not found")
-
+    host = _get_agent_or_404(database, agent_id)
     return await _build_agent_image_details(host, database)
 
 
@@ -1020,16 +1066,7 @@ async def _build_agent_image_details(host: models.Host, database: Session) -> di
         models.ImageHost.host_id == host.id
     ).all()
 
-    result = []
-    for ih in image_hosts:
-        result.append({
-            "image_id": ih.image_id,
-            "reference": ih.reference,
-            "status": ih.status,
-            "size_bytes": ih.size_bytes,
-            "synced_at": ih.synced_at.isoformat() if ih.synced_at else None,
-            "error_message": ih.error_message,
-        })
+    result = [_image_host_to_dict(ih) for ih in image_hosts]
 
     from app import agent_client
     from app.image_store import load_manifest
@@ -1052,7 +1089,7 @@ async def _build_agent_image_details(host: models.Host, database: Session) -> di
     if host.status == HostStatus.ONLINE and agent_client.is_agent_online(host):
         try:
             images_response = await agent_client.get_agent_images(host)
-            inventory_refreshed_at = datetime.now(timezone.utc).isoformat()
+            inventory_refreshed_at = utcnow().isoformat()
             for img_info in images_response.get("images", []):
                 candidates: list[str] = []
                 reference = img_info.get("reference")
@@ -1090,7 +1127,7 @@ async def _build_agent_image_details(host: models.Host, database: Session) -> di
                     if not is_needed and not is_infra:
                         stale_images.append(entry)
         except Exception as e:
-            inventory_refreshed_at = datetime.now(timezone.utc).isoformat()
+            inventory_refreshed_at = utcnow().isoformat()
             stale_images = [{
                 "reference": "",
                 "display_reference": "",
@@ -1126,9 +1163,7 @@ async def cleanup_agent_stale_images(
     """Delete stale image artifacts from an agent immediately."""
     require_admin(current_user)
 
-    host = database.get(models.Host, agent_id)
-    if not host:
-        raise HTTPException(status_code=404, detail="Agent not found")
+    host = _get_agent_or_404(database, agent_id)
     result = await _cleanup_stale_images_for_host(host, database)
     if result.get("status") == "offline":
         raise HTTPException(status_code=503, detail="Agent is offline")
@@ -1155,14 +1190,7 @@ async def _cleanup_stale_images_for_host(host: models.Host, database: Session) -
         }
 
     details = await _build_agent_image_details(host, database)
-    inventory_error = next(
-        (
-            str(entry.get("reason"))
-            for entry in details["stale_images"]
-            if entry.get("reference") == "" and entry.get("reason")
-        ),
-        None,
-    )
+    inventory_error = _extract_inventory_error(details)
     if inventory_error:
         return {
             "agent_id": host.id,
@@ -1261,14 +1289,7 @@ async def list_stale_agent_images_summary(
         details = await _build_agent_image_details(host, database)
         stale_count = sum(1 for entry in details["stale_images"] if entry.get("is_stale"))
         total_stale_images += stale_count
-        inventory_error = next(
-            (
-                str(entry.get("reason"))
-                for entry in details["stale_images"]
-                if entry.get("reference") == "" and entry.get("reason")
-            ),
-            None,
-        )
+        inventory_error = _extract_inventory_error(details)
         host_summaries.append({
             "agent_id": host.id,
             "agent_name": host.name,
@@ -1297,12 +1318,8 @@ async def reconcile_agent_images_endpoint(
     the ImageHost records to reflect reality. Use this after
     manually loading images on an agent.
     """
-    host = database.get(models.Host, agent_id)
-    if not host:
-        raise HTTPException(status_code=404, detail="Agent not found")
-
-    if host.status != HostStatus.ONLINE:
-        raise HTTPException(status_code=503, detail="Agent is offline")
+    host = _get_agent_or_404(database, agent_id)
+    _require_agent_online(host)
 
     from app.tasks.image_sync import reconcile_agent_images
 
@@ -1324,22 +1341,9 @@ async def list_agent_interfaces(
 
     Used for external network configuration (VLAN parent interfaces).
     """
-    host = database.get(models.Host, agent_id)
-    if not host:
-        raise HTTPException(status_code=404, detail="Agent not found")
-
-    if host.status != HostStatus.ONLINE:
-        raise HTTPException(status_code=503, detail="Agent is offline")
-
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            response = await client.get(f"{host.address}/interfaces", headers=_get_agent_auth_headers())
-            response.raise_for_status()
-            return response.json()
-    except httpx.RequestError as e:
-        raise HTTPException(status_code=502, detail=f"Failed to contact agent: {e}")
-    except httpx.HTTPStatusError as e:
-        raise HTTPException(status_code=e.response.status_code, detail=f"Agent error: {e}")
+    host = _get_agent_or_404(database, agent_id)
+    _require_agent_online(host)
+    return await _proxy_agent_get(host, "interfaces")
 
 
 @router.get("/{agent_id}/bridges")
@@ -1352,22 +1356,9 @@ async def list_agent_bridges(
 
     Used for external network configuration (bridge mode).
     """
-    host = database.get(models.Host, agent_id)
-    if not host:
-        raise HTTPException(status_code=404, detail="Agent not found")
-
-    if host.status != HostStatus.ONLINE:
-        raise HTTPException(status_code=503, detail="Agent is offline")
-
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            response = await client.get(f"{host.address}/bridges", headers=_get_agent_auth_headers())
-            response.raise_for_status()
-            return response.json()
-    except httpx.RequestError as e:
-        raise HTTPException(status_code=502, detail=f"Failed to contact agent: {e}")
-    except httpx.HTTPStatusError as e:
-        raise HTTPException(status_code=e.response.status_code, detail=f"Agent error: {e}")
+    host = _get_agent_or_404(database, agent_id)
+    _require_agent_online(host)
+    return await _proxy_agent_get(host, "bridges")
 
 
 # --- Agent Updates ---
@@ -1436,15 +1427,8 @@ async def trigger_agent_update(
     Creates an update job and sends the update request to the agent.
     The agent reports progress via callbacks.
     """
-    import logging
-    logger = logging.getLogger(__name__)
-
-    host = database.get(models.Host, agent_id)
-    if not host:
-        raise HTTPException(status_code=404, detail="Agent not found")
-
-    if host.status != HostStatus.ONLINE:
-        raise HTTPException(status_code=503, detail="Agent is offline")
+    host = _get_agent_or_404(database, agent_id)
+    _require_agent_online(host)
 
     # Docker agents use rebuild, not update
     if host.deployment_mode == "docker":
@@ -1454,24 +1438,17 @@ async def trigger_agent_update(
         )
 
     # Check for concurrent update — expire stale jobs automatically
-    active_job = (
-        database.query(models.AgentUpdateJob)
-        .filter(
-            models.AgentUpdateJob.host_id == agent_id,
-            models.AgentUpdateJob.status.in_(("pending", "downloading", "installing", "restarting")),
-        )
-        .first()
-    )
+    active_job = _find_active_update_job(database, agent_id)
     if active_job:
         ts = active_job.started_at or active_job.created_at
         if ts and ts.tzinfo is None:
             ts = ts.replace(tzinfo=timezone.utc)
-        age_seconds = (datetime.now(timezone.utc) - ts).total_seconds() if ts else 0
+        age_seconds = (utcnow() - ts).total_seconds() if ts else 0
         if age_seconds > 300:  # 5 minutes
-            active_job.status = JobStatus.FAILED
-            active_job.error_message = f"Expired: stuck in '{active_job.status}' for {int(age_seconds)}s"
-            active_job.completed_at = datetime.now(timezone.utc)
-            database.commit()
+            _fail_update_job(
+                database, active_job,
+                f"Expired: stuck in '{active_job.status}' for {int(age_seconds)}s",
+            )
             logger.info(f"Auto-expired stale update job {active_job.id} for agent {agent_id}")
         else:
             raise HTTPException(
@@ -1481,13 +1458,7 @@ async def trigger_agent_update(
 
     # Determine target version and checkout ref (for git)
     target_version = (request.target_version if request else None) or get_latest_agent_version()
-    # Use target_version as checkout ref if it looks like a commit SHA,
-    # otherwise fall back to the API's own commit (for version-based updates)
-    import re
-    if re.fullmatch(r'[0-9a-f]{7,40}', target_version):
-        checkout_ref = target_version
-    else:
-        checkout_ref = get_commit()
+    checkout_ref = _resolve_checkout_ref(target_version)
 
     # Check if already at target version
     if host.version == target_version:
@@ -1497,79 +1468,49 @@ async def trigger_agent_update(
         )
 
     # Create update job
-    job_id = str(uuid4())
-    update_job = models.AgentUpdateJob(
-        id=job_id,
-        host_id=agent_id,
-        from_version=host.version or "unknown",
-        to_version=target_version,
-        status="pending",
+    job_id, update_job = _create_update_job(
+        database, agent_id, host.version or "unknown", target_version,
     )
-    database.add(update_job)
     database.commit()
-
-    # Build callback URL
-    callback_url = f"{settings.internal_url}/callbacks/update/{job_id}"
 
     # Send update request to agent with commit SHA as target
     try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.post(
-                f"http://{host.address}/update",
-                json={
-                    "job_id": job_id,
-                    "target_version": checkout_ref,
-                    "callback_url": callback_url,
-                },
-                headers=_get_agent_auth_headers(),
-            )
-            response.raise_for_status()
-            result = response.json()
+        result = await _send_update_to_agent(host.address, job_id, checkout_ref)
 
-            # Update job status based on agent response
-            if result.get("accepted"):
-                update_job.status = "downloading"
-                update_job.started_at = datetime.now(timezone.utc)
-                message = "Update initiated"
-            else:
-                update_job.status = JobStatus.FAILED
-                update_job.error_message = result.get("message", "Agent rejected update")
-                update_job.completed_at = datetime.now(timezone.utc)
-                message = result.get("message", "Agent rejected update")
+        # Update job status based on agent response
+        if result.get("accepted"):
+            update_job.status = "downloading"
+            update_job.started_at = utcnow()
+            message = "Update initiated"
+        else:
+            update_job.status = JobStatus.FAILED
+            update_job.error_message = result.get("message", "Agent rejected update")
+            update_job.completed_at = utcnow()
+            message = result.get("message", "Agent rejected update")
 
-            # Store deployment mode if provided
-            if result.get("deployment_mode"):
-                host.deployment_mode = result["deployment_mode"]
+        # Store deployment mode if provided
+        if result.get("deployment_mode"):
+            host.deployment_mode = result["deployment_mode"]
 
-            database.commit()
-
-            return UpdateJobResponse(
-                job_id=job_id,
-                agent_id=agent_id,
-                from_version=host.version or "unknown",
-                to_version=target_version,
-                status=update_job.status,
-                message=message,
-            )
-
-    except httpx.RequestError as e:
-        # Update job as failed
-        update_job.status = JobStatus.FAILED
-        update_job.error_message = f"Failed to contact agent: {e}"
-        update_job.completed_at = datetime.now(timezone.utc)
         database.commit()
 
+        return UpdateJobResponse(
+            job_id=job_id,
+            agent_id=agent_id,
+            from_version=host.version or "unknown",
+            to_version=target_version,
+            status=update_job.status,
+            message=message,
+        )
+
+    except httpx.RequestError as e:
+        _fail_update_job(database, update_job, f"Failed to contact agent: {e}")
         raise HTTPException(status_code=502, detail=f"Failed to contact agent: {e}")
 
     except httpx.HTTPStatusError as e:
-        update_job.status = JobStatus.FAILED
-        update_job.error_message = f"Agent error: HTTP {e.response.status_code}"
-        update_job.completed_at = datetime.now(timezone.utc)
-        database.commit()
-
+        _fail_update_job(database, update_job, f"Agent error: HTTP {e.response.status_code}")
         raise HTTPException(
-            status_code=e.response.status_code,
-            detail=f"Agent error: {e}"
+            status_code=e.response.status_code, detail=f"Agent error: {e}"
         )
 
 
@@ -1584,17 +1525,8 @@ async def trigger_bulk_update(
     Creates DB jobs sequentially (shared session), then fires HTTP requests
     to agents in parallel via asyncio.gather for faster bulk updates.
     """
-    import logging
-    logging.getLogger(__name__)
-
     target_version = request.target_version or get_latest_agent_version()
-    # Use target_version as checkout ref if it looks like a commit SHA,
-    # otherwise fall back to the API's own commit (for version-based updates)
-    import re
-    if re.fullmatch(r'[0-9a-f]{7,40}', target_version):
-        checkout_ref = target_version
-    else:
-        checkout_ref = get_commit()
+    checkout_ref = _resolve_checkout_ref(target_version)
     results: list[dict] = []
     # Jobs to dispatch: list of (agent_id, job_id, host_address)
     pending_dispatches: list[tuple[str, str, str]] = []
@@ -1616,27 +1548,14 @@ async def trigger_bulk_update(
             continue
 
         # Check concurrent update
-        active_job = (
-            database.query(models.AgentUpdateJob)
-            .filter(
-                models.AgentUpdateJob.host_id == agent_id,
-                models.AgentUpdateJob.status.in_(("pending", "downloading", "installing", "restarting")),
-            )
-            .first()
-        )
+        active_job = _find_active_update_job(database, agent_id)
         if active_job:
             results.append({"agent_id": agent_id, "success": False, "error": "Update already in progress"})
             continue
 
-        job_id = str(uuid4())
-        update_job = models.AgentUpdateJob(
-            id=job_id,
-            host_id=agent_id,
-            from_version=host.version or "unknown",
-            to_version=target_version,
-            status="pending",
+        job_id, _ = _create_update_job(
+            database, agent_id, host.version or "unknown", target_version,
         )
-        database.add(update_job)
         pending_dispatches.append((agent_id, job_id, host.address))
 
     if pending_dispatches:
@@ -1644,35 +1563,19 @@ async def trigger_bulk_update(
 
     # Phase 2: Dispatch HTTP requests in parallel
     async def _dispatch_update(agent_id: str, job_id: str, address: str) -> dict:
-        callback_url = f"{settings.internal_url}/callbacks/update/{job_id}"
         try:
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                resp = await client.post(
-                    f"http://{address}/update",
-                    json={
-                        "job_id": job_id,
-                        "target_version": checkout_ref,
-                        "callback_url": callback_url,
-                    },
-                    headers=_get_agent_auth_headers(),
-                )
-                resp.raise_for_status()
-                result = resp.json()
-
-                if result.get("accepted"):
-                    return {"agent_id": agent_id, "success": True, "job_id": job_id, "_status": "downloading"}
-                else:
-                    return {
-                        "agent_id": agent_id, "success": False,
-                        "error": result.get("message", "Agent rejected update"),
-                        "job_id": job_id, "_status": "failed",
-                        "_error": result.get("message", "Agent rejected update"),
-                    }
+            result = await _send_update_to_agent(address, job_id, checkout_ref)
+            if result.get("accepted"):
+                return {"agent_id": agent_id, "success": True, "job_id": job_id, "_status": "downloading"}
+            msg = result.get("message", "Agent rejected update")
+            return {
+                "agent_id": agent_id, "success": False, "error": msg,
+                "job_id": job_id, "_status": "failed", "_error": msg,
+            }
         except Exception as e:
             return {
-                "agent_id": agent_id, "success": False,
-                "error": str(e), "job_id": job_id,
-                "_status": "failed", "_error": str(e),
+                "agent_id": agent_id, "success": False, "error": str(e),
+                "job_id": job_id, "_status": "failed", "_error": str(e),
             }
 
     if pending_dispatches:
@@ -1681,7 +1584,7 @@ async def trigger_bulk_update(
         )
 
         # Phase 3: Update DB job statuses based on dispatch results
-        now = datetime.now(timezone.utc)
+        now = utcnow()
         for dr in dispatch_results:
             job = database.get(models.AgentUpdateJob, dr.get("job_id"))
             if job:
@@ -1717,9 +1620,7 @@ def get_update_status(
 
     Returns None if no update jobs exist for this agent.
     """
-    host = database.get(models.Host, agent_id)
-    if not host:
-        raise HTTPException(status_code=404, detail="Agent not found")
+    _get_agent_or_404(database, agent_id)
 
     # Get most recent update job
     job = (
@@ -1732,18 +1633,7 @@ def get_update_status(
     if not job:
         return None
 
-    return UpdateStatusResponse(
-        job_id=job.id,
-        agent_id=agent_id,
-        from_version=job.from_version,
-        to_version=job.to_version,
-        status=job.status,
-        progress_percent=job.progress_percent,
-        error_message=job.error_message,
-        started_at=job.started_at,
-        completed_at=job.completed_at,
-        created_at=job.created_at,
-    )
+    return _update_job_to_status(job, agent_id)
 
 
 @router.get("/{agent_id}/update-jobs")
@@ -1757,9 +1647,7 @@ def list_update_jobs(
 
     Returns up to `limit` most recent update jobs.
     """
-    host = database.get(models.Host, agent_id)
-    if not host:
-        raise HTTPException(status_code=404, detail="Agent not found")
+    _get_agent_or_404(database, agent_id)
 
     jobs = (
         database.query(models.AgentUpdateJob)
@@ -1769,21 +1657,7 @@ def list_update_jobs(
         .all()
     )
 
-    return [
-        UpdateStatusResponse(
-            job_id=job.id,
-            agent_id=agent_id,
-            from_version=job.from_version,
-            to_version=job.to_version,
-            status=job.status,
-            progress_percent=job.progress_percent,
-            error_message=job.error_message,
-            started_at=job.started_at,
-            completed_at=job.completed_at,
-            created_at=job.created_at,
-        )
-        for job in jobs
-    ]
+    return [_update_job_to_status(job, agent_id) for job in jobs]
 
 
 # --- Docker Agent Rebuild ---
@@ -1812,9 +1686,7 @@ async def rebuild_docker_agent(
     3. Agent re-registers with new version after restart
     """
 
-    host = database.get(models.Host, agent_id)
-    if not host:
-        raise HTTPException(status_code=404, detail="Agent not found")
+    host = _get_agent_or_404(database, agent_id)
 
     # Check if this is a Docker-deployed agent
     if host.deployment_mode != "docker":
@@ -1834,15 +1706,15 @@ async def rebuild_docker_agent(
 
     try:
         # Find docker-compose file in mounted project directory
-        compose_file = Path("/app/project/docker-compose.gui.yml")
-        if not compose_file.exists():
-            # Try alternate locations
-            for alt_path in ["/app/docker-compose.gui.yml", "docker-compose.gui.yml"]:
-                if Path(alt_path).exists():
-                    compose_file = Path(alt_path)
-                    break
-
-        if not compose_file.exists():
+        compose_candidates = [
+            Path("/app/project/docker-compose.gui.yml"),
+            Path("/app/docker-compose.gui.yml"),
+            Path("docker-compose.gui.yml"),
+        ]
+        compose_file = next(
+            (p for p in compose_candidates if p.exists()), None,
+        )
+        if not compose_file:
             return RebuildResponse(
                 success=False,
                 message="docker-compose.gui.yml not found. Ensure project directory is mounted.",
@@ -1874,21 +1746,17 @@ async def rebuild_docker_agent(
         )
         try:
             stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=300)
-            stdout_str = stdout.decode() if stdout else ""
-            stderr_str = stderr.decode() if stderr else ""
+            output = (stdout.decode() if stdout else "") + (stderr.decode() if stderr else "")
 
-            if proc.returncode == 0:
-                return RebuildResponse(
-                    success=True,
-                    message="Agent container rebuilt successfully. It will re-register shortly.",
-                    output=stdout_str + stderr_str,
-                )
-            else:
-                return RebuildResponse(
-                    success=False,
-                    message="Rebuild failed",
-                    output=stdout_str + stderr_str,
-                )
+            return RebuildResponse(
+                success=proc.returncode == 0,
+                message=(
+                    "Agent container rebuilt successfully. It will re-register shortly."
+                    if proc.returncode == 0
+                    else "Rebuild failed"
+                ),
+                output=output,
+            )
         except asyncio.TimeoutError:
             proc.kill()
             return RebuildResponse(

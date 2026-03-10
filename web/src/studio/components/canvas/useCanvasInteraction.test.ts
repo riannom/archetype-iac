@@ -1,8 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 import { useCanvasInteraction } from './useCanvasInteraction';
-import type { Node, Annotation, DeviceNode } from '../../types';
+import type { Node, Annotation } from '../../types';
 import { DeviceType } from '../../types';
+import { createDeviceNode, createAnnotation } from '../../../test-utils/factories';
 
 // Mock getBoundingClientRect
 const mockRect = {
@@ -17,28 +18,6 @@ const mockRect = {
   toJSON: () => {},
 };
 
-// Factory functions
-const createDeviceNode = (overrides: Partial<DeviceNode> = {}): DeviceNode => ({
-  id: 'node-1',
-  name: 'Router1',
-  nodeType: 'device',
-  type: DeviceType.ROUTER,
-  model: 'ceos',
-  version: '4.28.0F',
-  x: 100,
-  y: 100,
-  ...overrides,
-});
-
-const createAnnotation = (overrides: Partial<Annotation> = {}): Annotation => ({
-  id: 'ann-1',
-  type: 'rect',
-  x: 150,
-  y: 150,
-  width: 100,
-  height: 60,
-  ...overrides,
-});
 
 // Creates a mock React.MouseEvent with the specified properties
 function createMouseEvent(overrides: Partial<React.MouseEvent> = {}): React.MouseEvent {

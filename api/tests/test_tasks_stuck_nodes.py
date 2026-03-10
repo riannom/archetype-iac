@@ -4,12 +4,12 @@ from __future__ import annotations
 from contextlib import contextmanager
 from datetime import datetime, timedelta
 from unittest.mock import MagicMock, patch
-from uuid import uuid4
 
 from sqlalchemy.orm import Session
 
 from app import models
 from app.state import JobStatus, NodeActualState
+from tests.factories import make_job, make_node_state
 
 
 def _naive_utcnow() -> datetime:
@@ -23,55 +23,6 @@ def _fake_get_session(session):
     def _get_session():
         yield session
     return _get_session
-
-
-def _make_node_state(
-    test_db: Session,
-    lab_id: str,
-    node_name: str,
-    actual_state: str,
-    *,
-    stopping_started_at=None,
-    starting_started_at=None,
-    image_sync_status=None,
-) -> models.NodeState:
-    """Helper to create a NodeState with given parameters."""
-    ns = models.NodeState(
-        id=str(uuid4()),
-        lab_id=lab_id,
-        node_id=node_name.lower(),
-        node_name=node_name,
-        desired_state="stopped",
-        actual_state=actual_state,
-        stopping_started_at=stopping_started_at,
-        starting_started_at=starting_started_at,
-        image_sync_status=image_sync_status,
-        is_ready=False,
-    )
-    test_db.add(ns)
-    test_db.commit()
-    test_db.refresh(ns)
-    return ns
-
-
-def _make_job(
-    test_db: Session,
-    lab_id: str,
-    user_id: str,
-    status: str,
-) -> models.Job:
-    """Helper to create a Job with given status."""
-    job = models.Job(
-        id=str(uuid4()),
-        lab_id=lab_id,
-        user_id=user_id,
-        action="sync:lab",
-        status=status,
-    )
-    test_db.add(job)
-    test_db.commit()
-    test_db.refresh(job)
-    return job
 
 
 # Patch utcnow in the stuck_nodes module to return naive datetimes.
@@ -99,7 +50,7 @@ class TestCheckStuckStoppingNodes:
         from app.tasks.stuck_nodes import check_stuck_stopping_nodes
 
         now = _naive_utcnow()
-        ns = _make_node_state(
+        ns = make_node_state(
             test_db,
             sample_lab.id,
             "R1",
@@ -125,7 +76,7 @@ class TestCheckStuckStoppingNodes:
         from app.tasks.stuck_nodes import check_stuck_stopping_nodes
 
         now = _naive_utcnow()
-        ns = _make_node_state(
+        ns = make_node_state(
             test_db,
             sample_lab.id,
             "R1",
@@ -148,7 +99,7 @@ class TestCheckStuckStoppingNodes:
 
         now = _naive_utcnow()
         # Exactly at 360s: the filter uses `<` so this should NOT be caught
-        ns = _make_node_state(
+        ns = make_node_state(
             test_db,
             sample_lab.id,
             "R1",
@@ -172,14 +123,14 @@ class TestCheckStuckStoppingNodes:
         from app.tasks.stuck_nodes import check_stuck_stopping_nodes
 
         now = _naive_utcnow()
-        ns = _make_node_state(
+        ns = make_node_state(
             test_db,
             sample_lab.id,
             "R1",
             NodeActualState.STOPPING.value,
             stopping_started_at=now - timedelta(seconds=400),
         )
-        _make_job(test_db, sample_lab.id, test_user.id, JobStatus.RUNNING.value)
+        make_job(test_db, sample_lab.id, test_user.id, JobStatus.RUNNING.value)
 
         with patch("app.tasks.stuck_nodes.get_session", _fake_get_session(test_db)):
             with patch(_UTCNOW_PATCH, _naive_utcnow):
@@ -195,14 +146,14 @@ class TestCheckStuckStoppingNodes:
         from app.tasks.stuck_nodes import check_stuck_stopping_nodes
 
         now = _naive_utcnow()
-        ns = _make_node_state(
+        ns = make_node_state(
             test_db,
             sample_lab.id,
             "R1",
             NodeActualState.STOPPING.value,
             stopping_started_at=now - timedelta(seconds=400),
         )
-        _make_job(test_db, sample_lab.id, test_user.id, JobStatus.QUEUED.value)
+        make_job(test_db, sample_lab.id, test_user.id, JobStatus.QUEUED.value)
 
         with patch("app.tasks.stuck_nodes.get_session", _fake_get_session(test_db)):
             with patch(_UTCNOW_PATCH, _naive_utcnow):
@@ -218,14 +169,14 @@ class TestCheckStuckStoppingNodes:
         from app.tasks.stuck_nodes import check_stuck_stopping_nodes
 
         now = _naive_utcnow()
-        ns1 = _make_node_state(
+        ns1 = make_node_state(
             test_db,
             sample_lab.id,
             "R1",
             NodeActualState.STOPPING.value,
             stopping_started_at=now - timedelta(seconds=500),
         )
-        ns2 = _make_node_state(
+        ns2 = make_node_state(
             test_db,
             sample_lab.id,
             "R2",
@@ -248,10 +199,10 @@ class TestCheckStuckStoppingNodes:
         """Nodes in running/stopped/error states should never be recovered."""
         from app.tasks.stuck_nodes import check_stuck_stopping_nodes
 
-        ns_running = _make_node_state(
+        ns_running = make_node_state(
             test_db, sample_lab.id, "R1", NodeActualState.RUNNING.value
         )
-        ns_stopped = _make_node_state(
+        ns_stopped = make_node_state(
             test_db, sample_lab.id, "R2", NodeActualState.STOPPED.value
         )
 
@@ -301,7 +252,7 @@ class TestCheckStuckStartingNodes:
         from app.tasks.stuck_nodes import check_stuck_starting_nodes
 
         now = _naive_utcnow()
-        ns = _make_node_state(
+        ns = make_node_state(
             test_db,
             sample_lab.id,
             "R1",
@@ -326,7 +277,7 @@ class TestCheckStuckStartingNodes:
         from app.tasks.stuck_nodes import check_stuck_starting_nodes
 
         now = _naive_utcnow()
-        ns = _make_node_state(
+        ns = make_node_state(
             test_db,
             sample_lab.id,
             "R1",
@@ -348,7 +299,7 @@ class TestCheckStuckStartingNodes:
         from app.tasks.stuck_nodes import check_stuck_starting_nodes
 
         now = _naive_utcnow()
-        ns_syncing = _make_node_state(
+        ns_syncing = make_node_state(
             test_db,
             sample_lab.id,
             "R1",
@@ -356,7 +307,7 @@ class TestCheckStuckStartingNodes:
             starting_started_at=now - timedelta(seconds=400),
             image_sync_status="syncing",
         )
-        ns_checking = _make_node_state(
+        ns_checking = make_node_state(
             test_db,
             sample_lab.id,
             "R2",
@@ -381,14 +332,14 @@ class TestCheckStuckStartingNodes:
         from app.tasks.stuck_nodes import check_stuck_starting_nodes
 
         now = _naive_utcnow()
-        ns = _make_node_state(
+        ns = make_node_state(
             test_db,
             sample_lab.id,
             "R1",
             NodeActualState.STARTING.value,
             starting_started_at=now - timedelta(seconds=400),
         )
-        _make_job(test_db, sample_lab.id, test_user.id, JobStatus.RUNNING.value)
+        make_job(test_db, sample_lab.id, test_user.id, JobStatus.RUNNING.value)
 
         with patch("app.tasks.stuck_nodes.get_session", _fake_get_session(test_db)):
             with patch(_UTCNOW_PATCH, _naive_utcnow):
@@ -404,7 +355,7 @@ class TestCheckStuckStartingNodes:
         from app.tasks.stuck_nodes import check_stuck_starting_nodes
 
         now = _naive_utcnow()
-        ns = _make_node_state(
+        ns = make_node_state(
             test_db,
             sample_lab.id,
             "R1",
@@ -427,7 +378,7 @@ class TestCheckStuckStartingNodes:
         from app.tasks.stuck_nodes import check_stuck_starting_nodes
 
         now = _naive_utcnow()
-        ns_recoverable = _make_node_state(
+        ns_recoverable = make_node_state(
             test_db,
             sample_lab.id,
             "R1",
@@ -435,7 +386,7 @@ class TestCheckStuckStartingNodes:
             starting_started_at=now - timedelta(seconds=400),
             image_sync_status=None,
         )
-        ns_syncing = _make_node_state(
+        ns_syncing = make_node_state(
             test_db,
             sample_lab.id,
             "R2",
@@ -460,14 +411,14 @@ class TestCheckStuckStartingNodes:
         from app.tasks.stuck_nodes import check_stuck_starting_nodes
 
         now = _naive_utcnow()
-        ns = _make_node_state(
+        ns = make_node_state(
             test_db,
             sample_lab.id,
             "R1",
             NodeActualState.STARTING.value,
             starting_started_at=now - timedelta(seconds=400),
         )
-        _make_job(test_db, sample_lab.id, test_user.id, JobStatus.COMPLETED.value)
+        make_job(test_db, sample_lab.id, test_user.id, JobStatus.COMPLETED.value)
 
         with patch("app.tasks.stuck_nodes.get_session", _fake_get_session(test_db)):
             with patch(_UTCNOW_PATCH, _naive_utcnow):

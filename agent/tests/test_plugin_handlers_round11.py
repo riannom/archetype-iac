@@ -1,4 +1,4 @@
-"""Tests for agent/network/plugin_handlers.py — Docker OVS plugin handlers (round 11)."""
+"""Tests for Docker OVS plugin handlers (round 11)."""
 from __future__ import annotations
 
 import asyncio
@@ -7,6 +7,8 @@ from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, MagicMock
 
 from aiohttp import web
+
+from agent.network.docker_plugin import DockerOVSPlugin
 
 
 def _run(coro):
@@ -21,14 +23,12 @@ def _make_request(data: dict) -> MagicMock:
 
 
 class _TestPlugin:
-    """Minimal plugin object with mixin methods and required state."""
+    """Minimal plugin object with handler methods and required state."""
 
     def __init__(self):
-        from agent.network.plugin_handlers import PluginHandlersMixin
-        # Mix in handlers
-        for attr in dir(PluginHandlersMixin):
+        for attr in dir(DockerOVSPlugin):
             if attr.startswith("handle_"):
-                setattr(self, attr, getattr(PluginHandlersMixin, attr).__get__(self))
+                setattr(self, attr, getattr(DockerOVSPlugin, attr).__get__(self))
 
         self.networks = {}
         self.endpoints = {}

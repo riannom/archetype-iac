@@ -17,74 +17,12 @@ import pytest
 from sqlalchemy.orm import Session
 
 from app import models
+from tests.factories import make_link_state, make_node
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-
-def _make_link_state(
-    test_db: Session,
-    lab_id: str,
-    link_name: str = "R1:eth1--R2:eth1",
-    source_node: str = "archetype-test-r1",
-    target_node: str = "archetype-test-r2",
-    source_interface: str = "eth1",
-    target_interface: str = "eth1",
-    desired_state: str = "up",
-    actual_state: str = "up",
-    source_host_id: str | None = None,
-    target_host_id: str | None = None,
-    is_cross_host: bool = False,
-    vlan_tag: int | None = None,
-    source_vlan_tag: int | None = None,
-    target_vlan_tag: int | None = None,
-) -> models.LinkState:
-    ls = models.LinkState(
-        id=str(uuid4()),
-        lab_id=lab_id,
-        link_name=link_name,
-        source_node=source_node,
-        source_interface=source_interface,
-        target_node=target_node,
-        target_interface=target_interface,
-        desired_state=desired_state,
-        actual_state=actual_state,
-        source_host_id=source_host_id,
-        target_host_id=target_host_id,
-        is_cross_host=is_cross_host,
-        vlan_tag=vlan_tag,
-        source_vlan_tag=source_vlan_tag,
-        target_vlan_tag=target_vlan_tag,
-    )
-    test_db.add(ls)
-    test_db.commit()
-    test_db.refresh(ls)
-    return ls
-
-
-def _make_node(
-    test_db: Session,
-    lab_id: str,
-    display_name: str = "R1",
-    container_name: str = "archetype-test-r1",
-    host_id: str | None = None,
-    device: str = "linux",
-) -> models.Node:
-    node = models.Node(
-        id=str(uuid4()),
-        lab_id=lab_id,
-        gui_id=str(uuid4())[:8],
-        display_name=display_name,
-        container_name=container_name,
-        device=device,
-        host_id=host_id,
-    )
-    test_db.add(node)
-    test_db.commit()
-    test_db.refresh(node)
-    return node
 
 
 def _make_interface_mapping(
@@ -109,26 +47,6 @@ def _make_interface_mapping(
     return im
 
 
-def _make_node_state(
-    test_db: Session,
-    lab_id: str,
-    node_name: str,
-    actual_state: str = "running",
-    desired_state: str = "running",
-) -> models.NodeState:
-    ns = models.NodeState(
-        lab_id=lab_id,
-        node_id=str(uuid4())[:8],
-        node_name=node_name,
-        desired_state=desired_state,
-        actual_state=actual_state,
-    )
-    test_db.add(ns)
-    test_db.commit()
-    test_db.refresh(ns)
-    return ns
-
-
 # ============================================================================
 # run_same_host_convergence — deeper scenarios
 # ============================================================================
@@ -146,7 +64,7 @@ class TestRunSameHostConvergenceRound12:
 
         host_to_agent = {sample_host.id: sample_host}
 
-        link = _make_link_state(
+        link = make_link_state(
             test_db, sample_lab.id,
             desired_state="up", actual_state="up",
             is_cross_host=False,
@@ -154,8 +72,8 @@ class TestRunSameHostConvergenceRound12:
             target_host_id=sample_host.id,
             vlan_tag=200,
         )
-        n1 = _make_node(test_db, sample_lab.id, "R1", link.source_node, sample_host.id)
-        n2 = _make_node(test_db, sample_lab.id, "R2", link.target_node, sample_host.id)
+        n1 = make_node(test_db, sample_lab.id, "R1", link.source_node, sample_host.id)
+        n2 = make_node(test_db, sample_lab.id, "R2", link.target_node, sample_host.id)
         _make_interface_mapping(
             test_db, sample_lab.id, n1.id,
             linux_interface="eth1", ovs_port="vh-src", vlan_tag=200,
@@ -191,7 +109,7 @@ class TestRunSameHostConvergenceRound12:
             ("archetype-test-a1", "archetype-test-a2"),
             ("archetype-test-b1", "archetype-test-b2"),
         ]):
-            _make_link_state(
+            make_link_state(
                 test_db, sample_lab.id,
                 link_name=f"L{i}:eth1--L{i}:eth1",
                 source_node=sn, target_node=tn,
@@ -201,8 +119,8 @@ class TestRunSameHostConvergenceRound12:
                 target_host_id=sample_host.id,
                 vlan_tag=300 + i,
             )
-            n_s = _make_node(test_db, sample_lab.id, f"S{i}", sn, sample_host.id)
-            n_t = _make_node(test_db, sample_lab.id, f"T{i}", tn, sample_host.id)
+            n_s = make_node(test_db, sample_lab.id, f"S{i}", sn, sample_host.id)
+            n_t = make_node(test_db, sample_lab.id, f"T{i}", tn, sample_host.id)
             _make_interface_mapping(
                 test_db, sample_lab.id, n_s.id,
                 linux_interface="eth1", ovs_port=f"vh-s{i}", vlan_tag=300 + i,
@@ -238,7 +156,7 @@ class TestRunSameHostConvergenceRound12:
 
         host_to_agent = {sample_host.id: sample_host}
 
-        link = _make_link_state(
+        link = make_link_state(
             test_db, sample_lab.id,
             desired_state="up", actual_state="up",
             is_cross_host=False,
@@ -246,8 +164,8 @@ class TestRunSameHostConvergenceRound12:
             target_host_id=sample_host.id,
             vlan_tag=100,
         )
-        n1 = _make_node(test_db, sample_lab.id, "R1", link.source_node, sample_host.id)
-        n2 = _make_node(test_db, sample_lab.id, "R2", link.target_node, sample_host.id)
+        n1 = make_node(test_db, sample_lab.id, "R1", link.source_node, sample_host.id)
+        n2 = make_node(test_db, sample_lab.id, "R2", link.target_node, sample_host.id)
         _make_interface_mapping(
             test_db, sample_lab.id, n1.id,
             linux_interface="eth1", ovs_port="vh-s", vlan_tag=100,
@@ -276,7 +194,7 @@ class TestRunSameHostConvergenceRound12:
 
         host_to_agent = {sample_host.id: sample_host}
 
-        link = _make_link_state(
+        link = make_link_state(
             test_db, sample_lab.id,
             desired_state="up", actual_state="up",
             is_cross_host=False,
@@ -284,8 +202,8 @@ class TestRunSameHostConvergenceRound12:
             target_host_id=sample_host.id,
             vlan_tag=None,  # no vlan_tag on link
         )
-        n1 = _make_node(test_db, sample_lab.id, "R1", link.source_node, sample_host.id)
-        n2 = _make_node(test_db, sample_lab.id, "R2", link.target_node, sample_host.id)
+        n1 = make_node(test_db, sample_lab.id, "R1", link.source_node, sample_host.id)
+        n2 = make_node(test_db, sample_lab.id, "R2", link.target_node, sample_host.id)
         _make_interface_mapping(
             test_db, sample_lab.id, n1.id,
             linux_interface="eth1", ovs_port="vh-s", vlan_tag=None,  # no tag
@@ -314,7 +232,7 @@ class TestRunSameHostConvergenceRound12:
 
         host_to_agent = {sample_host.id: sample_host}
 
-        link = _make_link_state(
+        link = make_link_state(
             test_db, sample_lab.id,
             desired_state="up", actual_state="up",
             is_cross_host=False,
@@ -322,8 +240,8 @@ class TestRunSameHostConvergenceRound12:
             target_host_id=sample_host.id,
             vlan_tag=150,
         )
-        n1 = _make_node(test_db, sample_lab.id, "R1", link.source_node, sample_host.id)
-        n2 = _make_node(test_db, sample_lab.id, "R2", link.target_node, sample_host.id)
+        n1 = make_node(test_db, sample_lab.id, "R1", link.source_node, sample_host.id)
+        n2 = make_node(test_db, sample_lab.id, "R2", link.target_node, sample_host.id)
         _make_interface_mapping(
             test_db, sample_lab.id, n1.id,
             linux_interface="eth1", ovs_port="vh-s", vlan_tag=150,
@@ -378,15 +296,15 @@ class TestRunCrossHostPortConvergenceRound12:
         h1, h2 = multiple_hosts[0], multiple_hosts[1]
         host_to_agent = {h1.id: h1, h2.id: h2}
 
-        ls = _make_link_state(
+        ls = make_link_state(
             test_db, sample_lab.id,
             desired_state="up", actual_state="up",
             is_cross_host=True,
             source_host_id=h1.id, target_host_id=h2.id,
             source_vlan_tag=500, target_vlan_tag=600,
         )
-        n1 = _make_node(test_db, sample_lab.id, "R1", ls.source_node, h1.id)
-        n2 = _make_node(test_db, sample_lab.id, "R2", ls.target_node, h2.id)
+        n1 = make_node(test_db, sample_lab.id, "R1", ls.source_node, h1.id)
+        n2 = make_node(test_db, sample_lab.id, "R2", ls.target_node, h2.id)
         # Mapping tags match DB tags → already converged
         _make_interface_mapping(
             test_db, sample_lab.id, n1.id,
@@ -416,15 +334,15 @@ class TestRunCrossHostPortConvergenceRound12:
         h1, h2 = multiple_hosts[0], multiple_hosts[1]
         host_to_agent = {h1.id: h1, h2.id: h2}
 
-        ls = _make_link_state(
+        ls = make_link_state(
             test_db, sample_lab.id,
             desired_state="up", actual_state="up",
             is_cross_host=True,
             source_host_id=h1.id, target_host_id=h2.id,
             source_vlan_tag=500, target_vlan_tag=600,
         )
-        n1 = _make_node(test_db, sample_lab.id, "R1", ls.source_node, h1.id)
-        n2 = _make_node(test_db, sample_lab.id, "R2", ls.target_node, h2.id)
+        n1 = make_node(test_db, sample_lab.id, "R1", ls.source_node, h1.id)
+        n2 = make_node(test_db, sample_lab.id, "R2", ls.target_node, h2.id)
         # Mapping tags DIFFER from DB (stale after container restart)
         _make_interface_mapping(
             test_db, sample_lab.id, n1.id,
@@ -454,15 +372,15 @@ class TestRunCrossHostPortConvergenceRound12:
         h1, h2 = multiple_hosts[0], multiple_hosts[1]
         host_to_agent = {h1.id: h1, h2.id: h2}
 
-        ls = _make_link_state(
+        ls = make_link_state(
             test_db, sample_lab.id,
             desired_state="up", actual_state="up",
             is_cross_host=True,
             source_host_id=h1.id, target_host_id=h2.id,
             source_vlan_tag=500, target_vlan_tag=600,
         )
-        n1 = _make_node(test_db, sample_lab.id, "R1", ls.source_node, h1.id)
-        n2 = _make_node(test_db, sample_lab.id, "R2", ls.target_node, h2.id)
+        n1 = make_node(test_db, sample_lab.id, "R1", ls.source_node, h1.id)
+        n2 = make_node(test_db, sample_lab.id, "R2", ls.target_node, h2.id)
         _make_interface_mapping(
             test_db, sample_lab.id, n1.id,
             linux_interface="eth1", ovs_port="vh-s", vlan_tag=111,
@@ -510,7 +428,7 @@ class TestRunCrossHostPortConvergenceRound12:
         test_db.refresh(other_lab)
 
         # Link in sample_lab (should be converged)
-        _make_link_state(
+        make_link_state(
             test_db, sample_lab.id,
             link_name="A:eth1--B:eth1",
             source_node="archetype-test-a", target_node="archetype-test-b",
@@ -519,8 +437,8 @@ class TestRunCrossHostPortConvergenceRound12:
             source_host_id=h1.id, target_host_id=h2.id,
             source_vlan_tag=500, target_vlan_tag=600,
         )
-        n1 = _make_node(test_db, sample_lab.id, "A", "archetype-test-a", h1.id)
-        n2 = _make_node(test_db, sample_lab.id, "B", "archetype-test-b", h2.id)
+        n1 = make_node(test_db, sample_lab.id, "A", "archetype-test-a", h1.id)
+        n2 = make_node(test_db, sample_lab.id, "B", "archetype-test-b", h2.id)
         _make_interface_mapping(
             test_db, sample_lab.id, n1.id,
             linux_interface="eth1", ovs_port="vh-a", vlan_tag=1,
@@ -531,7 +449,7 @@ class TestRunCrossHostPortConvergenceRound12:
         )
 
         # Link in other_lab (should NOT be converged when filtering by sample_lab)
-        _make_link_state(
+        make_link_state(
             test_db, other_lab.id,
             link_name="C:eth1--D:eth1",
             source_node="archetype-other-c", target_node="archetype-other-d",
@@ -540,8 +458,8 @@ class TestRunCrossHostPortConvergenceRound12:
             source_host_id=h1.id, target_host_id=h2.id,
             source_vlan_tag=700, target_vlan_tag=800,
         )
-        n3 = _make_node(test_db, other_lab.id, "C", "archetype-other-c", h1.id)
-        n4 = _make_node(test_db, other_lab.id, "D", "archetype-other-d", h2.id)
+        n3 = make_node(test_db, other_lab.id, "C", "archetype-other-c", h1.id)
+        n4 = make_node(test_db, other_lab.id, "D", "archetype-other-d", h2.id)
         _make_interface_mapping(
             test_db, other_lab.id, n3.id,
             linux_interface="eth1", ovs_port="vh-c", vlan_tag=1,
@@ -605,7 +523,7 @@ class TestReconcileLabLinksRound12:
         """Links whose source_host_id points to an offline agent are skipped."""
         from app.tasks.link_reconciliation import reconcile_lab_links
 
-        _make_link_state(
+        make_link_state(
             test_db, sample_lab.id,
             desired_state="up", actual_state="down",
             source_host_id=offline_host.id,
@@ -629,7 +547,7 @@ class TestReconcileLabLinksRound12:
         """Links whose target_host_id points to an offline agent are skipped."""
         from app.tasks.link_reconciliation import reconcile_lab_links
 
-        _make_link_state(
+        make_link_state(
             test_db, sample_lab.id,
             desired_state="up", actual_state="down",
             source_host_id=sample_host.id,
@@ -651,7 +569,7 @@ class TestReconcileLabLinksRound12:
         """An 'up' link failing verification with VLAN mismatch tries lightweight repair."""
         from app.tasks.link_reconciliation import reconcile_lab_links
 
-        _make_link_state(
+        make_link_state(
             test_db, sample_lab.id,
             desired_state="up", actual_state="up",
             source_host_id=sample_host.id,
@@ -701,7 +619,7 @@ class TestReconcileLabLinksRound12:
 
         h1, h2 = multiple_hosts[0], multiple_hosts[1]
 
-        _make_link_state(
+        make_link_state(
             test_db, sample_lab.id,
             desired_state="up", actual_state="error",
             is_cross_host=True,
@@ -727,7 +645,7 @@ class TestReconcileLabLinksRound12:
         """Pending link whose create_link_if_ready returns False is counted as skipped."""
         from app.tasks.link_reconciliation import reconcile_lab_links
 
-        _make_link_state(
+        make_link_state(
             test_db, sample_lab.id,
             desired_state="up", actual_state="pending",
             source_host_id=sample_host.id,
@@ -754,7 +672,7 @@ class TestReconcileLabLinksRound12:
         from app.tasks.link_reconciliation import reconcile_lab_links
 
         # Two links: first will raise, second should still be processed
-        _make_link_state(
+        make_link_state(
             test_db, sample_lab.id,
             link_name="L1:eth1--L2:eth1",
             source_node="archetype-test-l1", target_node="archetype-test-l2",
@@ -762,7 +680,7 @@ class TestReconcileLabLinksRound12:
             source_host_id=sample_host.id,
             target_host_id=sample_host.id,
         )
-        _make_link_state(
+        make_link_state(
             test_db, sample_lab.id,
             link_name="L3:eth1--L4:eth1",
             source_node="archetype-test-l3", target_node="archetype-test-l4",
@@ -799,7 +717,7 @@ class TestReconcileLabLinksRound12:
         """An up/up link that passes verification is counted as valid."""
         from app.tasks.link_reconciliation import reconcile_lab_links
 
-        _make_link_state(
+        make_link_state(
             test_db, sample_lab.id,
             desired_state="up", actual_state="up",
             source_host_id=sample_host.id,
@@ -825,7 +743,7 @@ class TestReconcileLabLinksRound12:
         """Link with desired=up actual=down triggers create_link_if_ready."""
         from app.tasks.link_reconciliation import reconcile_lab_links
 
-        _make_link_state(
+        make_link_state(
             test_db, sample_lab.id,
             desired_state="up", actual_state="down",
             source_host_id=sample_host.id,
@@ -851,7 +769,7 @@ class TestReconcileLabLinksRound12:
         """Link with desired=down actual=up triggers teardown."""
         from app.tasks.link_reconciliation import reconcile_lab_links
 
-        _make_link_state(
+        make_link_state(
             test_db, sample_lab.id,
             desired_state="down", actual_state="up",
             source_host_id=sample_host.id,

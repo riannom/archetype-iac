@@ -178,7 +178,7 @@ def _detect_qcow2(destination: Path) -> dict[str, object]:
     suggested: dict[str, object] = {}
     if device_id:
         try:
-            from app.services.device_resolver import get_resolver
+            from app.services.device_service import get_resolver
             resolved = get_resolver().resolve_config(device_id)
             if resolved:
                 suggested["memory_mb"] = resolved.memory

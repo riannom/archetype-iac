@@ -14,6 +14,7 @@ import pytest
 from app import models
 import app.tasks.link_reconciliation as link_reconciliation
 from app.tasks.reconciliation_db import _apply_runtime_identity_decision
+from tests.factories import make_node
 
 
 # ─── Helpers ──────────────────────────────────────────────────────────────
@@ -88,28 +89,6 @@ def _make_cross_host_link(
     return ls
 
 
-def _make_node(
-    test_db,
-    lab_id: str,
-    display_name: str,
-    *,
-    host_id: str,
-    container_name: str | None = None,
-) -> models.Node:
-    node = models.Node(
-        id=str(uuid4()),
-        lab_id=lab_id,
-        gui_id=display_name.lower(),
-        display_name=display_name,
-        container_name=container_name or f"archetype-test-{display_name.lower()}",
-        device="linux",
-        host_id=host_id,
-    )
-    test_db.add(node)
-    test_db.flush()
-    return node
-
-
 def _make_interface_mapping(
     test_db,
     lab_id: str,
@@ -138,7 +117,7 @@ def _make_interface_mapping(
 @pytest.mark.asyncio
 async def test_refresh_creates_new_mappings(test_db, sample_lab, sample_host):
     """New ports from agent create InterfaceMapping records."""
-    node = _make_node(test_db, sample_lab.id, "R1", host_id=sample_host.id)
+    node = make_node(test_db, sample_lab.id, "R1", host_id=sample_host.id)
     _make_same_host_link(
         test_db, sample_lab.id, "R1:eth1-R2:eth1",
         host_id=sample_host.id,
@@ -184,7 +163,7 @@ async def test_refresh_creates_new_mappings(test_db, sample_lab, sample_host):
 @pytest.mark.asyncio
 async def test_refresh_updates_existing_mappings(test_db, sample_lab, sample_host):
     """Existing mappings get updated with fresh data and timestamp."""
-    node = _make_node(test_db, sample_lab.id, "R1", host_id=sample_host.id)
+    node = make_node(test_db, sample_lab.id, "R1", host_id=sample_host.id)
     mapping = _make_interface_mapping(
         test_db, sample_lab.id, node.id, "eth1", "vh-old123", vlan_tag=50,
     )
@@ -225,7 +204,7 @@ async def test_refresh_updates_existing_mappings(test_db, sample_lab, sample_hos
 @pytest.mark.asyncio
 async def test_refresh_updates_mappings_for_error_links(test_db, sample_lab, sample_host):
     """Broken desired-up links still refresh InterfaceMapping records."""
-    node = _make_node(test_db, sample_lab.id, "R1", host_id=sample_host.id)
+    node = make_node(test_db, sample_lab.id, "R1", host_id=sample_host.id)
     mapping = _make_interface_mapping(
         test_db, sample_lab.id, node.id, "eth1", "vh-stale", vlan_tag=50,
     )
@@ -312,8 +291,8 @@ async def test_refresh_no_same_host_links_noop(test_db, sample_lab, multiple_hos
 @pytest.mark.asyncio
 async def test_same_host_convergence_sends_pairings(test_db, sample_lab, sample_host):
     """Same-host links with InterfaceMappings produce port pairings."""
-    node_r1 = _make_node(test_db, sample_lab.id, "R1", host_id=sample_host.id)
-    node_r2 = _make_node(test_db, sample_lab.id, "R2", host_id=sample_host.id)
+    node_r1 = make_node(test_db, sample_lab.id, "R1", host_id=sample_host.id)
+    node_r2 = make_node(test_db, sample_lab.id, "R2", host_id=sample_host.id)
 
     _make_interface_mapping(
         test_db, sample_lab.id, node_r1.id, "eth1", "vh-r1eth1", vlan_tag=100,
@@ -364,14 +343,14 @@ async def test_same_host_convergence_resolves_container_name_endpoints(
     test_db, sample_lab, sample_host
 ):
     """Endpoint names keyed by container_name still resolve Node records."""
-    node_r1 = _make_node(
+    node_r1 = make_node(
         test_db,
         sample_lab.id,
         "Router One",
         host_id=sample_host.id,
         container_name="r1",
     )
-    node_r2 = _make_node(
+    node_r2 = make_node(
         test_db,
         sample_lab.id,
         "Router Two",
@@ -411,8 +390,8 @@ async def test_same_host_convergence_resolves_container_name_endpoints(
 @pytest.mark.asyncio
 async def test_same_host_convergence_skips_missing_mappings(test_db, sample_lab, sample_host):
     """Links without InterfaceMappings are skipped."""
-    _make_node(test_db, sample_lab.id, "R1", host_id=sample_host.id)
-    _make_node(test_db, sample_lab.id, "R2", host_id=sample_host.id)
+    make_node(test_db, sample_lab.id, "R1", host_id=sample_host.id)
+    make_node(test_db, sample_lab.id, "R2", host_id=sample_host.id)
     # No InterfaceMapping records
 
     _make_same_host_link(
@@ -456,8 +435,8 @@ async def test_same_host_convergence_retries_after_mapping_refresh(
     test_db, sample_lab, sample_host,
 ):
     """Missing same-host mappings should trigger one refresh+retry pass."""
-    node_r1 = _make_node(test_db, sample_lab.id, "R1", host_id=sample_host.id)
-    node_r2 = _make_node(test_db, sample_lab.id, "R2", host_id=sample_host.id)
+    node_r1 = make_node(test_db, sample_lab.id, "R1", host_id=sample_host.id)
+    node_r2 = make_node(test_db, sample_lab.id, "R2", host_id=sample_host.id)
     _make_same_host_link(
         test_db, sample_lab.id, "R1:eth1-R2:eth1",
         host_id=sample_host.id,
@@ -501,8 +480,8 @@ async def test_same_host_convergence_retries_after_mapping_refresh(
 @pytest.mark.asyncio
 async def test_same_host_convergence_handles_agent_error(test_db, sample_lab, sample_host):
     """Agent call failure is handled gracefully."""
-    node_r1 = _make_node(test_db, sample_lab.id, "R1", host_id=sample_host.id)
-    node_r2 = _make_node(test_db, sample_lab.id, "R2", host_id=sample_host.id)
+    node_r1 = make_node(test_db, sample_lab.id, "R1", host_id=sample_host.id)
+    node_r2 = make_node(test_db, sample_lab.id, "R2", host_id=sample_host.id)
 
     _make_interface_mapping(
         test_db, sample_lab.id, node_r1.id, "eth1", "vh-r1eth1", vlan_tag=100,
@@ -556,8 +535,8 @@ async def test_same_host_no_links_noop(test_db, sample_lab, sample_host):
 @pytest.mark.asyncio
 async def test_same_host_skips_zero_vlan(test_db, sample_lab, sample_host):
     """Links with vlan_tag=0 are skipped (no valid VLAN)."""
-    node_r1 = _make_node(test_db, sample_lab.id, "R1", host_id=sample_host.id)
-    node_r2 = _make_node(test_db, sample_lab.id, "R2", host_id=sample_host.id)
+    node_r1 = make_node(test_db, sample_lab.id, "R1", host_id=sample_host.id)
+    node_r2 = make_node(test_db, sample_lab.id, "R2", host_id=sample_host.id)
 
     _make_interface_mapping(
         test_db, sample_lab.id, node_r1.id, "eth1", "vh-r1eth1", vlan_tag=0,
@@ -594,14 +573,14 @@ async def test_cross_host_convergence_resolves_container_name_endpoints(
 ):
     """Cross-host convergence resolves endpoint names by container_name."""
     host_a, host_b = multiple_hosts[0], multiple_hosts[1]
-    node_r1 = _make_node(
+    node_r1 = make_node(
         test_db,
         sample_lab.id,
         "Router One",
         host_id=host_a.id,
         container_name="r1",
     )
-    node_r2 = _make_node(
+    node_r2 = make_node(
         test_db,
         sample_lab.id,
         "Router Two",
@@ -651,14 +630,14 @@ async def test_cross_host_convergence_retries_after_mapping_refresh(
 ):
     """Missing cross-host mappings should trigger one refresh+retry pass."""
     host_a, host_b = multiple_hosts[0], multiple_hosts[1]
-    node_r1 = _make_node(
+    node_r1 = make_node(
         test_db,
         sample_lab.id,
         "Router One",
         host_id=host_a.id,
         container_name="r1",
     )
-    node_r2 = _make_node(
+    node_r2 = make_node(
         test_db,
         sample_lab.id,
         "Router Two",
@@ -717,14 +696,14 @@ async def test_cross_host_convergence_skips_when_mappings_still_missing(
 ):
     """Persistent mapping misses should not trigger full link repair fallback."""
     host_a, host_b = multiple_hosts[0], multiple_hosts[1]
-    _make_node(
+    make_node(
         test_db,
         sample_lab.id,
         "Router One",
         host_id=host_a.id,
         container_name="r1",
     )
-    _make_node(
+    make_node(
         test_db,
         sample_lab.id,
         "Router Two",
@@ -779,13 +758,13 @@ async def test_libvirt_restart_recovery_flow_repairs_same_and_cross_host_links(
 ):
     """Controller recovery flow adopts new runtime ID and converges repaired VM ports."""
     host_a, host_b = multiple_hosts[0], multiple_hosts[1]
-    node_vm = _make_node(
+    node_vm = make_node(
         test_db, sample_lab.id, "vm1", host_id=host_a.id, container_name="vm1"
     )
-    node_r2 = _make_node(
+    node_r2 = make_node(
         test_db, sample_lab.id, "r2", host_id=host_a.id, container_name="r2"
     )
-    node_r3 = _make_node(
+    node_r3 = make_node(
         test_db, sample_lab.id, "r3", host_id=host_b.id, container_name="r3"
     )
 

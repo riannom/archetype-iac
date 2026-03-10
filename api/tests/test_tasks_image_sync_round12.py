@@ -15,7 +15,6 @@ Focus areas:
 from __future__ import annotations
 
 import asyncio
-import json
 from contextlib import contextmanager
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
@@ -24,32 +23,12 @@ import pytest
 from sqlalchemy.orm import Session
 
 from app import models
+from tests.factories import make_host
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-
-def _make_host(test_db: Session, *, host_id: str = "h1", online: bool = True,
-               providers: list[str] | None = None, strategy: str | None = None) -> models.Host:
-    from datetime import datetime, timezone
-    caps = {"providers": providers or ["docker"]}
-    host = models.Host(
-        id=host_id,
-        name=f"Host-{host_id}",
-        address=f"{host_id}.local:8080",
-        status="online" if online else "offline",
-        capabilities=json.dumps(caps),
-        version="1.0.0",
-        last_heartbeat=datetime.now(timezone.utc),
-        resource_usage=json.dumps({}),
-        image_sync_strategy=strategy,
-    )
-    test_db.add(host)
-    test_db.commit()
-    test_db.refresh(host)
-    return host
 
 
 def _make_lab_with_nodes(test_db: Session, user: models.User, node_names: list[str],
@@ -100,7 +79,7 @@ class TestEnsureImagesTimeoutPath:
 
         monkeypatch.setattr(settings, "image_sync_pre_deploy_check", True)
 
-        host = _make_host(test_db, host_id="timeout-host")
+        host = make_host(test_db, host_id="timeout-host")
         lab, nodes = _make_lab_with_nodes(test_db, test_user, ["n1", "n2"])
         image_to_nodes = {"slow:img": ["n1", "n2"]}
         manifest = {"images": [{"id": "docker:slow:img", "kind": "docker", "reference": "slow:img"}]}
@@ -146,7 +125,7 @@ class TestEnsureImagesPartialFailure:
         monkeypatch.setattr(settings, "image_sync_pre_deploy_check", True)
         monkeypatch.setattr(settings, "image_sync_timeout", 30)
 
-        host = _make_host(test_db, host_id="partial-host")
+        host = make_host(test_db, host_id="partial-host")
         lab, nodes = _make_lab_with_nodes(test_db, test_user, ["good-node", "bad-node"])
         image_to_nodes = {"good:img": ["good-node"], "bad:img": ["bad-node"]}
         manifest = {"images": [
@@ -196,7 +175,7 @@ class TestEnsureImagesMissingFromLibrary:
         monkeypatch.setattr(settings, "image_sync_pre_deploy_check", True)
         monkeypatch.setattr(settings, "image_sync_timeout", 30)
 
-        host = _make_host(test_db, host_id="nolib-host")
+        host = make_host(test_db, host_id="nolib-host")
         lab, _ = _make_lab_with_nodes(test_db, test_user, ["orphan"])
         # Empty manifest -- image not found
         manifest = {"images": []}
@@ -229,7 +208,7 @@ class TestEnsureImagesOuterException:
 
         monkeypatch.setattr(settings, "image_sync_pre_deploy_check", True)
 
-        host = _make_host(test_db, host_id="exc-host")
+        host = make_host(test_db, host_id="exc-host")
 
         with patch("app.tasks.image_sync.load_manifest", side_effect=RuntimeError("manifest boom")):
             all_ready, missing, logs = await ensure_images_for_deployment(
@@ -285,7 +264,7 @@ class TestRunSyncAndCallbackSyncJobFailed:
         """When the sync job ends in non-completed status, nodes are marked failed."""
         from app.tasks.image_sync import _run_sync_and_callback
 
-        host = _make_host(test_db, host_id="fail-cb-host")
+        host = make_host(test_db, host_id="fail-cb-host")
         lab, nodes = _make_lab_with_nodes(test_db, test_user, ["n1"])
 
         # Create a failed sync job
@@ -333,7 +312,7 @@ class TestWaitForSyncAndCallbackErrorStatus:
         should mark nodes as failed."""
         from app.tasks.image_sync import _wait_for_sync_and_callback
 
-        host = _make_host(test_db, host_id="wait-err-host")
+        host = make_host(test_db, host_id="wait-err-host")
         lab, nodes = _make_lab_with_nodes(test_db, test_user, ["w1"])
 
         sync_job = models.ImageSyncJob(
@@ -381,7 +360,7 @@ class TestWaitForSyncAndCallbackTimeout:
         should be marked failed with a timeout message."""
         from app.tasks.image_sync import _wait_for_sync_and_callback
 
-        host = _make_host(test_db, host_id="wait-to-host")
+        host = make_host(test_db, host_id="wait-to-host")
         lab, nodes = _make_lab_with_nodes(test_db, test_user, ["wt1"])
 
         # Job stays in 'transferring' forever
@@ -427,7 +406,7 @@ class TestCheckAgentHasImageChecksumMismatch:
         """When agent reports a different sha256 from expected, should return False."""
         from app.tasks.image_sync import check_agent_has_image
 
-        host = _make_host(test_db, host_id="sha-host", providers=["docker", "libvirt"])
+        host = make_host(test_db, host_id="sha-host", providers=["docker", "libvirt"])
 
         mock_response = MagicMock()
         mock_response.status_code = 200
@@ -460,7 +439,7 @@ class TestCheckAgentHasImageNon200ForFile:
         """A 404 from the agent for a file image should return False."""
         from app.tasks.image_sync import check_agent_has_image
 
-        host = _make_host(test_db, host_id="404-host", providers=["docker", "libvirt"])
+        host = make_host(test_db, host_id="404-host", providers=["docker", "libvirt"])
 
         mock_response = MagicMock()
         mock_response.status_code = 404
@@ -487,7 +466,7 @@ class TestCheckAndStartImageSyncOuterException:
         """An unexpected exception should be caught and returned via log_entries."""
         from app.tasks.image_sync import check_and_start_image_sync
 
-        host = _make_host(test_db, host_id="exc-cas-host")
+        host = make_host(test_db, host_id="exc-cas-host")
         lab, nodes = _make_lab_with_nodes(test_db, test_user, ["ex1"])
 
         # Force an exception during image check
@@ -518,7 +497,7 @@ class TestReconcileAgentImagesMarksMissing:
         agent inventory no longer contains the image."""
         from app.tasks.image_sync import reconcile_agent_images
 
-        host = _make_host(test_db, host_id="recon-host")
+        host = make_host(test_db, host_id="recon-host")
 
         # Pre-existing synced record
         from datetime import datetime, timezone

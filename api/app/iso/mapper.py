@@ -10,7 +10,7 @@ import logging
 import re
 
 from app.iso.models import ParsedNodeDefinition, ParsedImage
-from app.services.device_constraints import minimum_hardware_for_device
+from app.services.device_service import minimum_hardware_for_device
 
 logger = logging.getLogger(__name__)
 
@@ -102,7 +102,7 @@ def map_node_definition_to_device(node_def: ParsedNodeDefinition) -> str | None:
 
     # Fall back to DeviceResolver for alias chain resolution.
     try:
-        from app.services.device_resolver import get_resolver
+        from app.services.device_service import get_resolver
         resolved = get_resolver().resolve(node_def.id)
         if resolved.vendor_config_key:
             return resolved.vendor_config_key

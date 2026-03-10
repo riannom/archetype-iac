@@ -346,7 +346,7 @@ def get_vendor_for_device(device_id: str) -> str | None:
         return result
     # Fallback to DeviceResolver for full alias chain resolution.
     try:
-        from app.services.device_resolver import get_resolver
+        from app.services.device_service import get_resolver
         resolved = get_resolver().resolve(device_id)
         return resolved.vendor
     except Exception:

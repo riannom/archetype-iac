@@ -19,7 +19,7 @@ from sqlalchemy.orm import Session
 
 from app import agent_client, models
 from app.agent_client import compute_vxlan_port_name
-from app.services.link_operational_state import recompute_link_oper_state
+from app.services.link_manager import recompute_link_oper_state
 from app.services.link_manager import LinkManager
 from app.services.link_validator import (
     persist_link_interface_mappings,

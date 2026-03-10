@@ -12,35 +12,11 @@ import pytest
 
 from app import models
 import app.tasks.link_reconciliation as link_reconciliation
+from tests.factories import make_link_state
 
 
 # ─── Helpers ──────────────────────────────────────────────────────────────
 
-def _make_link_state(
-    test_db,
-    lab_id: str,
-    link_name: str,
-    *,
-    is_cross_host: bool = True,
-    actual_state: str = "up",
-    source_host_id: str | None = None,
-    target_host_id: str | None = None,
-) -> models.LinkState:
-    ls = models.LinkState(
-        lab_id=lab_id,
-        link_name=link_name,
-        source_node="R1",
-        source_interface="eth1",
-        target_node="R2",
-        target_interface="eth1",
-        is_cross_host=is_cross_host,
-        actual_state=actual_state,
-        source_host_id=source_host_id,
-        target_host_id=target_host_id,
-    )
-    test_db.add(ls)
-    test_db.flush()
-    return ls
 
 
 def _make_tunnel(
@@ -79,7 +55,7 @@ def _make_tunnel(
 @pytest.mark.asyncio
 async def test_no_duplicates_noop(test_db, sample_lab, multiple_hosts):
     """No duplicate tunnels → no deletions."""
-    ls = _make_link_state(test_db, sample_lab.id, "R1:eth1-R2:eth1")
+    ls = make_link_state(test_db, sample_lab.id, "R1:eth1-R2:eth1")
     _make_tunnel(
         test_db, sample_lab.id, ls.id, 5000,
         multiple_hosts[0].id, multiple_hosts[1].id,
@@ -104,10 +80,10 @@ async def test_no_duplicates_noop(test_db, sample_lab, multiple_hosts):
 @pytest.mark.asyncio
 async def test_same_direction_duplicates_keeps_active(test_db, sample_lab, multiple_hosts):
     """Two tunnels same direction — keeps one with active LinkState."""
-    ls_active = _make_link_state(
+    ls_active = make_link_state(
         test_db, sample_lab.id, "R1:eth1-R2:eth1", actual_state="up",
     )
-    ls_dead = _make_link_state(
+    ls_dead = make_link_state(
         test_db, sample_lab.id, "R3:eth1-R4:eth1", actual_state="deleted",
     )
     t_keep = _make_tunnel(
@@ -140,8 +116,8 @@ async def test_same_direction_duplicates_keeps_active(test_db, sample_lab, multi
 @pytest.mark.asyncio
 async def test_reversed_direction_duplicates_detected(test_db, sample_lab, multiple_hosts):
     """Duplicates with (a,b) vs (b,a) agent ordering are detected."""
-    ls1 = _make_link_state(test_db, sample_lab.id, "R1:eth1-R2:eth1", actual_state="up")
-    ls2 = _make_link_state(test_db, sample_lab.id, "R3:eth1-R4:eth1", actual_state="deleted")
+    ls1 = make_link_state(test_db, sample_lab.id, "R1:eth1-R2:eth1", actual_state="up")
+    ls2 = make_link_state(test_db, sample_lab.id, "R3:eth1-R4:eth1", actual_state="deleted")
 
     _make_tunnel(
         test_db, sample_lab.id, ls1.id, 5000,
@@ -171,8 +147,8 @@ async def test_reversed_direction_duplicates_detected(test_db, sample_lab, multi
 @pytest.mark.asyncio
 async def test_both_active_keeps_newest(test_db, sample_lab, multiple_hosts):
     """When both duplicates have active LinkStates, keep the newest."""
-    ls1 = _make_link_state(test_db, sample_lab.id, "R1:eth1-R2:eth1", actual_state="up")
-    ls2 = _make_link_state(test_db, sample_lab.id, "R3:eth1-R4:eth1", actual_state="up")
+    ls1 = make_link_state(test_db, sample_lab.id, "R1:eth1-R2:eth1", actual_state="up")
+    ls2 = make_link_state(test_db, sample_lab.id, "R3:eth1-R4:eth1", actual_state="up")
 
     old_time = datetime.now(timezone.utc) - timedelta(hours=1)
     _make_tunnel(
@@ -206,8 +182,8 @@ async def test_both_active_keeps_newest(test_db, sample_lab, multiple_hosts):
 @pytest.mark.asyncio
 async def test_teardown_fails_still_deletes_db_record(test_db, sample_lab, multiple_hosts):
     """If agent teardown fails, the DB record is still deleted."""
-    ls1 = _make_link_state(test_db, sample_lab.id, "R1:eth1-R2:eth1", actual_state="up")
-    ls2 = _make_link_state(test_db, sample_lab.id, "R3:eth1-R4:eth1", actual_state="deleted")
+    ls1 = make_link_state(test_db, sample_lab.id, "R1:eth1-R2:eth1", actual_state="up")
+    ls2 = make_link_state(test_db, sample_lab.id, "R3:eth1-R4:eth1", actual_state="deleted")
 
     _make_tunnel(
         test_db, sample_lab.id, ls1.id, 5000,

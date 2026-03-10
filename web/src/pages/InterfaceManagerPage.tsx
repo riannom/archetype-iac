@@ -4,6 +4,7 @@ import { useUser } from '../contexts/UserContext';
 import { canViewInfrastructure } from '../utils/permissions';
 import { apiRequest } from '../api';
 import AdminMenuButton from '../components/AdminMenuButton';
+import { getManagedIfaceSyncBadge, getInterfaceTypeBadge } from './infrastructure/badgeHelpers';
 
 interface AgentManagedInterface {
   id: string;
@@ -54,25 +55,6 @@ const TYPE_DESCRIPTIONS: Record<string, string> = {
   external: 'L2 pass-through to OVS bridge for external network access',
   custom: 'General-purpose managed interface',
 };
-
-function getSyncBadge(status: string): { text: string; color: string; icon: string } {
-  switch (status) {
-    case 'synced': return { text: 'Synced', color: 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400', icon: 'fa-check' };
-    case 'mismatch': return { text: 'Mismatch', color: 'bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400', icon: 'fa-triangle-exclamation' };
-    case 'error': return { text: 'Error', color: 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400', icon: 'fa-xmark' };
-    case 'unconfigured': return { text: 'Pending', color: 'bg-stone-100 dark:bg-stone-800 text-stone-500 dark:text-stone-400', icon: 'fa-clock' };
-    default: return { text: status, color: 'bg-stone-100 dark:bg-stone-800 text-stone-500', icon: 'fa-question' };
-  }
-}
-
-function getTypeBadge(type: string): { text: string; color: string } {
-  switch (type) {
-    case 'transport': return { text: 'Transport', color: 'bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400' };
-    case 'external': return { text: 'External', color: 'bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-400' };
-    case 'custom': return { text: 'Custom', color: 'bg-teal-100 dark:bg-teal-900/30 text-teal-700 dark:text-teal-400' };
-    default: return { text: type, color: 'bg-stone-100 dark:bg-stone-800 text-stone-500' };
-  }
-}
 
 export default function InterfaceManagerPage() {
   const { user } = useUser();
@@ -389,8 +371,8 @@ export default function InterfaceManagerPage() {
                       </thead>
                       <tbody>
                         {hostInterfaces.map(iface => {
-                          const syncBadge = getSyncBadge(iface.sync_status);
-                          const typeBadge = getTypeBadge(iface.interface_type);
+                          const syncBadge = getManagedIfaceSyncBadge(iface.sync_status);
+                          const typeBadge = getInterfaceTypeBadge(iface.interface_type);
                           const isEditingMtu = editingMtu === iface.id;
 
                           return (

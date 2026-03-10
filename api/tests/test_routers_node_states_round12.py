@@ -18,85 +18,18 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
-from uuid import uuid4
 
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
 from app import models
 from app.state import NodeActualState, NodeDesiredState
+from tests.factories import make_node, make_node_state, make_placement
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-
-def _make_node_def(
-    test_db: Session,
-    lab: models.Lab,
-    gui_id: str = "n1",
-    display_name: str = "R1",
-    container_name: str = "archetype-test-r1",
-    device: str = "linux",
-    host_id: str | None = None,
-) -> models.Node:
-    node = models.Node(
-        id=str(uuid4()),
-        lab_id=lab.id,
-        gui_id=gui_id,
-        display_name=display_name,
-        container_name=container_name,
-        device=device,
-        host_id=host_id,
-    )
-    test_db.add(node)
-    test_db.commit()
-    test_db.refresh(node)
-    return node
-
-
-def _make_node_state(
-    test_db: Session,
-    lab: models.Lab,
-    node_id: str = "n1",
-    node_name: str = "R1",
-    desired_state: str = "stopped",
-    actual_state: str = "undeployed",
-    **kwargs,
-) -> models.NodeState:
-    ns = models.NodeState(
-        lab_id=lab.id,
-        node_id=node_id,
-        node_name=node_name,
-        desired_state=desired_state,
-        actual_state=actual_state,
-        **kwargs,
-    )
-    test_db.add(ns)
-    test_db.commit()
-    test_db.refresh(ns)
-    return ns
-
-
-def _make_placement(
-    test_db: Session,
-    lab: models.Lab,
-    host: models.Host,
-    node_name: str,
-    node_def: models.Node,
-) -> models.NodePlacement:
-    p = models.NodePlacement(
-        id=str(uuid4()),
-        lab_id=lab.id,
-        host_id=host.id,
-        node_name=node_name,
-        node_definition_id=node_def.id,
-    )
-    test_db.add(p)
-    test_db.commit()
-    test_db.refresh(p)
-    return p
 
 
 # ============================================================================
@@ -116,13 +49,13 @@ class TestReconcileLabDeepPaths:
         auth_headers: dict,
     ):
         """Only out-of-sync nodes appear in nodes_to_reconcile."""
-        _make_node_def(test_db, sample_lab, gui_id="n1", container_name="r1")
-        _make_node_def(test_db, sample_lab, gui_id="n2", container_name="r2")
+        make_node(test_db, sample_lab, gui_id="n1", container_name="r1")
+        make_node(test_db, sample_lab, gui_id="n2", container_name="r2")
         # n1 is in sync (desired=running, actual=running)
-        _make_node_state(test_db, sample_lab, "n1", "r1",
+        make_node_state(test_db, sample_lab, "n1", "r1",
                          desired_state="running", actual_state="running")
         # n2 is out of sync (desired=running, actual=stopped)
-        _make_node_state(test_db, sample_lab, "n2", "r2",
+        make_node_state(test_db, sample_lab, "n2", "r2",
                          desired_state="running", actual_state="stopped")
 
         with patch("app.routers.labs_node_states._has_conflicting_job",
@@ -163,8 +96,8 @@ class TestReconcileLabDeepPaths:
         auth_headers: dict,
     ):
         """Nodes desired=stopped but actual=running are out of sync."""
-        _make_node_def(test_db, sample_lab, gui_id="n1", container_name="r1")
-        _make_node_state(test_db, sample_lab, "n1", "r1",
+        make_node(test_db, sample_lab, gui_id="n1", container_name="r1")
+        make_node_state(test_db, sample_lab, "n1", "r1",
                          desired_state="stopped", actual_state="running")
 
         with patch("app.routers.labs_node_states._has_conflicting_job",
@@ -220,8 +153,8 @@ class TestReconcileNodeDeepPaths:
         auth_headers: dict,
     ):
         """Returns 503 when no agent is available for the node."""
-        _make_node_def(test_db, sample_lab, gui_id="n1", container_name="r1")
-        _make_node_state(test_db, sample_lab, "n1", "r1",
+        make_node(test_db, sample_lab, gui_id="n1", container_name="r1")
+        make_node_state(test_db, sample_lab, "n1", "r1",
                          desired_state="running", actual_state="stopped")
 
         with patch("app.routers.labs_node_states.get_online_agent_for_lab",
@@ -243,8 +176,8 @@ class TestReconcileNodeDeepPaths:
         auth_headers: dict,
     ):
         """Desired=stopped, actual=undeployed is considered in-sync."""
-        _make_node_def(test_db, sample_lab, gui_id="n1", container_name="r1")
-        _make_node_state(test_db, sample_lab, "n1", "r1",
+        make_node(test_db, sample_lab, gui_id="n1", container_name="r1")
+        make_node_state(test_db, sample_lab, "n1", "r1",
                          desired_state="stopped", actual_state="undeployed")
 
         response = test_client.post(
@@ -266,9 +199,9 @@ class TestReconcileNodeDeepPaths:
         auth_headers: dict,
     ):
         """When DB node exists, get_node_provider is used (not get_lab_provider)."""
-        _make_node_def(test_db, sample_lab, gui_id="n1", container_name="r1",
+        make_node(test_db, sample_lab, gui_id="n1", container_name="r1",
                        device="ceos")
-        _make_node_state(test_db, sample_lab, "n1", "r1",
+        make_node_state(test_db, sample_lab, "n1", "r1",
                          desired_state="running", actual_state="error")
 
         mock_get_node_provider = MagicMock(return_value="docker")
@@ -314,8 +247,8 @@ class TestRefreshNodeStatesDeepPaths:
         sample_lab.agent_id = sample_host.id
         test_db.commit()
 
-        _make_node_def(test_db, sample_lab, gui_id="n1", container_name="r1")
-        ns = _make_node_state(
+        make_node(test_db, sample_lab, gui_id="n1", container_name="r1")
+        ns = make_node_state(
             test_db, sample_lab, "n1", "r1",
             desired_state="stopped", actual_state="stopping",
         )
@@ -349,8 +282,8 @@ class TestRefreshNodeStatesDeepPaths:
         sample_lab.agent_id = sample_host.id
         test_db.commit()
 
-        _make_node_def(test_db, sample_lab, gui_id="n1", container_name="r1")
-        ns = _make_node_state(
+        make_node(test_db, sample_lab, gui_id="n1", container_name="r1")
+        ns = make_node_state(
             test_db, sample_lab, "n1", "r1",
             desired_state="running", actual_state="starting",
         )
@@ -383,8 +316,8 @@ class TestRefreshNodeStatesDeepPaths:
         sample_lab.agent_id = sample_host.id
         test_db.commit()
 
-        _make_node_def(test_db, sample_lab, gui_id="n1", container_name="r1")
-        ns = _make_node_state(
+        make_node(test_db, sample_lab, gui_id="n1", container_name="r1")
+        ns = make_node_state(
             test_db, sample_lab, "n1", "r1",
             desired_state="running", actual_state="pending",
         )
@@ -417,8 +350,8 @@ class TestRefreshNodeStatesDeepPaths:
         sample_lab.agent_id = sample_host.id
         test_db.commit()
 
-        _make_node_def(test_db, sample_lab, gui_id="n1", container_name="r1")
-        ns = _make_node_state(
+        make_node(test_db, sample_lab, gui_id="n1", container_name="r1")
+        ns = make_node_state(
             test_db, sample_lab, "n1", "r1",
             desired_state="stopped", actual_state="running",
             boot_started_at=datetime.now(timezone.utc) - timedelta(minutes=10),
@@ -455,8 +388,8 @@ class TestRefreshNodeStatesDeepPaths:
         sample_lab.agent_id = sample_host.id
         test_db.commit()
 
-        _make_node_def(test_db, sample_lab, gui_id="n1", container_name="r1")
-        _make_node_state(test_db, sample_lab, "n1", "r1",
+        make_node(test_db, sample_lab, gui_id="n1", container_name="r1")
+        make_node_state(test_db, sample_lab, "n1", "r1",
                          desired_state="running", actual_state="stopped")
 
         mock_ac = MagicMock()
@@ -487,17 +420,17 @@ class TestRefreshNodeStatesDeepPaths:
     ):
         """When one agent raises an exception, the refresh continues with others."""
         # Use two placements on different agents
-        node1 = _make_node_def(test_db, sample_lab, gui_id="n1", container_name="r1",
+        node1 = make_node(test_db, sample_lab, gui_id="n1", container_name="r1",
                                host_id=multiple_hosts[0].id)
-        node2 = _make_node_def(test_db, sample_lab, gui_id="n2", container_name="r2",
+        node2 = make_node(test_db, sample_lab, gui_id="n2", container_name="r2",
                                host_id=multiple_hosts[1].id)
-        ns1 = _make_node_state(test_db, sample_lab, "n1", "r1",
+        ns1 = make_node_state(test_db, sample_lab, "n1", "r1",
                                desired_state="running", actual_state="stopped")
-        ns2 = _make_node_state(test_db, sample_lab, "n2", "r2",
+        ns2 = make_node_state(test_db, sample_lab, "n2", "r2",
                                desired_state="running", actual_state="stopped")
 
-        _make_placement(test_db, sample_lab, multiple_hosts[0], "r1", node1)
-        _make_placement(test_db, sample_lab, multiple_hosts[1], "r2", node2)
+        make_placement(test_db, sample_lab, multiple_hosts[0], "r1", node1)
+        make_placement(test_db, sample_lab, multiple_hosts[1], "r2", node2)
 
         call_count = 0
 
@@ -538,8 +471,8 @@ class TestRefreshNodeStatesDeepPaths:
         sample_lab.agent_id = None
         test_db.commit()
 
-        _make_node_def(test_db, sample_lab, gui_id="n1", container_name="r1")
-        ns = _make_node_state(test_db, sample_lab, "n1", "r1",
+        make_node(test_db, sample_lab, gui_id="n1", container_name="r1")
+        ns = make_node_state(test_db, sample_lab, "n1", "r1",
                               desired_state="running", actual_state="stopped")
 
         mock_ac = MagicMock()
@@ -572,8 +505,8 @@ class TestRefreshNodeStatesDeepPaths:
         sample_lab.agent_id = sample_host.id
         test_db.commit()
 
-        _make_node_def(test_db, sample_lab, gui_id="n1", container_name="r1")
-        ns = _make_node_state(test_db, sample_lab, "n1", "r1",
+        make_node(test_db, sample_lab, gui_id="n1", container_name="r1")
+        ns = make_node_state(test_db, sample_lab, "n1", "r1",
                               desired_state="running", actual_state="running")
 
         mock_ac = MagicMock()
@@ -605,8 +538,8 @@ class TestRefreshNodeStatesDeepPaths:
         sample_lab.agent_id = sample_host.id
         test_db.commit()
 
-        _make_node_def(test_db, sample_lab, gui_id="n1", container_name="r1")
-        ns = _make_node_state(test_db, sample_lab, "n1", "r1",
+        make_node(test_db, sample_lab, gui_id="n1", container_name="r1")
+        ns = make_node_state(test_db, sample_lab, "n1", "r1",
                               desired_state="running", actual_state="stopped")
         assert ns.boot_started_at is None
 
@@ -648,8 +581,8 @@ class TestListNodeStatesDeepPaths:
         sample_lab.agent_id = sample_host.id
         test_db.commit()
 
-        _make_node_def(test_db, sample_lab, gui_id="n1", container_name="r1")
-        ns = _make_node_state(test_db, sample_lab, "n1", "r1",
+        make_node(test_db, sample_lab, gui_id="n1", container_name="r1")
+        ns = make_node_state(test_db, sample_lab, "n1", "r1",
                               desired_state="running", actual_state="pending")
 
         mock_ac = MagicMock()
@@ -684,8 +617,8 @@ class TestListNodeStatesDeepPaths:
         sample_lab.agent_id = sample_host.id
         test_db.commit()
 
-        _make_node_def(test_db, sample_lab, gui_id="n1", container_name="r1")
-        ns = _make_node_state(test_db, sample_lab, "n1", "r1",
+        make_node(test_db, sample_lab, gui_id="n1", container_name="r1")
+        ns = make_node_state(test_db, sample_lab, "n1", "r1",
                               desired_state="running", actual_state="pending")
 
         # Create an active job
@@ -728,8 +661,8 @@ class TestListNodeStatesDeepPaths:
         sample_lab.agent_id = sample_host.id
         test_db.commit()
 
-        _make_node_def(test_db, sample_lab, gui_id="n1", container_name="r1")
-        ns = _make_node_state(test_db, sample_lab, "n1", "r1",
+        make_node(test_db, sample_lab, gui_id="n1", container_name="r1")
+        ns = make_node_state(test_db, sample_lab, "n1", "r1",
                               desired_state="running", actual_state="pending")
 
         with patch("app.routers.labs_node_states.agent_client"), \
@@ -753,8 +686,8 @@ class TestListNodeStatesDeepPaths:
         auth_headers: dict,
     ):
         """When no nodes are pending, agent is never queried for refresh."""
-        _make_node_def(test_db, sample_lab, gui_id="n1", container_name="r1")
-        _make_node_state(test_db, sample_lab, "n1", "r1",
+        make_node(test_db, sample_lab, gui_id="n1", container_name="r1")
+        make_node_state(test_db, sample_lab, "n1", "r1",
                          desired_state="running", actual_state="running")
 
         with patch("app.routers.labs_node_states.get_online_agent_for_lab",
@@ -784,8 +717,8 @@ class TestSetDesiredStateDeepPaths:
     ):
         """When a conflicting job exists, sync job is not created even though
         desired state changes."""
-        _make_node_def(test_db, sample_lab, gui_id="n1", container_name="r1")
-        _make_node_state(test_db, sample_lab, "n1", "r1",
+        make_node(test_db, sample_lab, gui_id="n1", container_name="r1")
+        make_node_state(test_db, sample_lab, "n1", "r1",
                          desired_state="stopped", actual_state="stopped")
 
         with patch("app.routers.labs._create_node_sync_job") as mock_sync, \
@@ -812,8 +745,8 @@ class TestSetDesiredStateDeepPaths:
     ):
         """Setting desired=stopped when already desired=stopped but actual=error
         still converges the error state (no-change branch)."""
-        _make_node_def(test_db, sample_lab, gui_id="n1", container_name="r1")
-        ns = _make_node_state(test_db, sample_lab, "n1", "r1",
+        make_node(test_db, sample_lab, gui_id="n1", container_name="r1")
+        ns = make_node_state(test_db, sample_lab, "n1", "r1",
                               desired_state="stopped", actual_state="error")
 
         with patch("app.routers.labs.has_conflicting_job",
@@ -838,8 +771,8 @@ class TestSetDesiredStateDeepPaths:
     ):
         """Retry (running on error node already desired=running) resets enforcement
         but does NOT create sync job when conflicting job exists."""
-        _make_node_def(test_db, sample_lab, gui_id="n1", container_name="r1")
-        ns = _make_node_state(test_db, sample_lab, "n1", "r1",
+        make_node(test_db, sample_lab, gui_id="n1", container_name="r1")
+        ns = make_node_state(test_db, sample_lab, "n1", "r1",
                               desired_state="running", actual_state="error")
         ns.enforcement_attempts = 5
         ns.error_message = "deploy failed"
@@ -877,8 +810,8 @@ class TestSetAllNodesDesiredStateDeepPaths:
         auth_headers: dict,
     ):
         """Stop-all on error nodes converges them to stopped without sync."""
-        _make_node_def(test_db, sample_lab, gui_id="n1", container_name="r1")
-        ns = _make_node_state(test_db, sample_lab, "n1", "r1",
+        make_node(test_db, sample_lab, gui_id="n1", container_name="r1")
+        ns = make_node_state(test_db, sample_lab, "n1", "r1",
                               desired_state="running", actual_state="error")
 
         with patch("app.routers.labs.has_conflicting_job", return_value=(False, None)), \
@@ -908,9 +841,9 @@ class TestSetAllNodesDesiredStateDeepPaths:
     ):
         """Start-all on error nodes with desired=running resets enforcement
         (reset_and_proceed classification)."""
-        _make_node_def(test_db, sample_lab, gui_id="n1", container_name="r1")
+        make_node(test_db, sample_lab, gui_id="n1", container_name="r1")
         # desired=running + actual=error triggers reset_and_proceed
-        ns = _make_node_state(test_db, sample_lab, "n1", "r1",
+        ns = make_node_state(test_db, sample_lab, "n1", "r1",
                               desired_state="running", actual_state="error")
         ns.enforcement_attempts = 3
         ns.error_message = "previous failure"
@@ -943,9 +876,9 @@ class TestSetAllNodesDesiredStateDeepPaths:
         auth_headers: dict,
     ):
         """When affected nodes don't need sync (e.g., error converged), no job."""
-        _make_node_def(test_db, sample_lab, gui_id="n1", container_name="r1")
+        make_node(test_db, sample_lab, gui_id="n1", container_name="r1")
         # Error node + stop request = converges to stopped (no sync needed)
-        _make_node_state(test_db, sample_lab, "n1", "r1",
+        make_node_state(test_db, sample_lab, "n1", "r1",
                          desired_state="running", actual_state="error")
 
         mock_safe_task = MagicMock()
@@ -985,7 +918,7 @@ class TestGetOutOfSyncNodes:
         """desired=stopped, actual=running -> out of sync."""
         from app.routers.labs_node_states import _get_out_of_sync_nodes
 
-        _make_node_state(test_db, sample_lab, "n1", "r1",
+        make_node_state(test_db, sample_lab, "n1", "r1",
                          desired_state="stopped", actual_state="running")
 
         result = _get_out_of_sync_nodes(test_db, sample_lab.id)
@@ -1000,7 +933,7 @@ class TestGetOutOfSyncNodes:
         """desired=running, actual=running -> in sync."""
         from app.routers.labs_node_states import _get_out_of_sync_nodes
 
-        _make_node_state(test_db, sample_lab, "n1", "r1",
+        make_node_state(test_db, sample_lab, "n1", "r1",
                          desired_state="running", actual_state="running")
 
         result = _get_out_of_sync_nodes(test_db, sample_lab.id)
@@ -1014,7 +947,7 @@ class TestGetOutOfSyncNodes:
         """desired=stopped, actual=undeployed -> in sync."""
         from app.routers.labs_node_states import _get_out_of_sync_nodes
 
-        _make_node_state(test_db, sample_lab, "n1", "r1",
+        make_node_state(test_db, sample_lab, "n1", "r1",
                          desired_state="stopped", actual_state="undeployed")
 
         result = _get_out_of_sync_nodes(test_db, sample_lab.id)
@@ -1028,7 +961,7 @@ class TestGetOutOfSyncNodes:
         """desired=running, actual=error -> out of sync."""
         from app.routers.labs_node_states import _get_out_of_sync_nodes
 
-        _make_node_state(test_db, sample_lab, "n1", "r1",
+        make_node_state(test_db, sample_lab, "n1", "r1",
                          desired_state="running", actual_state="error")
 
         result = _get_out_of_sync_nodes(test_db, sample_lab.id)
@@ -1042,9 +975,9 @@ class TestGetOutOfSyncNodes:
         """node_ids parameter filters to only specified nodes."""
         from app.routers.labs_node_states import _get_out_of_sync_nodes
 
-        _make_node_state(test_db, sample_lab, "n1", "r1",
+        make_node_state(test_db, sample_lab, "n1", "r1",
                          desired_state="running", actual_state="stopped")
-        _make_node_state(test_db, sample_lab, "n2", "r2",
+        make_node_state(test_db, sample_lab, "n2", "r2",
                          desired_state="running", actual_state="stopped")
 
         result = _get_out_of_sync_nodes(test_db, sample_lab.id, node_ids=["n1"])
@@ -1070,7 +1003,7 @@ class TestGetOutOfSyncNodes:
         """desired=running, actual=pending -> in sync (pending counts as progressing)."""
         from app.routers.labs_node_states import _get_out_of_sync_nodes
 
-        _make_node_state(test_db, sample_lab, "n1", "r1",
+        make_node_state(test_db, sample_lab, "n1", "r1",
                          desired_state="running", actual_state="pending")
 
         result = _get_out_of_sync_nodes(test_db, sample_lab.id)

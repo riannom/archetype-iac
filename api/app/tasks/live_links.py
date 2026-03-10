@@ -26,7 +26,7 @@ from app.tasks.link_orchestration import (
     create_same_host_link,
     create_cross_host_link,
 )
-from app.services.link_operational_state import recompute_link_oper_state
+from app.services.link_manager import recompute_link_oper_state
 from app.services.interface_naming import normalize_for_node
 from app.services.link_reservations import (
     claim_link_endpoints,

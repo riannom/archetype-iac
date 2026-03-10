@@ -8,39 +8,12 @@ from sqlalchemy.orm import Session
 
 from app import models
 from app.state import LinkActualState, NodeActualState
+from tests.factories import make_node_state, make_placement
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-def _make_node_state(
-    test_db: Session, lab_id: str, node_name: str, actual_state: str
-) -> models.NodeState:
-    ns = models.NodeState(
-        lab_id=lab_id,
-        node_id=node_name.lower(),
-        node_name=node_name,
-        desired_state="running",
-        actual_state=actual_state,
-    )
-    test_db.add(ns)
-    test_db.commit()
-    test_db.refresh(ns)
-    return ns
-
-
-def _make_placement(
-    test_db: Session, lab_id: str, node_name: str, host_id: str
-) -> models.NodePlacement:
-    p = models.NodePlacement(
-        lab_id=lab_id,
-        node_name=node_name,
-        host_id=host_id,
-    )
-    test_db.add(p)
-    test_db.commit()
-    return p
 
 
 # ---------------------------------------------------------------------------
@@ -62,7 +35,7 @@ class TestBuildHostToAgentMap:
     ):
         from app.tasks.live_links import _build_host_to_agent_map
 
-        _make_placement(test_db, sample_lab.id, "R1", sample_host.id)
+        make_placement(test_db, sample_lab.id, "R1", sample_host.id)
 
         with patch("app.agent_client.is_agent_online", return_value=True):
             result = await _build_host_to_agent_map(test_db, sample_lab.id)
@@ -87,7 +60,7 @@ class TestBuildHostToAgentMap:
     ):
         from app.tasks.live_links import _build_host_to_agent_map
 
-        _make_placement(test_db, sample_lab.id, "R1", sample_host.id)
+        make_placement(test_db, sample_lab.id, "R1", sample_host.id)
 
         with patch("app.agent_client.is_agent_online", return_value=False):
             result = await _build_host_to_agent_map(test_db, sample_lab.id)
@@ -192,8 +165,8 @@ class TestCreateLinkIfReady:
     ):
         from app.tasks.live_links import create_link_if_ready
 
-        _make_node_state(test_db, sample_lab.id, "R1", "stopped")
-        _make_node_state(test_db, sample_lab.id, "R2", "stopped")
+        make_node_state(test_db, sample_lab.id, "R1", "stopped")
+        make_node_state(test_db, sample_lab.id, "R2", "stopped")
 
         log_parts = []
         with (
@@ -213,11 +186,8 @@ class TestCreateLinkIfReady:
     ):
         from app.tasks.live_links import create_link_if_ready
 
-        ns1 = _make_node_state(test_db, sample_lab.id, "R1", NodeActualState.RUNNING)
-        ns2 = _make_node_state(test_db, sample_lab.id, "R2", NodeActualState.RUNNING)
-        ns1.is_ready = True
-        ns2.is_ready = True
-        test_db.commit()
+        make_node_state(test_db, sample_lab.id, "R1", NodeActualState.RUNNING, is_ready=True)
+        make_node_state(test_db, sample_lab.id, "R2", NodeActualState.RUNNING, is_ready=True)
 
         log_parts = []
         with (

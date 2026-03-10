@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState, useRef } from 'react';
+import React, { useCallback, useMemo, useState } from 'react';
 import Sidebar from './components/Sidebar';
 import Canvas from './components/Canvas';
 import TopBar from './components/TopBar';
@@ -18,8 +18,8 @@ import LogsView from './components/LogsView';
 import VerificationPanel from './components/VerificationPanel';
 import ScenarioPanel from './components/ScenarioPanel';
 import InfraView from './components/InfraView';
-import { Annotation, AnnotationType, DeviceModel, Link, Node, ExternalNetworkNode, DeviceNode, isExternalNetworkNode, isDeviceNode } from './types';
-import { apiRequest, rawApiRequest } from '../api';
+import ViewTabBar from './components/ViewTabBar';
+import type { LabView } from './components/ViewTabBar';
 import { usePortManager } from './hooks/usePortManager';
 import { useLabStateWS } from './hooks/useLabStateWS';
 import { useTheme } from '../theme/index';
@@ -27,24 +27,17 @@ import { useUser } from '../contexts/UserContext';
 import { canViewInfrastructure } from '../utils/permissions';
 import { useNotifications } from '../contexts/NotificationContext';
 import { useImageLibrary } from '../contexts/ImageLibraryContext';
-import { downloadBlob } from '../utils/download';
 import { useDeviceCatalog } from '../contexts/DeviceCatalogContext';
-import {
-  buildImageCompatibilityAliasMap,
-  getAllowedInstantiableImageKinds,
-  imageMatchesDeviceId,
-  isInstantiableImageKind,
-  requiresRunnableImage,
-} from '../utils/deviceModels';
-import { generateContainerName } from './studioUtils';
 import { useLabTopology } from './hooks/useLabTopology';
-import { useNodeStates, RuntimeStatus } from './hooks/useNodeStates';
+import { useNodeStates } from './hooks/useNodeStates';
 import { useConsoleManager } from './hooks/useConsoleManager';
 import { useJobTracking } from './hooks/useJobTracking';
 import { useLabDataLoading, LabSummary } from './hooks/useLabDataLoading';
 import { useStudioModals } from './hooks/useStudioModals';
 import { useStudioAuth } from './hooks/useStudioAuth';
 import { useCanvasInteraction } from './hooks/useCanvasInteraction';
+import { useTopologyHandlers } from './hooks/useTopologyHandlers';
+import { useLabLifecycle } from './hooks/useLabLifecycle';
 import './studio.css';
 import 'xterm/css/xterm.css';
 
@@ -56,13 +49,11 @@ const StudioPage: React.FC = () => {
   const { deviceModels, deviceCategories, refresh: refreshDeviceCatalog } = useDeviceCatalog();
   const showAdminStrip = canViewInfrastructure(user ?? null);
   const [activeLab, setActiveLab] = useState<LabSummary | null>(null);
-  const [view, setView] = useState<'designer' | 'configs' | 'logs' | 'runtime' | 'tests' | 'scenarios' | 'infra'>('designer');
+  const [view, setView] = useState<LabView>('designer');
   const isDesignerView = view === 'designer';
   const [showAgentIndicators, setShowAgentIndicators] = useState<boolean>(() => {
     return localStorage.getItem('archetype_show_agent_indicators') !== 'false';
   });
-
-  const initialNodeSyncLabRef = useRef<string | null>(null);
 
   // --- Extracted hooks ---
 
@@ -119,7 +110,7 @@ const StudioPage: React.FC = () => {
 
   const {
     nodeStates, setNodeStates, runtimeStates,
-    nodeReadinessHints, pendingNodeOps, setPendingNodeOps,
+    pendingNodeOps, setPendingNodeOps,
     optimisticGuardRef,
     handleWSNodeStateChange,
     loadNodeStates, loadNodeReadiness, refreshNodeStatesFromAgent,
@@ -134,7 +125,6 @@ const StudioPage: React.FC = () => {
     preferences,
   });
 
-  // Port manager for interface auto-assignment
   const portManager = usePortManager(nodes, links);
 
   // WebSocket hook for real-time state updates
@@ -148,6 +138,47 @@ const StudioPage: React.FC = () => {
     onTestResult: handleWSTestResult,
     onScenarioStep: handleWSScenarioStep,
     enabled: !!activeLab,
+  });
+
+  // --- Lab lifecycle (create, select, exit, delete, rename, login, logout, polling) ---
+
+  const {
+    handleCreateLab, handleSelectLab, handleExitLab, handleLogout,
+    handleDeleteLab, handleRenameLab, handleDownloadBundle, handleLogin,
+  } = useLabLifecycle({
+    activeLab, setActiveLab, labs, setLabs,
+    nodes, annotations, setNodes, setLinks, setAnnotations,
+    setView: setView as React.Dispatch<React.SetStateAction<string>>,
+    studioRequest, loadLabs,
+    layoutDirtyRef, saveLayout,
+    resetJobTracking, clearSelection, consoleManager,
+    beginLogout, clearUser, attemptLogin, refreshUser, refreshDeviceCatalog,
+    addNotification,
+    wsConnected, refreshNodeStatesFromAgent, loadNodeStates, loadJobs, loadNodeReadiness,
+  });
+
+  // --- Topology & action handlers ---
+
+  const {
+    handleAddDevice, handleAddExternalNetwork, handleCanvasToolCreate,
+    handleNodeMove, handleAnnotationMove, handleConnect,
+    handleUpdateNode, handleUpdateLink, handleUpdateAnnotation, handleDelete,
+    handleUpdateStatus, handleOpenConsole, handleDockWindow,
+    handleExtractNodeConfig, handleStartTests, handleStartScenario,
+    handleExtractConfigs,
+  } = useTopologyHandlers({
+    activeLab, nodes, links, annotations, deviceModels, imageLibrary, effectiveMode,
+    runtimeStates,
+    setNodes, setLinks, setAnnotations, setSelectedId, setActiveTool, clearSelection,
+    nodesRef, linksRef,
+    triggerLayoutSave, triggerTopologySave, flushTopologySave,
+    studioRequest, addTaskLogEntry, addNotification,
+    portManager,
+    pendingNodeOps, setPendingNodeOps, setNodeStates, optimisticGuardRef,
+    loadJobs,
+    setIsTaskLogVisible, consoleManager,
+    testRunning, setTestResults, setTestSummary, setTestRunning,
+    activeScenarioJobId, setActiveScenarioJobId,
   });
 
   // Derive canvas highlights from the currently-running scenario step
@@ -164,7 +195,6 @@ const StudioPage: React.FC = () => {
     if (stepType === 'link_down' || stepType === 'link_up') {
       const link = (sd.link as string) || '';
       activeLinkName = link;
-      // Extract node names from "node1:iface1 <-> node2:iface2"
       const parts = link.split(' <-> ');
       parts.forEach(p => {
         const nodeName = p.trim().split(':')[0];
@@ -186,342 +216,6 @@ const StudioPage: React.FC = () => {
     return { activeNodeNames, activeLinkName, stepName: runningStep.step_name };
   }, [activeScenarioJobId, scenarioSteps]);
 
-  // Prevent fixed-position console windows from causing document-level horizontal scrollbar
-  useEffect(() => {
-    document.documentElement.style.overflowX = 'hidden';
-    return () => { document.documentElement.style.overflowX = ''; };
-  }, []);
-
-  // On lab entry, force a deterministic sync sequence:
-  // refresh from agent first, then load node states/jobs.
-  // This avoids UI showing stale DB state on initial render.
-  useEffect(() => {
-    if (!activeLab) {
-      initialNodeSyncLabRef.current = null;
-      return;
-    }
-    let cancelled = false;
-    const labId = activeLab.id;
-    if (initialNodeSyncLabRef.current === labId) return;
-    initialNodeSyncLabRef.current = labId;
-
-    const syncOnOpen = async () => {
-      await refreshNodeStatesFromAgent(labId);
-      if (cancelled) return;
-      await loadNodeStates(labId, nodes);
-      if (cancelled) return;
-      await loadJobs(labId, nodes);
-      if (cancelled) return;
-      await loadNodeReadiness(labId);
-    };
-
-    void syncOnOpen();
-    return () => {
-      cancelled = true;
-    };
-  }, [activeLab, refreshNodeStatesFromAgent, loadNodeStates, loadJobs, loadNodeReadiness, nodes]);
-
-  useEffect(() => {
-    if (!activeLab || nodes.length === 0) return;
-    loadNodeStates(activeLab.id, nodes);
-    loadJobs(activeLab.id, nodes);
-    loadNodeReadiness(activeLab.id);
-  }, [activeLab, nodes, loadNodeStates, loadJobs, loadNodeReadiness]);
-
-  // Poll for node state and job updates
-  // When WebSocket is connected, poll less frequently as a fallback
-  // When disconnected, poll at normal rate for state updates
-  useEffect(() => {
-    if (!activeLab || nodes.length === 0) return;
-    // Use longer interval when WebSocket is connected (fallback only)
-    // Shorter interval when disconnected (primary update mechanism)
-    const interval = wsConnected ? 15000 : 4000;
-    const timer = setInterval(() => {
-      loadNodeStates(activeLab.id, nodes);
-      loadJobs(activeLab.id, nodes);
-      loadNodeReadiness(activeLab.id);
-    }, interval);
-    return () => clearInterval(timer);
-  }, [activeLab, nodes, loadNodeStates, loadJobs, loadNodeReadiness, wsConnected]);
-
-  // --- Event handlers ---
-
-  const handleCreateLab = async () => {
-    const name = `Project_${labs.length + 1}`;
-    await studioRequest('/labs', { method: 'POST', body: JSON.stringify({ name }) });
-    loadLabs();
-  };
-
-  const handleSelectLab = (lab: LabSummary) => {
-    // Save pending layout changes before switching
-    if (activeLab && layoutDirtyRef.current && nodes.length > 0) {
-      saveLayout(activeLab.id, nodes, annotations);
-    }
-    // Reset job tracking for new lab context
-    resetJobTracking();
-    setActiveLab(lab);
-    setAnnotations([]);
-    consoleManager.resetConsoles();
-    clearSelection();
-    setView('designer');
-  };
-
-  const handleExitLab = useCallback(() => {
-    if (!activeLab) return;
-    const confirmed = window.confirm('Are you sure you want to exit the lab?');
-    if (!confirmed) return;
-    consoleManager.resetConsoles();
-    setActiveLab(null);
-  }, [activeLab, consoleManager]);
-
-  const handleLogout = useCallback(() => {
-    beginLogout();
-    clearUser();
-    setActiveLab(null);
-    consoleManager.resetConsoles();
-  }, [beginLogout, clearUser, consoleManager]);
-
-  const handleDeleteLab = async (labId: string) => {
-    await studioRequest(`/labs/${labId}`, { method: 'DELETE' });
-    if (activeLab?.id === labId) {
-      setActiveLab(null);
-      setNodes([]);
-      setLinks([]);
-    }
-    loadLabs();
-  };
-
-  const handleRenameLab = async (labId: string, newName: string) => {
-    await studioRequest(`/labs/${labId}`, {
-      method: 'PUT',
-      body: JSON.stringify({ name: newName }),
-    });
-    // Update local state
-    setLabs((prev) => prev.map((lab) => (lab.id === labId ? { ...lab, name: newName } : lab)));
-    if (activeLab?.id === labId) {
-      setActiveLab((prev) => (prev ? { ...prev, name: newName } : prev));
-    }
-  };
-
-  const imageCompatibilityAliases = useMemo(
-    () => buildImageCompatibilityAliasMap(deviceModels),
-    [deviceModels]
-  );
-
-  const hasInstantiableImageForModel = useCallback((model: DeviceModel): boolean => {
-    const allowedKinds = getAllowedInstantiableImageKinds(model);
-
-    return imageLibrary.some((img) => {
-      if (!isInstantiableImageKind(img.kind)) {
-        return false;
-      }
-      const imageKind = (img.kind || '').toLowerCase();
-      if (!allowedKinds.has(imageKind)) {
-        return false;
-      }
-      return imageMatchesDeviceId(img, model.id, imageCompatibilityAliases);
-    });
-  }, [imageLibrary, imageCompatibilityAliases]);
-
-  const handleAddDevice = (model: DeviceModel, x?: number, y?: number) => {
-    if (requiresRunnableImage(model) && !hasInstantiableImageForModel(model)) {
-      addNotification(
-        'warning',
-        'No runnable image assigned',
-        `${model.name} has no associated Docker or qcow2 image and cannot be instantiated.`,
-      );
-      return;
-    }
-
-    const id = Math.random().toString(36).slice(2, 9);
-    const displayName = `${model.id.toUpperCase()}-${nodes.length + 1}`;
-    const newNode: DeviceNode = {
-      id,
-      nodeType: 'device',
-      name: displayName,
-      // Generate immutable container_name at creation time
-      // This name is used by containerlab and never changes even if display name changes
-      container_name: generateContainerName(displayName),
-      type: model.type,
-      model: model.id,
-      version: model.versions[0],
-      x: x ?? 300 + Math.random() * 50,
-      y: y ?? 200 + Math.random() * 50,
-      cpu: model.cpu || 1,
-      memory: model.memory || 1024,
-      // Don't bake vendor defaults into per-node config; let the backend
-      // resolve disk_driver/nic_driver/machine_type through its layered
-      // resolution (vendor config -> image manifest -> device overrides).
-    };
-    setNodes((prev) => [...prev, newNode]);
-    // Don't set any status for new nodes - they should show no status icon until deployed
-    setSelectedId(id);
-    // Auto-save topology after a delay
-    setTimeout(() => triggerTopologySave(), 100);
-  };
-
-  const handleAddExternalNetwork = (x?: number, y?: number) => {
-    const id = Math.random().toString(36).slice(2, 9);
-    const extNetCount = nodes.filter((n) => isExternalNetworkNode(n)).length;
-    const newNode: ExternalNetworkNode = {
-      id,
-      nodeType: 'external',
-      name: `External-${extNetCount + 1}`,
-      x: x ?? 350 + Math.random() * 50,
-      y: y ?? 250 + Math.random() * 50,
-    };
-    setNodes((prev) => [...prev, newNode]);
-    setSelectedId(id);
-    // Auto-save topology after a delay
-    setTimeout(() => triggerTopologySave(), 100);
-  };
-
-
-  const handleCanvasToolCreate = useCallback((type: AnnotationType, x: number, y: number, opts?: { width?: number; height?: number; targetX?: number; targetY?: number }) => {
-    const id = Math.random().toString(36).slice(2, 9);
-    const newAnn: Annotation = {
-      id,
-      type,
-      x,
-      y,
-      text: '',
-      color: effectiveMode === 'dark' ? '#3b82f6' : '#2563eb',
-      width: opts?.width ?? (type === 'rect' || type === 'circle' ? 100 : undefined),
-      height: opts?.height ?? (type === 'rect' ? 60 : undefined),
-      targetX: opts?.targetX,
-      targetY: opts?.targetY,
-    };
-    setAnnotations((prev) => [...prev, newAnn]);
-    setSelectedId(id);
-    setActiveTool('pointer');
-    triggerLayoutSave();
-  }, [effectiveMode, triggerLayoutSave, setAnnotations]);
-
-  const handleUpdateStatus = useCallback(async (nodeId: string, status: RuntimeStatus): Promise<void> => {
-    if (!activeLab) return;
-
-    // Block if operation already pending for this node
-    if (pendingNodeOps.has(nodeId)) {
-      addTaskLogEntry('info', 'Operation already in progress for this node');
-      return;
-    }
-
-    const node = nodes.find((n) => n.id === nodeId);
-    if (!node) return;
-    const nodeName = node.name;
-
-    // Map RuntimeStatus to desired state
-    const desiredState = status === 'stopped' ? 'stopped' : 'running';
-    const action = desiredState === 'running' ? 'start' : 'stop';
-
-    // Mark operation as pending
-    setPendingNodeOps((prev) => new Set(prev).add(nodeId));
-    addTaskLogEntry('info', `Setting "${nodeName}" to ${desiredState}...`);
-
-    try {
-      if (desiredState === 'running') {
-        await flushTopologySave();
-      }
-
-      // Optimistically update nodeStates -- runtimeStates derived automatically
-      const transitionalState = status === 'stopped' ? 'stopping' : 'starting';
-      optimisticGuardRef.current.set(nodeId, Date.now() + 5000);
-      setNodeStates((prev) => ({
-        ...prev,
-        [nodeId]: {
-          ...prev[nodeId],
-          actual_state: transitionalState,
-          desired_state: desiredState as 'stopped' | 'running',
-          display_state: transitionalState,
-        },
-      }));
-
-      // Set desired state - this now auto-triggers sync
-      await studioRequest(`/labs/${activeLab.id}/nodes/${encodeURIComponent(nodeId)}/desired-state`, {
-        method: 'PUT',
-        body: JSON.stringify({ state: desiredState }),
-      });
-
-      addTaskLogEntry('success', `${action === 'start' ? 'Starting' : 'Stopping'} "${nodeName}"...`);
-      loadJobs(activeLab.id, nodes);
-    } catch (error) {
-      let message = error instanceof Error ? error.message : 'Action failed';
-
-      // Handle specific HTTP error codes with user-friendly messages
-      if (error instanceof Error) {
-        // Check for 409 Conflict (operation already in progress)
-        if (message.includes('409') || message.toLowerCase().includes('already in progress') || message.toLowerCase().includes('conflict')) {
-          message = 'Another operation is already in progress for this lab';
-          addTaskLogEntry('warning', `Cannot ${action} "${nodeName}": ${message}`);
-          // Don't set error state - just inform the user
-          return;
-        }
-        // Check for 503 Service Unavailable (agent busy / lock timeout)
-        if (message.includes('503') || message.toLowerCase().includes('try again later')) {
-          message = 'Service temporarily unavailable, please try again';
-          addTaskLogEntry('warning', `Cannot ${action} "${nodeName}": ${message}`);
-          return;
-        }
-      }
-
-      console.error('Node action failed:', error);
-      setNodeStates((prev) => ({
-        ...prev,
-        [nodeId]: { ...prev[nodeId], actual_state: 'error', error_message: message },
-      }));
-      addTaskLogEntry('error', `Node ${action} failed for "${nodeName}": ${message}`);
-    } finally {
-      // Clear pending operation
-      setPendingNodeOps((prev) => {
-        const next = new Set(prev);
-        next.delete(nodeId);
-        return next;
-      });
-    }
-  }, [activeLab, nodes, pendingNodeOps, studioRequest, addTaskLogEntry, loadNodeStates, loadJobs, flushTopologySave, setPendingNodeOps, setNodeStates, optimisticGuardRef]);
-
-  const handleOpenConsole = useCallback((nodeId: string) => {
-    consoleManager.handleOpenConsole(nodeId, setIsTaskLogVisible);
-  }, [consoleManager, setIsTaskLogVisible]);
-
-  const handleExtractNodeConfig = useCallback(async (nodeId: string) => {
-    if (!activeLab) return;
-    const node = nodes.find((n) => n.id === nodeId);
-    if (!node || !isDeviceNode(node)) return;
-
-    addTaskLogEntry('info', `Extracting config for "${node.name}"...`);
-    try {
-      const result = await studioRequest<{ message: string }>(
-        `/labs/${activeLab.id}/nodes/${encodeURIComponent(nodeId)}/extract-config?create_snapshot=true&snapshot_type=manual`,
-        { method: 'POST' }
-      );
-      addTaskLogEntry('success', `Config extracted successfully for "${node.name}"`);
-      addNotification(
-        'success',
-        `Config extracted: ${node.name}`,
-        result.message || `Config extracted successfully for "${node.name}"`,
-        { labId: activeLab.id, category: 'config-extract-node-success' }
-      );
-      if (result.message) {
-        addTaskLogEntry('info', result.message);
-      }
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Extract failed';
-      addTaskLogEntry('error', `Config extraction failed for "${node.name}": ${message}`);
-      addNotification(
-        'error',
-        `Config extract failed: ${node.name}`,
-        message,
-        { labId: activeLab.id, category: 'config-extract-node-failed' }
-      );
-    }
-  }, [activeLab, nodes, studioRequest, addTaskLogEntry, addNotification]);
-
-  const handleDockWindow = useCallback((windowId: string) => {
-    consoleManager.handleDockWindow(windowId, setIsTaskLogVisible);
-  }, [consoleManager, setIsTaskLogVisible]);
-
-
   const handleToggleAgentIndicators = useCallback(() => {
     setShowAgentIndicators(prev => {
       const next = !prev;
@@ -530,280 +224,24 @@ const StudioPage: React.FC = () => {
     });
   }, []);
 
-
-  const handleStartTests = useCallback(async (specs?: import('./types').TestSpec[]) => {
-    if (!activeLab?.id || testRunning) return;
-    setTestResults([]);
-    setTestSummary(null);
-    setTestRunning(true);
-    try {
-      const options: RequestInit = { method: 'POST' };
-      if (specs && specs.length > 0) {
-        options.body = JSON.stringify({ specs });
-      }
-      await apiRequest(`/labs/${activeLab.id}/tests/run`, options);
-    } catch (e: any) {
-      setTestRunning(false);
-      addNotification('error', 'Test run failed', e.message || 'Failed to start tests');
-    }
-  }, [activeLab?.id, testRunning, addNotification, setTestResults, setTestSummary, setTestRunning]);
-
-  const handleStartScenario = useCallback(async (filename: string) => {
-    if (!activeLab?.id || activeScenarioJobId) return;
-    try {
-      const data = await apiRequest<{ job_id: string }>(`/labs/${activeLab.id}/scenarios/${filename}/execute`, { method: 'POST' });
-      setActiveScenarioJobId(data.job_id);
-    } catch (e: any) {
-      addNotification('error', 'Scenario failed', e.message || 'Failed to start scenario');
-    }
-  }, [activeLab?.id, activeScenarioJobId, addNotification, setActiveScenarioJobId]);
-
-
-  const handleNodeMove = useCallback((id: string, x: number, y: number) => {
-    setNodes((prev) => prev.map((node) => (node.id === id ? { ...node, x, y } : node)));
-    triggerLayoutSave();
-  }, [triggerLayoutSave, setNodes]);
-
-  const handleAnnotationMove = useCallback((id: string, x: number, y: number) => {
-    setAnnotations((prev) => prev.map((ann) => (ann.id === id ? { ...ann, x, y } : ann)));
-    triggerLayoutSave();
-  }, [triggerLayoutSave, setAnnotations]);
-
-  const handleConnect = (sourceId: string, targetId: string) => {
-    const exists = links.find(
-      (link) => (link.source === sourceId && link.target === targetId) || (link.source === targetId && link.target === sourceId)
-    );
-    if (exists) return;
-
-    // Auto-assign next available interfaces
-    const sourceInterface = portManager.getNextInterface(sourceId);
-    const targetInterface = portManager.getNextInterface(targetId);
-
-    const newLink: Link = {
-      id: Math.random().toString(36).slice(2, 9),
-      source: sourceId,
-      target: targetId,
-      type: 'p2p',
-      sourceInterface,
-      targetInterface,
-    };
-    setLinks((prev) => [...prev, newLink]);
-    setSelectedId(newLink.id);
-    // Auto-save topology
-    triggerTopologySave();
-  };
-
-  const handleUpdateNode = (id: string, updates: Partial<Node>) => {
-    setNodes((prev) => {
-      const next = prev.map((node) => (node.id === id ? { ...node, ...updates } as Node : node));
-      // Keep ref in sync immediately so flushTopologySave() sees latest host assignment.
-      nodesRef.current = next;
-      return next;
-    });
-    // Auto-save topology if name, model, version, or host changed (device nodes only)
-    const deviceUpdates = updates as Partial<DeviceNode>;
-    if (updates.name || deviceUpdates.model || deviceUpdates.version || deviceUpdates.host
-        || deviceUpdates.cpu !== undefined || deviceUpdates.memory !== undefined) {
-      triggerTopologySave();
-    }
-    // Also save if external network fields change
-    const extUpdates = updates as Partial<ExternalNetworkNode>;
-    if (extUpdates.managedInterfaceId !== undefined || extUpdates.connectionType || extUpdates.parentInterface || extUpdates.vlanId || extUpdates.bridgeName || extUpdates.host) {
-      triggerTopologySave();
-    }
-  };
-
-  const handleUpdateLink = (id: string, updates: Partial<Link>) => {
-    const prevLink = linksRef.current.find((link) => link.id === id);
-    if (!prevLink) return;
-
-    const nextLink = { ...prevLink, ...updates };
-    setLinks((prev) => prev.map((link) => (link.id === id ? nextLink : link)));
-
-    // Auto-save topology if interface assignments changed
-    const interfacesChanged = updates.sourceInterface || updates.targetInterface;
-    if (interfacesChanged) {
-      triggerTopologySave();
-    }
-
-    if (!interfacesChanged || !activeLab) return;
-
-    const sourceNode = nodesRef.current.find((node) => node.id === nextLink.source);
-    const targetNode = nodesRef.current.find((node) => node.id === nextLink.target);
-    if (!sourceNode || !targetNode) return;
-    if (!isDeviceNode(sourceNode) || !isDeviceNode(targetNode)) return;
-
-    const sourceState = runtimeStates[sourceNode.id];
-    const targetState = runtimeStates[targetNode.id];
-    const isRunning = sourceState === 'running' && targetState === 'running';
-
-    if (!isRunning) {
-      return;
-    }
-
-    const sourceName = sourceNode.container_name || sourceNode.name;
-    const targetName = targetNode.container_name || targetNode.name;
-
-    const oldSourceIface = prevLink.sourceInterface || '';
-    const oldTargetIface = prevLink.targetInterface || '';
-    const newSourceIface = nextLink.sourceInterface || '';
-    const newTargetIface = nextLink.targetInterface || '';
-
-    if (oldSourceIface === newSourceIface && oldTargetIface === newTargetIface) {
-      return;
-    }
-
-    if (!newSourceIface || !newTargetIface) {
-      return;
-    }
-
-    const hotSwapLink = async () => {
-      try {
-        if (oldSourceIface && oldTargetIface) {
-          const oldLinkId = `${sourceName}:${oldSourceIface}-${targetName}:${oldTargetIface}`;
-          await studioRequest(`/labs/${activeLab.id}/hot-disconnect/${encodeURIComponent(oldLinkId)}`, {
-            method: 'DELETE',
-          });
-        }
-
-        const response = await studioRequest<{ success: boolean; error?: string }>(
-          `/labs/${activeLab.id}/hot-connect`,
-          {
-            method: 'POST',
-            body: JSON.stringify({
-              source_node: sourceName,
-              source_interface: newSourceIface,
-              target_node: targetName,
-              target_interface: newTargetIface,
-            }),
-          }
-        );
-
-        if (!response.success) {
-          throw new Error(response.error || 'Hot-connect failed');
-        }
-      } catch (error) {
-        const message = error instanceof Error ? error.message : 'Hot-connect failed';
-        console.error('Hot-connect failed:', error);
-        addTaskLogEntry('error', `Hot-connect failed for ${sourceName} ↔ ${targetName}: ${message}`);
-        addNotification('error', 'Hot-connect failed', message);
-
-        setLinks((prev) => prev.map((link) => (link.id === id ? prevLink : link)));
-        triggerTopologySave();
-
-        if (oldSourceIface && oldTargetIface) {
-          try {
-            await studioRequest(`/labs/${activeLab.id}/hot-connect`, {
-              method: 'POST',
-              body: JSON.stringify({
-                source_node: sourceName,
-                source_interface: oldSourceIface,
-                target_node: targetName,
-                target_interface: oldTargetIface,
-              }),
-            });
-          } catch (restoreError) {
-            console.error('Failed to restore previous link after hot-connect failure:', restoreError);
-          }
-        }
-      }
-    };
-
-    void hotSwapLink();
-  };
-
-  const handleUpdateAnnotation = (id: string, updates: Partial<Annotation>) => {
-    setAnnotations((prev) => prev.map((ann) => (ann.id === id ? { ...ann, ...updates } : ann)));
-    triggerLayoutSave();
-  };
-
-
-  const handleDelete = (id: string) => {
-    const isAnnotation = annotations.some((ann) => ann.id === id);
-    const isNode = nodes.some((node) => node.id === id);
-    const isLink = links.some((link) => link.id === id);
-    setNodes((prev) => prev.filter((node) => node.id !== id));
-    setLinks((prev) => prev.filter((link) => link.id !== id && link.source !== id && link.target !== id));
-    setAnnotations((prev) => prev.filter((ann) => ann.id !== id));
-    clearSelection();
-    // Trigger layout save if an annotation was deleted
-    if (isAnnotation) {
-      triggerLayoutSave();
-    }
-    // Trigger topology save if a node or link was deleted
-    if (isNode || isLink) {
-      triggerTopologySave();
-    }
-  };
-
-  const handleExport = async () => {
+  const handleExport = useCallback(async () => {
     if (!activeLab) return;
     const data = await studioRequest<{ content: string }>(`/labs/${activeLab.id}/export-yaml`);
     openYamlPreview(data.content || '');
-  };
+  }, [activeLab, studioRequest, openYamlPreview]);
 
-  const handleDownloadBundle = async (lab: LabSummary) => {
-    try {
-      const response = await rawApiRequest(`/labs/${lab.id}/download-bundle`);
-      if (!response.ok) {
-        let errorMessage = 'Bundle download failed';
-        try {
-          const err = await response.json();
-          if (err?.detail) {
-            errorMessage = String(err.detail);
-          }
-        } catch {
-          // Ignore parse failures and use default message.
-        }
-        throw new Error(errorMessage);
-      }
-
-      const blob = await response.blob();
-      const filename =
-        response.headers.get('Content-Disposition')?.split('filename=')[1] ||
-        `${lab.name.replace(/\s+/g, '_')}_bundle.zip`;
-      downloadBlob(blob, filename);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Bundle download failed';
-      addNotification('error', 'Download failed', message);
-      console.error('Bundle download failed:', error);
-    }
-  };
-
-  const handleExportFull = async () => {
+  const handleExportFull = useCallback(async () => {
     if (!activeLab) return;
-    // Save layout first to include the latest canvas state.
     await saveLayout(activeLab.id, nodes, annotations);
     await handleDownloadBundle(activeLab);
-  };
+  }, [activeLab, saveLayout, nodes, annotations, handleDownloadBundle]);
 
-  const handleLogin = async (username: string, password?: string) => {
-    const success = await attemptLogin(username, password);
-    if (success) {
-      await refreshUser();
-      await loadLabs();
-      await refreshDeviceCatalog();
-    }
-  };
+  const selectedItem = nodes.find((node) => node.id === selectedId)
+    || links.find((link) => link.id === selectedId)
+    || annotations.find((ann) => ann.id === selectedId)
+    || null;
 
-  const selectedItem = nodes.find((node) => node.id === selectedId) || links.find((link) => link.id === selectedId) || annotations.find((ann) => ann.id === selectedId) || null;
-
-  // Handle extract configs for ConfigsView
-  const handleExtractConfigs = useCallback(async () => {
-    if (!activeLab) return;
-    addTaskLogEntry('info', 'Extracting configs...');
-    try {
-      const result = await studioRequest<{ success: boolean; extracted_count: number; snapshots_created: number; message: string }>(
-        `/labs/${activeLab.id}/extract-configs?create_snapshot=true&snapshot_type=manual`,
-        { method: 'POST' }
-      );
-      addTaskLogEntry('success', result.message);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Extract failed';
-      addTaskLogEntry('error', `Extract failed: ${message}`);
-      throw error;
-    }
-  }, [activeLab, studioRequest, addTaskLogEntry]);
+  // --- Render helpers ---
 
   const renderView = () => {
     switch (view) {
@@ -835,13 +273,10 @@ const StudioPage: React.FC = () => {
             deviceModels={deviceModels}
             onUpdateStatus={handleUpdateStatus}
             onSetRuntimeStatus={(nodeId, status) => {
-              // Map RuntimeStatus back to actual_state for optimistic updates
               const actualStateMap: Record<string, string> = {
                 booting: 'starting', stopping: 'stopping', running: 'running', stopped: 'stopped', error: 'error',
               };
               const actualState = actualStateMap[status] || status;
-              // Set optimistic guard: protect transitional states from being
-              // overwritten by stale polling/WS data for 5 seconds
               if (actualState === 'stopping' || actualState === 'starting') {
                 optimisticGuardRef.current.set(nodeId, Date.now() + 5000);
               }
@@ -990,7 +425,6 @@ const StudioPage: React.FC = () => {
               studioRequest={studioRequest}
               agents={agents}
               nodeStates={nodeStates}
-              nodeReadinessHints={nodeReadinessHints}
             />
               </div>
             </div>
@@ -1027,80 +461,7 @@ const StudioPage: React.FC = () => {
   return (
     <div className={`flex flex-col h-screen overflow-hidden select-none transition-colors duration-500 ${view === 'designer' ? '' : backgroundGradient}`}>
       <TopBar labName={activeLab.name} onExport={handleExport} onExportFull={handleExportFull} onExit={handleExitLab} onRename={(newName) => handleRenameLab(activeLab.id, newName)} />
-      <div className="h-10 bg-white/35 dark:bg-black/35 backdrop-blur-md border-b border-stone-200/70 dark:border-black/70 flex px-6 items-center gap-1 shrink-0">
-        <button
-          onClick={() => setView('designer')}
-          className={`h-full px-4 text-[10px] font-black uppercase border-b-2 transition-all ${
-            view === 'designer'
-              ? 'text-sage-700 dark:text-sage-500 border-sage-700 dark:border-sage-500'
-              : 'text-stone-700 dark:text-stone-300 border-transparent hover:text-stone-900 dark:hover:text-stone-100'
-          }`}
-        >
-          Designer
-        </button>
-        <button
-          onClick={() => setView('runtime')}
-          className={`h-full px-4 text-[10px] font-black uppercase border-b-2 transition-all ${
-            view === 'runtime'
-              ? 'text-sage-700 dark:text-sage-500 border-sage-700 dark:border-sage-500'
-              : 'text-stone-700 dark:text-stone-300 border-transparent hover:text-stone-900 dark:hover:text-stone-100'
-          }`}
-        >
-          Runtime
-        </button>
-        <button
-          onClick={() => setView('configs')}
-          className={`h-full px-4 text-[10px] font-black uppercase border-b-2 transition-all ${
-            view === 'configs'
-              ? 'text-sage-700 dark:text-sage-500 border-sage-700 dark:border-sage-500'
-              : 'text-stone-700 dark:text-stone-300 border-transparent hover:text-stone-900 dark:hover:text-stone-100'
-          }`}
-        >
-          Configs
-        </button>
-        <button
-          onClick={() => setView('logs')}
-          className={`h-full px-4 text-[10px] font-black uppercase border-b-2 transition-all ${
-            view === 'logs'
-              ? 'text-sage-700 dark:text-sage-500 border-sage-700 dark:border-sage-500'
-              : 'text-stone-700 dark:text-stone-300 border-transparent hover:text-stone-900 dark:hover:text-stone-100'
-          }`}
-        >
-          Logs
-        </button>
-        <button
-          onClick={() => setView('tests')}
-          className={`h-full px-4 text-[10px] font-black uppercase border-b-2 transition-all ${
-            view === 'tests'
-              ? 'text-sage-700 dark:text-sage-500 border-sage-700 dark:border-sage-500'
-              : 'text-stone-700 dark:text-stone-300 border-transparent hover:text-stone-900 dark:hover:text-stone-100'
-          }`}
-        >
-          Tests
-        </button>
-        <button
-          onClick={() => setView('scenarios')}
-          className={`h-full px-4 text-[10px] font-black uppercase border-b-2 transition-all ${
-            view === 'scenarios'
-              ? 'text-sage-700 dark:text-sage-500 border-sage-700 dark:border-sage-500'
-              : 'text-stone-700 dark:text-stone-300 border-transparent hover:text-stone-900 dark:hover:text-stone-100'
-          }`}
-        >
-          Scenarios
-        </button>
-        {agents.length > 1 && (
-          <button
-            onClick={() => setView('infra')}
-            className={`h-full px-4 text-[10px] font-black uppercase border-b-2 transition-all ${
-              view === 'infra'
-                ? 'text-sage-700 dark:text-sage-500 border-sage-700 dark:border-sage-500'
-                : 'text-stone-700 dark:text-stone-300 border-transparent hover:text-stone-900 dark:hover:text-stone-100'
-            }`}
-          >
-            Infra
-          </button>
-        )}
-      </div>
+      <ViewTabBar view={view} onViewChange={setView} showInfraTab={agents.length > 1} />
       {showAdminStrip && <SystemStatusStrip metrics={systemMetrics} />}
       <AgentAlertBanner />
       <div className="flex flex-1 overflow-hidden relative">

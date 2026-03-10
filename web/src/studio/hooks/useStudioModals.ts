@@ -26,7 +26,7 @@ export function useStudioModals() {
           : null;
       configViewer.open({ node, snapshot });
     },
-    [configViewer]
+    [configViewer.open]
   );
 
   const handleTaskLogEntryClick = useCallback(
@@ -37,7 +37,7 @@ export function useStudioModals() {
       }
       taskLogEntry.open(entry);
     },
-    [jobLog, taskLogEntry]
+    [jobLog.open, taskLogEntry.open]
   );
 
   return {

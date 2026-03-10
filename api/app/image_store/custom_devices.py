@@ -5,7 +5,7 @@ import json
 import logging
 import re
 
-from app.services.device_constraints import validate_minimum_hardware
+from app.services.device_service import validate_minimum_hardware
 
 from .aliases import (
     canonicalize_device_id,

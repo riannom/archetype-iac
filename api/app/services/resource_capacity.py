@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 
 from app import models
 from app.config import settings
-from app.services.device_constraints import minimum_hardware_for_device
+from app.services.device_service import minimum_hardware_for_device
 
 logger = logging.getLogger(__name__)
 

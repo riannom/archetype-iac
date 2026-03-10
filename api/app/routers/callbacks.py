@@ -25,7 +25,7 @@ from app.agent_auth import verify_agent_secret
 from app.state import JobStatus, LinkDesiredState, NodeActualState
 from app.utils.lab import update_lab_state
 from app.tasks.live_links import create_link_if_ready, _build_host_to_agent_map
-from app.services.link_operational_state import recompute_link_oper_state
+from app.services.link_manager import recompute_link_oper_state
 from app.services.broadcaster import get_broadcaster
 from app.services.interface_naming import normalize_interface
 

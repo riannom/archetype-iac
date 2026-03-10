@@ -4,17 +4,12 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import Canvas from './Canvas';
-import {
-  Node,
-  Link,
-  Annotation,
-  DeviceModel,
-  DeviceType,
-  DeviceNode,
-} from '../../types';
+import type { Node, Link, Annotation, DeviceModel } from '../../types';
+import { DeviceType } from '../../types';
 import { RuntimeStatus } from '../RuntimeControl';
 import { ThemeProvider } from '../../../theme/ThemeProvider';
 import type { LinkStateData } from '../../hooks/useLabStateWS';
+import { createDeviceNode, createLink, createAnnotation } from '../../../test-utils/factories';
 
 // Mock getBoundingClientRect for container element
 const mockGetBoundingClientRect = vi.fn(() => ({
@@ -52,18 +47,6 @@ const mockDeviceModels: DeviceModel[] = [
   { id: 'linux', name: 'Linux', type: DeviceType.HOST, icon: 'fa-server', versions: ['alpine:latest'], isActive: true, vendor: 'Generic' },
 ];
 
-const createDeviceNode = (overrides: Partial<DeviceNode> = {}): DeviceNode => ({
-  id: 'node-1', name: 'Router1', nodeType: 'device', type: DeviceType.ROUTER,
-  model: 'ceos', version: '4.28.0F', x: 100, y: 100, ...overrides,
-});
-
-const createLink = (overrides: Partial<Link> = {}): Link => ({
-  id: 'link-1', source: 'node-1', target: 'node-2', type: 'p2p', ...overrides,
-});
-
-const createAnnotation = (overrides: Partial<Annotation> = {}): Annotation => ({
-  id: 'ann-1', type: 'text' as const, x: 200, y: 200, ...overrides,
-});
 
 describe('Canvas - effects and state', () => {
   const noop = vi.fn();
