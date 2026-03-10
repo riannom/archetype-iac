@@ -108,6 +108,7 @@ class TestEarlyTransitionalStateAssignment:
         mock_ac = MagicMock()
         mock_ac.get_healthy_agent = AsyncMock(return_value=None)
         mock_ac.is_agent_online = MagicMock(return_value=False)
+        mock_ac.get_agent_for_node = AsyncMock(return_value=None)
 
         with patch("app.tasks.jobs_node_reconcile.get_session", mock_get_session(test_db)), \
              patch("app.tasks.node_lifecycle.agent_client", mock_ac), \
@@ -172,6 +173,7 @@ class TestEarlyTransitionalStateAssignment:
         mock_ac = MagicMock()
         mock_ac.get_healthy_agent = AsyncMock(return_value=None)
         mock_ac.is_agent_online = MagicMock(return_value=False)
+        mock_ac.get_agent_for_node = AsyncMock(return_value=None)
 
         with patch("app.tasks.jobs_node_reconcile.get_session", mock_get_session(test_db)), \
              patch("app.tasks.node_lifecycle.agent_client", mock_ac), \
@@ -233,6 +235,7 @@ class TestEarlyTransitionalStateAssignment:
         mock_ac = MagicMock()
         mock_ac.get_healthy_agent = AsyncMock(return_value=None)
         mock_ac.is_agent_online = MagicMock(return_value=False)
+        mock_ac.get_agent_for_node = AsyncMock(return_value=None)
 
         with patch("app.tasks.jobs_node_reconcile.get_session", mock_get_session(test_db)), \
              patch("app.tasks.node_lifecycle.agent_client", mock_ac), \
@@ -977,6 +980,8 @@ class TestEarlyPlacementUpdate:
         mock_ac = MagicMock()
         mock_ac.is_agent_online = MagicMock(return_value=True)
         mock_ac.get_healthy_agent = AsyncMock(return_value=None)
+        mock_ac.get_agent_for_node = AsyncMock(return_value=host)
+        mock_ac.ping_agent = AsyncMock(return_value=True)
         mock_ac.container_action = AsyncMock(
             return_value={"success": True, "status": "running"}
         )

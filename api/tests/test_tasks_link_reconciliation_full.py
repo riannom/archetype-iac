@@ -231,8 +231,11 @@ class TestCreateLinkIfReady:
         """Link is created when both endpoint nodes are running on the same host."""
         from app.tasks.live_links import create_link_if_ready
 
-        _make_node_state(test_db, sample_lab.id, "archetype-test-r1", actual_state="running")
-        _make_node_state(test_db, sample_lab.id, "archetype-test-r2", actual_state="running")
+        ns1 = _make_node_state(test_db, sample_lab.id, "archetype-test-r1", actual_state="running")
+        ns2 = _make_node_state(test_db, sample_lab.id, "archetype-test-r2", actual_state="running")
+        ns1.is_ready = True
+        ns2.is_ready = True
+        test_db.commit()
 
         link = _make_link_state(
             test_db, sample_lab.id,

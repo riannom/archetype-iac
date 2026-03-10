@@ -713,6 +713,9 @@ class TestConnectSameHostLinks:
 
         ns1 = _make_node_state(test_db, lab, "n1", "R1", desired="running", actual="running")
         ns2 = _make_node_state(test_db, lab, "n2", "R2", desired="running", actual="running")
+        ns1.is_ready = True
+        ns2.is_ready = True
+        test_db.commit()
         _make_placement(test_db, lab, "R1", host.id)
         _make_placement(test_db, lab, "R2", host.id)
 
