@@ -548,11 +548,7 @@ class LocalNetworkManager:
             # Determine interface name based on prefix
             # For "Ethernet" -> "Ethernet1", "Ethernet2", etc. (cEOS style)
             # For "eth" -> "eth1", "eth2", etc. (Linux style)
-            if interface_prefix.endswith("-"):
-                # e.g., "e1-" -> "e1-1", "e1-2" (SR Linux style)
-                iface_name = f"{interface_prefix}{iface_num}"
-            else:
-                iface_name = f"{interface_prefix}{iface_num}"
+            iface_name = f"{interface_prefix}{iface_num}"
 
             # Check if interface already exists
             code, _, _ = await self._run_cmd([

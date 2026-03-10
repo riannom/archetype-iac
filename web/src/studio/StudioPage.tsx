@@ -119,7 +119,7 @@ const StudioPage: React.FC = () => {
 
   const {
     nodeStates, setNodeStates, runtimeStates,
-    nodeReadinessHints, pendingNodeOps, setPendingNodeOps,
+    pendingNodeOps, setPendingNodeOps,
     optimisticGuardRef,
     handleWSNodeStateChange,
     loadNodeStates, loadNodeReadiness, refreshNodeStatesFromAgent,
@@ -990,7 +990,6 @@ const StudioPage: React.FC = () => {
               studioRequest={studioRequest}
               agents={agents}
               nodeStates={nodeStates}
-              nodeReadinessHints={nodeReadinessHints}
             />
               </div>
             </div>

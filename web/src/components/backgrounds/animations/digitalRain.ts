@@ -6,6 +6,8 @@
 import { useRef, useCallback } from 'react';
 import { useCanvasAnimation } from './useCanvasAnimation';
 
+const CHARS = '01₿₿₿SATOSHI'.split('');
+
 interface RainDrop {
   x: number;
   y: number;
@@ -24,20 +26,18 @@ export function useDigitalRain(
 ) {
   const dropsRef = useRef<RainDrop[]>([]);
 
-  const chars = '01₿₿₿SATOSHI'.split('');
-
   const createDrop = useCallback((canvas: HTMLCanvasElement, startFromTop = true): RainDrop => {
     const length = 5 + Math.floor(Math.random() * 15);
     return {
       x: Math.floor(Math.random() * (canvas.width / 16)) * 16,
       y: startFromTop ? -length * 16 : Math.random() * canvas.height,
       speed: 0.5 + Math.random() * 1,
-      chars: Array.from({ length }, () => chars[Math.floor(Math.random() * chars.length)]),
+      chars: Array.from({ length }, () => CHARS[Math.floor(Math.random() * CHARS.length)]),
       charIndex: 0,
       opacity: 0.15 + Math.random() * 0.2,
       length,
     };
-  }, [chars]);
+  }, []);
 
   useCanvasAnimation(
     canvasRef,
@@ -83,7 +83,7 @@ export function useDigitalRain(
 
           if (Math.random() < 0.01) {
             const changeIndex = Math.floor(Math.random() * drop.length);
-            drop.chars[changeIndex] = chars[Math.floor(Math.random() * chars.length)];
+            drop.chars[changeIndex] = CHARS[Math.floor(Math.random() * CHARS.length)];
           }
 
           if (drop.y > canvas.height + drop.length * 16) {
@@ -92,6 +92,6 @@ export function useDigitalRain(
         });
       },
     },
-    [darkMode, opacity, createDrop, chars]
+    [darkMode, opacity, createDrop]
   );
 }

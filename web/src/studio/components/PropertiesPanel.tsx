@@ -28,15 +28,6 @@ interface PropertiesPanelProps {
   studioRequest?: <T>(path: string, options?: RequestInit) => Promise<T>;
   agents?: { id: string; name: string }[];
   nodeStates?: Record<string, NodeStateEntry>;
-  nodeReadinessHints?: Record<
-    string,
-    {
-      is_ready: boolean;
-      actual_state: string;
-      progress_percent?: number | null;
-      message?: string | null;
-    }
-  >;
 }
 
 const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
