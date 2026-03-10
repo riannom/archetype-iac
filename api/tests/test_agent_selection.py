@@ -253,6 +253,52 @@ class TestGetHealthyAgent:
         assert result is not None
         assert result.id == "agent-2"
 
+    @pytest.mark.asyncio
+    async def test_device_compatibility_filters_cjunos_hosts(self, test_db: Session):
+        compatible = models.Host(
+            id="agent-good",
+            name="Agent Good",
+            address="localhost:8080",
+            status="online",
+            capabilities=json.dumps(
+                {
+                    "providers": ["docker"],
+                    "virtualization": {
+                        "cpu_flags": {"vnmi": True},
+                        "kvm_amd": {"vnmi": True},
+                    },
+                }
+            ),
+            last_heartbeat=datetime.now(timezone.utc),
+        )
+        incompatible = models.Host(
+            id="agent-bad",
+            name="Agent Bad",
+            address="localhost:8081",
+            status="online",
+            capabilities=json.dumps(
+                {
+                    "providers": ["docker"],
+                    "virtualization": {
+                        "cpu_flags": {"vnmi": False},
+                        "kvm_amd": {"vnmi": False},
+                    },
+                }
+            ),
+            last_heartbeat=datetime.now(timezone.utc),
+        )
+        test_db.add_all([compatible, incompatible])
+        test_db.commit()
+
+        result = await agent_client.get_healthy_agent(
+            test_db,
+            required_provider="docker",
+            device_type="juniper_cjunos",
+        )
+
+        assert result is not None
+        assert result.id == "agent-good"
+
 
 class TestGetAgentForLab:
     """Tests for get_agent_for_lab function."""
@@ -318,6 +364,79 @@ class TestGetAgentForLab:
         result = await agent_client.get_agent_for_lab(test_db, lab)
         assert result is not None
         assert result.id == "healthy-agent"
+
+
+class TestGetAgentForNode:
+    @pytest.mark.asyncio
+    async def test_explicit_incompatible_host_is_rejected(
+        self,
+        test_db: Session,
+        test_user: models.User,
+    ):
+        incompatible = models.Host(
+            id="agent-bad",
+            name="Agent Bad",
+            address="localhost:8080",
+            status="online",
+            capabilities=json.dumps(
+                {
+                    "providers": ["docker"],
+                    "virtualization": {
+                        "cpu_flags": {"vnmi": False},
+                        "kvm_amd": {"vnmi": False},
+                    },
+                }
+            ),
+            last_heartbeat=datetime.now(timezone.utc),
+        )
+        compatible = models.Host(
+            id="agent-good",
+            name="Agent Good",
+            address="localhost:8081",
+            status="online",
+            capabilities=json.dumps(
+                {
+                    "providers": ["docker"],
+                    "virtualization": {
+                        "cpu_flags": {"vnmi": True},
+                        "kvm_amd": {"vnmi": True},
+                    },
+                }
+            ),
+            last_heartbeat=datetime.now(timezone.utc),
+        )
+        test_db.add_all([incompatible, compatible])
+        test_db.commit()
+
+        lab = models.Lab(
+            name="Placement Lab",
+            owner_id=test_user.id,
+            provider="docker",
+            agent_id="agent-good",
+        )
+        test_db.add(lab)
+        test_db.commit()
+
+        node = models.Node(
+            lab_id=lab.id,
+            gui_id="node-1",
+            display_name="JUNIPER_CJUNOS-1",
+            container_name="juniper_cjunos_1",
+            node_type="device",
+            device="juniper_cjunos",
+            host_id="agent-bad",
+        )
+        test_db.add(node)
+        test_db.commit()
+
+        result = await agent_client.get_agent_for_node(
+            test_db,
+            lab.id,
+            "juniper_cjunos_1",
+            required_provider="docker",
+        )
+
+        assert result is None
 
 
 class TestGetAgentByName:

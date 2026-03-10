@@ -88,6 +88,39 @@ def test_sync_get_resource_usage_returns_empty_on_failure(monkeypatch):
     assert usage == {}
 
 
+def test_get_virtualization_capabilities_reports_cpu_and_kvm(monkeypatch, tmp_path):
+    cpuinfo = tmp_path / "cpuinfo"
+    cpuinfo.write_text(
+        "processor\t: 0\n"
+        "model name\t: AMD Test CPU\n"
+        "flags\t\t: svm npt nrip_save vgif vnmi\n"
+    )
+    sysfs = tmp_path / "sys" / "module" / "kvm_amd" / "parameters"
+    sysfs.mkdir(parents=True)
+    (sysfs / "vnmi").write_text("Y\n")
+    (sysfs / "vgif").write_text("1\n")
+    (sysfs / "npt").write_text("Y\n")
+
+    real_path = helpers_mod.Path
+
+    def _fake_path(path_str: str):
+        if path_str == "/proc/cpuinfo":
+            return real_path(cpuinfo)
+        if path_str.startswith("/sys/module/kvm_amd/parameters/"):
+            return real_path(sysfs / path_str.rsplit("/", 1)[-1])
+        return real_path(path_str)
+
+    monkeypatch.setattr(helpers_mod, "Path", _fake_path)
+    caps = helpers_mod.get_virtualization_capabilities()
+
+    assert caps is not None
+    assert caps.cpu_model == "AMD Test CPU"
+    assert caps.cpu_flags["vnmi"] is True
+    assert caps.cpu_flags["vgif"] is True
+    assert caps.kvm_amd["vnmi"] is True
+    assert caps.kvm_amd["vgif"] is True
+
+
 @pytest.mark.asyncio
 async def test_get_resource_usage_adds_vm_stats(monkeypatch):
     monkeypatch.setattr(helpers_mod.settings, "enable_libvirt", True)

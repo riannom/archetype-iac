@@ -255,25 +255,15 @@ class AgentResolutionMixin:
             if ns.node_name not in all_node_agents
         ]
         if fallback_nodes:
-            default_agent_id = None
-            if self.lab.agent_id:
-                default_agent = self.session.get(
-                    models.Host, self.lab.agent_id
+            for ns in fallback_nodes:
+                selected = await agent_client.get_agent_for_node(
+                    self.session,
+                    self.lab.id,
+                    ns.node_name,
+                    required_provider=self.provider,
                 )
-                if default_agent and agent_client.is_agent_online(
-                    default_agent
-                ):
-                    default_agent_id = self.lab.agent_id
-            if not default_agent_id:
-                healthy_agent = await agent_client.get_healthy_agent(
-                    self.session, required_provider=self.provider
-                )
-                if healthy_agent:
-                    default_agent_id = healthy_agent.id
-
-            if default_agent_id:
-                for ns in fallback_nodes:
-                    all_node_agents[ns.node_name] = default_agent_id
+                if selected:
+                    all_node_agents[ns.node_name] = selected.id
 
         return True
 
