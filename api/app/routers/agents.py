@@ -1063,11 +1063,16 @@ async def _build_agent_image_details(host: models.Host, database: Session) -> di
                         candidates.append(tag)
 
                 kind = img_info.get("kind") or ("docker" if img_info.get("tags") else "file")
+                in_use = img_info.get("in_use", False)
                 for candidate in candidates:
                     if "<none>" in candidate:
                         continue
                     tracked = tracked_by_reference.get(candidate)
                     is_needed = candidate in keep_refs
+                    # Images in use by running containers but not in the
+                    # catalog are infrastructure images (platform, monitoring,
+                    # etc.) — never flag them as stale.
+                    is_infra = in_use and not tracked
                     entry = {
                         "reference": candidate,
                         "display_reference": candidate,
@@ -1077,12 +1082,12 @@ async def _build_agent_image_details(host: models.Host, database: Session) -> di
                         "device_id": img_info.get("device_id"),
                         "tracked_image_id": tracked.image_id if tracked else None,
                         "tracked_status": tracked.status if tracked else None,
-                        "is_needed": is_needed,
-                        "is_stale": not is_needed,
-                        "reason": None if is_needed else "Not referenced by catalog or active nodes",
+                        "is_needed": is_needed or is_infra,
+                        "is_stale": not is_needed and not is_infra,
+                        "reason": None if (is_needed or is_infra) else "Not referenced by catalog or active nodes",
                     }
                     inventory.append(entry)
-                    if not is_needed:
+                    if not is_needed and not is_infra:
                         stale_images.append(entry)
         except Exception as e:
             inventory_refreshed_at = datetime.now(timezone.utc).isoformat()
