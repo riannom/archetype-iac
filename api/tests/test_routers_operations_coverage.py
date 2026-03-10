@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, MagicMock
 from sqlalchemy.orm import Session
 
 from app import models
+from tests.factories import make_node_state
 
 
 # ---------------------------------------------------------------------------
@@ -37,32 +38,6 @@ def _make_config_snapshot(
     db.commit()
     db.refresh(snap)
     return snap
-
-
-def _make_node_state(
-    db: Session,
-    lab_id: str,
-    node_id: str,
-    node_name: str,
-    *,
-    desired: str = "stopped",
-    actual: str = "undeployed",
-    is_ready: bool = False,
-    error_message: str | None = None,
-) -> models.NodeState:
-    ns = models.NodeState(
-        lab_id=lab_id,
-        node_id=node_id,
-        node_name=node_name,
-        desired_state=desired,
-        actual_state=actual,
-        is_ready=is_ready,
-        error_message=error_message,
-    )
-    db.add(ns)
-    db.commit()
-    db.refresh(ns)
-    return ns
 
 
 # ============================================================================
@@ -196,7 +171,7 @@ class TestInventoryExport:
     def test_inventory_json_format(
         self, test_client, auth_headers, test_db, sample_lab, monkeypatch
     ):
-        _make_node_state(test_db, sample_lab.id, "n1", "R1")
+        make_node_state(test_db, sample_lab.id, "n1", "R1")
 
         # Mock TopologyService so it doesn't try real DB queries for graph export
         import app.routers.labs as labs_pkg
@@ -223,7 +198,7 @@ class TestInventoryExport:
     def test_inventory_ansible_format(
         self, test_client, auth_headers, test_db, sample_lab, monkeypatch
     ):
-        ns = _make_node_state(test_db, sample_lab.id, "n1", "R1")
+        ns = make_node_state(test_db, sample_lab.id, "n1", "R1")
         ns.management_ip = "10.0.0.1"
         test_db.commit()
 
@@ -315,7 +290,7 @@ class TestInfraNotifications:
     def test_node_error_notification(
         self, test_client, auth_headers, test_db, sample_lab
     ):
-        _make_node_state(
+        make_node_state(
             test_db, sample_lab.id, "n1", "R1",
             actual="error", error_message="OOM killed",
         )

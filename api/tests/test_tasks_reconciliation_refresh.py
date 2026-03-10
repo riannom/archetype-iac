@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from app import models
 from app.state import LabState, NodeActualState, NodeDesiredState
+from tests.factories import make_lab, make_node, make_node_state, make_placement
 
 
 # ---------------------------------------------------------------------------
@@ -81,105 +82,6 @@ def _override_get_session(test_db: Session):
     return _session_ctx
 
 
-def _make_lab(
-    test_db: Session,
-    test_user: models.User,
-    *,
-    state: str = "stopped",
-    state_updated_at: datetime | None = None,
-    name: str | None = None,
-) -> models.Lab:
-    """Helper to create a lab with specific state."""
-    lab = models.Lab(
-        name=name or f"Lab-{uuid4().hex[:8]}",
-        owner_id=test_user.id,
-        provider="docker",
-        state=state,
-        workspace_path="/tmp/test-lab",
-        state_updated_at=state_updated_at,
-    )
-    test_db.add(lab)
-    test_db.commit()
-    test_db.refresh(lab)
-    return lab
-
-
-def _make_node_state(
-    test_db: Session,
-    lab_id: str,
-    *,
-    node_name: str = "R1",
-    node_id: str | None = None,
-    desired_state: str = "stopped",
-    actual_state: str = "undeployed",
-    is_ready: bool = False,
-    boot_started_at: datetime | None = None,
-    updated_at: datetime | None = None,
-) -> models.NodeState:
-    """Helper to create a NodeState with specific state."""
-    ns = models.NodeState(
-        lab_id=lab_id,
-        node_id=node_id or node_name.lower(),
-        node_name=node_name,
-        desired_state=desired_state,
-        actual_state=actual_state,
-        is_ready=is_ready,
-        boot_started_at=boot_started_at,
-    )
-    test_db.add(ns)
-    test_db.commit()
-    if updated_at is not None:
-        # Directly update the column to bypass onupdate triggers
-        test_db.execute(
-            models.NodeState.__table__.update()
-            .where(models.NodeState.id == ns.id)
-            .values(updated_at=updated_at)
-        )
-        test_db.commit()
-    test_db.refresh(ns)
-    return ns
-
-
-def _make_node_def(
-    test_db: Session,
-    lab_id: str,
-    *,
-    container_name: str = "R1",
-    device: str = "linux",
-) -> models.Node:
-    """Helper to create a Node definition."""
-    node = models.Node(
-        lab_id=lab_id,
-        gui_id=container_name.lower(),
-        display_name=container_name,
-        container_name=container_name,
-        node_type="device",
-        device=device,
-    )
-    test_db.add(node)
-    test_db.commit()
-    test_db.refresh(node)
-    return node
-
-
-def _make_placement(
-    test_db: Session,
-    lab_id: str,
-    node_name: str,
-    host_id: str,
-) -> models.NodePlacement:
-    """Helper to create a NodePlacement."""
-    placement = models.NodePlacement(
-        lab_id=lab_id,
-        node_name=node_name,
-        host_id=host_id,
-    )
-    test_db.add(placement)
-    test_db.commit()
-    test_db.refresh(placement)
-    return placement
-
-
 # ---------------------------------------------------------------------------
 # Test classes
 # ---------------------------------------------------------------------------
@@ -207,7 +109,7 @@ class TestSweepTriggerSelection:
         from app.tasks.reconciliation_refresh import refresh_states_from_agents
 
         stale_time = datetime.now(timezone.utc) - timedelta(seconds=1200)
-        lab = _make_lab(
+        lab = make_lab(
             test_db, test_user,
             state=LabState.STARTING.value,
             state_updated_at=stale_time,
@@ -236,7 +138,7 @@ class TestSweepTriggerSelection:
         from app.tasks.reconciliation_refresh import refresh_states_from_agents
 
         stale_time = datetime.now(timezone.utc) - timedelta(seconds=1200)
-        lab = _make_lab(
+        lab = make_lab(
             test_db, test_user,
             state=LabState.STOPPING.value,
             state_updated_at=stale_time,
@@ -264,7 +166,7 @@ class TestSweepTriggerSelection:
         from app.tasks.reconciliation_refresh import refresh_states_from_agents
 
         stale_time = datetime.now(timezone.utc) - timedelta(seconds=1200)
-        lab = _make_lab(
+        lab = make_lab(
             test_db, test_user,
             state=LabState.UNKNOWN.value,
             state_updated_at=stale_time,
@@ -291,18 +193,18 @@ class TestSweepTriggerSelection:
         """A running lab with no issues should NOT be selected (non-sweep cycle)."""
         from app.tasks.reconciliation_refresh import refresh_states_from_agents
 
-        lab = _make_lab(test_db, test_user, state=LabState.RUNNING.value)
+        lab = make_lab(test_db, test_user, state=LabState.RUNNING.value)
 
         # Ensure no nodes in problematic states
-        _make_node_state(
+        make_node_state(
             test_db, lab.id,
             actual_state=NodeActualState.RUNNING.value,
             desired_state=NodeDesiredState.RUNNING.value,
             is_ready=True,
         )
         # Add node definition and placement so this node isn't flagged as orphan
-        _make_node_def(test_db, lab.id, container_name="R1")
-        _make_placement(test_db, lab.id, "R1", sample_host.id)
+        make_node(test_db, lab.id, container_name="R1")
+        make_placement(test_db, lab.id, "R1", sample_host.id)
 
         with patch(
             "app.tasks.reconciliation_refresh.get_session",
@@ -331,7 +233,7 @@ class TestTransitionalStateAgeGuards:
 
         # Set state_updated_at to now (within threshold)
         fresh_time = datetime.now(timezone.utc)
-        lab = _make_lab(
+        lab = make_lab(
             test_db, test_user,
             state=LabState.STARTING.value,
             state_updated_at=fresh_time,
@@ -358,9 +260,9 @@ class TestTransitionalStateAgeGuards:
         """Nodes in PENDING state past threshold should trigger reconciliation."""
         from app.tasks.reconciliation_refresh import refresh_states_from_agents
 
-        lab = _make_lab(test_db, test_user, state=LabState.RUNNING.value)
+        lab = make_lab(test_db, test_user, state=LabState.RUNNING.value)
         stale_time = datetime.now(timezone.utc) - timedelta(seconds=1200)
-        _make_node_state(
+        make_node_state(
             test_db, lab.id,
             node_name="R1",
             actual_state=NodeActualState.PENDING.value,
@@ -392,19 +294,19 @@ class TestTransitionalStateAgeGuards:
         # Use STARTING lab state so it matches the computed state (pending node -> starting)
         # and thus avoids triggering the inconsistent-state path.
         # The lab's state_updated_at must also be recent to avoid the transitional threshold.
-        lab = _make_lab(
+        lab = make_lab(
             test_db, test_user,
             state=LabState.STARTING.value,
             state_updated_at=datetime.now(timezone.utc),
         )
         # Default updated_at is now() — within threshold
-        _make_node_state(
+        make_node_state(
             test_db, lab.id,
             node_name="R1",
             actual_state=NodeActualState.PENDING.value,
         )
-        _make_node_def(test_db, lab.id, container_name="R1")
-        _make_placement(test_db, lab.id, "R1", sample_host.id)
+        make_node(test_db, lab.id, container_name="R1")
+        make_placement(test_db, lab.id, "R1", sample_host.id)
 
         with patch(
             "app.tasks.reconciliation_refresh.get_session",
@@ -431,8 +333,8 @@ class TestPerLabTriggers:
         """Labs with ERROR nodes should be selected for reconciliation."""
         from app.tasks.reconciliation_refresh import refresh_states_from_agents
 
-        lab = _make_lab(test_db, test_user, state=LabState.ERROR.value)
-        _make_node_state(
+        lab = make_lab(test_db, test_user, state=LabState.ERROR.value)
+        make_node_state(
             test_db, lab.id,
             node_name="R1",
             actual_state=NodeActualState.ERROR.value,
@@ -459,8 +361,8 @@ class TestPerLabTriggers:
         """Labs with running but not-ready nodes should trigger reconciliation."""
         from app.tasks.reconciliation_refresh import refresh_states_from_agents
 
-        lab = _make_lab(test_db, test_user, state=LabState.RUNNING.value)
-        _make_node_state(
+        lab = make_lab(test_db, test_user, state=LabState.RUNNING.value)
+        make_node_state(
             test_db, lab.id,
             node_name="R1",
             actual_state=NodeActualState.RUNNING.value,
@@ -489,8 +391,8 @@ class TestPerLabTriggers:
         """Nodes where desired=running but actual=stopped should trigger reconciliation."""
         from app.tasks.reconciliation_refresh import refresh_states_from_agents
 
-        lab = _make_lab(test_db, test_user, state=LabState.RUNNING.value)
-        _make_node_state(
+        lab = make_lab(test_db, test_user, state=LabState.RUNNING.value)
+        make_node_state(
             test_db, lab.id,
             node_name="R1",
             desired_state=NodeDesiredState.RUNNING.value,
@@ -518,8 +420,8 @@ class TestPerLabTriggers:
         """Running nodes missing NodePlacement should trigger reconciliation."""
         from app.tasks.reconciliation_refresh import refresh_states_from_agents
 
-        lab = _make_lab(test_db, test_user, state=LabState.RUNNING.value)
-        _make_node_state(
+        lab = make_lab(test_db, test_user, state=LabState.RUNNING.value)
+        make_node_state(
             test_db, lab.id,
             node_name="R1",
             actual_state=NodeActualState.RUNNING.value,
@@ -549,9 +451,9 @@ class TestPerLabTriggers:
         """Placements for deleted nodes should trigger reconciliation."""
         from app.tasks.reconciliation_refresh import refresh_states_from_agents
 
-        lab = _make_lab(test_db, test_user, state=LabState.RUNNING.value)
+        lab = make_lab(test_db, test_user, state=LabState.RUNNING.value)
         # Create placement for a node that does NOT have a matching Node definition
-        _make_placement(test_db, lab.id, "deleted-node", sample_host.id)
+        make_placement(test_db, lab.id, "deleted-node", sample_host.id)
 
         with patch(
             "app.tasks.reconciliation_refresh.get_session",
@@ -578,14 +480,14 @@ class TestInconsistentLabState:
         """Lab state='running' but all nodes stopped -> inconsistent -> selected."""
         from app.tasks.reconciliation_refresh import refresh_states_from_agents
 
-        lab = _make_lab(test_db, test_user, state=LabState.RUNNING.value)
-        _make_node_state(
+        lab = make_lab(test_db, test_user, state=LabState.RUNNING.value)
+        make_node_state(
             test_db, lab.id,
             node_name="R1",
             actual_state=NodeActualState.STOPPED.value,
             desired_state=NodeDesiredState.STOPPED.value,
         )
-        _make_node_state(
+        make_node_state(
             test_db, lab.id,
             node_name="R2",
             node_id="r2",
@@ -618,18 +520,18 @@ class TestPeriodicFullSweep:
         """Every 10th cycle should add all deployed labs to reconciliation set."""
         from app.tasks.reconciliation_refresh import refresh_states_from_agents
 
-        lab = _make_lab(test_db, test_user, state=LabState.RUNNING.value)
+        lab = make_lab(test_db, test_user, state=LabState.RUNNING.value)
         # Make all nodes consistent so it wouldn't be selected normally
-        _make_node_state(
+        make_node_state(
             test_db, lab.id,
             node_name="R1",
             actual_state=NodeActualState.RUNNING.value,
             desired_state=NodeDesiredState.RUNNING.value,
             is_ready=True,
         )
-        _make_placement(test_db, lab.id, "R1", "dummy-host")
+        make_placement(test_db, lab.id, "R1", "dummy-host")
         # Add a Node definition so the placement isn't orphaned
-        _make_node_def(test_db, lab.id, container_name="R1")
+        make_node(test_db, lab.id, container_name="R1")
 
         # Set sweep counter to 9 so the next call is the 10th
         refresh_states_from_agents._sweep_counter = 9
@@ -655,16 +557,16 @@ class TestPeriodicFullSweep:
         """Non-10th cycles should NOT add healthy deployed labs."""
         from app.tasks.reconciliation_refresh import refresh_states_from_agents
 
-        lab = _make_lab(test_db, test_user, state=LabState.RUNNING.value)
-        _make_node_state(
+        lab = make_lab(test_db, test_user, state=LabState.RUNNING.value)
+        make_node_state(
             test_db, lab.id,
             node_name="R1",
             actual_state=NodeActualState.RUNNING.value,
             desired_state=NodeDesiredState.RUNNING.value,
             is_ready=True,
         )
-        _make_placement(test_db, lab.id, "R1", "dummy-host")
-        _make_node_def(test_db, lab.id, container_name="R1")
+        make_placement(test_db, lab.id, "R1", "dummy-host")
+        make_node(test_db, lab.id, container_name="R1")
 
         # Counter at 4 -> next call is 5 (not a sweep cycle)
         refresh_states_from_agents._sweep_counter = 4
@@ -695,7 +597,7 @@ class TestErrorHandling:
         from app.tasks.reconciliation_refresh import refresh_states_from_agents
 
         stale_time = datetime.now(timezone.utc) - timedelta(seconds=1200)
-        _make_lab(
+        make_lab(
             test_db, test_user,
             state=LabState.STARTING.value,
             state_updated_at=stale_time,
@@ -721,7 +623,7 @@ class TestErrorHandling:
         from app.tasks.reconciliation_refresh import refresh_states_from_agents
 
         stale_time = datetime.now(timezone.utc) - timedelta(seconds=1200)
-        _make_lab(
+        make_lab(
             test_db, test_user,
             state=LabState.STARTING.value,
             state_updated_at=stale_time,
@@ -776,8 +678,8 @@ class TestLabStateFiltering:
         """STOPPED labs should be included in the periodic full sweep."""
         from app.tasks.reconciliation_refresh import refresh_states_from_agents
 
-        lab = _make_lab(test_db, test_user, state=LabState.STOPPED.value)
-        _make_node_state(
+        lab = make_lab(test_db, test_user, state=LabState.STOPPED.value)
+        make_node_state(
             test_db, lab.id,
             node_name="R1",
             actual_state=NodeActualState.STOPPED.value,
@@ -808,8 +710,8 @@ class TestLabStateFiltering:
         """ERROR labs should be included in the periodic full sweep."""
         from app.tasks.reconciliation_refresh import refresh_states_from_agents
 
-        lab = _make_lab(test_db, test_user, state=LabState.ERROR.value)
-        _make_node_state(
+        lab = make_lab(test_db, test_user, state=LabState.ERROR.value)
+        make_node_state(
             test_db, lab.id,
             node_name="R1",
             actual_state=NodeActualState.ERROR.value,
@@ -838,18 +740,18 @@ class TestLabStateFiltering:
         from app.tasks.reconciliation_refresh import refresh_states_from_agents
 
         stale_time = datetime.now(timezone.utc) - timedelta(seconds=1200)
-        lab = _make_lab(
+        lab = make_lab(
             test_db, test_user,
             state=LabState.ERROR.value,
             state_updated_at=stale_time,
         )
         # Error node AND desired=running but actual=stopped -- two triggers
-        _make_node_state(
+        make_node_state(
             test_db, lab.id,
             node_name="R1",
             actual_state=NodeActualState.ERROR.value,
         )
-        _make_node_state(
+        make_node_state(
             test_db, lab.id,
             node_name="R2",
             node_id="r2",
@@ -883,8 +785,8 @@ class TestReadinessChecks:
         """Unready running nodes should trigger readiness checks."""
         from app.tasks.reconciliation_refresh import refresh_states_from_agents
 
-        lab = _make_lab(test_db, test_user, state=LabState.RUNNING.value)
-        _make_node_state(
+        lab = make_lab(test_db, test_user, state=LabState.RUNNING.value)
+        make_node_state(
             test_db, lab.id,
             node_name="R1",
             actual_state=NodeActualState.RUNNING.value,
@@ -915,16 +817,16 @@ class TestReadinessChecks:
         """Already-ready nodes should NOT trigger readiness checks."""
         from app.tasks.reconciliation_refresh import refresh_states_from_agents
 
-        lab = _make_lab(test_db, test_user, state=LabState.RUNNING.value)
-        _make_node_state(
+        lab = make_lab(test_db, test_user, state=LabState.RUNNING.value)
+        make_node_state(
             test_db, lab.id,
             node_name="R1",
             actual_state=NodeActualState.RUNNING.value,
             desired_state=NodeDesiredState.RUNNING.value,
             is_ready=True,
         )
-        _make_placement(test_db, lab.id, "R1", "dummy-host")
-        _make_node_def(test_db, lab.id, container_name="R1")
+        make_placement(test_db, lab.id, "R1", "dummy-host")
+        make_node(test_db, lab.id, container_name="R1")
 
         with patch(
             "app.tasks.reconciliation_refresh.get_session",

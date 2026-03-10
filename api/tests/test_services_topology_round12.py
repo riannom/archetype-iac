@@ -25,50 +25,12 @@ from app.schemas import (
     TopologyGraph,
 )
 from app.services.topology import TopologyService
+from tests.factories import make_host, make_link, make_node
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-
-def _make_node(db, lab_id, gui_id, name, device="linux", host_id=None,
-               config_json=None, image=None, version=None, node_type="device",
-               managed_interface_id=None):
-    n = models.Node(
-        lab_id=lab_id, gui_id=gui_id, display_name=name,
-        container_name=name, device=device, host_id=host_id,
-        config_json=config_json, image=image, version=version,
-        node_type=node_type, managed_interface_id=managed_interface_id,
-    )
-    db.add(n)
-    db.flush()
-    return n
-
-
-def _make_link(db, lab_id, src_node_id, src_iface, tgt_node_id, tgt_iface,
-               config_json=None, mtu=None, bandwidth=None):
-    from app.utils.link import generate_link_name
-    link_name = generate_link_name("src", src_iface, "tgt", tgt_iface)
-    lnk = models.Link(
-        lab_id=lab_id, link_name=link_name,
-        source_node_id=src_node_id, source_interface=src_iface,
-        target_node_id=tgt_node_id, target_interface=tgt_iface,
-        config_json=config_json, mtu=mtu, bandwidth=bandwidth,
-    )
-    db.add(lnk)
-    db.flush()
-    return lnk
-
-
-def _make_host(db, host_id, name="Host"):
-    h = models.Host(
-        id=host_id, name=name, address="localhost:8080",
-        status="online", capabilities="{}",
-    )
-    db.add(h)
-    db.flush()
-    return h
 
 
 # ---------------------------------------------------------------------------
@@ -80,8 +42,8 @@ class TestAnalyzePlacements:
 
     def test_all_nodes_on_default_host(self, test_db: Session, sample_lab: models.Lab):
         """When no node has explicit host, default_host_id assigns all."""
-        _make_node(test_db, sample_lab.id, "n1", "R1")
-        _make_node(test_db, sample_lab.id, "n2", "R2")
+        make_node(test_db, sample_lab.id, "n1", "R1")
+        make_node(test_db, sample_lab.id, "n2", "R2")
         test_db.commit()
 
         svc = TopologyService(test_db)
@@ -92,9 +54,9 @@ class TestAnalyzePlacements:
 
     def test_mixed_explicit_and_default_host(self, test_db: Session, sample_lab: models.Lab):
         """Node with explicit host_id uses that; others use default."""
-        _make_host(test_db, "h1")
-        _make_node(test_db, sample_lab.id, "n1", "R1", host_id="h1")
-        _make_node(test_db, sample_lab.id, "n2", "R2")
+        make_host(test_db, "h1")
+        make_node(test_db, sample_lab.id, "n1", "R1", host_id="h1")
+        make_node(test_db, sample_lab.id, "n2", "R2")
         test_db.commit()
 
         svc = TopologyService(test_db)
@@ -105,7 +67,7 @@ class TestAnalyzePlacements:
 
     def test_no_hosts_no_default_gives_empty_placements(self, test_db: Session, sample_lab: models.Lab):
         """Without any host info and no default, placements dict is empty."""
-        _make_node(test_db, sample_lab.id, "n1", "R1")
+        make_node(test_db, sample_lab.id, "n1", "R1")
         test_db.commit()
 
         svc = TopologyService(test_db)
@@ -116,12 +78,12 @@ class TestAnalyzePlacements:
 
     def test_cross_host_link_canonical_ordering_swapped(self, test_db: Session, sample_lab: models.Lab):
         """When ep_a > ep_b alphabetically, endpoints are swapped in CrossHostLink."""
-        _make_host(test_db, "h1")
-        _make_host(test_db, "h2")
+        make_host(test_db, "h1")
+        make_host(test_db, "h2")
         # "Z1" > "A1" alphabetically => swap will happen
-        n_z = _make_node(test_db, sample_lab.id, "nz", "Z1", host_id="h1")
-        n_a = _make_node(test_db, sample_lab.id, "na", "A1", host_id="h2")
-        _make_link(test_db, sample_lab.id, n_z.id, "eth1", n_a.id, "eth2")
+        n_z = make_node(test_db, sample_lab.id, "nz", "Z1", host_id="h1")
+        n_a = make_node(test_db, sample_lab.id, "na", "A1", host_id="h2")
+        make_link(test_db, sample_lab.id, n_z.id, "eth1", n_a.id, "eth2")
         test_db.commit()
 
         svc = TopologyService(test_db)
@@ -136,12 +98,12 @@ class TestAnalyzePlacements:
 
     def test_cross_host_link_with_ip_config(self, test_db: Session, sample_lab: models.Lab):
         """IPs from link config_json are included in CrossHostLink."""
-        _make_host(test_db, "h1")
-        _make_host(test_db, "h2")
-        n1 = _make_node(test_db, sample_lab.id, "n1", "A1", host_id="h1")
-        n2 = _make_node(test_db, sample_lab.id, "n2", "B1", host_id="h2")
+        make_host(test_db, "h1")
+        make_host(test_db, "h2")
+        n1 = make_node(test_db, sample_lab.id, "n1", "A1", host_id="h1")
+        n2 = make_node(test_db, sample_lab.id, "n2", "B1", host_id="h2")
         config = json.dumps({"ip_a": "10.0.0.1/24", "ip_b": "10.0.0.2/24"})
-        _make_link(test_db, sample_lab.id, n1.id, "eth1", n2.id, "eth1", config_json=config)
+        make_link(test_db, sample_lab.id, n1.id, "eth1", n2.id, "eth1", config_json=config)
         test_db.commit()
 
         svc = TopologyService(test_db)
@@ -152,13 +114,13 @@ class TestAnalyzePlacements:
 
     def test_cross_host_link_ip_swap_on_canonical_order(self, test_db: Session, sample_lab: models.Lab):
         """IPs are swapped when endpoints are swapped for canonical ordering."""
-        _make_host(test_db, "h1")
-        _make_host(test_db, "h2")
+        make_host(test_db, "h1")
+        make_host(test_db, "h2")
         # Z1:eth1 > A1:eth1 so swap will happen
-        n_z = _make_node(test_db, sample_lab.id, "nz", "Z1", host_id="h1")
-        n_a = _make_node(test_db, sample_lab.id, "na", "A1", host_id="h2")
+        n_z = make_node(test_db, sample_lab.id, "nz", "Z1", host_id="h1")
+        n_a = make_node(test_db, sample_lab.id, "na", "A1", host_id="h2")
         config = json.dumps({"ip_a": "1.1.1.1/24", "ip_b": "2.2.2.2/24"})
-        _make_link(test_db, sample_lab.id, n_z.id, "eth1", n_a.id, "eth1", config_json=config)
+        make_link(test_db, sample_lab.id, n_z.id, "eth1", n_a.id, "eth1", config_json=config)
         test_db.commit()
 
         svc = TopologyService(test_db)
@@ -171,11 +133,11 @@ class TestAnalyzePlacements:
 
     def test_cross_host_link_invalid_config_json(self, test_db: Session, sample_lab: models.Lab):
         """Invalid config_json is handled gracefully — IPs become None."""
-        _make_host(test_db, "h1")
-        _make_host(test_db, "h2")
-        n1 = _make_node(test_db, sample_lab.id, "n1", "A1", host_id="h1")
-        n2 = _make_node(test_db, sample_lab.id, "n2", "B1", host_id="h2")
-        _make_link(test_db, sample_lab.id, n1.id, "eth1", n2.id, "eth1",
+        make_host(test_db, "h1")
+        make_host(test_db, "h2")
+        n1 = make_node(test_db, sample_lab.id, "n1", "A1", host_id="h1")
+        n2 = make_node(test_db, sample_lab.id, "n2", "B1", host_id="h2")
+        make_link(test_db, sample_lab.id, n1.id, "eth1", n2.id, "eth1",
                    config_json="not-valid-json{")
         test_db.commit()
 
@@ -195,8 +157,8 @@ class TestBuildInterfaceIndexMap:
 
     def test_link_with_empty_interface(self, test_db: Session, sample_lab: models.Lab):
         """Links with empty interface are skipped (falsy check)."""
-        n1 = _make_node(test_db, sample_lab.id, "n1", "R1")
-        n2 = _make_node(test_db, sample_lab.id, "n2", "R2")
+        n1 = make_node(test_db, sample_lab.id, "n1", "R1")
+        n2 = make_node(test_db, sample_lab.id, "n2", "R2")
         test_db.commit()
 
         # Create link with empty string interfaces
@@ -215,8 +177,8 @@ class TestBuildInterfaceIndexMap:
 
     def test_link_with_non_numeric_interface(self, test_db: Session, sample_lab: models.Lab):
         """Interfaces without trailing numbers yield index 0."""
-        n1 = _make_node(test_db, sample_lab.id, "n1", "R1")
-        n2 = _make_node(test_db, sample_lab.id, "n2", "R2")
+        n1 = make_node(test_db, sample_lab.id, "n1", "R1")
+        n2 = make_node(test_db, sample_lab.id, "n2", "R2")
         test_db.commit()
 
         lnk = models.Link(
@@ -234,8 +196,8 @@ class TestBuildInterfaceIndexMap:
 
     def test_max_index_from_multiple_links(self, test_db: Session, sample_lab: models.Lab):
         """Multiple links — highest index wins."""
-        n1 = _make_node(test_db, sample_lab.id, "n1", "R1")
-        n2 = _make_node(test_db, sample_lab.id, "n2", "R2")
+        n1 = make_node(test_db, sample_lab.id, "n1", "R1")
+        n2 = make_node(test_db, sample_lab.id, "n2", "R2")
         test_db.commit()
 
         lnk1 = models.Link(
@@ -259,7 +221,7 @@ class TestBuildInterfaceIndexMap:
 
     def test_link_with_unknown_node_id(self, test_db: Session, sample_lab: models.Lab):
         """Links referencing node IDs not in the nodes list are skipped."""
-        n1 = _make_node(test_db, sample_lab.id, "n1", "R1")
+        n1 = make_node(test_db, sample_lab.id, "n1", "R1")
         test_db.commit()
 
         lnk = models.Link(
@@ -286,9 +248,9 @@ class TestBuildInterfaceIndexMap:
 class TestLinkToDeployDict:
 
     def test_basic_conversion(self, test_db: Session, sample_lab: models.Lab):
-        n1 = _make_node(test_db, sample_lab.id, "n1", "R1")
-        n2 = _make_node(test_db, sample_lab.id, "n2", "R2")
-        lnk = _make_link(test_db, sample_lab.id, n1.id, "eth1", n2.id, "eth2")
+        n1 = make_node(test_db, sample_lab.id, "n1", "R1")
+        n2 = make_node(test_db, sample_lab.id, "n2", "R2")
+        lnk = make_link(test_db, sample_lab.id, n1.id, "eth1", n2.id, "eth2")
         test_db.commit()
 
         svc = TopologyService(test_db)
@@ -301,9 +263,9 @@ class TestLinkToDeployDict:
         assert result["target_interface"] == "eth2"
 
     def test_missing_node_id_gives_empty_string(self, test_db: Session, sample_lab: models.Lab):
-        n1 = _make_node(test_db, sample_lab.id, "n1", "R1")
-        n2 = _make_node(test_db, sample_lab.id, "n2", "R2")
-        lnk = _make_link(test_db, sample_lab.id, n1.id, "eth1", n2.id, "eth2")
+        n1 = make_node(test_db, sample_lab.id, "n1", "R1")
+        n2 = make_node(test_db, sample_lab.id, "n2", "R2")
+        lnk = make_link(test_db, sample_lab.id, n1.id, "eth1", n2.id, "eth2")
         test_db.commit()
 
         svc = TopologyService(test_db)
@@ -315,8 +277,8 @@ class TestLinkToDeployDict:
 
     def test_empty_interfaces_become_empty_string(self, test_db: Session, sample_lab: models.Lab):
         """Empty-string interfaces pass through as empty strings."""
-        n1 = _make_node(test_db, sample_lab.id, "n1", "R1")
-        n2 = _make_node(test_db, sample_lab.id, "n2", "R2")
+        n1 = make_node(test_db, sample_lab.id, "n1", "R1")
+        n2 = make_node(test_db, sample_lab.id, "n2", "R2")
         lnk = models.Link(
             lab_id=sample_lab.id, link_name="test-link",
             source_node_id=n1.id, source_interface="",
@@ -341,10 +303,10 @@ class TestLinkToDeployDict:
 class TestExportToGraphLinkConfig:
 
     def test_link_ips_exported(self, test_db: Session, sample_lab: models.Lab):
-        n1 = _make_node(test_db, sample_lab.id, "n1", "R1")
-        n2 = _make_node(test_db, sample_lab.id, "n2", "R2")
+        n1 = make_node(test_db, sample_lab.id, "n1", "R1")
+        n2 = make_node(test_db, sample_lab.id, "n2", "R2")
         config = json.dumps({"ip_a": "10.0.0.1/24", "ip_b": "10.0.0.2/24"})
-        _make_link(test_db, sample_lab.id, n1.id, "eth1", n2.id, "eth1", config_json=config)
+        make_link(test_db, sample_lab.id, n1.id, "eth1", n2.id, "eth1", config_json=config)
         test_db.commit()
 
         svc = TopologyService(test_db)
@@ -355,9 +317,9 @@ class TestExportToGraphLinkConfig:
         assert link.endpoints[1].ipv4 == "10.0.0.2/24"
 
     def test_link_mtu_and_bandwidth_exported(self, test_db: Session, sample_lab: models.Lab):
-        n1 = _make_node(test_db, sample_lab.id, "n1", "R1")
-        n2 = _make_node(test_db, sample_lab.id, "n2", "R2")
-        _make_link(test_db, sample_lab.id, n1.id, "eth1", n2.id, "eth1", mtu=9000, bandwidth=1000)
+        n1 = make_node(test_db, sample_lab.id, "n1", "R1")
+        n2 = make_node(test_db, sample_lab.id, "n2", "R2")
+        make_link(test_db, sample_lab.id, n1.id, "eth1", n2.id, "eth1", mtu=9000, bandwidth=1000)
         test_db.commit()
 
         svc = TopologyService(test_db)
@@ -368,10 +330,10 @@ class TestExportToGraphLinkConfig:
         assert link.bandwidth == 1000
 
     def test_link_type_pool_prefix_bridge_exported(self, test_db: Session, sample_lab: models.Lab):
-        n1 = _make_node(test_db, sample_lab.id, "n1", "R1")
-        n2 = _make_node(test_db, sample_lab.id, "n2", "R2")
+        n1 = make_node(test_db, sample_lab.id, "n1", "R1")
+        n2 = make_node(test_db, sample_lab.id, "n2", "R2")
         config = json.dumps({"type": "p2p", "name": "mylink", "pool": "mgmt", "prefix": "192.168.0.0/24", "bridge": "br0"})
-        _make_link(test_db, sample_lab.id, n1.id, "eth1", n2.id, "eth1", config_json=config)
+        make_link(test_db, sample_lab.id, n1.id, "eth1", n2.id, "eth1", config_json=config)
         test_db.commit()
 
         svc = TopologyService(test_db)
@@ -385,9 +347,9 @@ class TestExportToGraphLinkConfig:
         assert link.bridge == "br0"
 
     def test_invalid_link_config_json_handled(self, test_db: Session, sample_lab: models.Lab):
-        n1 = _make_node(test_db, sample_lab.id, "n1", "R1")
-        n2 = _make_node(test_db, sample_lab.id, "n2", "R2")
-        _make_link(test_db, sample_lab.id, n1.id, "eth1", n2.id, "eth1", config_json="bad{json")
+        n1 = make_node(test_db, sample_lab.id, "n1", "R1")
+        n2 = make_node(test_db, sample_lab.id, "n2", "R2")
+        make_link(test_db, sample_lab.id, n1.id, "eth1", n2.id, "eth1", config_json="bad{json")
         test_db.commit()
 
         svc = TopologyService(test_db)
@@ -398,7 +360,7 @@ class TestExportToGraphLinkConfig:
         assert graph.links[0].endpoints[0].ipv4 is None
 
     def test_invalid_node_config_json_handled(self, test_db: Session, sample_lab: models.Lab):
-        _make_node(test_db, sample_lab.id, "n1", "R1", config_json="not-json!!")
+        make_node(test_db, sample_lab.id, "n1", "R1", config_json="not-json!!")
         test_db.commit()
 
         svc = TopologyService(test_db)
@@ -416,7 +378,7 @@ class TestExportToGraphLinkConfig:
 class TestLinkStates:
 
     def test_link_node_states_by_container_name(self, test_db: Session, sample_lab: models.Lab):
-        n = _make_node(test_db, sample_lab.id, "g1", "R1")
+        n = make_node(test_db, sample_lab.id, "g1", "R1")
         ns = models.NodeState(
             lab_id=sample_lab.id, node_id="some-old-id", node_name="R1",
             desired_state="stopped", actual_state="undeployed",
@@ -431,7 +393,7 @@ class TestLinkStates:
         assert ns.node_definition_id == n.id
 
     def test_link_node_states_by_gui_id(self, test_db: Session, sample_lab: models.Lab):
-        n = _make_node(test_db, sample_lab.id, "gui-abc", "R1")
+        n = make_node(test_db, sample_lab.id, "gui-abc", "R1")
         ns = models.NodeState(
             lab_id=sample_lab.id, node_id="gui-abc", node_name="different-name",
             desired_state="stopped", actual_state="undeployed",
@@ -446,9 +408,9 @@ class TestLinkStates:
         assert ns.node_definition_id == n.id
 
     def test_link_link_states_by_link_name(self, test_db: Session, sample_lab: models.Lab):
-        n1 = _make_node(test_db, sample_lab.id, "n1", "R1")
-        n2 = _make_node(test_db, sample_lab.id, "n2", "R2")
-        lnk = _make_link(test_db, sample_lab.id, n1.id, "eth1", n2.id, "eth1")
+        n1 = make_node(test_db, sample_lab.id, "n1", "R1")
+        n2 = make_node(test_db, sample_lab.id, "n2", "R2")
+        lnk = make_link(test_db, sample_lab.id, n1.id, "eth1", n2.id, "eth1")
         ls = models.LinkState(
             lab_id=sample_lab.id, link_name=lnk.link_name,
             source_node="R1", source_interface="eth1",
@@ -466,9 +428,9 @@ class TestLinkStates:
 
     def test_link_link_states_no_match(self, test_db: Session, sample_lab: models.Lab):
         """LinkState with non-matching name stays unlinked."""
-        n1 = _make_node(test_db, sample_lab.id, "n1", "R1")
-        n2 = _make_node(test_db, sample_lab.id, "n2", "R2")
-        _make_link(test_db, sample_lab.id, n1.id, "eth1", n2.id, "eth1")
+        n1 = make_node(test_db, sample_lab.id, "n1", "R1")
+        n2 = make_node(test_db, sample_lab.id, "n2", "R2")
+        make_link(test_db, sample_lab.id, n1.id, "eth1", n2.id, "eth1")
         ls = models.LinkState(
             lab_id=sample_lab.id, link_name="completely-different-name",
             source_node="R1", source_interface="eth1",
@@ -606,9 +568,9 @@ class TestGetInterfaceCountMap:
     def test_max_ports_wins_over_link_index(self, mock_norm, mock_kind, mock_image, mock_ports,
                                             test_db: Session, sample_lab: models.Lab):
         """When max_ports > highest link index, max_ports is used."""
-        n1 = _make_node(test_db, sample_lab.id, "n1", "R1")
-        n2 = _make_node(test_db, sample_lab.id, "n2", "R2")
-        _make_link(test_db, sample_lab.id, n1.id, "eth3", n2.id, "eth2")
+        n1 = make_node(test_db, sample_lab.id, "n1", "R1")
+        n2 = make_node(test_db, sample_lab.id, "n2", "R2")
+        make_link(test_db, sample_lab.id, n1.id, "eth3", n2.id, "eth2")
         test_db.commit()
 
         svc = TopologyService(test_db)
@@ -623,9 +585,9 @@ class TestGetInterfaceCountMap:
     def test_link_index_wins_over_max_ports(self, mock_norm, mock_kind, mock_image, mock_ports,
                                             test_db: Session, sample_lab: models.Lab):
         """When highest link index > max_ports, link index is used."""
-        n1 = _make_node(test_db, sample_lab.id, "n1", "R1")
-        n2 = _make_node(test_db, sample_lab.id, "n2", "R2")
-        _make_link(test_db, sample_lab.id, n1.id, "eth10", n2.id, "eth1")
+        n1 = make_node(test_db, sample_lab.id, "n1", "R1")
+        n2 = make_node(test_db, sample_lab.id, "n2", "R2")
+        make_link(test_db, sample_lab.id, n1.id, "eth10", n2.id, "eth1")
         test_db.commit()
 
         svc = TopologyService(test_db)
@@ -643,13 +605,13 @@ class TestToTopologyYamlForHostLinkFilter:
 
     def test_cross_host_links_excluded(self, test_db: Session, sample_lab: models.Lab):
         """Links spanning two hosts are excluded from per-host YAML."""
-        _make_host(test_db, "h1")
-        _make_host(test_db, "h2")
-        n1 = _make_node(test_db, sample_lab.id, "n1", "R1", host_id="h1", device="linux")
-        n2 = _make_node(test_db, sample_lab.id, "n2", "R2", host_id="h2", device="linux")
-        n3 = _make_node(test_db, sample_lab.id, "n3", "R3", host_id="h1", device="linux")
-        _make_link(test_db, sample_lab.id, n1.id, "eth1", n2.id, "eth1")  # cross-host
-        _make_link(test_db, sample_lab.id, n1.id, "eth2", n3.id, "eth1")  # same-host
+        make_host(test_db, "h1")
+        make_host(test_db, "h2")
+        n1 = make_node(test_db, sample_lab.id, "n1", "R1", host_id="h1", device="linux")
+        n2 = make_node(test_db, sample_lab.id, "n2", "R2", host_id="h2", device="linux")
+        n3 = make_node(test_db, sample_lab.id, "n3", "R3", host_id="h1", device="linux")
+        make_link(test_db, sample_lab.id, n1.id, "eth1", n2.id, "eth1")  # cross-host
+        make_link(test_db, sample_lab.id, n1.id, "eth2", n3.id, "eth1")  # same-host
         test_db.commit()
 
         svc = TopologyService(test_db)
@@ -675,11 +637,11 @@ class TestReservedInterfacesTargetSide:
 
     def test_target_endpoint_on_host_reserved(self, test_db: Session, sample_lab: models.Lab):
         """When target node is on the queried host, target interface is reserved."""
-        _make_host(test_db, "h1")
-        _make_host(test_db, "h2")
-        n1 = _make_node(test_db, sample_lab.id, "n1", "R1", host_id="h2")
-        n2 = _make_node(test_db, sample_lab.id, "n2", "R2", host_id="h1")
-        _make_link(test_db, sample_lab.id, n1.id, "eth1", n2.id, "eth3")
+        make_host(test_db, "h1")
+        make_host(test_db, "h2")
+        n1 = make_node(test_db, sample_lab.id, "n1", "R1", host_id="h2")
+        n2 = make_node(test_db, sample_lab.id, "n2", "R2", host_id="h1")
+        make_link(test_db, sample_lab.id, n1.id, "eth1", n2.id, "eth3")
         test_db.commit()
 
         svc = TopologyService(test_db)
@@ -688,8 +650,8 @@ class TestReservedInterfacesTargetSide:
         assert ("R1", "eth1") not in reserved
 
     def test_no_links_gives_empty_reserved(self, test_db: Session, sample_lab: models.Lab):
-        _make_host(test_db, "h1")
-        _make_node(test_db, sample_lab.id, "n1", "R1", host_id="h1")
+        make_host(test_db, "h1")
+        make_node(test_db, sample_lab.id, "n1", "R1", host_id="h1")
         test_db.commit()
 
         svc = TopologyService(test_db)

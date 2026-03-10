@@ -10,6 +10,7 @@ from uuid import uuid4
 from sqlalchemy.orm import Session
 
 from app import models
+from tests.factories import make_host
 
 
 def _naive_utcnow() -> datetime:
@@ -23,30 +24,6 @@ def _fake_get_session(session: Session):
     def _get_session():
         yield session
     return _get_session
-
-
-def _make_host(
-    test_db: Session,
-    *,
-    host_id: str | None = None,
-    name: str = "Test Agent",
-    status: str = "online",
-) -> models.Host:
-    """Create a Host record."""
-    h = models.Host(
-        id=host_id or str(uuid4()),
-        name=name,
-        address="localhost:8080",
-        status=status,
-        capabilities=json.dumps({"providers": ["docker"]}),
-        version="1.0.0",
-        resource_usage=json.dumps({}),
-        last_heartbeat=datetime.now(timezone.utc),
-    )
-    test_db.add(h)
-    test_db.commit()
-    test_db.refresh(h)
-    return h
 
 
 def _make_update_job(
@@ -85,7 +62,7 @@ class TestCheckStuckAgentUpdates:
 
     def test_timed_out_job_marked_failed(self, test_db: Session):
         """Job stuck in active status past timeout is marked failed."""
-        host = _make_host(test_db, status="online")
+        host = make_host(test_db, status="online")
         old_time = _naive_utcnow() - timedelta(minutes=30)
         job = _make_update_job(
             test_db, host.id, status="installing", created_at=old_time,
@@ -102,7 +79,7 @@ class TestCheckStuckAgentUpdates:
 
     def test_timed_out_uses_started_at_when_available(self, test_db: Session):
         """Timeout uses started_at as reference time when present."""
-        host = _make_host(test_db, status="online")
+        host = make_host(test_db, status="online")
         # created_at is recent, but started_at is old
         recent = _naive_utcnow() - timedelta(minutes=1)
         old_started = _naive_utcnow() - timedelta(minutes=30)
@@ -121,7 +98,7 @@ class TestCheckStuckAgentUpdates:
 
     def test_recent_job_not_affected(self, test_db: Session):
         """Job created recently that hasn't timed out is left alone."""
-        host = _make_host(test_db, status="online")
+        host = make_host(test_db, status="online")
         recent = _naive_utcnow() - timedelta(minutes=1)
         job = _make_update_job(
             test_db, host.id, status="pending", created_at=recent,
@@ -137,7 +114,7 @@ class TestCheckStuckAgentUpdates:
 
     def test_offline_agent_job_marked_failed(self, test_db: Session):
         """Job on an offline agent is marked failed regardless of age."""
-        host = _make_host(test_db, status="offline")
+        host = make_host(test_db, status="offline")
         recent = _naive_utcnow() - timedelta(seconds=30)
         job = _make_update_job(
             test_db, host.id, status="restarting", created_at=recent,
@@ -154,7 +131,7 @@ class TestCheckStuckAgentUpdates:
 
     def test_completed_jobs_not_queried(self, test_db: Session):
         """Jobs in terminal states (completed/failed) are not considered."""
-        host = _make_host(test_db, status="online")
+        host = make_host(test_db, status="online")
         old_time = _naive_utcnow() - timedelta(minutes=30)
 
         completed_job = _make_update_job(
@@ -176,7 +153,7 @@ class TestCheckStuckAgentUpdates:
 
     def test_all_active_statuses_detected(self, test_db: Session):
         """All four active statuses are detected as potentially stuck."""
-        host = _make_host(test_db, status="online")
+        host = make_host(test_db, status="online")
         old_time = _naive_utcnow() - timedelta(minutes=30)
 
         jobs = []
@@ -223,7 +200,7 @@ class TestCheckStuckAgentUpdates:
 
     def test_per_job_error_handling(self, test_db: Session):
         """Error processing one job doesn't prevent processing others."""
-        host = _make_host(test_db, status="online")
+        host = make_host(test_db, status="online")
         old_time = _naive_utcnow() - timedelta(minutes=30)
 
         job1 = _make_update_job(
@@ -257,7 +234,7 @@ class TestCheckStuckAgentUpdates:
 
     def test_error_message_includes_minutes_for_timeout(self, test_db: Session):
         """Timeout error message includes the age in minutes."""
-        host = _make_host(test_db, status="online")
+        host = make_host(test_db, status="online")
         old_time = _naive_utcnow() - timedelta(minutes=45)
         job = _make_update_job(
             test_db, host.id, status="pending", created_at=old_time,

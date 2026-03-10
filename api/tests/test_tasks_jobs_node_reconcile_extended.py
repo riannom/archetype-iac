@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 
 from app import models
 from app.state import JobStatus
+from tests.factories import make_host, make_job, make_link, make_link_state, make_node, make_placement
 
 
 def _fake_get_session(session):
@@ -25,112 +26,6 @@ def _fake_get_session(session):
     def _get_session():
         yield session
     return _get_session
-
-
-def _make_job(test_db, lab_id, user_id, *, status="queued", action="sync:lab"):
-    job = models.Job(
-        id=str(uuid4()),
-        lab_id=lab_id,
-        user_id=user_id,
-        action=action,
-        status=status,
-    )
-    test_db.add(job)
-    test_db.commit()
-    test_db.refresh(job)
-    return job
-
-
-def _make_host(test_db, host_id, *, status="online"):
-    import json
-
-    host = models.Host(
-        id=host_id,
-        name=host_id,
-        address=f"{host_id}:8080",
-        status=status,
-        capabilities=json.dumps({"providers": ["docker"]}),
-        version="1.0.0",
-        last_heartbeat=datetime.now(timezone.utc),
-        resource_usage=json.dumps({}),
-    )
-    test_db.add(host)
-    test_db.commit()
-    test_db.refresh(host)
-    return host
-
-
-def _make_link_state(
-    test_db, lab_id, *,
-    link_name="R1:eth1-R2:eth1",
-    desired="up", actual="pending",
-    is_cross_host=False,
-    source_host_id=None, target_host_id=None,
-    source_node="R1", target_node="R2",
-    source_interface="eth1", target_interface="eth1",
-):
-    ls = models.LinkState(
-        id=str(uuid4()),
-        lab_id=lab_id,
-        link_name=link_name,
-        source_node=source_node,
-        source_interface=source_interface,
-        target_node=target_node,
-        target_interface=target_interface,
-        desired_state=desired,
-        actual_state=actual,
-        is_cross_host=is_cross_host,
-        source_host_id=source_host_id,
-        target_host_id=target_host_id,
-    )
-    test_db.add(ls)
-    test_db.commit()
-    test_db.refresh(ls)
-    return ls
-
-
-def _make_node(test_db, lab_id, name, *, host_id=None):
-    n = models.Node(
-        lab_id=lab_id,
-        gui_id=name.lower(),
-        display_name=name,
-        container_name=name,
-        node_type="device",
-        device="linux",
-        host_id=host_id,
-    )
-    test_db.add(n)
-    test_db.commit()
-    test_db.refresh(n)
-    return n
-
-
-def _make_link(test_db, lab_id, src_node_id, src_iface, tgt_node_id, tgt_iface, link_name):
-    lnk = models.Link(
-        lab_id=lab_id,
-        link_name=link_name,
-        source_node_id=src_node_id,
-        source_interface=src_iface,
-        target_node_id=tgt_node_id,
-        target_interface=tgt_iface,
-    )
-    test_db.add(lnk)
-    test_db.commit()
-    test_db.refresh(lnk)
-    return lnk
-
-
-def _make_placement(test_db, lab_id, node_name, host_id):
-    p = models.NodePlacement(
-        id=str(uuid4()),
-        lab_id=lab_id,
-        node_name=node_name,
-        host_id=host_id,
-    )
-    test_db.add(p)
-    test_db.commit()
-    test_db.refresh(p)
-    return p
 
 
 # ---------------------------------------------------------------------------
@@ -147,7 +42,7 @@ class TestRunNodeReconcileExtended:
         """Empty node_ids list should still create manager and call execute."""
         from app.tasks.jobs_node_reconcile import run_node_reconcile
 
-        job = _make_job(test_db, sample_lab.id, test_user.id, status="running")
+        job = make_job(test_db, sample_lab.id, test_user.id, status="running")
         mock_manager = MagicMock()
         mock_manager.execute = AsyncMock()
 
@@ -173,7 +68,7 @@ class TestRunNodeReconcileExtended:
         """Custom provider should be passed through to NodeLifecycleManager."""
         from app.tasks.jobs_node_reconcile import run_node_reconcile
 
-        job = _make_job(test_db, sample_lab.id, test_user.id, status="running")
+        job = make_job(test_db, sample_lab.id, test_user.id, status="running")
         mock_manager = MagicMock()
         mock_manager.execute = AsyncMock()
 
@@ -236,14 +131,14 @@ class TestCreateCrossHostLinksNewLinks:
         """Links in DB that don't have LinkState records should trigger creation."""
         from app.tasks.jobs_node_reconcile import _create_cross_host_links_if_ready
 
-        host_a = _make_host(test_db, "host-a")
-        host_b = _make_host(test_db, "host-b")
+        host_a = make_host(test_db, "host-a")
+        host_b = make_host(test_db, "host-b")
 
-        n1 = _make_node(test_db, sample_lab.id, "R1", host_id=host_a.id)
-        n2 = _make_node(test_db, sample_lab.id, "R2", host_id=host_b.id)
+        n1 = make_node(test_db, sample_lab.id, "R1", host_id=host_a.id)
+        n2 = make_node(test_db, sample_lab.id, "R2", host_id=host_b.id)
 
         # Create a link definition but NO LinkState
-        _make_link(
+        make_link(
             test_db, sample_lab.id,
             n1.id, "eth1", n2.id, "eth1",
             "R1:eth1-R2:eth1",
@@ -290,17 +185,17 @@ class TestCreateCrossHostLinksForceRecreate:
         """When link_tunnels are reported for the lab, force_recreate should not trigger."""
         from app.tasks.jobs_node_reconcile import _create_cross_host_links_if_ready
 
-        host_a = _make_host(test_db, "host-c")
-        host_b = _make_host(test_db, "host-d")
+        host_a = make_host(test_db, "host-c")
+        host_b = make_host(test_db, "host-d")
 
         # Cross-host link that is UP
-        _make_link_state(
+        make_link_state(
             test_db, sample_lab.id,
             link_name="R1:eth1-R3:eth1",
             actual="up", is_cross_host=True,
             source_host_id=host_a.id, target_host_id=host_b.id,
         )
-        _make_placement(test_db, sample_lab.id, "R1", host_a.id)
+        make_placement(test_db, sample_lab.id, "R1", host_a.id)
 
         log_parts = []
 
@@ -328,16 +223,16 @@ class TestCreateCrossHostLinksForceRecreate:
         """When both tunnels and link_tunnels are empty, force_recreate should trigger."""
         from app.tasks.jobs_node_reconcile import _create_cross_host_links_if_ready
 
-        host_a = _make_host(test_db, "host-e")
-        host_b = _make_host(test_db, "host-f")
+        host_a = make_host(test_db, "host-e")
+        host_b = make_host(test_db, "host-f")
 
-        _make_link_state(
+        make_link_state(
             test_db, sample_lab.id,
             link_name="R1:eth1-R3:eth1",
             actual="up", is_cross_host=True,
             source_host_id=host_a.id, target_host_id=host_b.id,
         )
-        _make_placement(test_db, sample_lab.id, "R1", host_a.id)
+        make_placement(test_db, sample_lab.id, "R1", host_a.id)
 
         mock_create = AsyncMock(return_value=(1, 0))
         mock_lock = MagicMock()
@@ -381,11 +276,11 @@ class TestCreateCrossHostLinksMultiAgent:
         """Only online agents should be included in host_to_agent."""
         from app.tasks.jobs_node_reconcile import _create_cross_host_links_if_ready
 
-        host_online = _make_host(test_db, "host-g", status="online")
-        host_offline = _make_host(test_db, "host-h", status="offline")
+        host_online = make_host(test_db, "host-g", status="online")
+        host_offline = make_host(test_db, "host-h", status="offline")
 
         # Create uncategorized link to trigger creation
-        _make_link_state(
+        make_link_state(
             test_db, sample_lab.id,
             link_name="R1:eth1-R2:eth1",
             actual="pending",
@@ -438,9 +333,9 @@ class TestCreateCrossHostLinksZeroResults:
         """When create_deployment_links returns (0, 0), info log should not be emitted."""
         from app.tasks.jobs_node_reconcile import _create_cross_host_links_if_ready
 
-        _make_host(test_db, "host-i")
+        make_host(test_db, "host-i")
 
-        _make_link_state(
+        make_link_state(
             test_db, sample_lab.id,
             source_host_id=None,
         )
@@ -482,7 +377,7 @@ class TestRunNodeReconcileExceptionHandling:
         """Unexpected exception during execution should fail the job."""
         from app.tasks.jobs_node_reconcile import run_node_reconcile
 
-        job = _make_job(test_db, sample_lab.id, test_user.id, status="running")
+        job = make_job(test_db, sample_lab.id, test_user.id, status="running")
 
         with patch("app.tasks.jobs_node_reconcile.get_session", _fake_get_session(test_db)):
             with patch(
@@ -527,7 +422,7 @@ class TestCreateCrossHostLinksNoAgents:
         """When no agents are online, should return without creating links."""
         from app.tasks.jobs_node_reconcile import _create_cross_host_links_if_ready
 
-        _make_link_state(
+        make_link_state(
             test_db, sample_lab.id,
             source_host_id=None,
         )

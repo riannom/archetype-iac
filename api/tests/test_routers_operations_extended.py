@@ -17,97 +17,12 @@ from unittest.mock import AsyncMock, MagicMock
 from sqlalchemy.orm import Session
 
 from app import models
+from tests.factories import make_link_state, make_node, make_node_state
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-def _make_node_state(
-    db: Session,
-    lab_id: str,
-    node_id: str,
-    node_name: str,
-    desired: str = "stopped",
-    actual: str = "undeployed",
-    is_ready: bool = False,
-    management_ip: str | None = None,
-    management_ips_json: str | None = None,
-    error_message: str | None = None,
-) -> models.NodeState:
-    ns = models.NodeState(
-        lab_id=lab_id,
-        node_id=node_id,
-        node_name=node_name,
-        desired_state=desired,
-        actual_state=actual,
-        is_ready=is_ready,
-        management_ip=management_ip,
-        management_ips_json=management_ips_json,
-        error_message=error_message,
-    )
-    db.add(ns)
-    db.commit()
-    db.refresh(ns)
-    return ns
-
-
-def _make_node(
-    db: Session,
-    lab_id: str,
-    node_id: str,
-    gui_id: str,
-    display_name: str,
-    container_name: str,
-    device: str = "linux",
-    host_id: str | None = None,
-    image: str | None = None,
-) -> models.Node:
-    n = models.Node(
-        id=node_id,
-        lab_id=lab_id,
-        gui_id=gui_id,
-        display_name=display_name,
-        container_name=container_name,
-        device=device,
-        host_id=host_id,
-        image=image,
-    )
-    db.add(n)
-    db.commit()
-    db.refresh(n)
-    return n
-
-
-def _make_link_state(
-    db: Session,
-    link_id: str,
-    lab_id: str,
-    link_name: str,
-    source_node: str,
-    source_interface: str,
-    target_node: str,
-    target_interface: str,
-    desired: str = "up",
-    actual: str = "up",
-    error_message: str | None = None,
-) -> models.LinkState:
-    ls = models.LinkState(
-        id=link_id,
-        lab_id=lab_id,
-        link_name=link_name,
-        source_node=source_node,
-        source_interface=source_interface,
-        target_node=target_node,
-        target_interface=target_interface,
-        desired_state=desired,
-        actual_state=actual,
-        error_message=error_message,
-    )
-    db.add(ls)
-    db.commit()
-    db.refresh(ls)
-    return ls
 
 
 def _make_vxlan_tunnel(
@@ -171,11 +86,11 @@ class TestCheckNodesReady:
         self, test_client, auth_headers, sample_lab, test_db, monkeypatch
     ):
         """Running + is_ready node is counted."""
-        _make_node_state(
+        make_node_state(
             test_db, sample_lab.id, "n1", "R1",
             desired="running", actual="running", is_ready=True,
         )
-        _make_node(test_db, sample_lab.id, "nd1", "n1", "R1", "R1", device="linux")
+        make_node(test_db, sample_lab.id, "nd1", "n1", "R1", "R1", device="linux")
 
         mock_ac = MagicMock()
         mock_ac.is_agent_online = MagicMock(return_value=False)
@@ -203,11 +118,11 @@ class TestCheckNodesReady:
         sample_lab.agent_id = sample_host.id
         test_db.commit()
 
-        _make_node_state(
+        make_node_state(
             test_db, sample_lab.id, "n1", "R1",
             desired="running", actual="running", is_ready=False,
         )
-        _make_node(test_db, sample_lab.id, "nd1", "n1", "R1", "R1", device="linux")
+        make_node(test_db, sample_lab.id, "nd1", "n1", "R1", "R1", device="linux")
 
         mock_ac = MagicMock()
         mock_ac.is_agent_online = MagicMock(return_value=True)
@@ -235,11 +150,11 @@ class TestCheckNodesReady:
         sample_lab.agent_id = sample_host.id
         test_db.commit()
 
-        _make_node_state(
+        make_node_state(
             test_db, sample_lab.id, "n1", "R1",
             desired="running", actual="running", is_ready=False,
         )
-        _make_node(test_db, sample_lab.id, "nd1", "n1", "R1", "R1")
+        make_node(test_db, sample_lab.id, "nd1", "n1", "R1", "R1")
 
         mock_ac = MagicMock()
         mock_ac.is_agent_online = MagicMock(return_value=True)
@@ -276,7 +191,7 @@ class TestExportInventory:
         self, test_client, auth_headers, sample_lab, test_db, monkeypatch
     ):
         """JSON inventory returns node list."""
-        _make_node_state(
+        make_node_state(
             test_db, sample_lab.id, "n1", "R1",
             desired="running", actual="running", management_ip="10.0.0.1",
             management_ips_json=json.dumps(["10.0.0.1", "fd00::1"]),
@@ -302,7 +217,7 @@ class TestExportInventory:
         self, test_client, auth_headers, sample_lab, test_db, monkeypatch
     ):
         """Ansible inventory generates YAML content."""
-        _make_node_state(
+        make_node_state(
             test_db, sample_lab.id, "n1", "R1",
             desired="running", actual="running", management_ip="10.0.0.1",
         )
@@ -326,7 +241,7 @@ class TestExportInventory:
         self, test_client, auth_headers, sample_lab, test_db, monkeypatch
     ):
         """Terraform inventory generates JSON content."""
-        _make_node_state(
+        make_node_state(
             test_db, sample_lab.id, "n1", "R1",
             desired="running", actual="running", management_ip="10.0.0.2",
         )
@@ -350,7 +265,7 @@ class TestExportInventory:
         self, test_client, auth_headers, sample_lab, test_db, monkeypatch
     ):
         """Inventory includes device info from topology."""
-        _make_node_state(
+        make_node_state(
             test_db, sample_lab.id, "n1", "R1",
             desired="running", actual="running",
         )
@@ -442,7 +357,7 @@ class TestGetNodeInterfaces:
         self, test_client, auth_headers, sample_lab, test_db
     ):
         """Returns interface mappings for a specific node."""
-        node = _make_node(
+        node = make_node(
             test_db, sample_lab.id, "nd1", "n1", "R1", "R1", device="ceos"
         )
         mapping = models.InterfaceMapping(
@@ -481,7 +396,7 @@ class TestGetNodeInterfaces:
         self, test_client, auth_headers, sample_lab, test_db
     ):
         """Node with no mappings returns empty list."""
-        _make_node(test_db, sample_lab.id, "nd1", "n1", "R1", "R1")
+        make_node(test_db, sample_lab.id, "nd1", "n1", "R1", "R1")
 
         resp = test_client.get(
             f"/labs/{sample_lab.id}/nodes/n1/interfaces", headers=auth_headers
@@ -533,7 +448,7 @@ class TestSyncInterfaceMappings:
         self, test_client, auth_headers, sample_lab, test_db, sample_host, monkeypatch
     ):
         """Node-scoped sync uses the placement host and returns counts."""
-        node = _make_node(test_db, sample_lab.id, "nd1", "n1", "R1", "R1")
+        node = make_node(test_db, sample_lab.id, "nd1", "n1", "R1", "R1")
         placement = models.NodePlacement(
             lab_id=sample_lab.id,
             node_name=node.display_name,
@@ -564,7 +479,7 @@ class TestSyncInterfaceMappings:
         self, test_client, auth_headers, sample_lab, test_db, monkeypatch
     ):
         """Node-scoped sync returns conflict when no placement exists."""
-        node = _make_node(test_db, sample_lab.id, "nd1", "n1", "R1", "R1")
+        node = make_node(test_db, sample_lab.id, "nd1", "n1", "R1", "R1")
         mock_svc = MagicMock()
         monkeypatch.setattr("app.routers.labs.interface_mapping_service", mock_svc)
 
@@ -579,7 +494,7 @@ class TestNodeInterfaceDiagnostics:
     def test_returns_controller_and_agent_diagnostics(
         self, test_client, auth_headers, sample_lab, test_db, sample_host, monkeypatch
     ):
-        node = _make_node(test_db, sample_lab.id, "nd1", "n1", "R1", "R1")
+        node = make_node(test_db, sample_lab.id, "nd1", "n1", "R1", "R1")
         node_state = models.NodeState(
             lab_id=sample_lab.id,
             node_id=node.gui_id,
@@ -676,7 +591,7 @@ class TestInfraNotifications:
         self, test_client, auth_headers, sample_lab, test_db, multiple_hosts
     ):
         """Tunnel in cleanup status surfaces as warning."""
-        ls = _make_link_state(
+        ls = make_link_state(
             test_db, "ls1", sample_lab.id, "R1:eth1-R2:eth1",
             "R1", "eth1", "R2", "eth1",
         )
@@ -701,7 +616,7 @@ class TestInfraNotifications:
         self, test_client, auth_headers, sample_lab, test_db, multiple_hosts
     ):
         """Tunnel in failed status surfaces as error."""
-        ls = _make_link_state(
+        ls = make_link_state(
             test_db, "ls2", sample_lab.id, "R1:eth2-R2:eth2",
             "R1", "eth2", "R2", "eth2",
         )
@@ -723,7 +638,7 @@ class TestInfraNotifications:
         self, test_client, auth_headers, sample_lab, test_db, multiple_hosts
     ):
         """Tunnel with error_message but active status still shows notification."""
-        ls = _make_link_state(
+        ls = make_link_state(
             test_db, "ls3", sample_lab.id, "R3:eth1-R4:eth1",
             "R3", "eth1", "R4", "eth1",
         )
@@ -744,7 +659,7 @@ class TestInfraNotifications:
         self, test_client, auth_headers, sample_lab, test_db
     ):
         """Link in error state surfaces as notification."""
-        _make_link_state(
+        make_link_state(
             test_db, "ls-err", sample_lab.id, "R1:eth1-R2:eth1",
             "R1", "eth1", "R2", "eth1",
             desired="up", actual="error", error_message="VLAN mismatch",
@@ -763,7 +678,7 @@ class TestInfraNotifications:
         self, test_client, auth_headers, sample_lab, test_db
     ):
         """Node in error state surfaces as notification."""
-        _make_node_state(
+        make_node_state(
             test_db, sample_lab.id, "n1", "R1",
             desired="running", actual="error", error_message="Container crash",
         )
@@ -782,18 +697,18 @@ class TestInfraNotifications:
     ):
         """Multiple notification types returned together."""
         # Error node
-        _make_node_state(
+        make_node_state(
             test_db, sample_lab.id, "n1", "R1",
             desired="running", actual="error", error_message="OOM",
         )
         # Error link
-        _make_link_state(
+        make_link_state(
             test_db, "ls-m", sample_lab.id, "R1:eth1-R2:eth1",
             "R1", "eth1", "R2", "eth1",
             desired="up", actual="error",
         )
         # Failed tunnel
-        ls2 = _make_link_state(
+        ls2 = make_link_state(
             test_db, "ls-m2", sample_lab.id, "R3:eth1-R4:eth1",
             "R3", "eth1", "R4", "eth1",
         )

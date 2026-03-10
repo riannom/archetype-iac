@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 from app import models
 from app.state import JobStatus, LabState
 from app.tasks.jobs_multihost import run_multihost_deploy, run_multihost_destroy
+from tests.factories import make_host, make_job, make_lab, make_node
 
 
 # ---------------------------------------------------------------------------
@@ -33,67 +34,6 @@ def _mock_get_session(test_db: Session):
     def mock_session():
         yield test_db
     return mock_session
-
-
-def _make_lab(test_db, test_user, *, state="stopped", name="Test Lab"):
-    lab = models.Lab(
-        name=name,
-        owner_id=test_user.id,
-        provider="docker",
-        state=state,
-    )
-    test_db.add(lab)
-    test_db.commit()
-    test_db.refresh(lab)
-    return lab
-
-
-def _make_job(test_db, lab, test_user, *, action="up", status="queued"):
-    job = models.Job(
-        lab_id=lab.id,
-        user_id=test_user.id,
-        action=action,
-        status=status,
-    )
-    test_db.add(job)
-    test_db.commit()
-    test_db.refresh(job)
-    return job
-
-
-def _make_host(test_db, host_id, *, name=None, status="online"):
-    from datetime import datetime, timezone
-
-    host = models.Host(
-        id=host_id,
-        name=name or host_id,
-        address=f"{host_id}:8080",
-        status=status,
-        capabilities=json.dumps({"providers": ["docker"]}),
-        version="1.0.0",
-        last_heartbeat=datetime.now(timezone.utc),
-        resource_usage=json.dumps({}),
-    )
-    test_db.add(host)
-    test_db.commit()
-    test_db.refresh(host)
-    return host
-
-
-def _make_node(test_db, lab_id, name, *, host_id=None, device="linux"):
-    node = models.Node(
-        lab_id=lab_id,
-        gui_id=name.lower(),
-        display_name=name,
-        container_name=name,
-        node_type="device",
-        device=device,
-        host_id=host_id,
-    )
-    test_db.add(node)
-    test_db.commit()
-    test_db.refresh(node)
-    return node
 
 
 @dataclass
@@ -141,10 +81,10 @@ class TestMultihostDeployResourceCapacity:
     @pytest.mark.asyncio
     async def test_resource_capacity_failure_fails_job(self, test_db: Session, test_user):
         """When resource capacity check fails, job should be marked failed."""
-        lab = _make_lab(test_db, test_user)
-        job = _make_job(test_db, lab, test_user)
-        host = _make_host(test_db, "host-cap-fail")
-        _make_node(test_db, lab.id, "R1", host_id=host.id)
+        lab = make_lab(test_db, test_user)
+        job = make_job(test_db, lab, test_user)
+        host = make_host(test_db, "host-cap-fail")
+        make_node(test_db, lab.id, "R1", host_id=host.id)
 
         analysis = _FakeAnalysis(
             placements={host.id: [{"node_name": "R1"}]},
@@ -192,10 +132,10 @@ class TestMultihostDeployResourceCapacity:
     @pytest.mark.asyncio
     async def test_resource_capacity_warnings_logged(self, test_db: Session, test_user):
         """When resource capacity has warnings, they should appear in job log."""
-        lab = _make_lab(test_db, test_user)
-        job = _make_job(test_db, lab, test_user)
-        host = _make_host(test_db, "host-cap-warn")
-        _make_node(test_db, lab.id, "R1", host_id=host.id)
+        lab = make_lab(test_db, test_user)
+        job = make_job(test_db, lab, test_user)
+        host = make_host(test_db, "host-cap-warn")
+        make_node(test_db, lab.id, "R1", host_id=host.id)
 
         analysis = _FakeAnalysis(
             placements={host.id: [{"node_name": "R1"}]},
@@ -256,10 +196,10 @@ class TestMultihostDeployPreflightFailure:
     @pytest.mark.asyncio
     async def test_preflight_failure_marks_host_missing(self, test_db: Session, test_user):
         """Agent that fails preflight connectivity should cause job failure."""
-        lab = _make_lab(test_db, test_user)
-        job = _make_job(test_db, lab, test_user)
-        host = _make_host(test_db, "host-preflight-fail")
-        _make_node(test_db, lab.id, "R1", host_id=host.id)
+        lab = make_lab(test_db, test_user)
+        job = make_job(test_db, lab, test_user)
+        host = make_host(test_db, "host-preflight-fail")
+        make_node(test_db, lab.id, "R1", host_id=host.id)
 
         analysis = _FakeAnalysis(
             placements={host.id: [{"node_name": "R1"}]},
@@ -292,10 +232,10 @@ class TestMultihostDeployPreflightFailure:
     @pytest.mark.asyncio
     async def test_offline_agent_marks_host_missing(self, test_db: Session, test_user):
         """Agent that is offline should cause job failure."""
-        lab = _make_lab(test_db, test_user)
-        job = _make_job(test_db, lab, test_user)
-        host = _make_host(test_db, "host-offline-deploy", status="offline")
-        _make_node(test_db, lab.id, "R1", host_id=host.id)
+        lab = make_lab(test_db, test_user)
+        job = make_job(test_db, lab, test_user)
+        host = make_host(test_db, "host-offline-deploy", status="offline")
+        make_node(test_db, lab.id, "R1", host_id=host.id)
 
         analysis = _FakeAnalysis(
             placements={host.id: [{"node_name": "R1"}]},
@@ -333,10 +273,10 @@ class TestMultihostDeployLinkFailure:
     @pytest.mark.asyncio
     async def test_link_failure_fails_job(self, test_db: Session, test_user):
         """When link creation returns failures, job should be marked failed."""
-        lab = _make_lab(test_db, test_user)
-        job = _make_job(test_db, lab, test_user)
-        host = _make_host(test_db, "host-link-fail")
-        _make_node(test_db, lab.id, "R1", host_id=host.id)
+        lab = make_lab(test_db, test_user)
+        job = make_job(test_db, lab, test_user)
+        host = make_host(test_db, "host-link-fail")
+        make_node(test_db, lab.id, "R1", host_id=host.id)
 
         analysis = _FakeAnalysis(
             placements={host.id: [{"node_name": "R1"}]},
@@ -374,10 +314,10 @@ class TestMultihostDeployLinkFailure:
     @pytest.mark.asyncio
     async def test_zero_link_failures_succeeds(self, test_db: Session, test_user):
         """When all links succeed, job should complete normally."""
-        lab = _make_lab(test_db, test_user)
-        job = _make_job(test_db, lab, test_user)
-        host = _make_host(test_db, "host-link-ok")
-        _make_node(test_db, lab.id, "R1", host_id=host.id)
+        lab = make_lab(test_db, test_user)
+        job = make_job(test_db, lab, test_user)
+        host = make_host(test_db, "host-link-ok")
+        make_node(test_db, lab.id, "R1", host_id=host.id)
 
         analysis = _FakeAnalysis(
             placements={host.id: [{"node_name": "R1"}]},
@@ -422,10 +362,10 @@ class TestMultihostDeployHappyPath:
     @pytest.mark.asyncio
     async def test_successful_deploy_sets_running_state(self, test_db: Session, test_user):
         """Successful deploy should set lab state to running."""
-        lab = _make_lab(test_db, test_user)
-        job = _make_job(test_db, lab, test_user)
-        host = _make_host(test_db, "host-happy")
-        _make_node(test_db, lab.id, "R1", host_id=host.id)
+        lab = make_lab(test_db, test_user)
+        job = make_job(test_db, lab, test_user)
+        host = make_host(test_db, "host-happy")
+        make_node(test_db, lab.id, "R1", host_id=host.id)
 
         analysis = _FakeAnalysis(
             placements={host.id: [{"node_name": "R1"}]},
@@ -479,10 +419,10 @@ class TestMultihostDeployHappyPath:
     @pytest.mark.asyncio
     async def test_deploy_broadcasts_started_and_completed(self, test_db: Session, test_user):
         """Deploy should broadcast both started and completed progress."""
-        lab = _make_lab(test_db, test_user)
-        job = _make_job(test_db, lab, test_user)
-        host = _make_host(test_db, "host-broadcast")
-        _make_node(test_db, lab.id, "R1", host_id=host.id)
+        lab = make_lab(test_db, test_user)
+        job = make_job(test_db, lab, test_user)
+        host = make_host(test_db, "host-broadcast")
+        make_node(test_db, lab.id, "R1", host_id=host.id)
 
         analysis = _FakeAnalysis(
             placements={host.id: [{"node_name": "R1"}]},
@@ -522,12 +462,12 @@ class TestMultihostDeployHappyPath:
     @pytest.mark.asyncio
     async def test_first_agent_set_as_primary(self, test_db: Session, test_user):
         """After successful deploy, first agent should be set as primary for lab."""
-        lab = _make_lab(test_db, test_user)
-        job = _make_job(test_db, lab, test_user)
-        host_a = _make_host(test_db, "host-primary-a", name="Primary A")
-        host_b = _make_host(test_db, "host-primary-b", name="Primary B")
-        _make_node(test_db, lab.id, "R1", host_id=host_a.id)
-        _make_node(test_db, lab.id, "R2", host_id=host_b.id)
+        lab = make_lab(test_db, test_user)
+        job = make_job(test_db, lab, test_user)
+        host_a = make_host(test_db, "host-primary-a", name="Primary A")
+        host_b = make_host(test_db, "host-primary-b", name="Primary B")
+        make_node(test_db, lab.id, "R1", host_id=host_a.id)
+        make_node(test_db, lab.id, "R2", host_id=host_b.id)
 
         analysis = _FakeAnalysis(
             placements={host_a.id: [{"node_name": "R1"}], host_b.id: [{"node_name": "R2"}]},
@@ -582,9 +522,9 @@ class TestMultihostDeployUnplacedNoAgent:
     @pytest.mark.asyncio
     async def test_no_default_agent_fails_job(self, test_db: Session, test_user):
         """When nodes have no host_id and no default agent, job should fail."""
-        lab = _make_lab(test_db, test_user)
-        job = _make_job(test_db, lab, test_user)
-        _make_node(test_db, lab.id, "R1")  # No host_id
+        lab = make_lab(test_db, test_user)
+        job = make_job(test_db, lab, test_user)
+        make_node(test_db, lab.id, "R1")  # No host_id
 
         patches = _build_standard_patches(test_db)
         with patches["get_session"], patches["record_started"], patches["record_failed"], \
@@ -616,12 +556,12 @@ class TestMultihostDeployRollbackFailure:
     @pytest.mark.asyncio
     async def test_rollback_exception_logged(self, test_db: Session, test_user):
         """When rollback destroy fails, it should be logged but job still fails."""
-        lab = _make_lab(test_db, test_user)
-        job = _make_job(test_db, lab, test_user)
-        host_a = _make_host(test_db, "host-rb-a", name="HostA")
-        host_b = _make_host(test_db, "host-rb-b", name="HostB")
-        _make_node(test_db, lab.id, "R1", host_id=host_a.id)
-        _make_node(test_db, lab.id, "R2", host_id=host_b.id)
+        lab = make_lab(test_db, test_user)
+        job = make_job(test_db, lab, test_user)
+        host_a = make_host(test_db, "host-rb-a", name="HostA")
+        host_b = make_host(test_db, "host-rb-b", name="HostB")
+        make_node(test_db, lab.id, "R1", host_id=host_a.id)
+        make_node(test_db, lab.id, "R2", host_id=host_b.id)
 
         analysis = _FakeAnalysis(
             placements={host_a.id: [{"node_name": "R1"}], host_b.id: [{"node_name": "R2"}]},
@@ -665,10 +605,10 @@ class TestMultihostDeployRollbackFailure:
     @pytest.mark.asyncio
     async def test_all_deploys_fail_no_rollback_needed(self, test_db: Session, test_user):
         """When all deploys fail, no rollback should be attempted."""
-        lab = _make_lab(test_db, test_user)
-        job = _make_job(test_db, lab, test_user)
-        host = _make_host(test_db, "host-all-fail")
-        _make_node(test_db, lab.id, "R1", host_id=host.id)
+        lab = make_lab(test_db, test_user)
+        job = make_job(test_db, lab, test_user)
+        host = make_host(test_db, "host-all-fail")
+        make_node(test_db, lab.id, "R1", host_id=host.id)
 
         analysis = _FakeAnalysis(
             placements={host.id: [{"node_name": "R1"}]},
@@ -709,11 +649,11 @@ class TestMultihostDeployRollbackFailure:
         self, test_db: Session, test_user
     ):
         """Mixed-provider deploy rollback should target only successful provider groups."""
-        lab = _make_lab(test_db, test_user)
-        job = _make_job(test_db, lab, test_user)
-        host = _make_host(test_db, "host-mixed-rb", name="HostMixed")
-        _make_node(test_db, lab.id, "ceos_1", host_id=host.id, device="ceos")
-        _make_node(test_db, lab.id, "n9kv_1", host_id=host.id, device="cisco_n9kv")
+        lab = make_lab(test_db, test_user)
+        job = make_job(test_db, lab, test_user)
+        host = make_host(test_db, "host-mixed-rb", name="HostMixed")
+        make_node(test_db, lab.id, "ceos_1", host_id=host.id, device="ceos")
+        make_node(test_db, lab.id, "n9kv_1", host_id=host.id, device="cisco_n9kv")
 
         analysis = _FakeAnalysis(
             placements={host.id: [{"node_name": "ceos_1"}, {"node_name": "n9kv_1"}]},
@@ -773,10 +713,10 @@ class TestMultihostDeployResultLogging:
     @pytest.mark.asyncio
     async def test_stdout_stderr_in_log(self, test_db: Session, test_user):
         """Successful deploy stdout/stderr should appear in job log."""
-        lab = _make_lab(test_db, test_user)
-        job = _make_job(test_db, lab, test_user)
-        host = _make_host(test_db, "host-log", name="LogHost")
-        _make_node(test_db, lab.id, "R1", host_id=host.id)
+        lab = make_lab(test_db, test_user)
+        job = make_job(test_db, lab, test_user)
+        host = make_host(test_db, "host-log", name="LogHost")
+        make_node(test_db, lab.id, "R1", host_id=host.id)
 
         analysis = _FakeAnalysis(
             placements={host.id: [{"node_name": "R1"}]},
@@ -826,8 +766,8 @@ class TestMultihostDeployUnexpectedException:
     @pytest.mark.asyncio
     async def test_unexpected_exception_sets_error_state(self, test_db: Session, test_user):
         """Unexpected exception should set lab to error state and fail job."""
-        lab = _make_lab(test_db, test_user)
-        job = _make_job(test_db, lab, test_user)
+        lab = make_lab(test_db, test_user)
+        job = make_job(test_db, lab, test_user)
 
         patches = _build_standard_patches(test_db)
         with patches["get_session"], patches["record_started"], patches["record_failed"], \
@@ -856,8 +796,8 @@ class TestMultihostDeployUnexpectedException:
     @pytest.mark.asyncio
     async def test_inner_exception_does_not_propagate(self, test_db: Session, test_user):
         """If error handler also fails, exception should not bubble up."""
-        lab = _make_lab(test_db, test_user)
-        job = _make_job(test_db, lab, test_user)
+        lab = make_lab(test_db, test_user)
+        job = make_job(test_db, lab, test_user)
 
         patches = _build_standard_patches(test_db)
         with patches["get_session"], patches["record_started"], patches["broadcast"], \
@@ -884,10 +824,10 @@ class TestMultihostDestroyHappyPath:
     @pytest.mark.asyncio
     async def test_successful_destroy_sets_stopped_state(self, test_db: Session, test_user):
         """Successful destroy should set lab state to stopped."""
-        lab = _make_lab(test_db, test_user, state="running")
-        job = _make_job(test_db, lab, test_user, action="down")
-        host = _make_host(test_db, "host-destroy-ok")
-        _make_node(test_db, lab.id, "R1", host_id=host.id)
+        lab = make_lab(test_db, test_user, state="running")
+        job = make_job(test_db, lab, test_user, action="down")
+        host = make_host(test_db, "host-destroy-ok")
+        make_node(test_db, lab.id, "R1", host_id=host.id)
 
         analysis = _FakeAnalysis(
             placements={host.id: [{"node_name": "R1"}]},
@@ -937,10 +877,10 @@ class TestMultihostDestroyHappyPath:
     @pytest.mark.asyncio
     async def test_link_states_deleted_on_full_success(self, test_db: Session, test_user):
         """On full success, remaining link states should be deleted."""
-        lab = _make_lab(test_db, test_user, state="running")
-        job = _make_job(test_db, lab, test_user, action="down")
-        host = _make_host(test_db, "host-destroy-clean")
-        _make_node(test_db, lab.id, "R1", host_id=host.id)
+        lab = make_lab(test_db, test_user, state="running")
+        job = make_job(test_db, lab, test_user, action="down")
+        host = make_host(test_db, "host-destroy-clean")
+        make_node(test_db, lab.id, "R1", host_id=host.id)
 
         # Create a lingering link state
         ls = models.LinkState(
@@ -995,11 +935,11 @@ class TestMultihostDestroyHappyPath:
         self, test_db: Session, test_user
     ):
         """Mixed Docker/libvirt hosts should destroy both provider runtime sets."""
-        lab = _make_lab(test_db, test_user, state="running")
-        job = _make_job(test_db, lab, test_user, action="down")
-        host = _make_host(test_db, "host-mixed-destroy")
-        _make_node(test_db, lab.id, "ceos_1", host_id=host.id, device="ceos")
-        _make_node(test_db, lab.id, "n9kv_1", host_id=host.id, device="cisco_n9kv")
+        lab = make_lab(test_db, test_user, state="running")
+        job = make_job(test_db, lab, test_user, action="down")
+        host = make_host(test_db, "host-mixed-destroy")
+        make_node(test_db, lab.id, "ceos_1", host_id=host.id, device="ceos")
+        make_node(test_db, lab.id, "n9kv_1", host_id=host.id, device="cisco_n9kv")
 
         analysis = _FakeAnalysis(
             placements={host.id: [{"node_name": "ceos_1"}, {"node_name": "n9kv_1"}]},
@@ -1050,11 +990,11 @@ class TestMultihostDeployMixedProviders:
         self, test_db: Session, test_user
     ):
         """Mixed Docker/libvirt hosts should deploy each provider with a filtered topology."""
-        lab = _make_lab(test_db, test_user)
-        job = _make_job(test_db, lab, test_user)
-        host = _make_host(test_db, "host-mixed-deploy", name="HostMixed")
-        _make_node(test_db, lab.id, "ceos_1", host_id=host.id, device="ceos")
-        _make_node(test_db, lab.id, "n9kv_1", host_id=host.id, device="cisco_n9kv")
+        lab = make_lab(test_db, test_user)
+        job = make_job(test_db, lab, test_user)
+        host = make_host(test_db, "host-mixed-deploy", name="HostMixed")
+        make_node(test_db, lab.id, "ceos_1", host_id=host.id, device="ceos")
+        make_node(test_db, lab.id, "n9kv_1", host_id=host.id, device="cisco_n9kv")
 
         analysis = _FakeAnalysis(
             placements={host.id: [{"node_name": "ceos_1"}, {"node_name": "n9kv_1"}]},
@@ -1127,10 +1067,10 @@ class TestMultihostDestroyTunnelTeardown:
     @pytest.mark.asyncio
     async def test_tunnel_failures_cause_warnings(self, test_db: Session, test_user):
         """Tunnel teardown failures should cause completed_with_warnings status."""
-        lab = _make_lab(test_db, test_user, state="running")
-        job = _make_job(test_db, lab, test_user, action="down")
-        host = _make_host(test_db, "host-tunnel-fail")
-        _make_node(test_db, lab.id, "R1", host_id=host.id)
+        lab = make_lab(test_db, test_user, state="running")
+        job = make_job(test_db, lab, test_user, action="down")
+        host = make_host(test_db, "host-tunnel-fail")
+        make_node(test_db, lab.id, "R1", host_id=host.id)
 
         analysis = _FakeAnalysis(
             placements={host.id: [{"node_name": "R1"}]},
@@ -1175,11 +1115,11 @@ class TestMultihostDestroyMixedAgents:
     @pytest.mark.asyncio
     async def test_some_online_some_missing(self, test_db: Session, test_user):
         """Destroy should proceed with available agents and warn about missing."""
-        lab = _make_lab(test_db, test_user, state="running")
-        job = _make_job(test_db, lab, test_user, action="down")
-        host = _make_host(test_db, "host-online-mix")
-        _make_node(test_db, lab.id, "R1", host_id=host.id)
-        _make_node(test_db, lab.id, "R2", host_id="nonexistent-host-id")
+        lab = make_lab(test_db, test_user, state="running")
+        job = make_job(test_db, lab, test_user, action="down")
+        host = make_host(test_db, "host-online-mix")
+        make_node(test_db, lab.id, "R1", host_id=host.id)
+        make_node(test_db, lab.id, "R2", host_id="nonexistent-host-id")
 
         analysis = _FakeAnalysis(
             placements={
@@ -1220,12 +1160,12 @@ class TestMultihostDestroyMixedAgents:
     @pytest.mark.asyncio
     async def test_some_online_some_offline(self, test_db: Session, test_user):
         """Destroy should proceed with online agents and warn about offline."""
-        lab = _make_lab(test_db, test_user, state="running")
-        job = _make_job(test_db, lab, test_user, action="down")
-        host_on = _make_host(test_db, "host-on-mixed", name="OnlineHost")
-        host_off = _make_host(test_db, "host-off-mixed", name="OfflineHost", status="offline")
-        _make_node(test_db, lab.id, "R1", host_id=host_on.id)
-        _make_node(test_db, lab.id, "R2", host_id=host_off.id)
+        lab = make_lab(test_db, test_user, state="running")
+        job = make_job(test_db, lab, test_user, action="down")
+        host_on = make_host(test_db, "host-on-mixed", name="OnlineHost")
+        host_off = make_host(test_db, "host-off-mixed", name="OfflineHost", status="offline")
+        make_node(test_db, lab.id, "R1", host_id=host_on.id)
+        make_node(test_db, lab.id, "R2", host_id=host_off.id)
 
         analysis = _FakeAnalysis(
             placements={
@@ -1273,10 +1213,10 @@ class TestMultihostDestroyResultLogging:
     @pytest.mark.asyncio
     async def test_stdout_stderr_truncated_in_log(self, test_db: Session, test_user):
         """Destroy stdout/stderr should be truncated to 200 chars in log."""
-        lab = _make_lab(test_db, test_user, state="running")
-        job = _make_job(test_db, lab, test_user, action="down")
-        host = _make_host(test_db, "host-trunc", name="TruncHost")
-        _make_node(test_db, lab.id, "R1", host_id=host.id)
+        lab = make_lab(test_db, test_user, state="running")
+        job = make_job(test_db, lab, test_user, action="down")
+        host = make_host(test_db, "host-trunc", name="TruncHost")
+        make_node(test_db, lab.id, "R1", host_id=host.id)
 
         analysis = _FakeAnalysis(
             placements={host.id: [{"node_name": "R1"}]},
@@ -1329,10 +1269,10 @@ class TestMultihostDestroyWebhooks:
     @pytest.mark.asyncio
     async def test_partial_failure_dispatches_job_failed(self, test_db: Session, test_user):
         """Partial destroy failure should dispatch job.failed webhook."""
-        lab = _make_lab(test_db, test_user, state="running")
-        job = _make_job(test_db, lab, test_user, action="down")
-        host = _make_host(test_db, "host-wh-fail")
-        _make_node(test_db, lab.id, "R1", host_id=host.id)
+        lab = make_lab(test_db, test_user, state="running")
+        job = make_job(test_db, lab, test_user, action="down")
+        host = make_host(test_db, "host-wh-fail")
+        make_node(test_db, lab.id, "R1", host_id=host.id)
 
         analysis = _FakeAnalysis(
             placements={host.id: [{"node_name": "R1"}]},
@@ -1378,8 +1318,8 @@ class TestMultihostDestroyUnexpectedException:
     @pytest.mark.asyncio
     async def test_unexpected_exception_marks_job_failed(self, test_db: Session, test_user):
         """Unexpected exception should set job to failed with error message."""
-        lab = _make_lab(test_db, test_user, state="running")
-        job = _make_job(test_db, lab, test_user, action="down")
+        lab = make_lab(test_db, test_user, state="running")
+        job = make_job(test_db, lab, test_user, action="down")
 
         patches = _build_standard_patches(test_db)
         with patches["get_session"], patches["record_started"], patches["record_failed"], \
@@ -1410,14 +1350,14 @@ class TestMultihostDeployThreeHosts:
         self, test_db: Session, test_user
     ):
         """With 3 hosts where 1 fails, only 2 successful ones should be rolled back."""
-        lab = _make_lab(test_db, test_user)
-        job = _make_job(test_db, lab, test_user)
+        lab = make_lab(test_db, test_user)
+        job = make_job(test_db, lab, test_user)
         hosts = [
-            _make_host(test_db, f"host-3h-{i}", name=f"Host{i}")
+            make_host(test_db, f"host-3h-{i}", name=f"Host{i}")
             for i in range(3)
         ]
         for i, h in enumerate(hosts):
-            _make_node(test_db, lab.id, f"R{i+1}", host_id=h.id)
+            make_node(test_db, lab.id, f"R{i+1}", host_id=h.id)
 
         analysis = _FakeAnalysis(
             placements={h.id: [{"node_name": f"R{i+1}"}] for i, h in enumerate(hosts)},
@@ -1470,10 +1410,10 @@ class TestMultihostDeployJobTimestamps:
     @pytest.mark.asyncio
     async def test_job_transitions_to_running(self, test_db: Session, test_user):
         """Job should transition from queued to running with started_at set."""
-        lab = _make_lab(test_db, test_user)
-        job = _make_job(test_db, lab, test_user)
-        host = _make_host(test_db, "host-ts")
-        _make_node(test_db, lab.id, "R1", host_id=host.id)
+        lab = make_lab(test_db, test_user)
+        job = make_job(test_db, lab, test_user)
+        host = make_host(test_db, "host-ts")
+        make_node(test_db, lab.id, "R1", host_id=host.id)
 
         analysis = _FakeAnalysis(
             placements={host.id: [{"node_name": "R1"}]},
@@ -1520,10 +1460,10 @@ class TestMultihostDestroyJobLifecycle:
     @pytest.mark.asyncio
     async def test_destroy_sets_stopping_state(self, test_db: Session, test_user):
         """Destroy should set lab state to STOPPING during execution."""
-        lab = _make_lab(test_db, test_user, state="running")
-        job = _make_job(test_db, lab, test_user, action="down")
-        host = _make_host(test_db, "host-lifecycle")
-        _make_node(test_db, lab.id, "R1", host_id=host.id)
+        lab = make_lab(test_db, test_user, state="running")
+        job = make_job(test_db, lab, test_user, action="down")
+        host = make_host(test_db, "host-lifecycle")
+        make_node(test_db, lab.id, "R1", host_id=host.id)
 
         analysis = _FakeAnalysis(
             placements={host.id: [{"node_name": "R1"}]},
@@ -1564,10 +1504,10 @@ class TestMultihostDestroyJobLifecycle:
     @pytest.mark.asyncio
     async def test_destroy_record_started_called_with_down(self, test_db: Session, test_user):
         """_record_started should be called with 'down' action for destroy."""
-        lab = _make_lab(test_db, test_user, state="running")
-        job = _make_job(test_db, lab, test_user, action="down")
-        host = _make_host(test_db, "host-rs-down")
-        _make_node(test_db, lab.id, "R1", host_id=host.id)
+        lab = make_lab(test_db, test_user, state="running")
+        job = make_job(test_db, lab, test_user, action="down")
+        host = make_host(test_db, "host-rs-down")
+        make_node(test_db, lab.id, "R1", host_id=host.id)
 
         analysis = _FakeAnalysis(
             placements={host.id: [{"node_name": "R1"}]},
@@ -1612,10 +1552,10 @@ class TestMultihostDeployWebhookStarted:
     @pytest.mark.asyncio
     async def test_deploy_started_webhook_dispatched(self, test_db: Session, test_user):
         """deploy_started webhook should be dispatched before deploy begins."""
-        lab = _make_lab(test_db, test_user)
-        job = _make_job(test_db, lab, test_user)
-        host = _make_host(test_db, "host-wh-start")
-        _make_node(test_db, lab.id, "R1", host_id=host.id)
+        lab = make_lab(test_db, test_user)
+        job = make_job(test_db, lab, test_user)
+        host = make_host(test_db, "host-wh-start")
+        make_node(test_db, lab.id, "R1", host_id=host.id)
 
         analysis = _FakeAnalysis(
             placements={host.id: [{"node_name": "R1"}]},
@@ -1665,10 +1605,10 @@ class TestMultihostDeployStartingState:
     @pytest.mark.asyncio
     async def test_lab_state_set_to_starting(self, test_db: Session, test_user):
         """During deploy, lab state should transition to STARTING."""
-        lab = _make_lab(test_db, test_user)
-        job = _make_job(test_db, lab, test_user)
-        host = _make_host(test_db, "host-starting")
-        _make_node(test_db, lab.id, "R1", host_id=host.id)
+        lab = make_lab(test_db, test_user)
+        job = make_job(test_db, lab, test_user)
+        host = make_host(test_db, "host-starting")
+        make_node(test_db, lab.id, "R1", host_id=host.id)
 
         analysis = _FakeAnalysis(
             placements={host.id: [{"node_name": "R1"}]},

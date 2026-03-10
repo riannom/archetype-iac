@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from app import models
 from app.state import JobStatus
+from tests.factories import make_job, make_node_state
 
 
 def _fake_get_session(session):
@@ -18,52 +19,6 @@ def _fake_get_session(session):
     def _get_session():
         yield session
     return _get_session
-
-
-def _make_job(
-    test_db: Session,
-    lab_id: str,
-    user_id: str,
-    *,
-    status: str = "queued",
-    action: str = "sync:lab",
-) -> models.Job:
-    """Helper to create a Job."""
-    job = models.Job(
-        id=str(uuid4()),
-        lab_id=lab_id,
-        user_id=user_id,
-        action=action,
-        status=status,
-    )
-    test_db.add(job)
-    test_db.commit()
-    test_db.refresh(job)
-    return job
-
-
-def _make_node_state(
-    test_db: Session,
-    lab_id: str,
-    node_id: str,
-    node_name: str,
-    *,
-    desired_state: str = "running",
-    actual_state: str = "running",
-) -> models.NodeState:
-    """Helper to create a NodeState."""
-    ns = models.NodeState(
-        id=str(uuid4()),
-        lab_id=lab_id,
-        node_id=node_id,
-        node_name=node_name,
-        desired_state=desired_state,
-        actual_state=actual_state,
-    )
-    test_db.add(ns)
-    test_db.commit()
-    test_db.refresh(ns)
-    return ns
 
 
 class TestRunNodeReconcile:
@@ -121,7 +76,7 @@ class TestRunNodeReconcile:
         """Should instantiate NodeLifecycleManager and call execute()."""
         from app.tasks.jobs_node_reconcile import run_node_reconcile
 
-        job = _make_job(test_db, sample_lab.id, test_user.id, status="running")
+        job = make_job(test_db, sample_lab.id, test_user.id, status="running")
         mock_manager = MagicMock()
         mock_manager.execute = AsyncMock()
 
@@ -152,7 +107,7 @@ class TestRunNodeReconcile:
         """When NodeLifecycleManager.execute() raises, job should be marked failed."""
         from app.tasks.jobs_node_reconcile import run_node_reconcile
 
-        job = _make_job(test_db, sample_lab.id, test_user.id, status="running")
+        job = make_job(test_db, sample_lab.id, test_user.id, status="running")
         mock_manager = MagicMock()
         mock_manager.execute = AsyncMock(side_effect=RuntimeError("Agent timeout"))
 
@@ -179,7 +134,7 @@ class TestRunNodeReconcile:
         """If both execute() and error-handler DB update fail, should not raise."""
         from app.tasks.jobs_node_reconcile import run_node_reconcile
 
-        job = _make_job(test_db, sample_lab.id, test_user.id, status="running")
+        job = make_job(test_db, sample_lab.id, test_user.id, status="running")
 
         mock_manager = MagicMock()
         mock_manager.execute = AsyncMock(side_effect=RuntimeError("Agent down"))
@@ -215,7 +170,7 @@ class TestRunNodeReconcile:
         """Provider parameter should default to 'docker'."""
         from app.tasks.jobs_node_reconcile import run_node_reconcile
 
-        job = _make_job(test_db, sample_lab.id, test_user.id, status="running")
+        job = make_job(test_db, sample_lab.id, test_user.id, status="running")
         mock_manager = MagicMock()
         mock_manager.execute = AsyncMock()
 
@@ -240,7 +195,7 @@ class TestRunNodeReconcile:
         """Should pass all node IDs through to NodeLifecycleManager."""
         from app.tasks.jobs_node_reconcile import run_node_reconcile
 
-        job = _make_job(test_db, sample_lab.id, test_user.id, status="running")
+        job = make_job(test_db, sample_lab.id, test_user.id, status="running")
         mock_manager = MagicMock()
         mock_manager.execute = AsyncMock()
 

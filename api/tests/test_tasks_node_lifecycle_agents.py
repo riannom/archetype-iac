@@ -12,37 +12,13 @@ from sqlalchemy.orm import Session
 from app import models
 from app.agent_client import AgentUnavailableError
 from app.state import JobStatus
+from tests.factories import make_host, make_node_state
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _make_host(
-    test_db: Session,
-    *,
-    host_id: str | None = None,
-    name: str = "agent",
-    status: str = "online",
-    heartbeat_offset: timedelta = timedelta(seconds=0),
-    providers: list[str] | None = None,
-) -> models.Host:
-    """Create and persist a Host row for testing."""
-    hid = host_id or str(uuid4())
-    host = models.Host(
-        id=hid,
-        name=name,
-        address=f"{name}.local:8001",
-        status=status,
-        capabilities=json.dumps({"providers": providers or ["docker"]}),
-        version="1.0.0",
-        last_heartbeat=datetime.now(timezone.utc) - heartbeat_offset,
-        resource_usage=json.dumps({}),
-    )
-    test_db.add(host)
-    test_db.commit()
-    test_db.refresh(host)
-    return host
 
 
 def _make_mixin(
@@ -73,28 +49,6 @@ def _make_mixin(
     mixin.agent = None
     mixin.log_parts = []
     return mixin
-
-
-def _make_node_state(
-    test_db: Session,
-    lab: models.Lab,
-    name: str,
-    *,
-    desired: str = "running",
-    actual: str = "undeployed",
-) -> models.NodeState:
-    """Create and persist a NodeState row."""
-    ns = models.NodeState(
-        lab_id=lab.id,
-        node_id=name.lower(),
-        node_name=name,
-        desired_state=desired,
-        actual_state=actual,
-    )
-    test_db.add(ns)
-    test_db.commit()
-    test_db.refresh(ns)
-    return ns
 
 
 # ---------------------------------------------------------------------------
@@ -147,8 +101,8 @@ class TestGetCandidateAgents:
         self, test_db: Session, agent_lab: models.Lab, agent_job: models.Job,
     ):
         """Online agents with fresh heartbeat should be returned."""
-        host = _make_host(test_db, name="online-agent")
-        ns = _make_node_state(test_db, agent_lab, "R1")
+        host = make_host(test_db, name="online-agent")
+        ns = make_node_state(test_db, agent_lab, "R1")
         mixin = _make_mixin(test_db, agent_lab, agent_job, [ns])
 
         with patch(
@@ -164,8 +118,8 @@ class TestGetCandidateAgents:
         self, test_db: Session, agent_lab: models.Lab, agent_job: models.Job,
     ):
         """Offline agents should not be returned."""
-        _make_host(test_db, name="offline-agent", status="offline")
-        ns = _make_node_state(test_db, agent_lab, "R1")
+        make_host(test_db, name="offline-agent", status="offline")
+        ns = make_node_state(test_db, agent_lab, "R1")
         mixin = _make_mixin(test_db, agent_lab, agent_job, [ns])
 
         with patch(
@@ -181,13 +135,13 @@ class TestGetCandidateAgents:
         self, test_db: Session, agent_lab: models.Lab, agent_job: models.Job,
     ):
         """Agents with stale heartbeats should not be returned."""
-        _make_host(
+        make_host(
             test_db,
             name="stale-agent",
             status="online",
             heartbeat_offset=timedelta(minutes=10),
         )
-        ns = _make_node_state(test_db, agent_lab, "R1")
+        ns = make_node_state(test_db, agent_lab, "R1")
         mixin = _make_mixin(test_db, agent_lab, agent_job, [ns])
 
         with patch(
@@ -211,8 +165,8 @@ class TestResolveExplicitPlacements:
         self, test_db: Session, agent_lab: models.Lab, agent_job: models.Job,
     ):
         """Node with explicit host_id pointing to an online host should be assigned."""
-        host = _make_host(test_db, name="explicit-host")
-        ns = _make_node_state(test_db, agent_lab, "R1")
+        host = make_host(test_db, name="explicit-host")
+        ns = make_node_state(test_db, agent_lab, "R1")
 
         node_def = models.Node(
             lab_id=agent_lab.id,
@@ -252,8 +206,8 @@ class TestResolveExplicitPlacements:
         self, test_db: Session, agent_lab: models.Lab, agent_job: models.Job,
     ):
         """Node with explicit host_id pointing to an offline host should fail the job."""
-        host = _make_host(test_db, name="down-host", status="online")
-        ns = _make_node_state(test_db, agent_lab, "R1")
+        host = make_host(test_db, name="down-host", status="online")
+        ns = make_node_state(test_db, agent_lab, "R1")
 
         node_def = models.Node(
             lab_id=agent_lab.id,
@@ -290,8 +244,8 @@ class TestResolveExplicitPlacements:
         self, test_db: Session, agent_lab: models.Lab, agent_job: models.Job,
     ):
         """Node with explicit host that is unreachable (ping fails) should fail the job."""
-        host = _make_host(test_db, name="unreachable-host")
-        ns = _make_node_state(test_db, agent_lab, "R1")
+        host = make_host(test_db, name="unreachable-host")
+        ns = make_node_state(test_db, agent_lab, "R1")
 
         node_def = models.Node(
             lab_id=agent_lab.id,
@@ -332,7 +286,7 @@ class TestResolveExplicitPlacements:
         self, test_db: Session, agent_lab: models.Lab, agent_job: models.Job,
     ):
         """When no nodes have explicit host_id the method should succeed."""
-        ns = _make_node_state(test_db, agent_lab, "R1")
+        ns = make_node_state(test_db, agent_lab, "R1")
 
         mixin = _make_mixin(test_db, agent_lab, agent_job, [ns])
 
@@ -355,8 +309,8 @@ class TestResolveAutoPlacements:
         self, test_db: Session, agent_lab: models.Lab, agent_job: models.Job,
     ):
         """Node with a valid sticky placement on an online host should reuse it."""
-        host = _make_host(test_db, name="sticky-host")
-        ns = _make_node_state(test_db, agent_lab, "R1")
+        host = make_host(test_db, name="sticky-host")
+        ns = make_node_state(test_db, agent_lab, "R1")
 
         placement = models.NodePlacement(
             lab_id=agent_lab.id,
@@ -394,8 +348,8 @@ class TestResolveAutoPlacements:
         self, test_db: Session, agent_lab: models.Lab, agent_job: models.Job,
     ):
         """Sticky placement on offline host should be evicted (status=failed)."""
-        host = _make_host(test_db, name="dead-host", status="online")
-        ns = _make_node_state(test_db, agent_lab, "R1")
+        host = make_host(test_db, name="dead-host", status="online")
+        ns = make_node_state(test_db, agent_lab, "R1")
 
         placement = models.NodePlacement(
             lab_id=agent_lab.id,
@@ -408,7 +362,7 @@ class TestResolveAutoPlacements:
         test_db.refresh(placement)
 
         # Lab has a fallback agent
-        fallback = _make_host(test_db, name="fallback-host")
+        fallback = make_host(test_db, name="fallback-host")
         agent_lab.agent_id = fallback.id
         test_db.commit()
 
@@ -451,11 +405,11 @@ class TestResolveAutoPlacements:
         self, test_db: Session, agent_lab: models.Lab, agent_job: models.Job,
     ):
         """Nodes with no placement should fall back to lab.agent_id."""
-        fallback = _make_host(test_db, name="fallback")
+        fallback = make_host(test_db, name="fallback")
         agent_lab.agent_id = fallback.id
         test_db.commit()
 
-        ns = _make_node_state(test_db, agent_lab, "R1")
+        ns = make_node_state(test_db, agent_lab, "R1")
 
         mixin = _make_mixin(test_db, agent_lab, agent_job, [ns])
 

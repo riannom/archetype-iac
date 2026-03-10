@@ -21,113 +21,12 @@ from app import models
 from app.agent_client import AgentUnavailableError
 from app.state import JobStatus, NodeActualState, NodeDesiredState
 from app.tasks.node_lifecycle import NodeLifecycleManager, _get_container_name
+from tests.factories import make_host, make_job, make_lab, make_node, make_node_state, make_placement
 
 
 # ---------------------------------------------------------------------------
 # Helpers (mirrors test_node_lifecycle.py conventions)
 # ---------------------------------------------------------------------------
-
-
-def _make_host(test_db, host_id="agent-1", name="Agent 1", status="online"):
-    """Create and persist a Host record."""
-    host = models.Host(
-        id=host_id,
-        name=name,
-        address=f"{host_id}.local:8080",
-        status=status,
-        capabilities=json.dumps({"providers": ["docker"]}),
-        version="1.0.0",
-        resource_usage=json.dumps({
-            "cpu_percent": 25.0,
-            "memory_percent": 40.0,
-            "disk_percent": 30.0,
-            "disk_used_gb": 60.0,
-            "disk_total_gb": 200.0,
-            "containers_running": 2,
-            "containers_total": 4,
-            "container_details": [],
-        }),
-        last_heartbeat=datetime.now(timezone.utc),
-    )
-    test_db.add(host)
-    test_db.commit()
-    test_db.refresh(host)
-    return host
-
-
-def _make_lab(test_db, user, agent_id=None):
-    """Create and persist a Lab record."""
-    lab = models.Lab(
-        name="Test Lab",
-        owner_id=user.id,
-        provider="docker",
-        state="running",
-        workspace_path="/tmp/test-lab",
-        agent_id=agent_id,
-    )
-    test_db.add(lab)
-    test_db.commit()
-    test_db.refresh(lab)
-    return lab
-
-
-def _make_job(test_db, lab, user):
-    """Create and persist a queued Job record."""
-    job = models.Job(
-        lab_id=lab.id,
-        user_id=user.id,
-        action="sync",
-        status=JobStatus.QUEUED.value,
-    )
-    test_db.add(job)
-    test_db.commit()
-    test_db.refresh(job)
-    return job
-
-
-def _make_node_state(test_db, lab, node_id, node_name, desired="running", actual="undeployed"):
-    """Create and persist a NodeState record."""
-    ns = models.NodeState(
-        lab_id=lab.id,
-        node_id=node_id,
-        node_name=node_name,
-        desired_state=desired,
-        actual_state=actual,
-    )
-    test_db.add(ns)
-    test_db.commit()
-    test_db.refresh(ns)
-    return ns
-
-
-def _make_node_def(test_db, lab, gui_id, name, container_name, device="linux", host_id=None):
-    """Create and persist a Node definition."""
-    node = models.Node(
-        lab_id=lab.id,
-        gui_id=gui_id,
-        display_name=name,
-        container_name=container_name,
-        device=device,
-        host_id=host_id,
-    )
-    test_db.add(node)
-    test_db.commit()
-    test_db.refresh(node)
-    return node
-
-
-def _make_placement(test_db, lab, node_name, host_id, status="running"):
-    """Create and persist a NodePlacement record."""
-    p = models.NodePlacement(
-        lab_id=lab.id,
-        node_name=node_name,
-        host_id=host_id,
-        status=status,
-    )
-    test_db.add(p)
-    test_db.commit()
-    test_db.refresh(p)
-    return p
 
 
 def _make_manager(session, lab, job, node_ids, agent=None):
@@ -152,12 +51,11 @@ class TestStopNodesSequencing:
     @pytest.mark.asyncio
     async def test_successful_single_node_stop(self, test_db, test_user):
         """A single running node is stopped successfully via batch reconcile."""
-        host = _make_host(test_db)
-        lab = _make_lab(test_db, test_user, agent_id=host.id)
-        job = _make_job(test_db, lab, test_user)
-        ns = _make_node_state(test_db, lab, "n1", "R1", desired="stopped", actual="running")
-        ns.stopping_started_at = datetime.now(timezone.utc)
-        test_db.commit()
+        host = make_host(test_db)
+        lab = make_lab(test_db, test_user, agent_id=host.id)
+        job = make_job(test_db, lab, test_user)
+        ns = make_node_state(test_db, lab, "n1", "R1", desired="stopped", actual="running",
+                             stopping_started_at=datetime.now(timezone.utc))
         container_name = _get_container_name(lab.id, "R1")
 
         manager = _make_manager(test_db, lab, job, [ns.node_id], agent=host)
@@ -181,11 +79,11 @@ class TestStopNodesSequencing:
     @pytest.mark.asyncio
     async def test_stop_multiple_nodes_same_agent(self, test_db, test_user):
         """Multiple nodes on the same agent are stopped in a single batch."""
-        host = _make_host(test_db)
-        lab = _make_lab(test_db, test_user, agent_id=host.id)
-        job = _make_job(test_db, lab, test_user)
-        ns1 = _make_node_state(test_db, lab, "n1", "R1", desired="stopped", actual="running")
-        ns2 = _make_node_state(test_db, lab, "n2", "R2", desired="stopped", actual="running")
+        host = make_host(test_db)
+        lab = make_lab(test_db, test_user, agent_id=host.id)
+        job = make_job(test_db, lab, test_user)
+        ns1 = make_node_state(test_db, lab, "n1", "R1", desired="stopped", actual="running")
+        ns2 = make_node_state(test_db, lab, "n2", "R2", desired="stopped", actual="running")
         cn1 = _get_container_name(lab.id, "R1")
         cn2 = _get_container_name(lab.id, "R2")
 
@@ -212,10 +110,10 @@ class TestStopNodesSequencing:
     @pytest.mark.asyncio
     async def test_stop_skips_nodes_whose_desired_state_changed(self, test_db, test_user):
         """Nodes whose desired_state changed to 'running' since job was queued are skipped."""
-        host = _make_host(test_db)
-        lab = _make_lab(test_db, test_user, agent_id=host.id)
-        job = _make_job(test_db, lab, test_user)
-        ns = _make_node_state(test_db, lab, "n1", "R1", desired="stopped", actual="running")
+        host = make_host(test_db)
+        lab = make_lab(test_db, test_user, agent_id=host.id)
+        job = make_job(test_db, lab, test_user)
+        ns = make_node_state(test_db, lab, "n1", "R1", desired="stopped", actual="running")
 
         manager = _make_manager(test_db, lab, job, [ns.node_id], agent=host)
         manager.node_states = [ns]
@@ -238,10 +136,10 @@ class TestStopNodesSequencing:
     @pytest.mark.asyncio
     async def test_stop_calls_auto_extract_before_reconcile(self, test_db, test_user):
         """_stop_nodes calls _auto_extract_before_stop before sending reconcile."""
-        host = _make_host(test_db)
-        lab = _make_lab(test_db, test_user, agent_id=host.id)
-        job = _make_job(test_db, lab, test_user)
-        ns = _make_node_state(test_db, lab, "n1", "R1", desired="stopped", actual="running")
+        host = make_host(test_db)
+        lab = make_lab(test_db, test_user, agent_id=host.id)
+        job = make_job(test_db, lab, test_user)
+        ns = make_node_state(test_db, lab, "n1", "R1", desired="stopped", actual="running")
         container_name = _get_container_name(lab.id, "R1")
 
         manager = _make_manager(test_db, lab, job, [ns.node_id], agent=host)
@@ -279,10 +177,10 @@ class TestStopStateTransitions:
     @pytest.mark.asyncio
     async def test_running_to_stopped_on_success(self, test_db, test_user):
         """Successful stop transitions actual_state from running to stopped."""
-        host = _make_host(test_db)
-        lab = _make_lab(test_db, test_user, agent_id=host.id)
-        job = _make_job(test_db, lab, test_user)
-        ns = _make_node_state(test_db, lab, "n1", "R1", desired="stopped", actual="running")
+        host = make_host(test_db)
+        lab = make_lab(test_db, test_user, agent_id=host.id)
+        job = make_job(test_db, lab, test_user)
+        ns = make_node_state(test_db, lab, "n1", "R1", desired="stopped", actual="running")
         ns.is_ready = True
         ns.boot_started_at = datetime.now(timezone.utc)
         ns.stopping_started_at = datetime.now(timezone.utc)
@@ -310,10 +208,10 @@ class TestStopStateTransitions:
     @pytest.mark.asyncio
     async def test_running_to_error_on_failure(self, test_db, test_user):
         """Failed stop transitions actual_state from running to error."""
-        host = _make_host(test_db)
-        lab = _make_lab(test_db, test_user, agent_id=host.id)
-        job = _make_job(test_db, lab, test_user)
-        ns = _make_node_state(test_db, lab, "n1", "R1", desired="stopped", actual="running")
+        host = make_host(test_db)
+        lab = make_lab(test_db, test_user, agent_id=host.id)
+        job = make_job(test_db, lab, test_user)
+        ns = make_node_state(test_db, lab, "n1", "R1", desired="stopped", actual="running")
         container_name = _get_container_name(lab.id, "R1")
 
         manager = _make_manager(test_db, lab, job, [ns.node_id], agent=host)
@@ -339,10 +237,10 @@ class TestStopStateTransitions:
     @pytest.mark.asyncio
     async def test_stop_broadcasts_on_success(self, test_db, test_user):
         """Successful stop broadcasts stopped state via _broadcast_state."""
-        host = _make_host(test_db)
-        lab = _make_lab(test_db, test_user, agent_id=host.id)
-        job = _make_job(test_db, lab, test_user)
-        ns = _make_node_state(test_db, lab, "n1", "R1", desired="stopped", actual="running")
+        host = make_host(test_db)
+        lab = make_lab(test_db, test_user, agent_id=host.id)
+        job = make_job(test_db, lab, test_user)
+        ns = make_node_state(test_db, lab, "n1", "R1", desired="stopped", actual="running")
         container_name = _get_container_name(lab.id, "R1")
 
         manager = _make_manager(test_db, lab, job, [ns.node_id], agent=host)
@@ -362,10 +260,10 @@ class TestStopStateTransitions:
     @pytest.mark.asyncio
     async def test_stop_broadcasts_on_error(self, test_db, test_user):
         """Failed stop broadcasts error state via _broadcast_state."""
-        host = _make_host(test_db)
-        lab = _make_lab(test_db, test_user, agent_id=host.id)
-        job = _make_job(test_db, lab, test_user)
-        ns = _make_node_state(test_db, lab, "n1", "R1", desired="stopped", actual="running")
+        host = make_host(test_db)
+        lab = make_lab(test_db, test_user, agent_id=host.id)
+        job = make_job(test_db, lab, test_user)
+        ns = make_node_state(test_db, lab, "n1", "R1", desired="stopped", actual="running")
         container_name = _get_container_name(lab.id, "R1")
 
         manager = _make_manager(test_db, lab, job, [ns.node_id], agent=host)
@@ -398,10 +296,10 @@ class TestStopAgentFailures:
     @pytest.mark.asyncio
     async def test_agent_unavailable_preserves_state(self, test_db, test_user):
         """AgentUnavailableError is transient: state is preserved, not set to error."""
-        host = _make_host(test_db)
-        lab = _make_lab(test_db, test_user, agent_id=host.id)
-        job = _make_job(test_db, lab, test_user)
-        ns = _make_node_state(test_db, lab, "n1", "R1", desired="stopped", actual="running")
+        host = make_host(test_db)
+        lab = make_lab(test_db, test_user, agent_id=host.id)
+        job = make_job(test_db, lab, test_user)
+        ns = make_node_state(test_db, lab, "n1", "R1", desired="stopped", actual="running")
 
         manager = _make_manager(test_db, lab, job, [ns.node_id], agent=host)
         manager.node_states = [ns]
@@ -422,10 +320,10 @@ class TestStopAgentFailures:
     @pytest.mark.asyncio
     async def test_generic_exception_sets_error(self, test_db, test_user):
         """Non-transient exception sets error state on all nodes in the batch."""
-        host = _make_host(test_db)
-        lab = _make_lab(test_db, test_user, agent_id=host.id)
-        job = _make_job(test_db, lab, test_user)
-        ns = _make_node_state(test_db, lab, "n1", "R1", desired="stopped", actual="running")
+        host = make_host(test_db)
+        lab = make_lab(test_db, test_user, agent_id=host.id)
+        job = make_job(test_db, lab, test_user)
+        ns = make_node_state(test_db, lab, "n1", "R1", desired="stopped", actual="running")
 
         manager = _make_manager(test_db, lab, job, [ns.node_id], agent=host)
         manager.node_states = [ns]
@@ -446,12 +344,12 @@ class TestStopAgentFailures:
     @pytest.mark.asyncio
     async def test_fallback_to_default_agent_on_not_found(self, test_db, test_user):
         """Container not found on placement agent triggers fallback to default agent."""
-        main_host = _make_host(test_db, "main-host", "Main Host")
-        remote_host = _make_host(test_db, "remote-host", "Remote Host")
-        lab = _make_lab(test_db, test_user, agent_id=main_host.id)
-        job = _make_job(test_db, lab, test_user)
-        ns = _make_node_state(test_db, lab, "n1", "R1", desired="stopped", actual="running")
-        _make_placement(test_db, lab, "R1", remote_host.id)
+        main_host = make_host(test_db, "main-host", "Main Host")
+        remote_host = make_host(test_db, "remote-host", "Remote Host")
+        lab = make_lab(test_db, test_user, agent_id=main_host.id)
+        job = make_job(test_db, lab, test_user)
+        ns = make_node_state(test_db, lab, "n1", "R1", desired="stopped", actual="running")
+        make_placement(test_db, lab, "R1", remote_host.id)
         container_name = _get_container_name(lab.id, "R1")
 
         manager = _make_manager(test_db, lab, job, [ns.node_id], agent=main_host)
@@ -493,12 +391,12 @@ class TestStopAgentFailures:
     @pytest.mark.asyncio
     async def test_fallback_agent_unavailable_is_transient(self, test_db, test_user):
         """AgentUnavailableError on fallback agent is treated as transient."""
-        main_host = _make_host(test_db, "main-host", "Main Host")
-        remote_host = _make_host(test_db, "remote-host", "Remote Host")
-        lab = _make_lab(test_db, test_user, agent_id=main_host.id)
-        job = _make_job(test_db, lab, test_user)
-        ns = _make_node_state(test_db, lab, "n1", "R1", desired="stopped", actual="running")
-        _make_placement(test_db, lab, "R1", remote_host.id)
+        main_host = make_host(test_db, "main-host", "Main Host")
+        remote_host = make_host(test_db, "remote-host", "Remote Host")
+        lab = make_lab(test_db, test_user, agent_id=main_host.id)
+        job = make_job(test_db, lab, test_user)
+        ns = make_node_state(test_db, lab, "n1", "R1", desired="stopped", actual="running")
+        make_placement(test_db, lab, "R1", remote_host.id)
         container_name = _get_container_name(lab.id, "R1")
 
         manager = _make_manager(test_db, lab, job, [ns.node_id], agent=main_host)
@@ -535,12 +433,12 @@ class TestStopAgentFailures:
     @pytest.mark.asyncio
     async def test_fallback_generic_exception_sets_error(self, test_db, test_user):
         """Non-transient exception on fallback agent sets error state."""
-        main_host = _make_host(test_db, "main-host", "Main Host")
-        remote_host = _make_host(test_db, "remote-host", "Remote Host")
-        lab = _make_lab(test_db, test_user, agent_id=main_host.id)
-        job = _make_job(test_db, lab, test_user)
-        ns = _make_node_state(test_db, lab, "n1", "R1", desired="stopped", actual="running")
-        _make_placement(test_db, lab, "R1", remote_host.id)
+        main_host = make_host(test_db, "main-host", "Main Host")
+        remote_host = make_host(test_db, "remote-host", "Remote Host")
+        lab = make_lab(test_db, test_user, agent_id=main_host.id)
+        job = make_job(test_db, lab, test_user)
+        ns = make_node_state(test_db, lab, "n1", "R1", desired="stopped", actual="running")
+        make_placement(test_db, lab, "R1", remote_host.id)
         container_name = _get_container_name(lab.id, "R1")
 
         manager = _make_manager(test_db, lab, job, [ns.node_id], agent=main_host)
@@ -581,14 +479,14 @@ class TestStopMultiAgentGrouping:
     @pytest.mark.asyncio
     async def test_nodes_grouped_by_placement_agent(self, test_db, test_user):
         """Nodes placed on different agents result in separate batch calls."""
-        host_a = _make_host(test_db, "host-a", "Host A")
-        host_b = _make_host(test_db, "host-b", "Host B")
-        lab = _make_lab(test_db, test_user, agent_id=host_a.id)
-        job = _make_job(test_db, lab, test_user)
-        ns1 = _make_node_state(test_db, lab, "n1", "R1", desired="stopped", actual="running")
-        ns2 = _make_node_state(test_db, lab, "n2", "R2", desired="stopped", actual="running")
-        _make_placement(test_db, lab, "R1", host_a.id)
-        _make_placement(test_db, lab, "R2", host_b.id)
+        host_a = make_host(test_db, "host-a", "Host A")
+        host_b = make_host(test_db, "host-b", "Host B")
+        lab = make_lab(test_db, test_user, agent_id=host_a.id)
+        job = make_job(test_db, lab, test_user)
+        ns1 = make_node_state(test_db, lab, "n1", "R1", desired="stopped", actual="running")
+        ns2 = make_node_state(test_db, lab, "n2", "R2", desired="stopped", actual="running")
+        make_placement(test_db, lab, "R1", host_a.id)
+        make_placement(test_db, lab, "R2", host_b.id)
         _get_container_name(lab.id, "R1")
         _get_container_name(lab.id, "R2")
 
@@ -621,12 +519,12 @@ class TestStopMultiAgentGrouping:
     @pytest.mark.asyncio
     async def test_offline_placement_agent_falls_back_to_default(self, test_db, test_user):
         """When placement agent is offline, stop falls back to default agent."""
-        main_host = _make_host(test_db, "main-host", "Main Host")
-        offline_host = _make_host(test_db, "offline-host", "Offline Host", status="offline")
-        lab = _make_lab(test_db, test_user, agent_id=main_host.id)
-        job = _make_job(test_db, lab, test_user)
-        ns = _make_node_state(test_db, lab, "n1", "R1", desired="stopped", actual="running")
-        _make_placement(test_db, lab, "R1", offline_host.id)
+        main_host = make_host(test_db, "main-host", "Main Host")
+        offline_host = make_host(test_db, "offline-host", "Offline Host", status="offline")
+        lab = make_lab(test_db, test_user, agent_id=main_host.id)
+        job = make_job(test_db, lab, test_user)
+        ns = make_node_state(test_db, lab, "n1", "R1", desired="stopped", actual="running")
+        make_placement(test_db, lab, "R1", offline_host.id)
         container_name = _get_container_name(lab.id, "R1")
 
         manager = _make_manager(test_db, lab, job, [ns.node_id], agent=main_host)
@@ -659,10 +557,10 @@ class TestApplyStopResult:
 
     def test_success_result_sets_stopped(self, test_db, test_user):
         """Successful result transitions to stopped and clears error."""
-        host = _make_host(test_db)
-        lab = _make_lab(test_db, test_user, agent_id=host.id)
-        job = _make_job(test_db, lab, test_user)
-        ns = _make_node_state(test_db, lab, "n1", "R1", desired="stopped", actual="running")
+        host = make_host(test_db)
+        lab = make_lab(test_db, test_user, agent_id=host.id)
+        job = make_job(test_db, lab, test_user)
+        ns = make_node_state(test_db, lab, "n1", "R1", desired="stopped", actual="running")
         ns.error_message = "Previous error"
         ns.is_ready = True
         ns.stopping_started_at = datetime.now(timezone.utc)
@@ -682,10 +580,10 @@ class TestApplyStopResult:
 
     def test_failure_result_sets_error(self, test_db, test_user):
         """Failed result sets error state with error message."""
-        host = _make_host(test_db)
-        lab = _make_lab(test_db, test_user, agent_id=host.id)
-        job = _make_job(test_db, lab, test_user)
-        ns = _make_node_state(test_db, lab, "n1", "R1", desired="stopped", actual="running")
+        host = make_host(test_db)
+        lab = make_lab(test_db, test_user, agent_id=host.id)
+        job = make_job(test_db, lab, test_user)
+        ns = make_node_state(test_db, lab, "n1", "R1", desired="stopped", actual="running")
 
         manager = _make_manager(test_db, lab, job, [ns.node_id], agent=host)
         manager.node_states = [ns]
@@ -701,10 +599,10 @@ class TestApplyStopResult:
 
     def test_failure_result_default_error_message(self, test_db, test_user):
         """Failed result with no error key uses default message."""
-        host = _make_host(test_db)
-        lab = _make_lab(test_db, test_user, agent_id=host.id)
-        job = _make_job(test_db, lab, test_user)
-        ns = _make_node_state(test_db, lab, "n1", "R1", desired="stopped", actual="running")
+        host = make_host(test_db)
+        lab = make_lab(test_db, test_user, agent_id=host.id)
+        job = make_job(test_db, lab, test_user)
+        ns = make_node_state(test_db, lab, "n1", "R1", desired="stopped", actual="running")
 
         manager = _make_manager(test_db, lab, job, [ns.node_id], agent=host)
         manager.node_states = [ns]
@@ -725,10 +623,10 @@ class TestAutoExtractBeforeStop:
     @pytest.mark.asyncio
     async def test_disabled_by_feature_flag(self, test_db, test_user):
         """When feature_auto_extract_on_stop is False, extraction is skipped."""
-        host = _make_host(test_db)
-        lab = _make_lab(test_db, test_user, agent_id=host.id)
-        job = _make_job(test_db, lab, test_user)
-        ns = _make_node_state(test_db, lab, "n1", "R1", desired="stopped", actual="running")
+        host = make_host(test_db)
+        lab = make_lab(test_db, test_user, agent_id=host.id)
+        job = make_job(test_db, lab, test_user)
+        ns = make_node_state(test_db, lab, "n1", "R1", desired="stopped", actual="running")
 
         manager = _make_manager(test_db, lab, job, [ns.node_id], agent=host)
         manager.node_states = [ns]
@@ -744,10 +642,10 @@ class TestAutoExtractBeforeStop:
     @pytest.mark.asyncio
     async def test_skips_non_running_nodes(self, test_db, test_user):
         """Only running/stopping nodes have configs extracted."""
-        host = _make_host(test_db)
-        lab = _make_lab(test_db, test_user, agent_id=host.id)
-        job = _make_job(test_db, lab, test_user)
-        ns = _make_node_state(test_db, lab, "n1", "R1", desired="stopped", actual="stopped")
+        host = make_host(test_db)
+        lab = make_lab(test_db, test_user, agent_id=host.id)
+        job = make_job(test_db, lab, test_user)
+        ns = make_node_state(test_db, lab, "n1", "R1", desired="stopped", actual="stopped")
 
         manager = _make_manager(test_db, lab, job, [ns.node_id], agent=host)
         manager.node_states = [ns]
@@ -765,10 +663,10 @@ class TestAutoExtractBeforeStop:
     @pytest.mark.asyncio
     async def test_extraction_timeout_does_not_block_stop(self, test_db, test_user):
         """Extraction timeout is logged but does not prevent stop."""
-        host = _make_host(test_db)
-        lab = _make_lab(test_db, test_user, agent_id=host.id)
-        job = _make_job(test_db, lab, test_user)
-        ns = _make_node_state(test_db, lab, "n1", "R1", desired="stopped", actual="running")
+        host = make_host(test_db)
+        lab = make_lab(test_db, test_user, agent_id=host.id)
+        job = make_job(test_db, lab, test_user)
+        ns = make_node_state(test_db, lab, "n1", "R1", desired="stopped", actual="running")
 
         manager = _make_manager(test_db, lab, job, [ns.node_id], agent=host)
         manager.node_states = [ns]
@@ -802,10 +700,10 @@ class TestAutoExtractBeforeStop:
         captures it. The code then skips configs from that agent, resulting in
         "No configs extracted" in log_parts (the exception itself is logged via logger).
         """
-        host = _make_host(test_db)
-        lab = _make_lab(test_db, test_user, agent_id=host.id)
-        job = _make_job(test_db, lab, test_user)
-        ns = _make_node_state(test_db, lab, "n1", "R1", desired="stopped", actual="running")
+        host = make_host(test_db)
+        lab = make_lab(test_db, test_user, agent_id=host.id)
+        job = make_job(test_db, lab, test_user)
+        ns = make_node_state(test_db, lab, "n1", "R1", desired="stopped", actual="running")
 
         manager = _make_manager(test_db, lab, job, [ns.node_id], agent=host)
         manager.node_states = [ns]
@@ -829,11 +727,11 @@ class TestAutoExtractBeforeStop:
     @pytest.mark.asyncio
     async def test_successful_extraction_creates_snapshots(self, test_db, test_user):
         """Successful extraction saves autosave snapshots via ConfigService."""
-        host = _make_host(test_db)
-        lab = _make_lab(test_db, test_user, agent_id=host.id)
-        job = _make_job(test_db, lab, test_user)
-        ns = _make_node_state(test_db, lab, "n1", "R1", desired="stopped", actual="running")
-        _make_node_def(test_db, lab, "n1", "R1", "R1", device="linux", host_id=host.id)
+        host = make_host(test_db)
+        lab = make_lab(test_db, test_user, agent_id=host.id)
+        job = make_job(test_db, lab, test_user)
+        ns = make_node_state(test_db, lab, "n1", "R1", desired="stopped", actual="running")
+        make_node(test_db, lab, "n1", "R1", "R1", device="linux", host_id=host.id)
 
         manager = _make_manager(test_db, lab, job, [ns.node_id], agent=host)
         manager.node_states = [ns]
@@ -872,10 +770,10 @@ class TestConvergeStoppedDesiredErrorStates:
 
     def test_error_to_stopped_when_desired_stopped(self, test_db, test_user):
         """desired=stopped + actual=error normalizes to actual=stopped."""
-        host = _make_host(test_db)
-        lab = _make_lab(test_db, test_user, agent_id=host.id)
-        job = _make_job(test_db, lab, test_user)
-        ns = _make_node_state(test_db, lab, "n1", "R1", desired="stopped", actual="error")
+        host = make_host(test_db)
+        lab = make_lab(test_db, test_user, agent_id=host.id)
+        job = make_job(test_db, lab, test_user)
+        ns = make_node_state(test_db, lab, "n1", "R1", desired="stopped", actual="error")
         ns.error_message = "Stop failed previously"
         ns.enforcement_attempts = 3
         ns.image_sync_status = "failed"
@@ -901,10 +799,10 @@ class TestConvergeStoppedDesiredErrorStates:
 
     def test_does_not_touch_running_nodes(self, test_db, test_user):
         """Nodes with desired=running are not normalized."""
-        host = _make_host(test_db)
-        lab = _make_lab(test_db, test_user, agent_id=host.id)
-        job = _make_job(test_db, lab, test_user)
-        ns = _make_node_state(test_db, lab, "n1", "R1", desired="running", actual="error")
+        host = make_host(test_db)
+        lab = make_lab(test_db, test_user, agent_id=host.id)
+        job = make_job(test_db, lab, test_user)
+        ns = make_node_state(test_db, lab, "n1", "R1", desired="running", actual="error")
         ns.error_message = "Deploy failed"
         test_db.commit()
 
@@ -919,10 +817,10 @@ class TestConvergeStoppedDesiredErrorStates:
 
     def test_does_not_touch_already_stopped(self, test_db, test_user):
         """Nodes already stopped are not counted as normalized."""
-        host = _make_host(test_db)
-        lab = _make_lab(test_db, test_user, agent_id=host.id)
-        job = _make_job(test_db, lab, test_user)
-        ns = _make_node_state(test_db, lab, "n1", "R1", desired="stopped", actual="stopped")
+        host = make_host(test_db)
+        lab = make_lab(test_db, test_user, agent_id=host.id)
+        job = make_job(test_db, lab, test_user)
+        ns = make_node_state(test_db, lab, "n1", "R1", desired="stopped", actual="stopped")
 
         manager = _make_manager(test_db, lab, job, [ns.node_id], agent=host)
         manager.node_states = [ns]
@@ -934,11 +832,11 @@ class TestConvergeStoppedDesiredErrorStates:
 
     def test_multiple_error_nodes_all_normalized(self, test_db, test_user):
         """All desired=stopped + actual=error nodes are normalized in one call."""
-        host = _make_host(test_db)
-        lab = _make_lab(test_db, test_user, agent_id=host.id)
-        job = _make_job(test_db, lab, test_user)
-        ns1 = _make_node_state(test_db, lab, "n1", "R1", desired="stopped", actual="error")
-        ns2 = _make_node_state(test_db, lab, "n2", "R2", desired="stopped", actual="error")
+        host = make_host(test_db)
+        lab = make_lab(test_db, test_user, agent_id=host.id)
+        job = make_job(test_db, lab, test_user)
+        ns1 = make_node_state(test_db, lab, "n1", "R1", desired="stopped", actual="error")
+        ns2 = make_node_state(test_db, lab, "n2", "R2", desired="stopped", actual="error")
 
         manager = _make_manager(test_db, lab, job, [ns1.node_id, ns2.node_id], agent=host)
         manager.node_states = [ns1, ns2]
@@ -961,11 +859,11 @@ class TestStopPartialFailure:
     @pytest.mark.asyncio
     async def test_partial_stop_isolates_errors(self, test_db, test_user):
         """In a batch, one node fails and another succeeds independently."""
-        host = _make_host(test_db)
-        lab = _make_lab(test_db, test_user, agent_id=host.id)
-        job = _make_job(test_db, lab, test_user)
-        ns1 = _make_node_state(test_db, lab, "n1", "R1", desired="stopped", actual="running")
-        ns2 = _make_node_state(test_db, lab, "n2", "R2", desired="stopped", actual="running")
+        host = make_host(test_db)
+        lab = make_lab(test_db, test_user, agent_id=host.id)
+        job = make_job(test_db, lab, test_user)
+        ns1 = make_node_state(test_db, lab, "n1", "R1", desired="stopped", actual="running")
+        ns2 = make_node_state(test_db, lab, "n2", "R2", desired="stopped", actual="running")
         cn1 = _get_container_name(lab.id, "R1")
         cn2 = _get_container_name(lab.id, "R2")
 
@@ -991,10 +889,10 @@ class TestStopPartialFailure:
     @pytest.mark.asyncio
     async def test_no_result_for_node_uses_empty_dict(self, test_db, test_user):
         """When agent returns no result for a node, empty dict is used (treated as failure)."""
-        host = _make_host(test_db)
-        lab = _make_lab(test_db, test_user, agent_id=host.id)
-        job = _make_job(test_db, lab, test_user)
-        ns = _make_node_state(test_db, lab, "n1", "R1", desired="stopped", actual="running")
+        host = make_host(test_db)
+        lab = make_lab(test_db, test_user, agent_id=host.id)
+        job = make_job(test_db, lab, test_user)
+        ns = make_node_state(test_db, lab, "n1", "R1", desired="stopped", actual="running")
         _get_container_name(lab.id, "R1")
 
         manager = _make_manager(test_db, lab, job, [ns.node_id], agent=host)

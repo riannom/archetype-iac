@@ -17,36 +17,12 @@ from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
 from app import models
+from tests.factories import make_node
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-
-def _make_node(
-    test_db: Session,
-    lab: models.Lab,
-    gui_id: str = "n1",
-    display_name: str = "R1",
-    container_name: str = "archetype-test-r1",
-    device: str = "ceos",
-    host_id: str | None = None,
-) -> models.Node:
-    """Create and persist a Node for testing."""
-    node = models.Node(
-        id=str(uuid4()),
-        lab_id=lab.id,
-        gui_id=gui_id,
-        display_name=display_name,
-        container_name=container_name,
-        device=device,
-        host_id=host_id,
-    )
-    test_db.add(node)
-    test_db.commit()
-    test_db.refresh(node)
-    return node
 
 
 def _make_snapshot(
@@ -97,7 +73,7 @@ class TestExtractConfigs:
         auth_headers: dict,
     ):
         """Successful extraction returns extracted count and snapshots created."""
-        node = _make_node(test_db, sample_lab, host_id=sample_host.id)
+        node = make_node(test_db, sample_lab, host_id=sample_host.id)
 
         # Create placement so extract knows which agent to talk to
         placement = models.NodePlacement(
@@ -161,7 +137,7 @@ class TestExtractConfigs:
         auth_headers: dict,
     ):
         """Partial agent failures still return data from successful agents."""
-        node = _make_node(test_db, sample_lab, host_id=sample_host.id)
+        node = make_node(test_db, sample_lab, host_id=sample_host.id)
         placement = models.NodePlacement(
             id=str(uuid4()),
             lab_id=sample_lab.id,
@@ -205,7 +181,7 @@ class TestExtractConfigs:
         auth_headers: dict,
     ):
         """Snapshots are persisted to the database after extraction."""
-        node = _make_node(test_db, sample_lab, host_id=sample_host.id)
+        node = make_node(test_db, sample_lab, host_id=sample_host.id)
         placement = models.NodePlacement(
             id=str(uuid4()),
             lab_id=sample_lab.id,
@@ -256,7 +232,7 @@ class TestSetActiveConfig:
         auth_headers: dict,
     ):
         """Successfully set an active config for a node."""
-        node = _make_node(test_db, sample_lab)
+        node = make_node(test_db, sample_lab)
         snapshot = _make_snapshot(test_db, sample_lab.id, node.container_name)
 
         mock_agent_client = MagicMock()
@@ -301,7 +277,7 @@ class TestSetActiveConfig:
         auth_headers: dict,
     ):
         """Passing null snapshot_id clears the active config."""
-        node = _make_node(test_db, sample_lab)
+        node = make_node(test_db, sample_lab)
 
         mock_agent_client = MagicMock()
         mock_agent_client.is_agent_online = MagicMock(return_value=False)
@@ -409,7 +385,7 @@ class TestConfigSnapshots:
         auth_headers: dict,
     ):
         """Bulk delete with active config guard returns 409 without force."""
-        node = _make_node(test_db, sample_lab)
+        node = make_node(test_db, sample_lab)
         snapshot = _make_snapshot(test_db, sample_lab.id, node.container_name)
 
         # Set snapshot as active config on node
@@ -431,7 +407,7 @@ class TestConfigSnapshots:
         auth_headers: dict,
     ):
         """Bulk delete with force=True overrides active config guard."""
-        node = _make_node(test_db, sample_lab)
+        node = make_node(test_db, sample_lab)
         snapshot = _make_snapshot(test_db, sample_lab.id, node.container_name)
 
         # Set snapshot as active config on node

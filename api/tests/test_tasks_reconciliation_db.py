@@ -22,6 +22,7 @@ from app.state import (
     LinkActualState,
     NodeActualState,
 )
+from tests.factories import make_host, make_link, make_link_state, make_node, make_node_state, make_placement
 
 
 # ---------------------------------------------------------------------------
@@ -85,114 +86,6 @@ def _disable_reconcile_redis():
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _make_node(test_db: Session, lab_id: str, name: str, device: str = "linux",
-               host_id: str | None = None) -> models.Node:
-    """Create and flush a Node definition."""
-    node = models.Node(
-        lab_id=lab_id,
-        gui_id=name.lower(),
-        display_name=name,
-        container_name=name,
-        node_type="device",
-        device=device,
-        host_id=host_id,
-    )
-    test_db.add(node)
-    test_db.flush()
-    return node
-
-
-def _make_link(test_db: Session, lab_id: str, src_node: models.Node,
-               src_iface: str, tgt_node: models.Node,
-               tgt_iface: str) -> models.Link:
-    """Create and flush a Link definition."""
-    link = models.Link(
-        lab_id=lab_id,
-        link_name=f"{src_node.container_name}:{src_iface}-{tgt_node.container_name}:{tgt_iface}",
-        source_node_id=src_node.id,
-        source_interface=src_iface,
-        target_node_id=tgt_node.id,
-        target_interface=tgt_iface,
-    )
-    test_db.add(link)
-    test_db.flush()
-    return link
-
-
-def _make_node_state(test_db: Session, lab_id: str, node_def: models.Node | None,
-                     node_id: str = "gui-1", node_name: str = "R1",
-                     desired: str = "stopped", actual: str = "undeployed",
-                     **kwargs) -> models.NodeState:
-    """Create and flush a NodeState record."""
-    ns = models.NodeState(
-        lab_id=lab_id,
-        node_id=node_id,
-        node_name=node_name,
-        node_definition_id=node_def.id if node_def else None,
-        desired_state=desired,
-        actual_state=actual,
-        **kwargs,
-    )
-    test_db.add(ns)
-    test_db.flush()
-    return ns
-
-
-def _make_link_state(test_db: Session, lab_id: str,
-                     source_node: str, source_iface: str,
-                     target_node: str, target_iface: str,
-                     desired: str = "up", actual: str = "unknown",
-                     **kwargs) -> models.LinkState:
-    """Create and flush a LinkState record."""
-    ls = models.LinkState(
-        lab_id=lab_id,
-        link_name=f"{source_node}:{source_iface}-{target_node}:{target_iface}",
-        source_node=source_node,
-        source_interface=source_iface,
-        target_node=target_node,
-        target_interface=target_iface,
-        desired_state=desired,
-        actual_state=actual,
-        **kwargs,
-    )
-    test_db.add(ls)
-    test_db.flush()
-    return ls
-
-
-def _make_placement(test_db: Session, lab_id: str, node_def: models.Node,
-                    host_id: str, status: str = "deployed") -> models.NodePlacement:
-    """Create and flush a NodePlacement record."""
-    p = models.NodePlacement(
-        lab_id=lab_id,
-        node_name=node_def.container_name,
-        node_definition_id=node_def.id,
-        host_id=host_id,
-        status=status,
-    )
-    test_db.add(p)
-    test_db.flush()
-    return p
-
-
-def _make_host(test_db: Session, host_id: str, name: str = "Agent",
-               status: str = "online") -> models.Host:
-    """Create and flush a Host record."""
-    import json
-    host = models.Host(
-        id=host_id,
-        name=name,
-        address=f"{host_id}.local:8080",
-        status=status,
-        capabilities=json.dumps({"providers": ["docker"]}),
-        version="1.0.0",
-        last_heartbeat=datetime.now(timezone.utc),
-        resource_usage=json.dumps({}),
-    )
-    test_db.add(host)
-    test_db.flush()
-    return host
-
 
 # ===================================================================
 #  _ensure_link_states_for_lab
@@ -204,9 +97,9 @@ class TestEnsureLinkStatesForLab:
         """New LinkState created when Link definition has no matching state."""
         from app.tasks.reconciliation_db import _ensure_link_states_for_lab
 
-        n1 = _make_node(test_db, sample_lab.id, "R1")
-        n2 = _make_node(test_db, sample_lab.id, "R2")
-        _make_link(test_db, sample_lab.id, n1, "eth1", n2, "eth1")
+        n1 = make_node(test_db, sample_lab.id, "R1")
+        n2 = make_node(test_db, sample_lab.id, "R2")
+        make_link(test_db, sample_lab.id, n1, "eth1", n2, "eth1")
         test_db.commit()
 
         created = _ensure_link_states_for_lab(test_db, sample_lab.id)
@@ -230,11 +123,11 @@ class TestEnsureLinkStatesForLab:
         """Existing LinkState with matching canonical key should not be duplicated."""
         from app.tasks.reconciliation_db import _ensure_link_states_for_lab
 
-        n1 = _make_node(test_db, sample_lab.id, "R1")
-        n2 = _make_node(test_db, sample_lab.id, "R2")
-        _make_link(test_db, sample_lab.id, n1, "eth1", n2, "eth1")
+        n1 = make_node(test_db, sample_lab.id, "R1")
+        n2 = make_node(test_db, sample_lab.id, "R2")
+        make_link(test_db, sample_lab.id, n1, "eth1", n2, "eth1")
         # Pre-existing state
-        _make_link_state(test_db, sample_lab.id, "R1", "eth1", "R2", "eth1")
+        make_link_state(test_db, sample_lab.id, "R1", "eth1", "R2", "eth1")
         test_db.commit()
 
         created = _ensure_link_states_for_lab(test_db, sample_lab.id)
@@ -244,11 +137,11 @@ class TestEnsureLinkStatesForLab:
         """Multiple missing link states should all be created."""
         from app.tasks.reconciliation_db import _ensure_link_states_for_lab
 
-        n1 = _make_node(test_db, sample_lab.id, "R1")
-        n2 = _make_node(test_db, sample_lab.id, "R2")
-        n3 = _make_node(test_db, sample_lab.id, "R3")
-        _make_link(test_db, sample_lab.id, n1, "eth1", n2, "eth1")
-        _make_link(test_db, sample_lab.id, n2, "eth2", n3, "eth1")
+        n1 = make_node(test_db, sample_lab.id, "R1")
+        n2 = make_node(test_db, sample_lab.id, "R2")
+        n3 = make_node(test_db, sample_lab.id, "R3")
+        make_link(test_db, sample_lab.id, n1, "eth1", n2, "eth1")
+        make_link(test_db, sample_lab.id, n2, "eth2", n3, "eth1")
         test_db.commit()
 
         created = _ensure_link_states_for_lab(test_db, sample_lab.id)
@@ -258,14 +151,14 @@ class TestEnsureLinkStatesForLab:
         """Duplicate LinkStates with same canonical key should be consolidated."""
         from app.tasks.reconciliation_db import _ensure_link_states_for_lab
 
-        n1 = _make_node(test_db, sample_lab.id, "R1")
-        n2 = _make_node(test_db, sample_lab.id, "R2")
-        _make_link(test_db, sample_lab.id, n1, "eth1", n2, "eth1")
+        n1 = make_node(test_db, sample_lab.id, "R1")
+        n2 = make_node(test_db, sample_lab.id, "R2")
+        make_link(test_db, sample_lab.id, n1, "eth1", n2, "eth1")
 
         # Create two link states with same canonical key but different link_names
         # (one in forward order, one reversed — both canonicalize the same)
-        _make_link_state(test_db, sample_lab.id, "R1", "eth1", "R2", "eth1")
-        _make_link_state(test_db, sample_lab.id, "R2", "eth1", "R1", "eth1")
+        make_link_state(test_db, sample_lab.id, "R1", "eth1", "R2", "eth1")
+        make_link_state(test_db, sample_lab.id, "R2", "eth1", "R1", "eth1")
         test_db.commit()
 
         created = _ensure_link_states_for_lab(test_db, sample_lab.id)
@@ -281,7 +174,7 @@ class TestEnsureLinkStatesForLab:
         """Link whose source/target Node cannot be resolved should be skipped."""
         from app.tasks.reconciliation_db import _ensure_link_states_for_lab
 
-        n1 = _make_node(test_db, sample_lab.id, "R1")
+        n1 = make_node(test_db, sample_lab.id, "R1")
         # Create link referencing a missing node
         link = models.Link(
             lab_id=sample_lab.id,
@@ -301,12 +194,12 @@ class TestEnsureLinkStatesForLab:
         """Link between nodes on different hosts should be marked is_cross_host."""
         from app.tasks.reconciliation_db import _ensure_link_states_for_lab
 
-        h1 = _make_host(test_db, "host-a", "Agent A")
-        h2 = _make_host(test_db, "host-b", "Agent B")
+        h1 = make_host(test_db, "host-a", "Agent A")
+        h2 = make_host(test_db, "host-b", "Agent B")
 
-        n1 = _make_node(test_db, sample_lab.id, "R1", host_id=h1.id)
-        n2 = _make_node(test_db, sample_lab.id, "R2", host_id=h2.id)
-        _make_link(test_db, sample_lab.id, n1, "eth1", n2, "eth1")
+        n1 = make_node(test_db, sample_lab.id, "R1", host_id=h1.id)
+        n2 = make_node(test_db, sample_lab.id, "R2", host_id=h2.id)
+        make_link(test_db, sample_lab.id, n1, "eth1", n2, "eth1")
         test_db.commit()
 
         created = _ensure_link_states_for_lab(test_db, sample_lab.id)
@@ -323,11 +216,11 @@ class TestEnsureLinkStatesForLab:
         """Link between nodes on the same host should have is_cross_host=False."""
         from app.tasks.reconciliation_db import _ensure_link_states_for_lab
 
-        h1 = _make_host(test_db, "host-same", "Agent Same")
+        h1 = make_host(test_db, "host-same", "Agent Same")
 
-        n1 = _make_node(test_db, sample_lab.id, "R1", host_id=h1.id)
-        n2 = _make_node(test_db, sample_lab.id, "R2", host_id=h1.id)
-        _make_link(test_db, sample_lab.id, n1, "eth1", n2, "eth1")
+        n1 = make_node(test_db, sample_lab.id, "R1", host_id=h1.id)
+        n2 = make_node(test_db, sample_lab.id, "R2", host_id=h1.id)
+        make_link(test_db, sample_lab.id, n1, "eth1", n2, "eth1")
         test_db.commit()
 
         _ensure_link_states_for_lab(test_db, sample_lab.id)
@@ -342,14 +235,14 @@ class TestEnsureLinkStatesForLab:
         """Host ID resolved from NodePlacement when Node.host_id is None."""
         from app.tasks.reconciliation_db import _ensure_link_states_for_lab
 
-        h1 = _make_host(test_db, "host-p1", "Agent P1")
-        h2 = _make_host(test_db, "host-p2", "Agent P2")
+        h1 = make_host(test_db, "host-p1", "Agent P1")
+        h2 = make_host(test_db, "host-p2", "Agent P2")
 
-        n1 = _make_node(test_db, sample_lab.id, "R1")  # no host_id on node
-        n2 = _make_node(test_db, sample_lab.id, "R2")
-        _make_placement(test_db, sample_lab.id, n1, h1.id)
-        _make_placement(test_db, sample_lab.id, n2, h2.id)
-        _make_link(test_db, sample_lab.id, n1, "eth1", n2, "eth1")
+        n1 = make_node(test_db, sample_lab.id, "R1")  # no host_id on node
+        n2 = make_node(test_db, sample_lab.id, "R2")
+        make_placement(test_db, sample_lab.id, n1, h1.id, status="deployed")
+        make_placement(test_db, sample_lab.id, n2, h2.id, status="deployed")
+        make_link(test_db, sample_lab.id, n1, "eth1", n2, "eth1")
         test_db.commit()
 
         _ensure_link_states_for_lab(test_db, sample_lab.id)
@@ -364,9 +257,9 @@ class TestEnsureLinkStatesForLab:
         """Newly created LinkState should have link_definition_id set."""
         from app.tasks.reconciliation_db import _ensure_link_states_for_lab
 
-        n1 = _make_node(test_db, sample_lab.id, "R1")
-        n2 = _make_node(test_db, sample_lab.id, "R2")
-        link = _make_link(test_db, sample_lab.id, n1, "eth1", n2, "eth1")
+        n1 = make_node(test_db, sample_lab.id, "R1")
+        n2 = make_node(test_db, sample_lab.id, "R2")
+        link = make_link(test_db, sample_lab.id, n1, "eth1", n2, "eth1")
         test_db.commit()
 
         _ensure_link_states_for_lab(test_db, sample_lab.id)
@@ -402,8 +295,8 @@ class TestBackfillPlacementNodeIds:
         """Placements with NULL node_definition_id trigger a warning but no backfill."""
         from app.tasks.reconciliation_db import _backfill_placement_node_ids
 
-        _make_node(test_db, sample_lab.id, "R1")
-        h1 = _make_host(test_db, "host-bf1", "Agent BF1")
+        make_node(test_db, sample_lab.id, "R1")
+        h1 = make_host(test_db, "host-bf1", "Agent BF1")
 
         p = models.NodePlacement(
             lab_id=sample_lab.id,
@@ -424,9 +317,9 @@ class TestBackfillPlacementNodeIds:
         """Placements with node_definition_id set should not count as missing."""
         from app.tasks.reconciliation_db import _backfill_placement_node_ids
 
-        n1 = _make_node(test_db, sample_lab.id, "R1")
-        h1 = _make_host(test_db, "host-bf2", "Agent BF2")
-        _make_placement(test_db, sample_lab.id, n1, h1.id)
+        n1 = make_node(test_db, sample_lab.id, "R1")
+        h1 = make_host(test_db, "host-bf2", "Agent BF2")
+        make_placement(test_db, sample_lab.id, n1, h1.id, status="deployed")
         test_db.commit()
 
         result = _backfill_placement_node_ids(test_db, sample_lab.id)
@@ -443,7 +336,7 @@ class TestCleanupOrphanedNodeStates:
         """Orphaned NodeState with actual_state=undeployed should be deleted."""
         from app.tasks.reconciliation_db import cleanup_orphaned_node_states
 
-        _make_node_state(test_db, sample_lab.id, None, actual="undeployed")
+        make_node_state(test_db, sample_lab.id, None, actual="undeployed")
         test_db.commit()
 
         count = cleanup_orphaned_node_states(test_db, sample_lab.id)
@@ -453,7 +346,7 @@ class TestCleanupOrphanedNodeStates:
         """Orphaned NodeState with actual_state=stopped should be deleted."""
         from app.tasks.reconciliation_db import cleanup_orphaned_node_states
 
-        _make_node_state(test_db, sample_lab.id, None, actual="stopped")
+        make_node_state(test_db, sample_lab.id, None, actual="stopped")
         test_db.commit()
 
         count = cleanup_orphaned_node_states(test_db, sample_lab.id)
@@ -463,7 +356,7 @@ class TestCleanupOrphanedNodeStates:
         """Orphaned NodeState with actual_state=error should be deleted."""
         from app.tasks.reconciliation_db import cleanup_orphaned_node_states
 
-        _make_node_state(test_db, sample_lab.id, None, actual="error")
+        make_node_state(test_db, sample_lab.id, None, actual="error")
         test_db.commit()
 
         count = cleanup_orphaned_node_states(test_db, sample_lab.id)
@@ -473,7 +366,7 @@ class TestCleanupOrphanedNodeStates:
         """Orphaned NodeState with actual_state=running should NOT be deleted."""
         from app.tasks.reconciliation_db import cleanup_orphaned_node_states
 
-        _make_node_state(
+        make_node_state(
             test_db, sample_lab.id, None,
             actual="running", desired="running",
         )
@@ -486,7 +379,7 @@ class TestCleanupOrphanedNodeStates:
         """Orphaned NodeState in transitional 'starting' state should be preserved."""
         from app.tasks.reconciliation_db import cleanup_orphaned_node_states
 
-        _make_node_state(test_db, sample_lab.id, None, actual="starting")
+        make_node_state(test_db, sample_lab.id, None, actual="starting")
         test_db.commit()
 
         count = cleanup_orphaned_node_states(test_db, sample_lab.id)
@@ -496,8 +389,8 @@ class TestCleanupOrphanedNodeStates:
         """NodeState with valid node_definition_id should not be deleted."""
         from app.tasks.reconciliation_db import cleanup_orphaned_node_states
 
-        n1 = _make_node(test_db, sample_lab.id, "R1")
-        _make_node_state(
+        n1 = make_node(test_db, sample_lab.id, "R1")
+        make_node_state(
             test_db, sample_lab.id, n1,
             node_name="R1", actual="undeployed",
         )
@@ -511,7 +404,7 @@ class TestCleanupOrphanedNodeStates:
         from app.tasks.reconciliation_db import cleanup_orphaned_node_states
 
         for i, state in enumerate(["undeployed", "stopped", "error"]):
-            _make_node_state(
+            make_node_state(
                 test_db, sample_lab.id, None,
                 node_id=f"gui-{i}", node_name=f"node-{i}", actual=state,
             )
@@ -531,19 +424,19 @@ class TestCleanupOrphanedNodeStates:
         """Only orphaned states should be deleted; valid ones preserved."""
         from app.tasks.reconciliation_db import cleanup_orphaned_node_states
 
-        n1 = _make_node(test_db, sample_lab.id, "R1")
+        n1 = make_node(test_db, sample_lab.id, "R1")
         # Valid state
-        _make_node_state(
+        make_node_state(
             test_db, sample_lab.id, n1,
             node_id="valid-gui", node_name="R1", actual="stopped",
         )
         # Orphan (safe state)
-        _make_node_state(
+        make_node_state(
             test_db, sample_lab.id, None,
             node_id="orphan-gui", node_name="old-node", actual="undeployed",
         )
         # Orphan (unsafe state - running)
-        _make_node_state(
+        make_node_state(
             test_db, sample_lab.id, None,
             node_id="orphan-running", node_name="active-orphan", actual="running",
         )
@@ -573,7 +466,7 @@ class TestReconcileSingleLab:
         from app.tasks.reconciliation_db import _reconcile_single_lab
 
         sample_lab.state = "running"
-        h = _make_host(test_db, "host-sj", "Agent SJ")
+        h = make_host(test_db, "host-sj", "Agent SJ")
         job = models.Job(
             id=str(uuid4()),
             lab_id=sample_lab.id,
@@ -595,7 +488,7 @@ class TestReconcileSingleLab:
         from app.tasks.reconciliation_db import _reconcile_single_lab
 
         sample_lab.state = "running"
-        h = _make_host(test_db, "host-stuck", "Agent Stuck")
+        h = make_host(test_db, "host-stuck", "Agent Stuck")
         sample_lab.agent_id = h.id
 
         # Create a job that started a long time ago (stuck)
@@ -610,8 +503,8 @@ class TestReconcileSingleLab:
         )
         test_db.add(job)
 
-        n1 = _make_node(test_db, sample_lab.id, "R1")
-        _make_node_state(
+        n1 = make_node(test_db, sample_lab.id, "R1")
+        make_node_state(
             test_db, sample_lab.id, n1,
             node_name="R1", desired="running", actual="running",
         )
@@ -645,12 +538,12 @@ class TestDoReconcileLabNodeStates:
         sample_lab.state = "running"
         sample_lab.agent_id = sample_host.id
 
-        n1 = _make_node(test_db, sample_lab.id, "R1")
-        _make_node_state(
+        n1 = make_node(test_db, sample_lab.id, "R1")
+        make_node_state(
             test_db, sample_lab.id, n1,
             node_name="R1", desired="running", actual="undeployed",
         )
-        _make_placement(test_db, sample_lab.id, n1, sample_host.id)
+        make_placement(test_db, sample_lab.id, n1, sample_host.id, status="deployed")
         test_db.commit()
 
         with patch(
@@ -683,12 +576,12 @@ class TestDoReconcileLabNodeStates:
         sample_lab.state = "running"
         sample_lab.agent_id = sample_host.id
 
-        n1 = _make_node(test_db, sample_lab.id, "R1")
-        ns = _make_node_state(
+        n1 = make_node(test_db, sample_lab.id, "R1")
+        ns = make_node_state(
             test_db, sample_lab.id, n1,
             node_name="R1", desired="stopped", actual="running",
         )
-        _make_placement(test_db, sample_lab.id, n1, sample_host.id)
+        make_placement(test_db, sample_lab.id, n1, sample_host.id, status="deployed")
         test_db.commit()
 
         with patch(
@@ -713,12 +606,12 @@ class TestDoReconcileLabNodeStates:
         sample_lab.state = "running"
         sample_lab.agent_id = sample_host.id
 
-        n1 = _make_node(test_db, sample_lab.id, "R1")
-        ns = _make_node_state(
+        n1 = make_node(test_db, sample_lab.id, "R1")
+        ns = make_node_state(
             test_db, sample_lab.id, n1,
             node_name="R1", desired="running", actual="running",
         )
-        _make_placement(test_db, sample_lab.id, n1, sample_host.id)
+        make_placement(test_db, sample_lab.id, n1, sample_host.id, status="deployed")
         test_db.commit()
 
         with patch(
@@ -743,12 +636,12 @@ class TestDoReconcileLabNodeStates:
         sample_lab.state = "running"
         sample_lab.agent_id = sample_host.id
 
-        n1 = _make_node(test_db, sample_lab.id, "R1")
-        ns = _make_node_state(
+        n1 = make_node(test_db, sample_lab.id, "R1")
+        ns = make_node_state(
             test_db, sample_lab.id, n1,
             node_name="R1", desired="running", actual="running",
         )
-        _make_placement(test_db, sample_lab.id, n1, sample_host.id)
+        make_placement(test_db, sample_lab.id, n1, sample_host.id, status="deployed")
         test_db.commit()
 
         with patch(
@@ -773,13 +666,13 @@ class TestDoReconcileLabNodeStates:
         sample_lab.state = "running"
         sample_lab.agent_id = sample_host.id
 
-        n1 = _make_node(test_db, sample_lab.id, "R1")
-        ns = _make_node_state(
+        n1 = make_node(test_db, sample_lab.id, "R1")
+        ns = make_node_state(
             test_db, sample_lab.id, n1,
             node_name="R1", desired="running", actual="error",
             enforcement_failed_at=datetime.now(timezone.utc),
         )
-        _make_placement(test_db, sample_lab.id, n1, sample_host.id)
+        make_placement(test_db, sample_lab.id, n1, sample_host.id, status="deployed")
         test_db.commit()
 
         with patch(
@@ -805,13 +698,13 @@ class TestDoReconcileLabNodeStates:
         sample_lab.state = "running"
         sample_lab.agent_id = sample_host.id
 
-        n1 = _make_node(test_db, sample_lab.id, "R1")
-        ns = _make_node_state(
+        n1 = make_node(test_db, sample_lab.id, "R1")
+        ns = make_node_state(
             test_db, sample_lab.id, n1,
             node_name="R1", desired="running", actual="undeployed",
             image_sync_status="syncing",
         )
-        _make_placement(test_db, sample_lab.id, n1, sample_host.id)
+        make_placement(test_db, sample_lab.id, n1, sample_host.id, status="deployed")
         test_db.commit()
 
         with patch(
@@ -840,22 +733,22 @@ class TestMultiAgentReconciliation:
         """Reconciliation should query all agents that have placements for a lab."""
         from app.tasks.reconciliation_db import _reconcile_single_lab
 
-        h1 = _make_host(test_db, "agent-ma1", "Agent MA1")
-        h2 = _make_host(test_db, "agent-ma2", "Agent MA2")
+        h1 = make_host(test_db, "agent-ma1", "Agent MA1")
+        h2 = make_host(test_db, "agent-ma2", "Agent MA2")
         sample_lab.state = "running"
 
-        n1 = _make_node(test_db, sample_lab.id, "R1", host_id=h1.id)
-        n2 = _make_node(test_db, sample_lab.id, "R2", host_id=h2.id)
-        _make_node_state(
+        n1 = make_node(test_db, sample_lab.id, "R1", host_id=h1.id)
+        n2 = make_node(test_db, sample_lab.id, "R2", host_id=h2.id)
+        make_node_state(
             test_db, sample_lab.id, n1,
             node_id="g1", node_name="R1", desired="running", actual="running",
         )
-        _make_node_state(
+        make_node_state(
             test_db, sample_lab.id, n2,
             node_id="g2", node_name="R2", desired="running", actual="running",
         )
-        _make_placement(test_db, sample_lab.id, n1, h1.id)
-        _make_placement(test_db, sample_lab.id, n2, h2.id)
+        make_placement(test_db, sample_lab.id, n1, h1.id, status="deployed")
+        make_placement(test_db, sample_lab.id, n2, h2.id, status="deployed")
         test_db.commit()
 
         agent_ids_queried = []
@@ -884,22 +777,22 @@ class TestMultiAgentReconciliation:
         """When one agent fails, nodes on successful agent should still be updated."""
         from app.tasks.reconciliation_db import _reconcile_single_lab
 
-        h1 = _make_host(test_db, "agent-ok", "Agent OK")
-        h2 = _make_host(test_db, "agent-fail", "Agent Fail")
+        h1 = make_host(test_db, "agent-ok", "Agent OK")
+        h2 = make_host(test_db, "agent-fail", "Agent Fail")
         sample_lab.state = "running"
 
-        n1 = _make_node(test_db, sample_lab.id, "R1", host_id=h1.id)
-        n2 = _make_node(test_db, sample_lab.id, "R2", host_id=h2.id)
-        ns1 = _make_node_state(
+        n1 = make_node(test_db, sample_lab.id, "R1", host_id=h1.id)
+        n2 = make_node(test_db, sample_lab.id, "R2", host_id=h2.id)
+        ns1 = make_node_state(
             test_db, sample_lab.id, n1,
             node_id="g1", node_name="R1", desired="running", actual="undeployed",
         )
-        ns2 = _make_node_state(
+        ns2 = make_node_state(
             test_db, sample_lab.id, n2,
             node_id="g2", node_name="R2", desired="running", actual="undeployed",
         )
-        _make_placement(test_db, sample_lab.id, n1, h1.id)
-        _make_placement(test_db, sample_lab.id, n2, h2.id)
+        make_placement(test_db, sample_lab.id, n1, h1.id, status="deployed")
+        make_placement(test_db, sample_lab.id, n2, h2.id, status="deployed")
         test_db.commit()
 
         async def _mock_get_status(agent, lab_id):
@@ -929,22 +822,22 @@ class TestMultiAgentReconciliation:
         """Offline agents should be skipped without error."""
         from app.tasks.reconciliation_db import _reconcile_single_lab
 
-        h1 = _make_host(test_db, "agent-online", "Agent Online")
-        h2 = _make_host(test_db, "agent-offline", "Agent Offline", status="offline")
+        h1 = make_host(test_db, "agent-online", "Agent Online")
+        h2 = make_host(test_db, "agent-offline", "Agent Offline", status="offline")
         sample_lab.state = "running"
 
-        n1 = _make_node(test_db, sample_lab.id, "R1", host_id=h1.id)
-        n2 = _make_node(test_db, sample_lab.id, "R2", host_id=h2.id)
-        _make_node_state(
+        n1 = make_node(test_db, sample_lab.id, "R1", host_id=h1.id)
+        n2 = make_node(test_db, sample_lab.id, "R2", host_id=h2.id)
+        make_node_state(
             test_db, sample_lab.id, n1,
             node_id="g1", node_name="R1", desired="running", actual="undeployed",
         )
-        _make_node_state(
+        make_node_state(
             test_db, sample_lab.id, n2,
             node_id="g2", node_name="R2", desired="running", actual="undeployed",
         )
-        _make_placement(test_db, sample_lab.id, n1, h1.id)
-        _make_placement(test_db, sample_lab.id, n2, h2.id)
+        make_placement(test_db, sample_lab.id, n1, h1.id, status="deployed")
+        make_placement(test_db, sample_lab.id, n2, h2.id, status="deployed")
         test_db.commit()
 
         def _is_online(agent):
@@ -979,20 +872,20 @@ class TestReconcileLabLinkStates:
         sample_lab.state = "running"
         sample_lab.agent_id = sample_host.id
 
-        n1 = _make_node(test_db, sample_lab.id, "R1")
-        n2 = _make_node(test_db, sample_lab.id, "R2")
-        _make_node_state(
+        n1 = make_node(test_db, sample_lab.id, "R1")
+        n2 = make_node(test_db, sample_lab.id, "R2")
+        make_node_state(
             test_db, sample_lab.id, n1,
             node_id="g1", node_name="R1", desired="running", actual="running",
         )
-        _make_node_state(
+        make_node_state(
             test_db, sample_lab.id, n2,
             node_id="g2", node_name="R2", desired="running", actual="running",
         )
-        _make_placement(test_db, sample_lab.id, n1, sample_host.id)
-        _make_placement(test_db, sample_lab.id, n2, sample_host.id)
+        make_placement(test_db, sample_lab.id, n1, sample_host.id, status="deployed")
+        make_placement(test_db, sample_lab.id, n2, sample_host.id, status="deployed")
 
-        ls = _make_link_state(
+        ls = make_link_state(
             test_db, sample_lab.id,
             "R1", "eth1", "R2", "eth1",
             desired="up", actual="unknown",
@@ -1024,20 +917,20 @@ class TestReconcileLabLinkStates:
         sample_lab.state = "running"
         sample_lab.agent_id = sample_host.id
 
-        n1 = _make_node(test_db, sample_lab.id, "R1")
-        n2 = _make_node(test_db, sample_lab.id, "R2")
-        _make_node_state(
+        n1 = make_node(test_db, sample_lab.id, "R1")
+        n2 = make_node(test_db, sample_lab.id, "R2")
+        make_node_state(
             test_db, sample_lab.id, n1,
             node_id="g1", node_name="R1", desired="running", actual="running",
         )
-        _make_node_state(
+        make_node_state(
             test_db, sample_lab.id, n2,
             node_id="g2", node_name="R2", desired="stopped", actual="stopped",
         )
-        _make_placement(test_db, sample_lab.id, n1, sample_host.id)
-        _make_placement(test_db, sample_lab.id, n2, sample_host.id)
+        make_placement(test_db, sample_lab.id, n1, sample_host.id, status="deployed")
+        make_placement(test_db, sample_lab.id, n2, sample_host.id, status="deployed")
 
-        ls = _make_link_state(
+        ls = make_link_state(
             test_db, sample_lab.id,
             "R1", "eth1", "R2", "eth1",
             desired="up", actual="up",
@@ -1069,20 +962,20 @@ class TestReconcileLabLinkStates:
         sample_lab.state = "running"
         sample_lab.agent_id = sample_host.id
 
-        n1 = _make_node(test_db, sample_lab.id, "R1")
-        n2 = _make_node(test_db, sample_lab.id, "R2")
-        _make_node_state(
+        n1 = make_node(test_db, sample_lab.id, "R1")
+        n2 = make_node(test_db, sample_lab.id, "R2")
+        make_node_state(
             test_db, sample_lab.id, n1,
             node_id="g1", node_name="R1", desired="running", actual="running",
         )
-        _make_node_state(
+        make_node_state(
             test_db, sample_lab.id, n2,
             node_id="g2", node_name="R2", desired="running", actual="error",
         )
-        _make_placement(test_db, sample_lab.id, n1, sample_host.id)
-        _make_placement(test_db, sample_lab.id, n2, sample_host.id)
+        make_placement(test_db, sample_lab.id, n1, sample_host.id, status="deployed")
+        make_placement(test_db, sample_lab.id, n2, sample_host.id, status="deployed")
 
-        ls = _make_link_state(
+        ls = make_link_state(
             test_db, sample_lab.id,
             "R1", "eth1", "R2", "eth1",
             desired="up", actual="up",
@@ -1121,12 +1014,12 @@ class TestReconcileErrorHandling:
         sample_lab.state = "running"
         sample_lab.agent_id = sample_host.id
 
-        n1 = _make_node(test_db, sample_lab.id, "R1")
-        _make_node_state(
+        n1 = make_node(test_db, sample_lab.id, "R1")
+        make_node_state(
             test_db, sample_lab.id, n1,
             node_name="R1", desired="running", actual="running",
         )
-        _make_placement(test_db, sample_lab.id, n1, sample_host.id)
+        make_placement(test_db, sample_lab.id, n1, sample_host.id, status="deployed")
         test_db.commit()
 
         with patch(
@@ -1239,13 +1132,13 @@ class TestTransitionalStateHandling:
         sample_lab.agent_id = sample_host.id
 
         now = datetime.now(timezone.utc)
-        n1 = _make_node(test_db, sample_lab.id, "R1")
-        ns = _make_node_state(
+        n1 = make_node(test_db, sample_lab.id, "R1")
+        ns = make_node_state(
             test_db, sample_lab.id, n1,
             node_name="R1", desired="stopped", actual="running",
             stopping_started_at=now,
         )
-        _make_placement(test_db, sample_lab.id, n1, sample_host.id)
+        make_placement(test_db, sample_lab.id, n1, sample_host.id, status="deployed")
         test_db.commit()
 
         # Patch utcnow to return a naive datetime (SQLite strips tzinfo)
@@ -1277,13 +1170,13 @@ class TestTransitionalStateHandling:
         sample_lab.agent_id = sample_host.id
 
         stopping_time = datetime.now(timezone.utc) - timedelta(minutes=30)
-        n1 = _make_node(test_db, sample_lab.id, "R1")
-        ns = _make_node_state(
+        n1 = make_node(test_db, sample_lab.id, "R1")
+        ns = make_node_state(
             test_db, sample_lab.id, n1,
             node_name="R1", desired="stopped", actual="running",
             stopping_started_at=stopping_time,
         )
-        _make_placement(test_db, sample_lab.id, n1, sample_host.id)
+        make_placement(test_db, sample_lab.id, n1, sample_host.id, status="deployed")
         test_db.commit()
 
         # Patch utcnow to return a naive datetime (SQLite strips tzinfo)

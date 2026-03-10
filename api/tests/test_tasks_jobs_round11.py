@@ -16,31 +16,12 @@ from app.tasks.jobs import (
     _dispatch_webhook,
     _run_job_preflight_checks,
 )
+from tests.factories import make_host, make_lab
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-
-def _make_lab(db, owner_id, state="running"):
-    lab = models.Lab(name="Test", owner_id=owner_id, provider="docker", state=state)
-    db.add(lab)
-    db.commit()
-    db.refresh(lab)
-    return lab
-
-
-def _make_host(db, host_id="h1"):
-    from datetime import datetime, timezone
-    h = models.Host(
-        id=host_id, name="Agent", address="localhost:8080",
-        status="online", capabilities="{}", last_heartbeat=datetime.now(timezone.utc),
-    )
-    db.add(h)
-    db.commit()
-    db.refresh(h)
-    return h
 
 
 def _run(coro):
@@ -55,8 +36,8 @@ def _run(coro):
 class TestPreflightImageSync:
 
     def test_non_up_action_skips_checks(self, test_db: Session, test_user: models.User):
-        lab = _make_lab(test_db, test_user.id)
-        host = _make_host(test_db)
+        lab = make_lab(test_db, test_user.id)
+        host = make_host(test_db)
         with patch("app.tasks.jobs.agent_client") as mock_ac:
             mock_ac.get_lab_status_from_agent = AsyncMock(return_value={})
             ok, msg = _run(_run_job_preflight_checks(test_db, lab, host, "restart"))
@@ -64,8 +45,8 @@ class TestPreflightImageSync:
         assert msg is None
 
     def test_down_action_skips_image_sync(self, test_db: Session, test_user: models.User):
-        lab = _make_lab(test_db, test_user.id)
-        host = _make_host(test_db)
+        lab = make_lab(test_db, test_user.id)
+        host = make_host(test_db)
         with patch("app.tasks.jobs.agent_client") as mock_ac, \
              patch("app.tasks.jobs.settings") as mock_settings:
             mock_ac.get_lab_status_from_agent = AsyncMock(return_value={})
@@ -75,8 +56,8 @@ class TestPreflightImageSync:
         assert ok is True
 
     def test_all_images_ready(self, test_db: Session, test_user: models.User):
-        lab = _make_lab(test_db, test_user.id)
-        host = _make_host(test_db)
+        lab = make_lab(test_db, test_user.id)
+        host = make_host(test_db)
         with patch("app.tasks.jobs.agent_client") as mock_ac, \
              patch("app.tasks.jobs.settings") as mock_settings, \
              patch("app.tasks.jobs.TopologyService") as mock_topo_cls, \
@@ -96,8 +77,8 @@ class TestPreflightImageSync:
         assert msg is None
 
     def test_missing_images_fails(self, test_db: Session, test_user: models.User):
-        lab = _make_lab(test_db, test_user.id)
-        host = _make_host(test_db)
+        lab = make_lab(test_db, test_user.id)
+        host = make_host(test_db)
         with patch("app.tasks.jobs.agent_client") as mock_ac, \
              patch("app.tasks.jobs.settings") as mock_settings, \
              patch("app.tasks.jobs.TopologyService") as mock_topo_cls, \
@@ -117,8 +98,8 @@ class TestPreflightImageSync:
         assert "Missing images" in msg
 
     def test_many_missing_truncated(self, test_db: Session, test_user: models.User):
-        lab = _make_lab(test_db, test_user.id)
-        host = _make_host(test_db)
+        lab = make_lab(test_db, test_user.id)
+        host = make_host(test_db)
         missing = [f"img{i}" for i in range(10)]
         with patch("app.tasks.jobs.agent_client") as mock_ac, \
              patch("app.tasks.jobs.settings") as mock_settings, \
@@ -139,8 +120,8 @@ class TestPreflightImageSync:
         assert "+5 more" in msg
 
     def test_image_sync_exception(self, test_db: Session, test_user: models.User):
-        lab = _make_lab(test_db, test_user.id)
-        host = _make_host(test_db)
+        lab = make_lab(test_db, test_user.id)
+        host = make_host(test_db)
         with patch("app.tasks.jobs.agent_client") as mock_ac, \
              patch("app.tasks.jobs.settings") as mock_settings, \
              patch("app.tasks.jobs.TopologyService") as mock_topo_cls, \
@@ -160,8 +141,8 @@ class TestPreflightImageSync:
         assert "unexpectedly" in msg
 
     def test_no_images_skips_sync(self, test_db: Session, test_user: models.User):
-        lab = _make_lab(test_db, test_user.id)
-        host = _make_host(test_db)
+        lab = make_lab(test_db, test_user.id)
+        host = make_host(test_db)
         with patch("app.tasks.jobs.agent_client") as mock_ac, \
              patch("app.tasks.jobs.settings") as mock_settings, \
              patch("app.tasks.jobs.TopologyService") as mock_topo_cls:
@@ -184,16 +165,16 @@ class TestPreflightImageSync:
 class TestAutoExtract:
 
     def test_disabled_feature_returns_early(self, test_db: Session, test_user: models.User):
-        lab = _make_lab(test_db, test_user.id)
-        host = _make_host(test_db)
+        lab = make_lab(test_db, test_user.id)
+        host = make_host(test_db)
         with patch("app.tasks.jobs.settings") as mock_settings:
             mock_settings.feature_auto_extract_on_destroy = False
             _run(_auto_extract_configs_before_destroy(test_db, lab, host))
         # Should not raise
 
     def test_saves_configs_via_config_service(self, test_db: Session, test_user: models.User):
-        lab = _make_lab(test_db, test_user.id)
-        host = _make_host(test_db)
+        lab = make_lab(test_db, test_user.id)
+        host = make_host(test_db)
         n = models.Node(
             lab_id=lab.id, gui_id="n1", display_name="R1",
             container_name="archetype-test-r1", device="linux",
@@ -218,8 +199,8 @@ class TestAutoExtract:
         mock_svc.save_extracted_config.assert_called_once()
 
     def test_skips_missing_node_name(self, test_db: Session, test_user: models.User):
-        lab = _make_lab(test_db, test_user.id)
-        host = _make_host(test_db)
+        lab = make_lab(test_db, test_user.id)
+        host = make_host(test_db)
         with patch("app.tasks.jobs.settings") as mock_settings, \
              patch("app.tasks.jobs.agent_client") as mock_ac, \
              patch("app.services.config_service.ConfigService") as mock_cs_cls:
@@ -244,7 +225,7 @@ class TestAutoExtract:
 class TestDispatchWebhook:
 
     def test_db_error_suppressed(self, test_db: Session, test_user: models.User):
-        lab = _make_lab(test_db, test_user.id)
+        lab = make_lab(test_db, test_user.id)
         job = models.Job(
             lab_id=lab.id, user_id=test_user.id,
             action="up", status="completed",

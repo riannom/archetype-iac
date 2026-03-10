@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 from app import models
 from app.state import JobStatus, LinkActualState
 from app.tasks.jobs_multihost import run_multihost_deploy, run_multihost_destroy
+from tests.factories import make_host, make_job, make_lab, make_link_state, make_node
 
 
 # ---------------------------------------------------------------------------
@@ -32,86 +33,6 @@ def _mock_get_session(test_db: Session):
     def mock_session():
         yield test_db
     return mock_session
-
-
-def _make_lab(test_db, test_user, *, state="stopped", name="Multi Lab"):
-    lab = models.Lab(
-        name=name,
-        owner_id=test_user.id,
-        provider="docker",
-        state=state,
-    )
-    test_db.add(lab)
-    test_db.commit()
-    test_db.refresh(lab)
-    return lab
-
-
-def _make_job(test_db, lab, test_user, *, action="up", status="queued"):
-    job = models.Job(
-        lab_id=lab.id,
-        user_id=test_user.id,
-        action=action,
-        status=status,
-    )
-    test_db.add(job)
-    test_db.commit()
-    test_db.refresh(job)
-    return job
-
-
-def _make_host(test_db, host_id, *, name=None, status="online"):
-    host = models.Host(
-        id=host_id,
-        name=name or host_id,
-        address=f"{host_id}.local:8001",
-        status=status,
-        capabilities=json.dumps({"providers": ["docker"]}),
-        version="1.0.0",
-        last_heartbeat=datetime.now(timezone.utc),
-        resource_usage=json.dumps({}),
-    )
-    test_db.add(host)
-    test_db.commit()
-    test_db.refresh(host)
-    return host
-
-
-def _make_node(test_db, lab, name, *, host_id=None, device="linux"):
-    node = models.Node(
-        lab_id=lab.id,
-        gui_id=f"g-{name}",
-        display_name=name,
-        container_name=name,
-        node_type="device",
-        device=device,
-        host_id=host_id,
-    )
-    test_db.add(node)
-    test_db.commit()
-    test_db.refresh(node)
-    return node
-
-
-def _make_link_state(test_db, lab, *, link_name="r1:eth1-r2:eth1",
-                     desired="up", actual="up"):
-    parts = link_name.split("-")
-    src_node, src_if = parts[0].split(":")
-    tgt_node, tgt_if = parts[1].split(":")
-    ls = models.LinkState(
-        lab_id=lab.id,
-        link_name=link_name,
-        source_node=src_node,
-        source_interface=src_if,
-        target_node=tgt_node,
-        target_interface=tgt_if,
-        desired_state=desired,
-        actual_state=actual,
-    )
-    test_db.add(ls)
-    test_db.commit()
-    test_db.refresh(ls)
-    return ls
 
 
 @dataclass
@@ -162,12 +83,12 @@ class TestDeployMidFailureRollback:
         self, test_db: Session, test_user,
     ):
         """When deploy to agent-B fails, agent-A (success) should be rolled back."""
-        lab = _make_lab(test_db, test_user)
-        job = _make_job(test_db, lab, test_user)
-        host_a = _make_host(test_db, "host-a", name="Agent-A")
-        host_b = _make_host(test_db, "host-b", name="Agent-B")
-        _make_node(test_db, lab, "r1", host_id=host_a.id)
-        _make_node(test_db, lab, "r2", host_id=host_b.id)
+        lab = make_lab(test_db, test_user)
+        job = make_job(test_db, lab, test_user)
+        host_a = make_host(test_db, "host-a", name="Agent-A")
+        host_b = make_host(test_db, "host-b", name="Agent-B")
+        make_node(test_db, lab, "r1", host_id=host_a.id)
+        make_node(test_db, lab, "r2", host_id=host_b.id)
 
         analysis = _FakeAnalysis(
             placements={
@@ -227,12 +148,12 @@ class TestDeployMidFailureRollback:
         self, test_db: Session, test_user,
     ):
         """When all agents fail deploy, no rollback is attempted."""
-        lab = _make_lab(test_db, test_user)
-        job = _make_job(test_db, lab, test_user)
-        host_a = _make_host(test_db, "host-all-fail-a", name="AgentA")
-        host_b = _make_host(test_db, "host-all-fail-b", name="AgentB")
-        _make_node(test_db, lab, "n1", host_id=host_a.id)
-        _make_node(test_db, lab, "n2", host_id=host_b.id)
+        lab = make_lab(test_db, test_user)
+        job = make_job(test_db, lab, test_user)
+        host_a = make_host(test_db, "host-all-fail-a", name="AgentA")
+        host_b = make_host(test_db, "host-all-fail-b", name="AgentB")
+        make_node(test_db, lab, "n1", host_id=host_a.id)
+        make_node(test_db, lab, "n2", host_id=host_b.id)
 
         analysis = _FakeAnalysis(
             placements={
@@ -278,12 +199,12 @@ class TestDeployMidFailureRollback:
         self, test_db: Session, test_user,
     ):
         """When rollback itself fails, the error is logged in job output."""
-        lab = _make_lab(test_db, test_user)
-        job = _make_job(test_db, lab, test_user)
-        host_a = _make_host(test_db, "host-rb-fail-a", name="AgentA")
-        host_b = _make_host(test_db, "host-rb-fail-b", name="AgentB")
-        _make_node(test_db, lab, "n1", host_id=host_a.id)
-        _make_node(test_db, lab, "n2", host_id=host_b.id)
+        lab = make_lab(test_db, test_user)
+        job = make_job(test_db, lab, test_user)
+        host_a = make_host(test_db, "host-rb-fail-a", name="AgentA")
+        host_b = make_host(test_db, "host-rb-fail-b", name="AgentB")
+        make_node(test_db, lab, "n1", host_id=host_a.id)
+        make_node(test_db, lab, "n2", host_id=host_b.id)
 
         analysis = _FakeAnalysis(
             placements={
@@ -346,10 +267,10 @@ class TestDeployLinkFailure:
         self, test_db: Session, test_user,
     ):
         """If create_deployment_links reports failures, job is FAILED."""
-        lab = _make_lab(test_db, test_user)
-        job = _make_job(test_db, lab, test_user)
-        host = _make_host(test_db, "host-link-fail")
-        _make_node(test_db, lab, "r1", host_id=host.id)
+        lab = make_lab(test_db, test_user)
+        job = make_job(test_db, lab, test_user)
+        host = make_host(test_db, "host-link-fail")
+        make_node(test_db, lab, "r1", host_id=host.id)
 
         analysis = _FakeAnalysis(
             placements={host.id: [{"node_name": "r1"}]},
@@ -397,10 +318,10 @@ class TestDeployUnplacedNodeAssignment:
         self, test_db: Session, test_user,
     ):
         """Unplaced nodes should be assigned to a default agent before deploy."""
-        lab = _make_lab(test_db, test_user)
-        job = _make_job(test_db, lab, test_user)
-        host = _make_host(test_db, "default-host")
-        node = _make_node(test_db, lab, "r1", host_id=None)  # No placement
+        lab = make_lab(test_db, test_user)
+        job = make_job(test_db, lab, test_user)
+        host = make_host(test_db, "default-host")
+        node = make_node(test_db, lab, "r1", host_id=None)  # No placement
 
         # After assignment, analysis will show node on default host
         analysis = _FakeAnalysis(
@@ -445,9 +366,9 @@ class TestDeployUnplacedNodeAssignment:
         self, test_db: Session, test_user,
     ):
         """When unplaced nodes exist and no default agent, job fails."""
-        lab = _make_lab(test_db, test_user)
-        job = _make_job(test_db, lab, test_user)
-        node = _make_node(test_db, lab, "r1", host_id=None)
+        lab = make_lab(test_db, test_user)
+        job = make_job(test_db, lab, test_user)
+        node = make_node(test_db, lab, "r1", host_id=None)
 
         patches = _standard_patches(test_db)
         with ExitStack() as stack:
@@ -481,10 +402,10 @@ class TestDeployPreflightFailure:
         self, test_db: Session, test_user,
     ):
         """If an agent fails preflight, deploy aborts before dispatching."""
-        lab = _make_lab(test_db, test_user)
-        job = _make_job(test_db, lab, test_user)
-        host = _make_host(test_db, "unreachable-host")
-        _make_node(test_db, lab, "r1", host_id=host.id)
+        lab = make_lab(test_db, test_user)
+        job = make_job(test_db, lab, test_user)
+        host = make_host(test_db, "unreachable-host")
+        make_node(test_db, lab, "r1", host_id=host.id)
 
         analysis = _FakeAnalysis(
             placements={host.id: [{"node_name": "r1"}]},
@@ -531,8 +452,8 @@ class TestDeployUnexpectedException:
         self, test_db: Session, test_user,
     ):
         """Unhandled exception triggers the outer except block."""
-        lab = _make_lab(test_db, test_user)
-        job = _make_job(test_db, lab, test_user)
+        lab = make_lab(test_db, test_user)
+        job = make_job(test_db, lab, test_user)
 
         patches = _standard_patches(test_db)
         with ExitStack() as stack:
@@ -561,16 +482,16 @@ class TestDestroyPartialAgentAvailability:
         self, test_db: Session, test_user,
     ):
         """When one agent is offline during destroy, job completes with warnings."""
-        lab = _make_lab(test_db, test_user, state="running")
-        job = _make_job(test_db, lab, test_user, action="down")
-        host_a = _make_host(test_db, "dest-ok-host", name="OnlineAgent")
-        host_b = _make_host(test_db, "dest-off-host", name="OfflineAgent", status="offline")
+        lab = make_lab(test_db, test_user, state="running")
+        job = make_job(test_db, lab, test_user, action="down")
+        host_a = make_host(test_db, "dest-ok-host", name="OnlineAgent")
+        host_b = make_host(test_db, "dest-off-host", name="OfflineAgent", status="offline")
         # Remove last_heartbeat so is_agent_online returns False
         host_b.last_heartbeat = None
         test_db.commit()
 
-        _make_node(test_db, lab, "r1", host_id=host_a.id)
-        _make_node(test_db, lab, "r2", host_id=host_b.id)
+        make_node(test_db, lab, "r1", host_id=host_a.id)
+        make_node(test_db, lab, "r2", host_id=host_b.id)
 
         analysis = _FakeAnalysis(
             placements={
@@ -610,12 +531,12 @@ class TestDestroyPartialAgentAvailability:
         self, test_db: Session, test_user,
     ):
         """When no agents are reachable during destroy, job fails."""
-        lab = _make_lab(test_db, test_user, state="running")
-        job = _make_job(test_db, lab, test_user, action="down")
-        host = _make_host(test_db, "all-off-host", name="DeadAgent", status="offline")
+        lab = make_lab(test_db, test_user, state="running")
+        job = make_job(test_db, lab, test_user, action="down")
+        host = make_host(test_db, "all-off-host", name="DeadAgent", status="offline")
         host.last_heartbeat = None
         test_db.commit()
-        _make_node(test_db, lab, "r1", host_id=host.id)
+        make_node(test_db, lab, "r1", host_id=host.id)
 
         analysis = _FakeAnalysis(
             placements={host.id: [{"node_name": "r1"}]},
@@ -653,12 +574,12 @@ class TestDestroyLinkStateCleanup:
         self, test_db: Session, test_user,
     ):
         """After a fully successful destroy, lingering LinkState rows are deleted."""
-        lab = _make_lab(test_db, test_user, state="running")
-        job = _make_job(test_db, lab, test_user, action="down")
-        host = _make_host(test_db, "host-ls-clean")
-        _make_node(test_db, lab, "r1", host_id=host.id)
-        _make_node(test_db, lab, "r2", host_id=host.id)
-        _make_link_state(test_db, lab)
+        lab = make_lab(test_db, test_user, state="running")
+        job = make_job(test_db, lab, test_user, action="down")
+        host = make_host(test_db, "host-ls-clean")
+        make_node(test_db, lab, "r1", host_id=host.id)
+        make_node(test_db, lab, "r2", host_id=host.id)
+        make_link_state(test_db, lab)
 
         analysis = _FakeAnalysis(
             placements={host.id: [{"node_name": "r1"}, {"node_name": "r2"}]},
@@ -701,12 +622,12 @@ class TestDestroyLinkStateCleanup:
         self, test_db: Session, test_user,
     ):
         """After partial destroy failure, LinkStates are marked error + desired=deleted."""
-        lab = _make_lab(test_db, test_user, state="running")
-        job = _make_job(test_db, lab, test_user, action="down")
-        host = _make_host(test_db, "host-ls-partial")
-        _make_node(test_db, lab, "r1", host_id=host.id)
-        _make_node(test_db, lab, "r2", host_id=host.id)
-        ls = _make_link_state(test_db, lab, desired="up", actual="up")
+        lab = make_lab(test_db, test_user, state="running")
+        job = make_job(test_db, lab, test_user, action="down")
+        host = make_host(test_db, "host-ls-partial")
+        make_node(test_db, lab, "r1", host_id=host.id)
+        make_node(test_db, lab, "r2", host_id=host.id)
+        ls = make_link_state(test_db, lab, desired="up", actual="up")
 
         analysis = _FakeAnalysis(
             placements={host.id: [{"node_name": "r1"}, {"node_name": "r2"}]},
@@ -757,8 +678,8 @@ class TestDestroyUnexpectedException:
         self, test_db: Session, test_user,
     ):
         """Unhandled exception in destroy sets job to FAILED."""
-        lab = _make_lab(test_db, test_user, state="running")
-        job = _make_job(test_db, lab, test_user, action="down")
+        lab = make_lab(test_db, test_user, state="running")
+        job = make_job(test_db, lab, test_user, action="down")
 
         patches = _standard_patches(test_db)
         with ExitStack() as stack:

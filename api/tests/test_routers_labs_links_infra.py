@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
 from app import models
+from tests.factories import make_link_state, make_node, make_node_state
 
 
 # ---------------------------------------------------------------------------
@@ -32,96 +33,6 @@ def _make_running_lab(
     test_db.commit()
     test_db.refresh(lab)
     return lab
-
-
-def _make_link_state(
-    test_db: Session,
-    lab_id: str,
-    *,
-    link_definition_id: str | None = None,
-    link_name: str = "R1:eth1-R2:eth1",
-    source_node: str = "R1",
-    source_interface: str = "eth1",
-    target_node: str = "R2",
-    target_interface: str = "eth1",
-    desired_state: str = "up",
-    actual_state: str = "unknown",
-    is_cross_host: bool = False,
-    source_host_id: str | None = None,
-    target_host_id: str | None = None,
-    error_message: str | None = None,
-) -> models.LinkState:
-    ls = models.LinkState(
-        lab_id=lab_id,
-        link_definition_id=link_definition_id,
-        link_name=link_name,
-        source_node=source_node,
-        source_interface=source_interface,
-        target_node=target_node,
-        target_interface=target_interface,
-        desired_state=desired_state,
-        actual_state=actual_state,
-        is_cross_host=is_cross_host,
-        source_host_id=source_host_id,
-        target_host_id=target_host_id,
-        error_message=error_message,
-    )
-    test_db.add(ls)
-    test_db.commit()
-    test_db.refresh(ls)
-    return ls
-
-
-def _make_node(
-    test_db: Session,
-    lab_id: str,
-    *,
-    gui_id: str = "n1",
-    display_name: str = "R1",
-    container_name: str = "R1",
-    device: str = "linux",
-    host_id: str | None = None,
-) -> models.Node:
-    node = models.Node(
-        lab_id=lab_id,
-        gui_id=gui_id,
-        display_name=display_name,
-        container_name=container_name,
-        device=device,
-        host_id=host_id,
-    )
-    test_db.add(node)
-    test_db.commit()
-    test_db.refresh(node)
-    return node
-
-
-def _make_node_state(
-    test_db: Session,
-    lab_id: str,
-    *,
-    node_id: str = "n1",
-    node_name: str = "R1",
-    desired_state: str = "running",
-    actual_state: str = "running",
-    management_ip: str | None = None,
-    management_ips_json: str | None = None,
-    error_message: str | None = None,
-) -> models.NodeState:
-    ns = models.NodeState(
-        lab_id=lab_id,
-        node_id=node_id,
-        node_name=node_name,
-        desired_state=desired_state,
-        actual_state=actual_state,
-        management_ip=management_ip,
-        management_ips_json=management_ips_json,
-        error_message=error_message,
-    )
-    test_db.add(ns)
-    test_db.commit()
-    test_db.refresh(ns)
-    return ns
 
 
 def _make_config_snapshot(
@@ -290,8 +201,8 @@ class TestListLinkStates:
         sample_lab: models.Lab,
     ):
         """Returns all link states for a lab."""
-        _make_link_state(test_db, sample_lab.id, link_name="R1:eth1-R2:eth1")
-        _make_link_state(
+        make_link_state(test_db, sample_lab.id, link_name="R1:eth1-R2:eth1")
+        make_link_state(
             test_db,
             sample_lab.id,
             link_name="R2:eth2-R3:eth1",
@@ -337,7 +248,7 @@ class TestGetLinkState:
         sample_lab: models.Lab,
     ):
         """Returns state for an existing link."""
-        ls = _make_link_state(test_db, sample_lab.id)
+        ls = make_link_state(test_db, sample_lab.id)
         with patch("app.routers.labs.TopologyService") as MockTS:
             mock_svc = MockTS.return_value
             mock_svc.has_nodes.return_value = False
@@ -383,7 +294,7 @@ class TestGetLinkDetail:
         sample_host: models.Host,
     ):
         """Returns detail for a same-host link."""
-        ls = _make_link_state(
+        ls = make_link_state(
             test_db,
             sample_lab.id,
             source_host_id=sample_host.id,
@@ -411,7 +322,7 @@ class TestGetLinkDetail:
         multiple_hosts: list[models.Host],
     ):
         """Returns detail with tunnel info for cross-host link."""
-        ls = _make_link_state(
+        ls = make_link_state(
             test_db,
             sample_lab.id,
             is_cross_host=True,
@@ -478,7 +389,7 @@ class TestSetLinkState:
         sample_lab: models.Lab,
     ):
         """Sets desired state to up."""
-        ls = _make_link_state(test_db, sample_lab.id, desired_state="down")
+        ls = make_link_state(test_db, sample_lab.id, desired_state="down")
         with patch("app.routers.labs.TopologyService") as MockTS:
             mock_svc = MockTS.return_value
             mock_svc.has_nodes.return_value = False
@@ -504,7 +415,7 @@ class TestSetLinkState:
         sample_lab: models.Lab,
     ):
         """Sets desired state to down."""
-        ls = _make_link_state(test_db, sample_lab.id, desired_state="up")
+        ls = make_link_state(test_db, sample_lab.id, desired_state="up")
         with patch("app.routers.labs.TopologyService") as MockTS:
             mock_svc = MockTS.return_value
             mock_svc.has_nodes.return_value = False
@@ -556,8 +467,8 @@ class TestSetAllLinksDesiredState:
         sample_lab: models.Lab,
     ):
         """Sets all links desired state to up."""
-        _make_link_state(test_db, sample_lab.id, desired_state="down")
-        _make_link_state(
+        make_link_state(test_db, sample_lab.id, desired_state="down")
+        make_link_state(
             test_db,
             sample_lab.id,
             link_name="R2:eth2-R3:eth1",
@@ -592,7 +503,7 @@ class TestSetAllLinksDesiredState:
         sample_lab: models.Lab,
     ):
         """Sets all links desired state to down."""
-        _make_link_state(test_db, sample_lab.id, desired_state="up")
+        make_link_state(test_db, sample_lab.id, desired_state="up")
         with patch("app.routers.labs.TopologyService") as MockTS:
             mock_svc = MockTS.return_value
             mock_svc.has_nodes.return_value = False
@@ -681,8 +592,8 @@ class TestHotConnectLink:
     ):
         """Successfully hot-connects two interfaces."""
         lab = _make_running_lab(test_db, test_user.id)
-        _make_node(test_db, lab.id, gui_id="n1", container_name="R1", host_id=sample_host.id)
-        _make_node(test_db, lab.id, gui_id="n2", display_name="R2", container_name="R2", host_id=sample_host.id)
+        make_node(test_db, lab.id, gui_id="n1", container_name="R1", host_id=sample_host.id)
+        make_node(test_db, lab.id, gui_id="n2", display_name="R2", container_name="R2", host_id=sample_host.id)
 
         with patch(
             "app.routers.labs._build_host_to_agent_map",
@@ -739,8 +650,8 @@ class TestHotConnectLink:
     ):
         """Hot-connect creates a LinkState record if none exists."""
         lab = _make_running_lab(test_db, test_user.id)
-        _make_node(test_db, lab.id, gui_id="n1", container_name="R1", host_id=sample_host.id)
-        _make_node(test_db, lab.id, gui_id="n2", display_name="R2", container_name="R2", host_id=sample_host.id)
+        make_node(test_db, lab.id, gui_id="n1", container_name="R1", host_id=sample_host.id)
+        make_node(test_db, lab.id, gui_id="n2", display_name="R2", container_name="R2", host_id=sample_host.id)
 
         # Verify no link states before
         count_before = (
@@ -802,8 +713,8 @@ class TestHotConnectLink:
     ):
         """Repeated requests converge to one Link and one LinkState."""
         lab = _make_running_lab(test_db, test_user.id)
-        _make_node(test_db, lab.id, gui_id="n1", container_name="R1", host_id=sample_host.id)
-        _make_node(test_db, lab.id, gui_id="n2", display_name="R2", container_name="R2", host_id=sample_host.id)
+        make_node(test_db, lab.id, gui_id="n1", container_name="R1", host_id=sample_host.id)
+        make_node(test_db, lab.id, gui_id="n2", display_name="R2", container_name="R2", host_id=sample_host.id)
 
         with patch(
             "app.routers.labs._build_host_to_agent_map",
@@ -843,8 +754,8 @@ class TestHotConnectLink:
     ):
         """Hot-connect matches existing state by FK, not stored link_name string."""
         lab = _make_running_lab(test_db, test_user.id)
-        src = _make_node(test_db, lab.id, gui_id="n1", container_name="R1", host_id=sample_host.id)
-        tgt = _make_node(test_db, lab.id, gui_id="n2", display_name="R2", container_name="R2", host_id=sample_host.id)
+        src = make_node(test_db, lab.id, gui_id="n1", container_name="R1", host_id=sample_host.id)
+        tgt = make_node(test_db, lab.id, gui_id="n2", display_name="R2", container_name="R2", host_id=sample_host.id)
 
         link_def = models.Link(
             lab_id=lab.id,
@@ -857,7 +768,7 @@ class TestHotConnectLink:
         test_db.add(link_def)
         test_db.flush()
 
-        existing = _make_link_state(
+        existing = make_link_state(
             test_db,
             lab.id,
             link_definition_id=link_def.id,
@@ -918,7 +829,7 @@ class TestHotDisconnectLink:
     ):
         """Successfully disconnects a link."""
         lab = _make_running_lab(test_db, test_user.id)
-        ls = _make_link_state(test_db, lab.id, actual_state="up")
+        ls = make_link_state(test_db, lab.id, actual_state="up")
 
         with patch(
             "app.routers.labs._build_host_to_agent_map",
@@ -947,7 +858,7 @@ class TestHotDisconnectLink:
         sample_host: models.Host,
     ):
         """Hot-disconnect attempts even for non-running labs (editor check only)."""
-        ls = _make_link_state(test_db, sample_lab.id, actual_state="up")
+        ls = make_link_state(test_db, sample_lab.id, actual_state="up")
 
         with patch(
             "app.routers.labs._build_host_to_agent_map",
@@ -1528,7 +1439,7 @@ class TestInfraNotifications:
         multiple_hosts: list[models.Host],
     ):
         """Returns cleanup notification for tunnel in cleanup state."""
-        ls = _make_link_state(
+        ls = make_link_state(
             test_db,
             sample_lab.id,
             is_cross_host=True,
@@ -1569,7 +1480,7 @@ class TestInfraNotifications:
         multiple_hosts: list[models.Host],
     ):
         """Returns error notification for failed tunnel."""
-        ls = _make_link_state(
+        ls = make_link_state(
             test_db,
             sample_lab.id,
             is_cross_host=True,
@@ -1609,13 +1520,13 @@ class TestInfraNotifications:
         sample_lab: models.Lab,
     ):
         """Returns notifications for link and node errors."""
-        _make_link_state(
+        make_link_state(
             test_db,
             sample_lab.id,
             actual_state="error",
             error_message="VLAN tag mismatch",
         )
-        _make_node_state(
+        make_node_state(
             test_db,
             sample_lab.id,
             actual_state="error",
@@ -1686,7 +1597,7 @@ class TestExportInventory:
         sample_lab: models.Lab,
     ):
         """Returns inventory in JSON format with node entries."""
-        _make_node_state(
+        make_node_state(
             test_db,
             sample_lab.id,
             node_name="R1",
@@ -1714,7 +1625,7 @@ class TestExportInventory:
         sample_lab: models.Lab,
     ):
         """Returns inventory in Ansible YAML format with content field."""
-        _make_node_state(
+        make_node_state(
             test_db,
             sample_lab.id,
             node_name="R1",
@@ -1742,7 +1653,7 @@ class TestExportInventory:
         sample_lab: models.Lab,
     ):
         """Returns inventory in Terraform JSON format with content field."""
-        _make_node_state(
+        make_node_state(
             test_db,
             sample_lab.id,
             node_name="R1",

@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 
 from app import models
 from app.state import NodeActualState
+from tests.factories import make_node, make_node_state
 
 
 # ---------------------------------------------------------------------------
@@ -26,63 +27,18 @@ from app.state import NodeActualState
 # ---------------------------------------------------------------------------
 
 
-def _make_node_def(
-    test_db: Session,
-    lab: models.Lab,
-    gui_id: str = "n1",
-    display_name: str = "R1",
-    container_name: str = "archetype-test-r1",
-    device: str = "linux",
-    host_id: str | None = None,
-) -> models.Node:
-    node = models.Node(
-        id=str(uuid4()),
-        lab_id=lab.id,
-        gui_id=gui_id,
-        display_name=display_name,
-        container_name=container_name,
-        device=device,
-        host_id=host_id,
-    )
-    test_db.add(node)
-    test_db.commit()
-    test_db.refresh(node)
-    return node
-
-
-def _make_node_state(
-    test_db: Session,
-    lab: models.Lab,
-    node_id: str = "n1",
-    node_name: str = "R1",
-    desired_state: str = "stopped",
-    actual_state: str = "undeployed",
-) -> models.NodeState:
-    ns = models.NodeState(
-        lab_id=lab.id,
-        node_id=node_id,
-        node_name=node_name,
-        desired_state=desired_state,
-        actual_state=actual_state,
-    )
-    test_db.add(ns)
-    test_db.commit()
-    test_db.refresh(ns)
-    return ns
-
-
 def _setup_lab_with_running_nodes(
     test_db: Session, lab: models.Lab, host: models.Host
 ) -> list[models.NodeState]:
     """Create two running nodes with node defs and states."""
-    _make_node_def(test_db, lab, gui_id="n1", display_name="R1",
+    make_node(test_db, lab, gui_id="n1", display_name="R1",
                    container_name="archetype-test-r1", host_id=host.id)
-    _make_node_def(test_db, lab, gui_id="n2", display_name="R2",
+    make_node(test_db, lab, gui_id="n2", display_name="R2",
                    container_name="archetype-test-r2", host_id=host.id)
 
-    ns1 = _make_node_state(test_db, lab, "n1", "archetype-test-r1",
+    ns1 = make_node_state(test_db, lab, "n1", "archetype-test-r1",
                            desired_state="running", actual_state="running")
-    ns2 = _make_node_state(test_db, lab, "n2", "archetype-test-r2",
+    ns2 = make_node_state(test_db, lab, "n2", "archetype-test-r2",
                            desired_state="running", actual_state="running")
     return [ns1, ns2]
 
@@ -122,7 +78,7 @@ class TestListNodeStates:
         auth_headers: dict,
     ):
         """When node defs exist but no states, states are auto-created."""
-        _make_node_def(test_db, sample_lab, gui_id="n1", container_name="archetype-test-r1")
+        make_node(test_db, sample_lab, gui_id="n1", container_name="archetype-test-r1")
 
         response = test_client.get(
             f"/labs/{sample_lab.id}/nodes/states",
@@ -142,8 +98,8 @@ class TestListNodeStates:
         auth_headers: dict,
     ):
         """Node states include host_id and host_name from placements."""
-        node_def = _make_node_def(test_db, sample_lab, host_id=sample_host.id)
-        _make_node_state(test_db, sample_lab, "n1", node_def.container_name)
+        node_def = make_node(test_db, sample_lab, host_id=sample_host.id)
+        make_node_state(test_db, sample_lab, "n1", node_def.container_name)
 
         # Create placement
         placement = models.NodePlacement(
@@ -178,8 +134,8 @@ class TestListNodeStates:
         sample_lab.agent_id = sample_host.id
         test_db.commit()
 
-        _make_node_def(test_db, sample_lab, gui_id="n1", container_name="archetype-test-r1")
-        ns = _make_node_state(test_db, sample_lab, "n1", "archetype-test-r1",
+        make_node(test_db, sample_lab, gui_id="n1", container_name="archetype-test-r1")
+        ns = make_node_state(test_db, sample_lab, "n1", "archetype-test-r1",
                               desired_state="running", actual_state="pending")
 
         mock_agent_client = MagicMock()
@@ -207,8 +163,8 @@ class TestListNodeStates:
         auth_headers: dict,
     ):
         """Stopped undeployed nodes should not keep stale deploy/image errors."""
-        _make_node_def(test_db, sample_lab, gui_id="n1", container_name="archetype-test-r1")
-        ns = _make_node_state(
+        make_node(test_db, sample_lab, gui_id="n1", container_name="archetype-test-r1")
+        ns = make_node_state(
             test_db,
             sample_lab,
             "n1",
@@ -256,8 +212,8 @@ class TestGetNodeState:
         auth_headers: dict,
     ):
         """Returns an existing node state."""
-        _make_node_def(test_db, sample_lab, gui_id="n1", container_name="archetype-test-r1")
-        _make_node_state(test_db, sample_lab, "n1", "archetype-test-r1")
+        make_node(test_db, sample_lab, gui_id="n1", container_name="archetype-test-r1")
+        make_node_state(test_db, sample_lab, "n1", "archetype-test-r1")
 
         response = test_client.get(
             f"/labs/{sample_lab.id}/nodes/n1/state",
@@ -276,7 +232,7 @@ class TestGetNodeState:
         auth_headers: dict,
     ):
         """Auto-creates NodeState when node def exists but state is missing."""
-        _make_node_def(test_db, sample_lab, gui_id="n1", container_name="archetype-test-r1")
+        make_node(test_db, sample_lab, gui_id="n1", container_name="archetype-test-r1")
 
         response = test_client.get(
             f"/labs/{sample_lab.id}/nodes/n1/state",
@@ -328,8 +284,8 @@ class TestSetDesiredState:
         auth_headers: dict,
     ):
         """Setting desired=running from stopped creates a sync job."""
-        _make_node_def(test_db, sample_lab, gui_id="n1", container_name="archetype-test-r1")
-        _make_node_state(test_db, sample_lab, "n1", "archetype-test-r1",
+        make_node(test_db, sample_lab, gui_id="n1", container_name="archetype-test-r1")
+        make_node_state(test_db, sample_lab, "n1", "archetype-test-r1",
                          desired_state="stopped", actual_state="stopped")
 
         with patch("app.routers.labs._create_node_sync_job") as mock_sync, \
@@ -353,8 +309,8 @@ class TestSetDesiredState:
         auth_headers: dict,
     ):
         """Setting desired=stopped when actual=error converges to stopped."""
-        _make_node_def(test_db, sample_lab, gui_id="n1", container_name="archetype-test-r1")
-        ns = _make_node_state(test_db, sample_lab, "n1", "archetype-test-r1",
+        make_node(test_db, sample_lab, gui_id="n1", container_name="archetype-test-r1")
+        ns = make_node_state(test_db, sample_lab, "n1", "archetype-test-r1",
                               desired_state="running", actual_state="error")
 
         with patch("app.routers.labs.has_conflicting_job", return_value=(False, None)):
@@ -376,8 +332,8 @@ class TestSetDesiredState:
         auth_headers: dict,
     ):
         """Cannot start a node that is currently stopping."""
-        _make_node_def(test_db, sample_lab, gui_id="n1", container_name="archetype-test-r1")
-        _make_node_state(test_db, sample_lab, "n1", "archetype-test-r1",
+        make_node(test_db, sample_lab, gui_id="n1", container_name="archetype-test-r1")
+        make_node_state(test_db, sample_lab, "n1", "archetype-test-r1",
                          desired_state="stopped", actual_state="stopping")
 
         response = test_client.put(
@@ -395,8 +351,8 @@ class TestSetDesiredState:
         auth_headers: dict,
     ):
         """Setting running on an error node that already desired=running resets enforcement."""
-        _make_node_def(test_db, sample_lab, gui_id="n1", container_name="archetype-test-r1")
-        ns = _make_node_state(test_db, sample_lab, "n1", "archetype-test-r1",
+        make_node(test_db, sample_lab, gui_id="n1", container_name="archetype-test-r1")
+        ns = make_node_state(test_db, sample_lab, "n1", "archetype-test-r1",
                               desired_state="running", actual_state="error")
         ns.enforcement_attempts = 3
         ns.error_message = "previous error"
@@ -433,11 +389,11 @@ class TestSetAllNodesDesiredState:
         auth_headers: dict,
     ):
         """Start all sets desired=running on all eligible nodes."""
-        _make_node_def(test_db, sample_lab, gui_id="n1", container_name="archetype-test-r1")
-        _make_node_def(test_db, sample_lab, gui_id="n2", container_name="archetype-test-r2")
-        _make_node_state(test_db, sample_lab, "n1", "archetype-test-r1",
+        make_node(test_db, sample_lab, gui_id="n1", container_name="archetype-test-r1")
+        make_node(test_db, sample_lab, gui_id="n2", container_name="archetype-test-r2")
+        make_node_state(test_db, sample_lab, "n1", "archetype-test-r1",
                          desired_state="stopped", actual_state="stopped")
-        _make_node_state(test_db, sample_lab, "n2", "archetype-test-r2",
+        make_node_state(test_db, sample_lab, "n2", "archetype-test-r2",
                          desired_state="stopped", actual_state="stopped")
 
         with patch("app.routers.labs.has_conflicting_job", return_value=(False, None)), \
@@ -487,11 +443,11 @@ class TestSetAllNodesDesiredState:
         auth_headers: dict,
     ):
         """Transitional nodes (starting/stopping) are skipped."""
-        _make_node_def(test_db, sample_lab, gui_id="n1", container_name="archetype-test-r1")
-        _make_node_def(test_db, sample_lab, gui_id="n2", container_name="archetype-test-r2")
-        _make_node_state(test_db, sample_lab, "n1", "archetype-test-r1",
+        make_node(test_db, sample_lab, gui_id="n1", container_name="archetype-test-r1")
+        make_node(test_db, sample_lab, gui_id="n2", container_name="archetype-test-r2")
+        make_node_state(test_db, sample_lab, "n1", "archetype-test-r1",
                          desired_state="running", actual_state="starting")
-        _make_node_state(test_db, sample_lab, "n2", "archetype-test-r2",
+        make_node_state(test_db, sample_lab, "n2", "archetype-test-r2",
                          desired_state="stopped", actual_state="stopped")
 
         with patch("app.routers.labs.has_conflicting_job", return_value=(False, None)), \
@@ -554,8 +510,8 @@ class TestRefreshNodeStates:
         sample_lab.agent_id = sample_host.id
         test_db.commit()
 
-        _make_node_def(test_db, sample_lab, gui_id="n1", container_name="archetype-test-r1")
-        ns = _make_node_state(test_db, sample_lab, "n1", "archetype-test-r1",
+        make_node(test_db, sample_lab, gui_id="n1", container_name="archetype-test-r1")
+        ns = make_node_state(test_db, sample_lab, "n1", "archetype-test-r1",
                               desired_state="running", actual_state="stopped")
 
         mock_agent_client = MagicMock()
@@ -582,8 +538,8 @@ class TestRefreshNodeStates:
         auth_headers: dict,
     ):
         """Returns 503 when no agent is available."""
-        _make_node_def(test_db, sample_lab, gui_id="n1", container_name="archetype-test-r1")
-        _make_node_state(test_db, sample_lab, "n1", "archetype-test-r1")
+        make_node(test_db, sample_lab, gui_id="n1", container_name="archetype-test-r1")
+        make_node_state(test_db, sample_lab, "n1", "archetype-test-r1")
 
         with patch("app.routers.labs_node_states.get_online_agent_for_lab", AsyncMock(return_value=None)):
             response = test_client.post(
@@ -605,8 +561,8 @@ class TestRefreshNodeStates:
         sample_lab.agent_id = sample_host.id
         test_db.commit()
 
-        _make_node_def(test_db, sample_lab, gui_id="n1", container_name="archetype-test-r1")
-        _make_node_state(test_db, sample_lab, "n1", "archetype-test-r1")
+        make_node(test_db, sample_lab, gui_id="n1", container_name="archetype-test-r1")
+        make_node_state(test_db, sample_lab, "n1", "archetype-test-r1")
 
         mock_agent_client = MagicMock()
         mock_agent_client.is_agent_online = MagicMock(return_value=False)
@@ -638,8 +594,8 @@ class TestReconcileNode:
         auth_headers: dict,
     ):
         """Reconcile creates a job for an out-of-sync node."""
-        _make_node_def(test_db, sample_lab, gui_id="n1", container_name="archetype-test-r1")
-        _make_node_state(test_db, sample_lab, "n1", "archetype-test-r1",
+        make_node(test_db, sample_lab, gui_id="n1", container_name="archetype-test-r1")
+        make_node_state(test_db, sample_lab, "n1", "archetype-test-r1",
                          desired_state="running", actual_state="stopped")
 
         with patch("app.routers.labs_node_states.get_online_agent_for_lab",
@@ -665,8 +621,8 @@ class TestReconcileNode:
         auth_headers: dict,
     ):
         """Node already in correct state returns empty reconcile response."""
-        _make_node_def(test_db, sample_lab, gui_id="n1", container_name="archetype-test-r1")
-        _make_node_state(test_db, sample_lab, "n1", "archetype-test-r1",
+        make_node(test_db, sample_lab, gui_id="n1", container_name="archetype-test-r1")
+        make_node_state(test_db, sample_lab, "n1", "archetype-test-r1",
                          desired_state="stopped", actual_state="stopped")
 
         response = test_client.post(
@@ -710,7 +666,7 @@ class TestReconcileNode:
         test_db.commit()
         test_db.refresh(lab)
 
-        _make_node_state(test_db, lab, "n1", "R1",
+        make_node_state(test_db, lab, "n1", "R1",
                          desired_state="running", actual_state="stopped")
 
         # Admin can still reconcile (admin role bypasses lab permissions)
@@ -743,11 +699,11 @@ class TestReconcileLab:
         auth_headers: dict,
     ):
         """Reconcile finds all out-of-sync nodes and creates a job."""
-        _make_node_def(test_db, sample_lab, gui_id="n1", container_name="archetype-test-r1")
-        _make_node_def(test_db, sample_lab, gui_id="n2", container_name="archetype-test-r2")
-        _make_node_state(test_db, sample_lab, "n1", "archetype-test-r1",
+        make_node(test_db, sample_lab, gui_id="n1", container_name="archetype-test-r1")
+        make_node(test_db, sample_lab, gui_id="n2", container_name="archetype-test-r2")
+        make_node_state(test_db, sample_lab, "n1", "archetype-test-r1",
                          desired_state="running", actual_state="stopped")
-        _make_node_state(test_db, sample_lab, "n2", "archetype-test-r2",
+        make_node_state(test_db, sample_lab, "n2", "archetype-test-r2",
                          desired_state="running", actual_state="stopped")
 
         with patch("app.routers.labs_node_states._has_conflicting_job",
@@ -797,8 +753,8 @@ class TestReconcileLab:
         auth_headers: dict,
     ):
         """Returns 409 when a conflicting job is already in progress."""
-        _make_node_def(test_db, sample_lab, gui_id="n1", container_name="archetype-test-r1")
-        _make_node_state(test_db, sample_lab, "n1", "archetype-test-r1",
+        make_node(test_db, sample_lab, gui_id="n1", container_name="archetype-test-r1")
+        make_node_state(test_db, sample_lab, "n1", "archetype-test-r1",
                          desired_state="running", actual_state="stopped")
 
         with patch("app.routers.labs_node_states._has_conflicting_job",
@@ -819,8 +775,8 @@ class TestReconcileLab:
         auth_headers: dict,
     ):
         """Returns 503 when no healthy agent is available."""
-        _make_node_def(test_db, sample_lab, gui_id="n1", container_name="archetype-test-r1")
-        _make_node_state(test_db, sample_lab, "n1", "archetype-test-r1",
+        make_node(test_db, sample_lab, gui_id="n1", container_name="archetype-test-r1")
+        make_node_state(test_db, sample_lab, "n1", "archetype-test-r1",
                          desired_state="running", actual_state="stopped")
 
         with patch("app.routers.labs_node_states._has_conflicting_job",

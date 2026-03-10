@@ -15,28 +15,12 @@ from app.tasks.migration_cleanup import (
     process_pending_migration_cleanups,
     process_pending_migration_cleanups_for_agent,
 )
-
-
-def _make_host(test_db, host_id: str, name: str, status: str = "online") -> models.Host:
-    host = models.Host(
-        id=host_id,
-        name=name,
-        address=f"{host_id}.local:8080",
-        status=status,
-        capabilities='{"providers":["docker"]}',
-        version="1.0.0",
-        resource_usage='{"cpu_percent": 1, "memory_percent": 1, "disk_percent": 1}',
-        last_heartbeat=datetime.now(timezone.utc),
-    )
-    test_db.add(host)
-    test_db.commit()
-    test_db.refresh(host)
-    return host
+from tests.factories import make_host
 
 
 @pytest.mark.asyncio
 async def test_process_pending_cleanup_success_deletes_row(test_db, sample_lab):
-    host = _make_host(test_db, "old-host", "Old Host")
+    host = make_host(test_db, "old-host", "Old Host")
     enqueue_node_migration_cleanup(
         test_db,
         sample_lab.id,
@@ -61,7 +45,7 @@ async def test_process_pending_cleanup_success_deletes_row(test_db, sample_lab):
 
 @pytest.mark.asyncio
 async def test_process_pending_cleanup_marks_failed_after_max_attempts(test_db, sample_lab):
-    host = _make_host(test_db, "old-host", "Old Host")
+    host = make_host(test_db, "old-host", "Old Host")
     row = enqueue_node_migration_cleanup(
         test_db,
         sample_lab.id,
@@ -90,7 +74,7 @@ async def test_process_pending_cleanup_marks_failed_after_max_attempts(test_db, 
 
 @pytest.mark.asyncio
 async def test_reclaims_stale_running_rows_and_retries(test_db, sample_lab):
-    host = _make_host(test_db, "old-host", "Old Host")
+    host = make_host(test_db, "old-host", "Old Host")
     row = enqueue_node_migration_cleanup(
         test_db,
         sample_lab.id,
@@ -117,7 +101,7 @@ async def test_reclaims_stale_running_rows_and_retries(test_db, sample_lab):
 
 @pytest.mark.asyncio
 async def test_reclaims_stale_failed_rows_and_retries(test_db, sample_lab):
-    host = _make_host(test_db, "old-host", "Old Host")
+    host = make_host(test_db, "old-host", "Old Host")
     row = enqueue_node_migration_cleanup(
         test_db,
         sample_lab.id,
@@ -145,7 +129,7 @@ async def test_reclaims_stale_failed_rows_and_retries(test_db, sample_lab):
 
 @pytest.mark.asyncio
 async def test_running_rows_are_included_in_global_scan(test_db, sample_lab):
-    host = _make_host(test_db, "old-host", "Old Host")
+    host = make_host(test_db, "old-host", "Old Host")
     row = enqueue_node_migration_cleanup(
         test_db,
         sample_lab.id,
@@ -176,7 +160,7 @@ async def test_running_rows_are_included_in_global_scan(test_db, sample_lab):
 
 @pytest.mark.asyncio
 async def test_failed_rows_are_included_in_global_scan(test_db, sample_lab):
-    host = _make_host(test_db, "old-host", "Old Host")
+    host = make_host(test_db, "old-host", "Old Host")
     row = enqueue_node_migration_cleanup(
         test_db,
         sample_lab.id,

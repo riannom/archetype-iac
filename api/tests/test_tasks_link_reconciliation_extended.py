@@ -19,79 +19,12 @@ import pytest
 from sqlalchemy.orm import Session
 
 from app import models
+from tests.factories import make_link_state, make_node
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-
-def _make_link_state(
-    test_db: Session,
-    lab_id: str,
-    link_name: str = "R1:eth1--R2:eth1",
-    source_node: str = "archetype-test-r1",
-    target_node: str = "archetype-test-r2",
-    source_interface: str = "eth1",
-    target_interface: str = "eth1",
-    desired_state: str = "up",
-    actual_state: str = "up",
-    source_host_id: str | None = None,
-    target_host_id: str | None = None,
-    is_cross_host: bool = False,
-    vlan_tag: int | None = None,
-    source_vlan_tag: int | None = None,
-    target_vlan_tag: int | None = None,
-    source_vxlan_attached: bool = False,
-    target_vxlan_attached: bool = False,
-) -> models.LinkState:
-    """Create and persist a LinkState for testing."""
-    link = models.LinkState(
-        id=str(uuid4()),
-        lab_id=lab_id,
-        link_name=link_name,
-        source_node=source_node,
-        source_interface=source_interface,
-        target_node=target_node,
-        target_interface=target_interface,
-        desired_state=desired_state,
-        actual_state=actual_state,
-        source_host_id=source_host_id,
-        target_host_id=target_host_id,
-        is_cross_host=is_cross_host,
-        vlan_tag=vlan_tag,
-        source_vlan_tag=source_vlan_tag,
-        target_vlan_tag=target_vlan_tag,
-        source_vxlan_attached=source_vxlan_attached,
-        target_vxlan_attached=target_vxlan_attached,
-    )
-    test_db.add(link)
-    test_db.commit()
-    test_db.refresh(link)
-    return link
-
-
-def _make_node(
-    test_db: Session,
-    lab_id: str,
-    display_name: str = "R1",
-    container_name: str = "archetype-test-r1",
-    host_id: str | None = None,
-) -> models.Node:
-    """Create and persist a Node for testing."""
-    node = models.Node(
-        id=str(uuid4()),
-        lab_id=lab_id,
-        gui_id=str(uuid4())[:8],
-        display_name=display_name,
-        container_name=container_name,
-        device="linux",
-        host_id=host_id,
-    )
-    test_db.add(node)
-    test_db.commit()
-    test_db.refresh(node)
-    return node
 
 
 def _make_interface_mapping(
@@ -163,7 +96,7 @@ class TestResolveNodeByEndpointName:
         """Should find node when endpoint_name matches container_name."""
         from app.tasks.link_reconciliation import _resolve_node_by_endpoint_name
 
-        node = _make_node(
+        node = make_node(
             test_db, sample_lab.id,
             display_name="Router1",
             container_name="archetype-lab-r1",
@@ -182,7 +115,7 @@ class TestResolveNodeByEndpointName:
         """Should fall back to display_name when container_name does not match."""
         from app.tasks.link_reconciliation import _resolve_node_by_endpoint_name
 
-        node = _make_node(
+        node = make_node(
             test_db, sample_lab.id,
             display_name="R1",
             container_name="archetype-lab-r1",
@@ -222,13 +155,13 @@ class TestResolveNodeByEndpointName:
         """When both match different nodes, container_name match is returned first."""
         from app.tasks.link_reconciliation import _resolve_node_by_endpoint_name
 
-        node_a = _make_node(
+        node_a = make_node(
             test_db, sample_lab.id,
             display_name="overlap",
             container_name="exact-match",
             host_id=sample_host.id,
         )
-        _make_node(
+        make_node(
             test_db, sample_lab.id,
             display_name="exact-match",
             container_name="something-else",
@@ -284,7 +217,7 @@ class TestRunOverlayConvergence:
         host_a, host_b = multiple_hosts[0], multiple_hosts[1]
         host_to_agent = {host_a.id: host_a, host_b.id: host_b}
 
-        link = _make_link_state(
+        link = make_link_state(
             test_db, sample_lab.id,
             desired_state="up", actual_state="up",
             is_cross_host=True,
@@ -330,7 +263,7 @@ class TestRunOverlayConvergence:
         # Only include agent_a in host_to_agent, not agent_b
         host_to_agent = {host_a.id: host_a}
 
-        link = _make_link_state(
+        link = make_link_state(
             test_db, sample_lab.id,
             desired_state="up", actual_state="up",
             is_cross_host=True,
@@ -393,7 +326,7 @@ class TestRunOverlayConvergence:
         host_a, host_b = multiple_hosts[0], multiple_hosts[1]
         host_to_agent = {host_a.id: host_a, host_b.id: host_b}
 
-        link = _make_link_state(
+        link = make_link_state(
             test_db, sample_lab.id,
             desired_state="up", actual_state="up",
             is_cross_host=True,
@@ -458,7 +391,7 @@ class TestRunSameHostConvergence:
 
         host_to_agent = {sample_host.id: sample_host}
 
-        link = _make_link_state(
+        link = make_link_state(
             test_db, sample_lab.id,
             desired_state="up", actual_state="up",
             is_cross_host=False,
@@ -468,13 +401,13 @@ class TestRunSameHostConvergence:
         )
 
         # Create nodes and interface mappings so the pairing resolves
-        node_r1 = _make_node(
+        node_r1 = make_node(
             test_db, sample_lab.id,
             display_name="R1",
             container_name=link.source_node,
             host_id=sample_host.id,
         )
-        node_r2 = _make_node(
+        node_r2 = make_node(
             test_db, sample_lab.id,
             display_name="R2",
             container_name=link.target_node,
@@ -515,7 +448,7 @@ class TestRunSameHostConvergence:
 
         host_to_agent = {sample_host.id: sample_host}
 
-        _make_link_state(
+        make_link_state(
             test_db, sample_lab.id,
             desired_state="up", actual_state="up",
             is_cross_host=False,
@@ -524,13 +457,13 @@ class TestRunSameHostConvergence:
             vlan_tag=100,
         )
         # Create nodes but NO InterfaceMapping records so mappings are missing
-        _make_node(
+        make_node(
             test_db, sample_lab.id,
             display_name="R1",
             container_name="archetype-test-r1",
             host_id=sample_host.id,
         )
-        _make_node(
+        make_node(
             test_db, sample_lab.id,
             display_name="R2",
             container_name="archetype-test-r2",
@@ -564,7 +497,7 @@ class TestRunSameHostConvergence:
 
         host_to_agent = {sample_host.id: sample_host}
 
-        link = _make_link_state(
+        link = make_link_state(
             test_db, sample_lab.id,
             desired_state="up", actual_state="up",
             is_cross_host=False,
@@ -577,10 +510,10 @@ class TestRunSameHostConvergence:
             source_interface="eth4",
             target_interface="eth1",
         )
-        source_node = _make_node(
+        source_node = make_node(
             test_db, sample_lab.id, display_name="ceos_5", container_name="ceos_5", host_id=sample_host.id
         )
-        target_node = _make_node(
+        target_node = make_node(
             test_db, sample_lab.id, display_name="cisco_n9kv_4", container_name="cisco_n9kv_4", host_id=sample_host.id
         )
         _make_interface_mapping(
@@ -633,7 +566,7 @@ class TestRunSameHostConvergence:
         from app.tasks.link_reconciliation import run_same_host_convergence
 
         # The link's host_id is the offline host — NOT included in host_to_agent
-        _make_link_state(
+        make_link_state(
             test_db, sample_lab.id,
             desired_state="up", actual_state="up",
             is_cross_host=False,
@@ -662,7 +595,7 @@ class TestRunSameHostConvergence:
 
         host_to_agent = {sample_host.id: sample_host}
 
-        link = _make_link_state(
+        link = make_link_state(
             test_db, sample_lab.id,
             desired_state="up", actual_state="up",
             is_cross_host=False,
@@ -670,13 +603,13 @@ class TestRunSameHostConvergence:
             target_host_id=sample_host.id,
             vlan_tag=100,
         )
-        node_r1 = _make_node(
+        node_r1 = make_node(
             test_db, sample_lab.id,
             display_name="R1",
             container_name=link.source_node,
             host_id=sample_host.id,
         )
-        node_r2 = _make_node(
+        node_r2 = make_node(
             test_db, sample_lab.id,
             display_name="R2",
             container_name=link.target_node,
@@ -744,7 +677,7 @@ class TestRunCrossHostPortConvergence:
         host_a, host_b = multiple_hosts[0], multiple_hosts[1]
         host_to_agent = {host_a.id: host_a, host_b.id: host_b}
 
-        link = _make_link_state(
+        link = make_link_state(
             test_db, sample_lab.id,
             desired_state="up", actual_state="up",
             is_cross_host=True,
@@ -753,12 +686,12 @@ class TestRunCrossHostPortConvergence:
             source_vlan_tag=200,
             target_vlan_tag=201,
         )
-        node_a = _make_node(
+        node_a = make_node(
             test_db, sample_lab.id,
             container_name=link.source_node,
             host_id=host_a.id,
         )
-        node_b = _make_node(
+        node_b = make_node(
             test_db, sample_lab.id,
             container_name=link.target_node,
             host_id=host_b.id,
@@ -798,7 +731,7 @@ class TestRunCrossHostPortConvergence:
         host_a, host_b = multiple_hosts[0], multiple_hosts[1]
         host_to_agent = {host_a.id: host_a, host_b.id: host_b}
 
-        link = _make_link_state(
+        link = make_link_state(
             test_db, sample_lab.id,
             desired_state="up", actual_state="up",
             is_cross_host=True,
@@ -807,12 +740,12 @@ class TestRunCrossHostPortConvergence:
             source_vlan_tag=200,
             target_vlan_tag=201,
         )
-        node_a = _make_node(
+        node_a = make_node(
             test_db, sample_lab.id,
             container_name=link.source_node,
             host_id=host_a.id,
         )
-        node_b = _make_node(
+        node_b = make_node(
             test_db, sample_lab.id,
             container_name=link.target_node,
             host_id=host_b.id,
@@ -854,7 +787,7 @@ class TestRunCrossHostPortConvergence:
         # host_to_agent only has host_a
         host_to_agent = {host_a.id: host_a}
 
-        link = _make_link_state(
+        link = make_link_state(
             test_db, sample_lab.id,
             desired_state="up", actual_state="up",
             is_cross_host=True,
@@ -863,7 +796,7 @@ class TestRunCrossHostPortConvergence:
             source_vlan_tag=200,
             target_vlan_tag=201,
         )
-        node_a = _make_node(
+        node_a = make_node(
             test_db, sample_lab.id,
             container_name=link.source_node,
             host_id=host_a.id,
@@ -896,7 +829,7 @@ class TestRunCrossHostPortConvergence:
         host_a, host_b = multiple_hosts[0], multiple_hosts[1]
         host_to_agent = {host_a.id: host_a, host_b.id: host_b}
 
-        link = _make_link_state(
+        link = make_link_state(
             test_db, sample_lab.id,
             desired_state="up", actual_state="up",
             is_cross_host=True,
@@ -906,7 +839,7 @@ class TestRunCrossHostPortConvergence:
             target_vlan_tag=201,
         )
         # Create nodes but NO InterfaceMapping records
-        _make_node(
+        make_node(
             test_db, sample_lab.id,
             container_name=link.source_node,
             host_id=host_a.id,
@@ -936,7 +869,7 @@ class TestRunCrossHostPortConvergence:
         host_a, host_b = multiple_hosts[0], multiple_hosts[1]
         host_to_agent = {host_a.id: host_a, host_b.id: host_b}
 
-        link = _make_link_state(
+        link = make_link_state(
             test_db, sample_lab.id,
             desired_state="up", actual_state="up",
             is_cross_host=True,
@@ -945,12 +878,12 @@ class TestRunCrossHostPortConvergence:
             source_vlan_tag=200,
             target_vlan_tag=201,
         )
-        node_a = _make_node(
+        node_a = make_node(
             test_db, sample_lab.id,
             container_name=link.source_node,
             host_id=host_a.id,
         )
-        node_b = _make_node(
+        node_b = make_node(
             test_db, sample_lab.id,
             container_name=link.target_node,
             host_id=host_b.id,
@@ -1017,14 +950,14 @@ class TestRefreshInterfaceMappings:
 
         host_to_agent = {sample_host.id: sample_host}
 
-        _make_link_state(
+        make_link_state(
             test_db, sample_lab.id,
             desired_state="up", actual_state="up",
             is_cross_host=False,
             source_host_id=sample_host.id,
             target_host_id=sample_host.id,
         )
-        _make_node(
+        make_node(
             test_db, sample_lab.id,
             display_name="R1",
             container_name="archetype-test-r1",
@@ -1057,14 +990,14 @@ class TestRefreshInterfaceMappings:
 
         host_to_agent = {sample_host.id: sample_host}
 
-        _make_link_state(
+        make_link_state(
             test_db, sample_lab.id,
             desired_state="up", actual_state="up",
             is_cross_host=False,
             source_host_id=sample_host.id,
             target_host_id=sample_host.id,
         )
-        node = _make_node(
+        node = make_node(
             test_db, sample_lab.id,
             display_name="R1",
             container_name="archetype-test-r1",
@@ -1102,7 +1035,7 @@ class TestRefreshInterfaceMappings:
         """Links whose agent is not in host_to_agent are silently skipped."""
         from app.tasks.link_reconciliation import refresh_interface_mappings
 
-        _make_link_state(
+        make_link_state(
             test_db, sample_lab.id,
             desired_state="up", actual_state="up",
             is_cross_host=False,
@@ -1129,7 +1062,7 @@ class TestRefreshInterfaceMappings:
 
         host_to_agent = {sample_host.id: sample_host}
 
-        _make_link_state(
+        make_link_state(
             test_db, sample_lab.id,
             desired_state="up", actual_state="up",
             is_cross_host=False,
@@ -1157,7 +1090,7 @@ class TestRefreshInterfaceMappings:
 
         host_to_agent = {sample_host.id: sample_host}
 
-        _make_link_state(
+        make_link_state(
             test_db, sample_lab.id,
             desired_state="up", actual_state="up",
             is_cross_host=False,
@@ -1205,7 +1138,7 @@ class TestReconcileLabLinks:
         test_db.commit()
         test_db.refresh(other_lab)
 
-        _make_link_state(
+        make_link_state(
             test_db, other_lab.id,
             desired_state="up", actual_state="up",
             source_host_id=sample_host.id,
@@ -1229,14 +1162,14 @@ class TestReconcileLabLinks:
         """An exception on one link does not prevent processing of subsequent links."""
         from app.tasks.link_reconciliation import reconcile_lab_links
 
-        _make_link_state(
+        make_link_state(
             test_db, sample_lab.id,
             link_name="R1:eth1--R2:eth1",
             desired_state="up", actual_state="up",
             source_host_id=sample_host.id,
             target_host_id=sample_host.id,
         )
-        _make_link_state(
+        make_link_state(
             test_db, sample_lab.id,
             link_name="R2:eth2--R3:eth2",
             source_node="archetype-test-r2",
@@ -1276,7 +1209,7 @@ class TestReconcileLabLinks:
         """Statement timeouts during per-link reconcile emit DB contention metrics."""
         from app.tasks.link_reconciliation import reconcile_lab_links
 
-        _make_link_state(
+        make_link_state(
             test_db, sample_lab.id,
             link_name="R1:eth1--R2:eth1",
             desired_state="up", actual_state="up",
@@ -1311,7 +1244,7 @@ class TestReconcileLabLinks:
         """Links waiting on intentionally stopped nodes should stay pending quietly."""
         from app.tasks.link_reconciliation import reconcile_lab_links
 
-        link = _make_link_state(
+        link = make_link_state(
             test_db, sample_lab.id,
             desired_state="up", actual_state="error",
             source_host_id=sample_host.id,
@@ -1360,7 +1293,7 @@ class TestReconcileLabLinks:
         """Per-link verification should release the DB transaction before awaited I/O."""
         from app.tasks.link_reconciliation import reconcile_lab_links
 
-        _make_link_state(
+        make_link_state(
             test_db, sample_lab.id,
             desired_state="up", actual_state="up",
             source_host_id=sample_host.id,
@@ -1391,7 +1324,7 @@ class TestReconcileLabLinks:
         """Links should not churn through repair while an endpoint is still starting."""
         from app.tasks.link_reconciliation import reconcile_lab_links
 
-        link = _make_link_state(
+        link = make_link_state(
             test_db, sample_lab.id,
             desired_state="up", actual_state="up",
             source_host_id=sample_host.id,
@@ -1440,7 +1373,7 @@ class TestReconcileLabLinks:
         """A VLAN mismatch on a per-lab link attempts vlan_repair then verify."""
         from app.tasks.link_reconciliation import reconcile_lab_links
 
-        _make_link_state(
+        make_link_state(
             test_db, sample_lab.id,
             desired_state="up", actual_state="up",
             source_host_id=sample_host.id,
@@ -1480,7 +1413,7 @@ class TestReconcileLabLinks:
         """reconcile_lab_links creates links with desired=up actual=down."""
         from app.tasks.link_reconciliation import reconcile_lab_links
 
-        _make_link_state(
+        make_link_state(
             test_db, sample_lab.id,
             desired_state="up", actual_state="down",
             source_host_id=sample_host.id,

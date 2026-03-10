@@ -32,6 +32,7 @@ from app.tasks.jobs import (
     run_multihost_deploy,
     run_multihost_destroy,
 )
+from tests.factories import make_job, make_lab, make_node, make_node_state
 
 
 def _mock_get_session(test_db: Session):
@@ -49,77 +50,6 @@ def _mock_get_session(test_db: Session):
 # ---------------------------------------------------------------------------
 
 
-def _make_lab(test_db, test_user, *, state="stopped", name="Test Lab"):
-    lab = models.Lab(
-        name=name,
-        owner_id=test_user.id,
-        provider="docker",
-        state=state,
-    )
-    test_db.add(lab)
-    test_db.commit()
-    test_db.refresh(lab)
-    return lab
-
-
-def _make_job(test_db, lab, test_user, *, action="up", status="queued"):
-    job = models.Job(
-        lab_id=lab.id,
-        user_id=test_user.id,
-        action=action,
-        status=status,
-    )
-    test_db.add(job)
-    test_db.commit()
-    test_db.refresh(job)
-    return job
-
-
-def _make_node(test_db, lab, *, gui_id, name, device="linux", host_id=None):
-    node = models.Node(
-        lab_id=lab.id,
-        gui_id=gui_id,
-        display_name=name,
-        container_name=name,
-        node_type="device",
-        device=device,
-        host_id=host_id,
-    )
-    test_db.add(node)
-    test_db.commit()
-    test_db.refresh(node)
-    return node
-
-
-def _make_node_state(test_db, lab, *, node_id, node_name, actual="running", desired="running", host_id=None):
-    # Create a Node definition so _capture_node_ips can look up by container_name
-    node_def = models.Node(
-        lab_id=lab.id,
-        gui_id=node_id,
-        display_name=node_name,
-        container_name=node_name,
-        node_type="device",
-        device="linux",
-        host_id=host_id,
-    )
-    test_db.add(node_def)
-    test_db.flush()
-
-    ns = models.NodeState(
-        lab_id=lab.id,
-        node_id=node_id,
-        node_name=node_name,
-        node_definition_id=node_def.id,
-        desired_state=desired,
-        actual_state=actual,
-        is_ready=actual == "running",
-    )
-    test_db.add(ns)
-    test_db.commit()
-    test_db.refresh(ns)
-    return ns
-
-
 # ---------------------------------------------------------------------------
 # 1. _capture_node_ips
 # ---------------------------------------------------------------------------
@@ -133,8 +63,8 @@ class TestCaptureNodeIps:
         self, test_db: Session, test_user: models.User, sample_host: models.Host
     ):
         """IPs from agent status are persisted to NodeState records."""
-        lab = _make_lab(test_db, test_user)
-        ns = _make_node_state(test_db, lab, node_id="n1", node_name="r1")
+        lab = make_lab(test_db, test_user)
+        ns = make_node_state(test_db, lab, node_id="n1", node_name="r1")
 
         agent_status = {
             "nodes": [
@@ -158,8 +88,8 @@ class TestCaptureNodeIps:
         self, test_db: Session, test_user: models.User, sample_host: models.Host
     ):
         """Empty nodes list from agent does not crash."""
-        lab = _make_lab(test_db, test_user)
-        _make_node_state(test_db, lab, node_id="n1", node_name="r1")
+        lab = make_lab(test_db, test_user)
+        make_node_state(test_db, lab, node_id="n1", node_name="r1")
 
         with patch(
             "app.tasks.jobs.agent_client.get_lab_status_from_agent",
@@ -181,7 +111,7 @@ class TestCaptureNodeIps:
         self, test_db: Session, test_user: models.User, sample_host: models.Host
     ):
         """Agent communication error is caught and does not propagate."""
-        lab = _make_lab(test_db, test_user)
+        lab = make_lab(test_db, test_user)
 
         with patch(
             "app.tasks.jobs.agent_client.get_lab_status_from_agent",
@@ -196,9 +126,9 @@ class TestCaptureNodeIps:
         self, test_db: Session, test_user: models.User, sample_host: models.Host
     ):
         """Nodes without IPs are skipped; nodes with IPs are updated."""
-        lab = _make_lab(test_db, test_user)
-        ns1 = _make_node_state(test_db, lab, node_id="n1", node_name="r1")
-        ns2 = _make_node_state(test_db, lab, node_id="n2", node_name="r2")
+        lab = make_lab(test_db, test_user)
+        ns1 = make_node_state(test_db, lab, node_id="n1", node_name="r1")
+        ns2 = make_node_state(test_db, lab, node_id="n2", node_name="r2")
 
         agent_status = {
             "nodes": [
@@ -224,7 +154,7 @@ class TestCaptureNodeIps:
         self, test_db: Session, test_user: models.User, sample_host: models.Host
     ):
         """Agent reports a node that has no NodeState record; no crash."""
-        lab = _make_lab(test_db, test_user)
+        lab = make_lab(test_db, test_user)
         # No NodeState for "phantom"
 
         agent_status = {
@@ -246,8 +176,8 @@ class TestCaptureNodeIps:
         self, test_db: Session, test_user: models.User, sample_host: models.Host
     ):
         """Commit failures trigger rollback in best-effort IP capture."""
-        lab = _make_lab(test_db, test_user)
-        ns = _make_node_state(test_db, lab, node_id="n1", node_name="r1")
+        lab = make_lab(test_db, test_user)
+        ns = make_node_state(test_db, lab, node_id="n1", node_name="r1")
 
         agent_status = {
             "nodes": [
@@ -282,9 +212,9 @@ class TestDispatchWebhook:
         self, test_db: Session, test_user: models.User
     ):
         """Webhook is dispatched with correct payload."""
-        lab = _make_lab(test_db, test_user)
-        job = _make_job(test_db, lab, test_user, action="up")
-        _make_node_state(test_db, lab, node_id="n1", node_name="r1")
+        lab = make_lab(test_db, test_user)
+        job = make_job(test_db, lab, test_user, action="up")
+        make_node_state(test_db, lab, node_id="n1", node_name="r1")
 
         with patch(
             "app.tasks.jobs.webhooks.dispatch_webhook_event",
@@ -303,8 +233,8 @@ class TestDispatchWebhook:
         self, test_db: Session, test_user: models.User
     ):
         """Exception from webhook dispatch is swallowed."""
-        lab = _make_lab(test_db, test_user)
-        job = _make_job(test_db, lab, test_user, action="up")
+        lab = make_lab(test_db, test_user)
+        job = make_job(test_db, lab, test_user, action="up")
 
         with patch(
             "app.tasks.jobs.webhooks.dispatch_webhook_event",
@@ -319,8 +249,8 @@ class TestDispatchWebhook:
         self, test_db: Session, test_user: models.User
     ):
         """Different event types pass through unchanged."""
-        lab = _make_lab(test_db, test_user)
-        job = _make_job(test_db, lab, test_user, action="down")
+        lab = make_lab(test_db, test_user)
+        job = make_job(test_db, lab, test_user, action="down")
 
         for event_type in ["lab.deploy_started", "lab.destroy_complete", "job.failed"]:
             with patch(
@@ -341,8 +271,8 @@ class TestGetNodeInfoForWebhook:
 
     def test_correct_fields(self, test_db: Session, test_user: models.User):
         """Returned dicts contain the expected keys."""
-        lab = _make_lab(test_db, test_user)
-        ns = _make_node_state(test_db, lab, node_id="n1", node_name="r1")
+        lab = make_lab(test_db, test_user)
+        ns = make_node_state(test_db, lab, node_id="n1", node_name="r1")
         ns.management_ip = "10.0.0.1"
         test_db.commit()
 
@@ -355,16 +285,16 @@ class TestGetNodeInfoForWebhook:
 
     def test_empty_no_nodes(self, test_db: Session, test_user: models.User):
         """Lab with no NodeState records returns empty list."""
-        lab = _make_lab(test_db, test_user)
+        lab = make_lab(test_db, test_user)
         result = _get_node_info_for_webhook(test_db, lab.id)
         assert result == []
 
     def test_multiple_nodes(self, test_db: Session, test_user: models.User):
         """Multiple nodes are all returned."""
-        lab = _make_lab(test_db, test_user)
-        _make_node_state(test_db, lab, node_id="n1", node_name="r1")
-        _make_node_state(test_db, lab, node_id="n2", node_name="r2")
-        _make_node_state(test_db, lab, node_id="n3", node_name="r3")
+        lab = make_lab(test_db, test_user)
+        make_node_state(test_db, lab, node_id="n1", node_name="r1")
+        make_node_state(test_db, lab, node_id="n2", node_name="r2")
+        make_node_state(test_db, lab, node_id="n3", node_name="r3")
 
         result = _get_node_info_for_webhook(test_db, lab.id)
         assert len(result) == 3
@@ -385,7 +315,7 @@ class TestAutoExtractAdditional:
         self, test_db: Session, test_user: models.User, sample_host: models.Host
     ):
         """Feature flag off skips extraction entirely."""
-        lab = _make_lab(test_db, test_user, state="running")
+        lab = make_lab(test_db, test_user, state="running")
 
         with patch("app.tasks.jobs.settings") as mock_settings:
             mock_settings.feature_auto_extract_on_destroy = False
@@ -398,7 +328,7 @@ class TestAutoExtractAdditional:
         self, test_db: Session, test_user: models.User, sample_host: models.Host
     ):
         """When all agents are offline the function returns without error."""
-        lab = _make_lab(test_db, test_user, state="running")
+        lab = make_lab(test_db, test_user, state="running")
         # Create a placement pointing at sample_host
         placement = models.NodePlacement(
             lab_id=lab.id,
@@ -420,8 +350,8 @@ class TestAutoExtractAdditional:
         self, test_db: Session, test_user: models.User, sample_host: models.Host
     ):
         """Single agent extraction creates snapshots."""
-        lab = _make_lab(test_db, test_user, state="running")
-        _make_node(test_db, lab, gui_id="n1", name="r1", host_id=sample_host.id)
+        lab = make_lab(test_db, test_user, state="running")
+        make_node(test_db, lab, gui_id="n1", name="r1", host_id=sample_host.id)
         placement = models.NodePlacement(
             lab_id=lab.id,
             node_name="r1",
@@ -461,9 +391,9 @@ class TestAutoExtractAdditional:
     ):
         """If one agent's extract raises, configs from the other are still saved."""
         host1, host2 = multiple_hosts[0], multiple_hosts[1]
-        lab = _make_lab(test_db, test_user, state="running")
-        _make_node(test_db, lab, gui_id="n1", name="r1", host_id=host1.id)
-        _make_node(test_db, lab, gui_id="n2", name="r2", host_id=host2.id)
+        lab = make_lab(test_db, test_user, state="running")
+        make_node(test_db, lab, gui_id="n1", name="r1", host_id=host1.id)
+        make_node(test_db, lab, gui_id="n2", name="r2", host_id=host2.id)
         for h, n in [(host1, "r1"), (host2, "r2")]:
             test_db.add(models.NodePlacement(lab_id=lab.id, node_name=n, host_id=h.id))
         test_db.commit()
@@ -495,9 +425,9 @@ class TestAutoExtractAdditional:
     ):
         """With two placements, both agents are contacted."""
         host1, host2 = multiple_hosts[0], multiple_hosts[1]
-        lab = _make_lab(test_db, test_user, state="running")
-        _make_node(test_db, lab, gui_id="n1", name="r1", host_id=host1.id)
-        _make_node(test_db, lab, gui_id="n2", name="r2", host_id=host2.id)
+        lab = make_lab(test_db, test_user, state="running")
+        make_node(test_db, lab, gui_id="n1", name="r1", host_id=host1.id)
+        make_node(test_db, lab, gui_id="n2", name="r2", host_id=host2.id)
         for h, n in [(host1, "r1"), (host2, "r2")]:
             test_db.add(models.NodePlacement(lab_id=lab.id, node_name=n, host_id=h.id))
         test_db.commit()
@@ -521,8 +451,8 @@ class TestAutoExtractAdditional:
         self, test_db: Session, test_user: models.User, sample_host: models.Host
     ):
         """When no placements exist, the provided agent is used as fallback."""
-        lab = _make_lab(test_db, test_user, state="running")
-        _make_node(test_db, lab, gui_id="n1", name="r1", host_id=sample_host.id)
+        lab = make_lab(test_db, test_user, state="running")
+        make_node(test_db, lab, gui_id="n1", name="r1", host_id=sample_host.id)
         # No NodePlacement records
 
         mock_result = {
@@ -546,7 +476,7 @@ class TestAutoExtractAdditional:
         self, test_db: Session, test_user: models.User, sample_host: models.Host
     ):
         """Top-level exception is caught — destroy must not fail due to extraction."""
-        lab = _make_lab(test_db, test_user, state="running")
+        lab = make_lab(test_db, test_user, state="running")
 
         with patch("app.tasks.jobs.settings") as mock_settings:
             mock_settings.feature_auto_extract_on_destroy = True
@@ -571,7 +501,7 @@ class TestCreateCrossHostLinksIfReady:
         self, test_db: Session, test_user: models.User
     ):
         """No pending cross-host links means function returns immediately."""
-        lab = _make_lab(test_db, test_user, state="running")
+        lab = make_lab(test_db, test_user, state="running")
         log_parts: list[str] = []
 
         with patch("app.services.topology.TopologyService") as mock_topo_cls:
@@ -594,7 +524,7 @@ class TestCreateCrossHostLinksIfReady:
     ):
         """Pending cross-host links trigger create_deployment_links."""
         host1, host2 = multiple_hosts[0], multiple_hosts[1]
-        lab = _make_lab(test_db, test_user, state="running")
+        lab = make_lab(test_db, test_user, state="running")
 
         # Create a pending cross-host link
         ls = models.LinkState(
@@ -645,7 +575,7 @@ class TestCreateCrossHostLinksIfReady:
         multiple_hosts: list[models.Host],
     ):
         """Links with no host IDs (uncategorized) trigger link creation."""
-        lab = _make_lab(test_db, test_user, state="running")
+        lab = make_lab(test_db, test_user, state="running")
 
         # Uncategorized: source_host_id is None
         ls = models.LinkState(
@@ -694,9 +624,9 @@ class TestCreateCrossHostLinksIfReady:
     ):
         """Links defined in DB but without LinkState records trigger creation."""
         host1 = multiple_hosts[0]
-        lab = _make_lab(test_db, test_user, state="running")
-        n1 = _make_node(test_db, lab, gui_id="n1", name="r1", host_id=host1.id)
-        n2 = _make_node(test_db, lab, gui_id="n2", name="r2", host_id=host1.id)
+        lab = make_lab(test_db, test_user, state="running")
+        n1 = make_node(test_db, lab, gui_id="n1", name="r1", host_id=host1.id)
+        n2 = make_node(test_db, lab, gui_id="n2", name="r2", host_id=host1.id)
 
         # A Link definition exists but no LinkState row
         link_def = models.Link(
@@ -738,7 +668,7 @@ class TestCreateCrossHostLinksIfReady:
     ):
         """Cross-host links marked up but agent reports no tunnels -> force recreate."""
         host1, host2 = multiple_hosts[0], multiple_hosts[1]
-        lab = _make_lab(test_db, test_user, state="running")
+        lab = make_lab(test_db, test_user, state="running")
 
         # Cross-host link already "up"
         ls = models.LinkState(
@@ -796,7 +726,7 @@ class TestCreateCrossHostLinksIfReady:
     ):
         """If no agents are online, function returns without creating links."""
         host1 = multiple_hosts[0]
-        lab = _make_lab(test_db, test_user, state="running")
+        lab = make_lab(test_db, test_user, state="running")
 
         ls = models.LinkState(
             lab_id=lab.id,
@@ -839,7 +769,7 @@ class TestCreateCrossHostLinksIfReady:
     ):
         """When link_ops_lock is already held, creation is skipped."""
         host1, host2 = multiple_hosts[0], multiple_hosts[1]
-        lab = _make_lab(test_db, test_user, state="running")
+        lab = make_lab(test_db, test_user, state="running")
 
         ls = models.LinkState(
             lab_id=lab.id,
@@ -889,7 +819,7 @@ class TestCreateCrossHostLinksIfReady:
     ):
         """Exception in create_deployment_links is caught and logged."""
         host1, host2 = multiple_hosts[0], multiple_hosts[1]
-        lab = _make_lab(test_db, test_user, state="running")
+        lab = make_lab(test_db, test_user, state="running")
 
         ls = models.LinkState(
             lab_id=lab.id,
@@ -968,9 +898,9 @@ class TestMultihostDeployAdvanced:
     ):
         """Successful deploy calls create_deployment_links and sets lab to running."""
         host1 = multiple_hosts[0]
-        lab = _make_lab(test_db, test_user)
-        job = _make_job(test_db, lab, test_user, action="up")
-        _make_node(test_db, lab, gui_id="n1", name="r1", host_id=host1.id)
+        lab = make_lab(test_db, test_user)
+        job = make_job(test_db, lab, test_user, action="up")
+        make_node(test_db, lab, gui_id="n1", name="r1", host_id=host1.id)
 
         _FakeAnalysis(
             placements={host1.id: [MagicMock(node_name="r1")]},
@@ -1003,9 +933,9 @@ class TestMultihostDeployAdvanced:
     ):
         """Resource capacity check failure marks job as failed."""
         host1 = multiple_hosts[0]
-        lab = _make_lab(test_db, test_user)
-        job = _make_job(test_db, lab, test_user, action="up")
-        _make_node(test_db, lab, gui_id="n1", name="r1", host_id=host1.id)
+        lab = make_lab(test_db, test_user)
+        job = make_job(test_db, lab, test_user, action="up")
+        make_node(test_db, lab, gui_id="n1", name="r1", host_id=host1.id)
 
         _FakeAnalysis(
             placements={host1.id: [MagicMock(node_name="r1")]},
@@ -1040,10 +970,10 @@ class TestMultihostDeployAdvanced:
     ):
         """If one host's deploy fails, successful hosts are rolled back."""
         host1, host2 = multiple_hosts[0], multiple_hosts[1]
-        lab = _make_lab(test_db, test_user)
-        job = _make_job(test_db, lab, test_user, action="up")
-        _make_node(test_db, lab, gui_id="n1", name="r1", host_id=host1.id)
-        _make_node(test_db, lab, gui_id="n2", name="r2", host_id=host2.id)
+        lab = make_lab(test_db, test_user)
+        job = make_job(test_db, lab, test_user, action="up")
+        make_node(test_db, lab, gui_id="n1", name="r1", host_id=host1.id)
+        make_node(test_db, lab, gui_id="n2", name="r2", host_id=host2.id)
 
         _FakeAnalysis(
             placements={
@@ -1088,10 +1018,10 @@ class TestMultihostDeployAdvanced:
     ):
         """Nodes without host_id are assigned to the default agent."""
         host1 = multiple_hosts[0]
-        lab = _make_lab(test_db, test_user)
-        job = _make_job(test_db, lab, test_user, action="up")
+        lab = make_lab(test_db, test_user)
+        job = make_job(test_db, lab, test_user, action="up")
         # Node WITHOUT host_id
-        node = _make_node(test_db, lab, gui_id="n1", name="r1", host_id=None)
+        node = make_node(test_db, lab, gui_id="n1", name="r1", host_id=None)
 
         with patch("app.tasks.jobs_multihost.get_session", _mock_get_session(test_db)):
             with patch("app.tasks.jobs_multihost._dispatch_webhook", new_callable=AsyncMock):
@@ -1117,9 +1047,9 @@ class TestMultihostDeployAdvanced:
         test_user: models.User,
     ):
         """Unplaced nodes with no available default agent causes failure."""
-        lab = _make_lab(test_db, test_user)
-        job = _make_job(test_db, lab, test_user, action="up")
-        _make_node(test_db, lab, gui_id="n1", name="r1", host_id=None)
+        lab = make_lab(test_db, test_user)
+        job = make_job(test_db, lab, test_user, action="up")
+        make_node(test_db, lab, gui_id="n1", name="r1", host_id=None)
 
         with patch("app.tasks.jobs_multihost.get_session", _mock_get_session(test_db)):
             with patch("app.tasks.jobs_multihost.agent_client.get_agent_for_lab", new_callable=AsyncMock, return_value=None):
@@ -1136,10 +1066,10 @@ class TestMultihostDeployAdvanced:
         test_user: models.User,
     ):
         """If required hosts are missing or offline, job fails."""
-        lab = _make_lab(test_db, test_user)
-        job = _make_job(test_db, lab, test_user, action="up")
+        lab = make_lab(test_db, test_user)
+        job = make_job(test_db, lab, test_user, action="up")
         # Node assigned to a nonexistent host
-        _make_node(test_db, lab, gui_id="n1", name="r1", host_id="nonexistent-host-id")
+        make_node(test_db, lab, gui_id="n1", name="r1", host_id="nonexistent-host-id")
 
         with patch("app.tasks.jobs_multihost.get_session", _mock_get_session(test_db)):
             with patch("app.tasks.jobs_multihost._dispatch_webhook", new_callable=AsyncMock):
@@ -1159,9 +1089,9 @@ class TestMultihostDeployAdvanced:
     ):
         """Failed link setup marks job as failed even if deploy succeeded."""
         host1 = multiple_hosts[0]
-        lab = _make_lab(test_db, test_user)
-        job = _make_job(test_db, lab, test_user, action="up")
-        _make_node(test_db, lab, gui_id="n1", name="r1", host_id=host1.id)
+        lab = make_lab(test_db, test_user)
+        job = make_job(test_db, lab, test_user, action="up")
+        make_node(test_db, lab, gui_id="n1", name="r1", host_id=host1.id)
 
         with patch("app.tasks.jobs_multihost.get_session", _mock_get_session(test_db)):
             with patch("app.tasks.jobs_multihost._dispatch_webhook", new_callable=AsyncMock):
@@ -1186,9 +1116,9 @@ class TestMultihostDeployAdvanced:
     ):
         """Capacity warnings are logged but don't fail the job."""
         host1 = multiple_hosts[0]
-        lab = _make_lab(test_db, test_user)
-        job = _make_job(test_db, lab, test_user, action="up")
-        _make_node(test_db, lab, gui_id="n1", name="r1", host_id=host1.id)
+        lab = make_lab(test_db, test_user)
+        job = make_job(test_db, lab, test_user, action="up")
+        make_node(test_db, lab, gui_id="n1", name="r1", host_id=host1.id)
 
         cap_result = MagicMock()
         cap_result.fits = True
@@ -1231,9 +1161,9 @@ class TestMultihostDestroyAdvanced:
     ):
         """Tunnel teardown is invoked before container destruction."""
         host1 = multiple_hosts[0]
-        lab = _make_lab(test_db, test_user, state="running")
-        job = _make_job(test_db, lab, test_user, action="down")
-        _make_node(test_db, lab, gui_id="n1", name="r1", host_id=host1.id)
+        lab = make_lab(test_db, test_user, state="running")
+        job = make_job(test_db, lab, test_user, action="down")
+        make_node(test_db, lab, gui_id="n1", name="r1", host_id=host1.id)
 
         with patch("app.tasks.jobs_multihost.get_session", _mock_get_session(test_db)):
             with patch("app.tasks.jobs_multihost.agent_client.is_agent_online", return_value=True):
@@ -1256,10 +1186,10 @@ class TestMultihostDestroyAdvanced:
     ):
         """Offline agents produce warnings in the job log."""
         host1, _host2, host3 = multiple_hosts[0], multiple_hosts[1], multiple_hosts[2]
-        lab = _make_lab(test_db, test_user, state="running")
-        job = _make_job(test_db, lab, test_user, action="down")
-        _make_node(test_db, lab, gui_id="n1", name="r1", host_id=host1.id)
-        _make_node(test_db, lab, gui_id="n2", name="r2", host_id=host3.id)
+        lab = make_lab(test_db, test_user, state="running")
+        job = make_job(test_db, lab, test_user, action="down")
+        make_node(test_db, lab, gui_id="n1", name="r1", host_id=host1.id)
+        make_node(test_db, lab, gui_id="n2", name="r2", host_id=host3.id)
 
         with patch("app.tasks.jobs_multihost.get_session", _mock_get_session(test_db)):
             with patch("app.tasks.jobs_multihost.agent_client.is_agent_online", side_effect=lambda h: h.id == host1.id):
@@ -1282,9 +1212,9 @@ class TestMultihostDestroyAdvanced:
     ):
         """On full success, remaining LinkState rows are deleted."""
         host1 = multiple_hosts[0]
-        lab = _make_lab(test_db, test_user, state="running")
-        job = _make_job(test_db, lab, test_user, action="down")
-        _make_node(test_db, lab, gui_id="n1", name="r1", host_id=host1.id)
+        lab = make_lab(test_db, test_user, state="running")
+        job = make_job(test_db, lab, test_user, action="down")
+        make_node(test_db, lab, gui_id="n1", name="r1", host_id=host1.id)
 
         # Pre-existing LinkState
         ls = models.LinkState(
@@ -1329,10 +1259,10 @@ class TestMultihostDestroyAdvanced:
     ):
         """On partial failure, LinkState rows are updated (not deleted)."""
         host1, _host2, host3 = multiple_hosts[0], multiple_hosts[1], multiple_hosts[2]
-        lab = _make_lab(test_db, test_user, state="running")
-        job = _make_job(test_db, lab, test_user, action="down")
-        _make_node(test_db, lab, gui_id="n1", name="r1", host_id=host1.id)
-        _make_node(test_db, lab, gui_id="n2", name="r2", host_id=host3.id)
+        lab = make_lab(test_db, test_user, state="running")
+        job = make_job(test_db, lab, test_user, action="down")
+        make_node(test_db, lab, gui_id="n1", name="r1", host_id=host1.id)
+        make_node(test_db, lab, gui_id="n2", name="r2", host_id=host3.id)
 
         ls = models.LinkState(
             lab_id=lab.id,
@@ -1374,9 +1304,9 @@ class TestMultihostDestroyAdvanced:
     ):
         """Webhook is dispatched on successful destroy."""
         host1 = multiple_hosts[0]
-        lab = _make_lab(test_db, test_user, state="running")
-        job = _make_job(test_db, lab, test_user, action="down")
-        _make_node(test_db, lab, gui_id="n1", name="r1", host_id=host1.id)
+        lab = make_lab(test_db, test_user, state="running")
+        job = make_job(test_db, lab, test_user, action="down")
+        make_node(test_db, lab, gui_id="n1", name="r1", host_id=host1.id)
 
         with patch("app.tasks.jobs_multihost.get_session", _mock_get_session(test_db)):
             with patch("app.tasks.jobs_multihost.agent_client.is_agent_online", return_value=True):
@@ -1400,10 +1330,10 @@ class TestMultihostDestroyAdvanced:
     ):
         """On partial failure, job.failed webhook is dispatched."""
         host1, _host2, host3 = multiple_hosts[0], multiple_hosts[1], multiple_hosts[2]
-        lab = _make_lab(test_db, test_user, state="running")
-        job = _make_job(test_db, lab, test_user, action="down")
-        _make_node(test_db, lab, gui_id="n1", name="r1", host_id=host1.id)
-        _make_node(test_db, lab, gui_id="n2", name="r2", host_id=host3.id)
+        lab = make_lab(test_db, test_user, state="running")
+        job = make_job(test_db, lab, test_user, action="down")
+        make_node(test_db, lab, gui_id="n1", name="r1", host_id=host1.id)
+        make_node(test_db, lab, gui_id="n2", name="r2", host_id=host3.id)
 
         with patch("app.tasks.jobs_multihost.get_session", _mock_get_session(test_db)):
             with patch("app.tasks.jobs_multihost.agent_client.is_agent_online", side_effect=lambda h: h.id == host1.id):
