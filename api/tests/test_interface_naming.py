@@ -59,9 +59,9 @@ NORMALIZE_CASES = [
     ("juniper_vjunosrouter", "ge-0/0/0", "eth1"),
     # Juniper vJunos Evolved: ge-0/0/, start=0
     ("juniper_vjunosevolved", "ge-0/0/0", "eth1"),
-    # Juniper cJunos: et-0/0/, start=0
-    ("juniper_cjunos", "et-0/0/0", "eth1"),
-    ("juniper_cjunos", "et-0/0/5", "eth6"),
+    # Juniper cJunos: eth0 mgmt, eth1-eth3 reserved, data starts at eth4
+    ("juniper_cjunos", "et-0/0/0", "eth4"),
+    ("juniper_cjunos", "et-0/0/5", "eth9"),
     # Cisco Nexus 9000v: Ethernet1/, start=1
     ("cisco_n9kv", "Ethernet1/1", "eth1"),
     ("cisco_n9kv", "Ethernet1/8", "eth8"),
@@ -189,7 +189,7 @@ class TestDenormalizeInterface:
         # Devices with management_interface → vendor management name
         assert denormalize_interface("eth0", "ceos") == "Management0"
         assert denormalize_interface("eth0", "cisco_n9kv") == "mgmt0"
-        # Devices without management_interface → eth0 passthrough
+        # Devices with management_interface → vendor management name
         assert denormalize_interface("eth0", "juniper_cjunos") == "eth0"
         assert denormalize_interface("eth0", "juniper_vsrx3") == "eth0"
         assert denormalize_interface("eth0", "sonic_vs") == "eth0"
@@ -340,8 +340,9 @@ class TestGetDataPortStart:
         assert get_data_port_start("cisco_n9kv") == 1
 
     def test_management_with_reserved(self):
-        """IOS-XR has 2 reserved NICs: dps = 1 + 2 = 3."""
+        """Reserved-NIC devices offset data ports by 1 + reserved_nics."""
         assert get_data_port_start("cisco_iosxr") == 3
+        assert get_data_port_start("juniper_cjunos") == 4
 
 
 class TestManagementNormalize:
