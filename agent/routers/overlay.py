@@ -359,7 +359,24 @@ async def set_overlay_port_vlan(port_name: str, request: dict):
         return {"success": False, "error": "vlan_tag (integer) is required"}
 
     if await _ovs_set_port_vlan(port_name, vlan_tag):
-        return {"success": True, "port_name": port_name, "vlan_tag": vlan_tag}
+        # Sync in-memory overlay tracking to prevent stale VLAN drift noise
+        from agent.agent_state import get_overlay_manager
+        try:
+            overlay = get_overlay_manager()
+            link_id = request.get("link_id")
+            updated_tracking = False
+            if link_id and link_id in overlay._link_tunnels:
+                overlay._link_tunnels[link_id].local_vlan = vlan_tag
+                updated_tracking = True
+            else:
+                for lt in overlay._link_tunnels.values():
+                    if lt.interface_name == port_name:
+                        lt.local_vlan = vlan_tag
+                        updated_tracking = True
+                        break
+        except Exception:
+            updated_tracking = False
+        return {"success": True, "port_name": port_name, "vlan_tag": vlan_tag, "in_memory_updated": updated_tracking}
     return {"success": False, "error": f"Failed to set VLAN {vlan_tag} on port {port_name}"}
 
 

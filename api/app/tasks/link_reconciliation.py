@@ -917,8 +917,8 @@ async def run_cross_host_port_convergence(
     if not cross_host_links:
         return result
 
-    def _collect_agent_corrections() -> tuple[dict[str, list[tuple[str, int]]], int, set[str]]:
-        corrections: dict[str, list[tuple[str, int]]] = defaultdict(list)
+    def _collect_agent_corrections() -> tuple[dict[str, list[tuple[str, int, str]]], int, set[str]]:
+        corrections: dict[str, list[tuple[str, int, str]]] = defaultdict(list)
         missing_mappings = 0
         links_missing_mapping: set[str] = set()
 
@@ -962,7 +962,7 @@ async def run_cross_host_port_convergence(
 
                 # Compare current tag vs DB truth
                 if mapping.vlan_tag != db_vlan:
-                    corrections[host_id].append((mapping.ovs_port, db_vlan))
+                    corrections[host_id].append((mapping.ovs_port, db_vlan, ls.link_name))
 
         return corrections, missing_mappings, links_missing_mapping
 
@@ -986,11 +986,11 @@ async def run_cross_host_port_convergence(
         return result
 
     # Apply corrections in parallel across agents
-    async def _apply_corrections(agent_id: str, corrections: list[tuple[str, int]]):
+    async def _apply_corrections(agent_id: str, corrections: list[tuple[str, int, str]]):
         agent = host_to_agent.get(agent_id)
         if not agent:
             return
-        for port_name, vlan_tag in corrections:
+        for port_name, vlan_tag, link_name in corrections:
             try:
                 _release_db_transaction_for_io(
                     session,
@@ -998,7 +998,7 @@ async def run_cross_host_port_convergence(
                     table="link_states",
                     lab_id=lab_id,
                 )
-                ok = await agent_client.set_port_vlan_on_agent(agent, port_name, vlan_tag)
+                ok = await agent_client.set_port_vlan_on_agent(agent, port_name, vlan_tag, link_id=link_name)
                 if ok:
                     result["updated"] += 1
                 else:

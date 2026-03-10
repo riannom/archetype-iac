@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 
 from app import agent_client, models
 from app.services.interface_naming import normalize_for_node
-from app.services.link_validator import verify_link_connected
+from app.services.link_validator import verify_link_connected, is_vlan_mismatch
 from app.services.link_operational_state import recompute_link_oper_state
 from app.tasks.link_orchestration import create_same_host_link, create_cross_host_link
 from app.utils.locks import get_link_state_by_id_for_update
@@ -94,6 +94,20 @@ async def attempt_partial_recovery(
             _sync_oper_state(session, link)
             logger.info(f"Link {link.link_name} already attached and verified")
             return True
+
+        # Both sides attached but VLAN tags drifted — lightweight repair
+        if error and is_vlan_mismatch(error):
+            logger.info(f"Link {link.link_name} VLAN mismatch during recovery, attempting repair: {error}")
+            vlan_repaired = await attempt_vlan_repair(session, link, host_to_agent)
+            if vlan_repaired:
+                link.actual_state = "up"
+                link.error_message = None
+                link.source_carrier_state = "on"
+                link.target_carrier_state = "on"
+                _sync_oper_state(session, link)
+                logger.info(f"Link {link.link_name} recovered via VLAN repair")
+                return True
+            logger.warning(f"VLAN repair failed for {link.link_name} during recovery")
 
         link.error_message = (
             f"Partial recovery validation failed: {error}"
@@ -303,7 +317,7 @@ async def _repair_cross_host_vlan(
 
         # Push DB tag to container port
         if container_port:
-            ok = await agent_client.set_port_vlan_on_agent(agent, container_port, db_vlan)
+            ok = await agent_client.set_port_vlan_on_agent(agent, container_port, db_vlan, link_id=link.link_name)
             if ok:
                 logger.info(
                     f"Cross-host VLAN repair ({side}): container port "
@@ -323,7 +337,7 @@ async def _repair_cross_host_vlan(
             repaired = False
 
         # Push DB tag to VXLAN tunnel port
-        ok = await agent_client.set_port_vlan_on_agent(agent, vxlan_port, db_vlan)
+        ok = await agent_client.set_port_vlan_on_agent(agent, vxlan_port, db_vlan, link_id=link.link_name)
         if ok:
             logger.info(
                 f"Cross-host VLAN repair ({side}): tunnel port "
