@@ -18,6 +18,7 @@ from app import agent_client, models
 from app.agent_client import AgentUnavailableError
 from app.config import settings
 from app.image_store import find_image_by_reference, get_image_provider
+from app.services.device_service import get_config_by_device
 from app.services.topology import graph_to_deploy_topology, resolve_node_image
 from app.state import (
     NodeActualState,
@@ -663,6 +664,7 @@ class DeploymentMixin:
         kind = db_node.device or "linux"
         iface_count = self._get_interface_count(ns.node_name)
         startup_config = self._get_startup_config(ns.node_name, db_node)
+        vendor_config = get_config_by_device(kind)
 
         # Resolve image: explicit → manifest → vendor default
         image = resolve_node_image(db_node.device, kind, db_node.image, db_node.version)
@@ -705,6 +707,7 @@ class DeploymentMixin:
                 image=image,
                 display_name=db_node.display_name,
                 interface_count=iface_count,
+                env=dict(getattr(vendor_config, "environment", {}) or {}),
                 startup_config=startup_config,
                 provider=node_provider,
                 memory=hw_specs.get("memory"),
