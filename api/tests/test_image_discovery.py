@@ -2,11 +2,9 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
-import json
 
 import pytest
 
-from app import models
 import app.tasks.image_reconciliation as image_reconciliation
 from tests.factories import make_host
 

@@ -5,15 +5,13 @@ same-host link connection, startup config resolution, and auto-extract.
 """
 from __future__ import annotations
 
-import json
-from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from app import models
 from app.agent_client import AgentUnavailableError
-from app.state import JobStatus, NodeActualState
+from app.state import NodeActualState
 from app.tasks.node_lifecycle import (
     NodeLifecycleManager,
     _get_container_name,

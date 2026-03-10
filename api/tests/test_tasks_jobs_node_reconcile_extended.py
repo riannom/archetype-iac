@@ -9,7 +9,6 @@ Covers additional scenarios beyond the base file:
 from __future__ import annotations
 
 from contextlib import contextmanager
-from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 

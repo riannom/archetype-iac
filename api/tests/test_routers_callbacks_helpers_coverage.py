@@ -1,10 +1,8 @@
 """Tests for private helpers in app/routers/callbacks.py and the heartbeat endpoint."""
 from __future__ import annotations
 
-import json
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
-from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient

@@ -8,8 +8,6 @@ This module tests:
 """
 from __future__ import annotations
 
-import json
-from datetime import datetime, timezone
 from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 
@@ -18,7 +16,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app import models
-from tests.factories import make_host, make_link_state, make_node_state
+from tests.factories import make_link_state, make_node_state
 
 
 # ---------------------------------------------------------------------------

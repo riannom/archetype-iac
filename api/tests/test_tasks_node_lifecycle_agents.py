@@ -1,8 +1,7 @@
 """Tests for app/tasks/node_lifecycle_agents.py — Agent resolution mixin."""
 from __future__ import annotations
 
-import json
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta
 from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 

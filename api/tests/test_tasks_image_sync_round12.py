@@ -15,7 +15,6 @@ Focus areas:
 from __future__ import annotations
 
 import asyncio
-import json
 from contextlib import contextmanager
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4

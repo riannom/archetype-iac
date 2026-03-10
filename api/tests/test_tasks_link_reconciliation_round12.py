@@ -17,7 +17,7 @@ import pytest
 from sqlalchemy.orm import Session
 
 from app import models
-from tests.factories import make_link_state, make_node, make_node_state
+from tests.factories import make_link_state, make_node
 
 
 # ---------------------------------------------------------------------------

@@ -12,12 +12,10 @@ from __future__ import annotations
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
-from uuid import uuid4
 
 import pytest
 from sqlalchemy.orm import Session
 
-from app import models
 from app.state import LabState, NodeActualState, NodeDesiredState
 from tests.factories import make_host, make_lab, make_node, make_node_state, make_placement
 

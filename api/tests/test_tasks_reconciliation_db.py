@@ -15,7 +15,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
 import pytest
-from sqlalchemy.orm import Session
 
 from app import models
 from app.state import (

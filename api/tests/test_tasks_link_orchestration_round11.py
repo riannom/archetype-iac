@@ -11,7 +11,7 @@ from app.tasks.link_orchestration import (
     create_external_network_links,
     teardown_deployment_links,
 )
-from tests.factories import make_host, make_link_state
+from tests.factories import make_link_state
 
 
 def _run(coro):

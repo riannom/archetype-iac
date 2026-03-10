@@ -1,9 +1,8 @@
 """Tests for app/tasks/stuck_agents.py — stuck agent update job detection."""
 from __future__ import annotations
 
-import json
 from contextlib import contextmanager
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from unittest.mock import patch
 from uuid import uuid4
 

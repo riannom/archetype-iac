@@ -11,15 +11,13 @@ Covers:
 from __future__ import annotations
 
 import asyncio
-import json
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from app import models
 from app.agent_client import AgentUnavailableError
-from app.state import JobStatus, NodeActualState, NodeDesiredState
+from app.state import NodeActualState, NodeDesiredState
 from app.tasks.node_lifecycle import NodeLifecycleManager, _get_container_name
 from tests.factories import make_host, make_job, make_lab, make_node, make_node_state, make_placement
 

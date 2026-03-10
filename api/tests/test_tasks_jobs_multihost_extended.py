@@ -8,7 +8,6 @@ Covers additional scenarios beyond the base file:
 """
 from __future__ import annotations
 
-import json
 from contextlib import contextmanager
 from dataclasses import dataclass
 from unittest.mock import AsyncMock, MagicMock, patch

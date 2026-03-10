@@ -18,15 +18,13 @@ Covers gaps not addressed by test_tasks_node_lifecycle_deploy.py:
 """
 from __future__ import annotations
 
-import json
-from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from app import models
 from app.agent_client import AgentUnavailableError
-from app.state import JobStatus, NodeActualState, NodeDesiredState
+from app.state import NodeActualState, NodeDesiredState
 from app.tasks.node_lifecycle import (
     NodeLifecycleManager,
 )

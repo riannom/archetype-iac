@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 
 from app import models
 from app.state import JobStatus
-from tests.factories import make_job, make_node_state
+from tests.factories import make_job
 
 
 def _fake_get_session(session):

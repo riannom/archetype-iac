@@ -12,16 +12,13 @@ Covers 8 untested endpoints in api/app/routers/labs.py:
 """
 from __future__ import annotations
 
-import json
-from datetime import datetime, timezone
 from unittest.mock import AsyncMock, patch
-from uuid import uuid4
 
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
 from app import models, schemas
-from app.state import HostStatus, LabState, NodeActualState, NodeDesiredState
+from app.state import LabState, NodeActualState, NodeDesiredState
 from tests.factories import make_host, make_lab, make_node, make_node_state
 
 
