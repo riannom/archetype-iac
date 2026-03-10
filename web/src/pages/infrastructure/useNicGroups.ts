@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useNotifications } from '../../contexts/NotificationContext';
 import { apiRequest } from '../../api';
+import { useModalState } from '../../hooks/useModalState';
 import type { HostDetailed, NicGroup } from './infrastructureTypes';
 
 export function useNicGroups(
@@ -19,8 +20,7 @@ export function useNicGroups(
   const [newNicGroupName, setNewNicGroupName] = useState<string>('');
   const [newNicGroupDescription, setNewNicGroupDescription] = useState<string>('');
   const [creatingNicGroup, setCreatingNicGroup] = useState(false);
-  const [showNicGroupMemberModal, setShowNicGroupMemberModal] = useState(false);
-  const [memberGroup, setMemberGroup] = useState<NicGroup | null>(null);
+  const nicGroupMemberModal = useModalState<NicGroup>();
   const [memberInterfaceId, setMemberInterfaceId] = useState<string>('');
   const [memberRole, setMemberRole] = useState<string>('transport');
   const [addingNicGroupMember, setAddingNicGroupMember] = useState(false);
@@ -60,20 +60,19 @@ export function useNicGroups(
   };
 
   const openNicGroupMemberModal = (group: NicGroup) => {
-    setMemberGroup(group);
+    nicGroupMemberModal.open(group);
     setMemberInterfaceId('');
     setMemberRole('transport');
-    setShowNicGroupMemberModal(true);
   };
 
   const closeNicGroupMemberModal = () => {
-    setShowNicGroupMemberModal(false);
-    setMemberGroup(null);
+    nicGroupMemberModal.close();
     setMemberInterfaceId('');
     setMemberRole('transport');
   };
 
   const addNicGroupMember = async () => {
+    const memberGroup = nicGroupMemberModal.data;
     if (!memberGroup || !memberInterfaceId) return;
     setAddingNicGroupMember(true);
     try {
@@ -102,8 +101,8 @@ export function useNicGroups(
     newNicGroupDescription,
     setNewNicGroupDescription,
     creatingNicGroup,
-    showNicGroupMemberModal,
-    memberGroup,
+    showNicGroupMemberModal: nicGroupMemberModal.isOpen,
+    memberGroup: nicGroupMemberModal.data,
     memberInterfaceId,
     setMemberInterfaceId,
     memberRole,

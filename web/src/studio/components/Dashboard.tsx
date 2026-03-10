@@ -4,6 +4,7 @@ import { useSearchParams } from 'react-router-dom';
 import { useTheme, ThemeSelector } from '../../theme/index';
 import { useUser } from '../../contexts/UserContext';
 import { canViewInfrastructure } from '../../utils/permissions';
+import { useModalState } from '../../hooks/useModalState';
 import SystemStatusStrip from './SystemStatusStrip';
 import SystemLogsModal from './SystemLogsModal';
 import { ArchetypeIcon } from '../../components/icons';
@@ -94,7 +95,7 @@ const Dashboard: React.FC<DashboardProps> = ({
   const { user } = useUser();
   const [searchParams, setSearchParams] = useSearchParams();
   const [showThemeSelector, setShowThemeSelector] = useState(false);
-  const [showSystemLogs, setShowSystemLogs] = useState(false);
+  const systemLogsModal = useModalState();
   const [editingLabId, setEditingLabId] = useState<string | null>(null);
   const [editName, setEditName] = useState('');
   const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
@@ -285,7 +286,7 @@ const Dashboard: React.FC<DashboardProps> = ({
           {showInfra && (
             <>
               <button
-                onClick={() => setShowSystemLogs(true)}
+                onClick={() => systemLogsModal.open()}
                 className="flex items-center gap-2 px-3 py-2 glass-control text-stone-600 dark:text-stone-300 rounded-lg transition-all"
                 title="View System Logs"
               >
@@ -561,8 +562,8 @@ const Dashboard: React.FC<DashboardProps> = ({
     />
 
     <SystemLogsModal
-      isOpen={showSystemLogs}
-      onClose={() => setShowSystemLogs(false)}
+      isOpen={systemLogsModal.isOpen}
+      onClose={systemLogsModal.close}
     />
     </>
   );

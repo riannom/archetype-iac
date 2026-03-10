@@ -79,7 +79,7 @@ function setupMocks(interfaces: any[] = [], agents: any[] = [makeAgent()]) {
 
 // ─── Tests ─────────────────────────────────────────────────────────
 
-describe('InterfaceManagerPage — round 12', () => {
+describe('InterfaceManagerPage - CRUD operations', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockCanView = true;

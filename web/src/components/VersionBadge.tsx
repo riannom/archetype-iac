@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { checkForUpdates, UpdateInfo } from '../api';
+import { useModalState } from '../hooks/useModalState';
 import { VersionModal } from './VersionModal';
 
 interface VersionBadgeProps {
@@ -9,7 +10,7 @@ interface VersionBadgeProps {
 
 export const VersionBadge: React.FC<VersionBadgeProps> = ({ className = '' }) => {
   const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
-  const [isModalOpen, setIsModalOpen] = useState(false);
+  const versionModal = useModalState();
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
@@ -46,7 +47,7 @@ export const VersionBadge: React.FC<VersionBadgeProps> = ({ className = '' }) =>
   return (
     <>
       <button
-        onClick={() => setIsModalOpen(true)}
+        onClick={() => versionModal.open()}
         className={`
           flex items-center gap-1.5 px-2 py-1
           text-[10px] font-medium
@@ -69,8 +70,8 @@ export const VersionBadge: React.FC<VersionBadgeProps> = ({ className = '' }) =>
 
       {createPortal(
         <VersionModal
-          isOpen={isModalOpen}
-          onClose={() => setIsModalOpen(false)}
+          isOpen={versionModal.isOpen}
+          onClose={versionModal.close}
           updateInfo={updateInfo}
         />,
         document.body

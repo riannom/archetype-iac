@@ -137,7 +137,7 @@ const createAnnotation = (overrides: Partial<Annotation> = {}): Annotation => ({
   ...overrides,
 });
 
-describe('Canvas (extended)', () => {
+describe('Canvas', () => {
   const mockOnNodeMove = vi.fn();
   const mockOnAnnotationMove = vi.fn();
   const mockOnConnect = vi.fn();

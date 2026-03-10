@@ -121,7 +121,7 @@ function setupDefaultMocks() {
   });
 }
 
-describe('InfrastructurePage extended', () => {
+describe('InfrastructurePage - tabs and settings', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.useFakeTimers({ shouldAdvanceTime: true });

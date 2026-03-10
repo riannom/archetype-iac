@@ -28,7 +28,7 @@ function securityError(): DOMException {
 // usePersistedState
 // ---------------------------------------------------------------------------
 
-describe('usePersistedState — extended', () => {
+describe('usePersistedState', () => {
   beforeEach(() => {
     localStorage.clear();
     vi.restoreAllMocks();
@@ -236,7 +236,7 @@ describe('usePersistedState — extended', () => {
 // usePersistedSet
 // ---------------------------------------------------------------------------
 
-describe('usePersistedSet — extended', () => {
+describe('usePersistedSet', () => {
   beforeEach(() => {
     localStorage.clear();
     vi.restoreAllMocks();

@@ -32,14 +32,13 @@ import docker
 from docker.errors import NotFound
 
 from agent.config import settings
-from agent.network.cmd import run_cmd as _shared_run_cmd, ovs_vsctl as _shared_ovs_vsctl
+from agent.network.cmd import run_cmd as _run_cmd, ovs_vsctl as _ovs_vsctl, ip_link_exists as _ip_link_exists
 from agent.providers.naming import docker_container_name as _build_container_name, DOCKER_PREFIX as CONTAINER_PREFIX
 from agent.network.overlay_vxlan import (
     create_vxlan_device as _create_vxlan_device_impl,
     delete_vxlan_device as _delete_vxlan_device_impl,
     discover_path_mtu as _discover_path_mtu_impl,
     read_vxlan_link_info as _read_vxlan_link_info_impl,
-    ip_link_exists as _ip_link_exists_impl,
 )
 from agent.network.overlay_state import (
     declare_state as _declare_state_impl,
@@ -209,6 +208,11 @@ class OverlayManager:
         await manager.cleanup_lab("lab123")
     """
 
+    # Delegate to shared cmd utilities; instance-level overrides for testing.
+    _run_cmd = staticmethod(_run_cmd)
+    _ovs_vsctl = staticmethod(_ovs_vsctl)
+    _ip_link_exists = staticmethod(_ip_link_exists)
+
     # VXLAN encapsulation overhead in bytes
     # 14 (outer Ethernet) + 20 (IP) + 8 (UDP) + 8 (VXLAN) = 50 bytes
     VXLAN_OVERHEAD = 50
@@ -233,14 +237,6 @@ class OverlayManager:
         if self._docker is None:
             self._docker = docker.from_env()
         return self._docker
-
-    async def _run_cmd(self, cmd: list[str]) -> tuple[int, str, str]:
-        """Run a shell command asynchronously."""
-        return await _shared_run_cmd(cmd)
-
-    async def _ovs_vsctl(self, *args: str) -> tuple[int, str, str]:
-        """Run ovs-vsctl command."""
-        return await _shared_ovs_vsctl(*args)
 
     async def _ensure_ovs_bridge(self) -> None:
         """Ensure OVS bridge exists and is configured for overlay use."""
@@ -274,10 +270,6 @@ class OverlayManager:
 
         self._ovs_initialized = True
         logger.info(f"OVS bridge {self._bridge_name} ready for overlay")
-
-    async def _ip_link_exists(self, name: str) -> bool:
-        """Check if a network interface exists."""
-        return await _ip_link_exists_impl(name)
 
     async def _ovs_port_exists(self, port_name: str) -> bool:
         """Check if an OVS port exists on the bridge."""

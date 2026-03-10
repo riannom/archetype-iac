@@ -17,7 +17,7 @@ from app.state import (
     JobStatus,
     LinkActualState,
 )
-from app.tasks.jobs import _release_db_transaction_for_io
+from app.utils.db import release_db_transaction_for_io as _release_db_transaction_for_io
 from app.utils.time import utcnow
 
 logger = logging.getLogger(__name__)

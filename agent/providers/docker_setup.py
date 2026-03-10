@@ -25,17 +25,18 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Duplicated from docker.py so this module is self-contained for labels.
-LABEL_LAB_ID = "archetype.lab_id"
-LABEL_NODE_DEFINITION_ID = "archetype.node_definition_id"
-LABEL_NODE_NAME = "archetype.node_name"
-LABEL_NODE_DISPLAY_NAME = "archetype.node_display_name"
-LABEL_NODE_KIND = "archetype.node_kind"
-LABEL_NODE_INTERFACE_COUNT = "archetype.node_interface_count"
-LABEL_NODE_READINESS_PROBE = "archetype.readiness_probe"
-LABEL_NODE_READINESS_PATTERN = "archetype.readiness_pattern"
-LABEL_NODE_READINESS_TIMEOUT = "archetype.readiness_timeout"
-LABEL_PROVIDER = "archetype.provider"
+from agent.labels import (
+    LABEL_LAB_ID,
+    LABEL_NODE_DEFINITION_ID,
+    LABEL_NODE_DISPLAY_NAME,
+    LABEL_NODE_INTERFACE_COUNT,
+    LABEL_NODE_KIND,
+    LABEL_NODE_NAME,
+    LABEL_NODE_READINESS_PATTERN,
+    LABEL_NODE_READINESS_PROBE,
+    LABEL_NODE_READINESS_TIMEOUT,
+    LABEL_PROVIDER,
+)
 
 # Interface wait script for cEOS (imported from docker.py at call site)
 # We import it lazily to avoid circular dependencies.

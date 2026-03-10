@@ -105,14 +105,6 @@ logger = logging.getLogger(__name__)
 ARCHETYPE_LIBVIRT_NS = "http://archetype.io/libvirt/1"
 
 
-def _log_name(node_name: str, node_config: dict) -> str:
-    """Format node name for logging: 'DisplayName(id)' or just 'id'."""
-    display_name = node_config.get("_display_name") if isinstance(node_config, dict) else None
-    if display_name and display_name != node_name:
-        return f"{display_name}({node_name})"
-    return node_name
-
-
 def _update_domain_identity_metadata_xml(
     xml_text: str,
     *,

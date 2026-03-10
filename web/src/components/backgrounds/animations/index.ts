@@ -3,6 +3,10 @@
  * Re-exports all animation hooks for easy importing
  */
 
+// Shared animation framework
+export { useCanvasAnimation } from './useCanvasAnimation';
+export type { CanvasAnimationCallbacks } from './useCanvasAnimation';
+
 export { useSakuraPetals } from './sakuraPetals';
 export { useConstellation } from './constellation';
 export { useSnowfall } from './snowfall';

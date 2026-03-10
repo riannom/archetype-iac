@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { usePersistedState } from '../../hooks/usePersistedState';
+import { useModalState } from '../../../hooks/useModalState';
 import {
   ImageManagementLogEntry,
   ImageManagementLogFilter,
@@ -16,7 +17,7 @@ export function useImageManagementLog() {
     'all'
   );
   const [imageLogSearch, setImageLogSearch] = useState('');
-  const [showUploadLogsModal, setShowUploadLogsModal] = useState(false);
+  const uploadLogsModal = useModalState();
   const [copiedUploadLogId, setCopiedUploadLogId] = useState<string | null>(null);
 
   const addImageManagementLog = useCallback(
@@ -127,8 +128,8 @@ export function useImageManagementLog() {
     setImageLogFilter,
     imageLogSearch,
     setImageLogSearch,
-    showUploadLogsModal,
-    setShowUploadLogsModal,
+    showUploadLogsModal: uploadLogsModal.isOpen,
+    setShowUploadLogsModal: (show: boolean) => show ? uploadLogsModal.open() : uploadLogsModal.close(),
     copiedUploadLogId,
     addImageManagementLog,
     clearImageManagementLogs,

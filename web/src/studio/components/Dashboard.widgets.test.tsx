@@ -108,7 +108,7 @@ const baseProps = () => ({
   onLogout: vi.fn(),
 });
 
-describe("Dashboard (round 12)", () => {
+describe("Dashboard - widgets", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.useFakeTimers({ shouldAdvanceTime: true });

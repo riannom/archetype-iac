@@ -6,6 +6,7 @@ import { canManageUsers } from '../utils/permissions';
 import { apiRequest } from '../api';
 import { ArchetypeIcon } from '../components/icons';
 import AdminMenuButton from '../components/AdminMenuButton';
+import { formatDate } from '../utils/format';
 
 // ============================================================================
 // Types
@@ -73,14 +74,6 @@ function getPasswordStrength(password: string): { label: string; color: string; 
   return { label: 'Strong', color: 'bg-green-500', width: 'w-full' };
 }
 
-function formatTimestamp(iso: string): string {
-  try {
-    const d = new Date(iso);
-    return d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
-  } catch {
-    return iso;
-  }
-}
 
 // ============================================================================
 // Component
@@ -437,7 +430,7 @@ const UserManagementPage: React.FC = () => {
                                 </span>
                               </td>
                               <td className="py-3 px-4 text-stone-500 dark:text-stone-400 text-xs">
-                                {formatTimestamp(u.created_at)}
+                                {formatDate(u.created_at)}
                               </td>
                               <td className="py-3 px-4">
                                 <div className="flex items-center justify-end gap-1">

@@ -91,7 +91,7 @@ function isValidCidr(value: string): boolean {
 
 // ─── Tests ─────────────────────────────────────────────────────────
 
-describe('InterfaceManagerPage - extended', () => {
+describe('InterfaceManagerPage - interactions', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockCanView = true;

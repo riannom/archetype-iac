@@ -21,9 +21,9 @@ from sqlalchemy.orm import Session
 
 from app import agent_client, models
 from app.services.interface_naming import normalize_interface, denormalize_interface
-from app.tasks.jobs import (
-    _release_db_transaction_for_io as _release_db_tx_for_io,
-    _reset_session_after_db_error,
+from app.utils.db import (
+    release_db_transaction_for_io as _release_db_tx_for_io,
+    reset_session_after_db_error as _reset_session_after_db_error,
 )
 
 logger = logging.getLogger(__name__)

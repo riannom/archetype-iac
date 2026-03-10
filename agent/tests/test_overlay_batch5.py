@@ -197,7 +197,7 @@ class TestReadVxlanLinkInfo:
         )
         # Patch the module-level run_cmd used by the extracted function
         monkeypatch.setattr(
-            "agent.network.overlay_vxlan._shared_run_cmd",
+            "agent.network.cmd.run_cmd",
             AsyncMock(return_value=(0, ip_output, "")),
         )
 
@@ -210,7 +210,7 @@ class TestReadVxlanLinkInfo:
     async def test_command_failure(self, monkeypatch, tmp_path):
         mgr = _make_overlay(monkeypatch, tmp_path)
         monkeypatch.setattr(
-            "agent.network.overlay_vxlan._shared_run_cmd",
+            "agent.network.cmd.run_cmd",
             AsyncMock(return_value=(1, "", "not found")),
         )
 
@@ -224,7 +224,7 @@ class TestReadVxlanLinkInfo:
         mgr = _make_overlay(monkeypatch, tmp_path)
         ip_output = "    vxlan id notanumber remote 10.0.0.2 local 10.0.0.1\n"
         monkeypatch.setattr(
-            "agent.network.overlay_vxlan._shared_run_cmd",
+            "agent.network.cmd.run_cmd",
             AsyncMock(return_value=(0, ip_output, "")),
         )
 
@@ -237,7 +237,7 @@ class TestReadVxlanLinkInfo:
         mgr = _make_overlay(monkeypatch, tmp_path)
         ip_output = "    vxlan id 50000 remote 10.0.0.5\n"  # no local
         monkeypatch.setattr(
-            "agent.network.overlay_vxlan._shared_run_cmd",
+            "agent.network.cmd.run_cmd",
             AsyncMock(return_value=(0, ip_output, "")),
         )
 
@@ -289,7 +289,7 @@ class TestBatchReadOvsPorts:
 
         # Patch the module-level ovs_vsctl used by the extracted function
         monkeypatch.setattr(
-            "agent.network.overlay_state._shared_ovs_vsctl", fake_ovs,
+            "agent.network.cmd.ovs_vsctl", fake_ovs,
         )
         result = await mgr._batch_read_ovs_ports()
 
@@ -307,7 +307,7 @@ class TestBatchReadOvsPorts:
         mgr = _make_overlay(monkeypatch, tmp_path)
         del mgr._batch_read_ovs_ports
         monkeypatch.setattr(
-            "agent.network.overlay_state._shared_ovs_vsctl",
+            "agent.network.cmd.ovs_vsctl",
             AsyncMock(return_value=(1, "", "no bridge")),
         )
 
@@ -330,7 +330,7 @@ class TestBatchReadOvsPorts:
             return 0, "", ""
 
         monkeypatch.setattr(
-            "agent.network.overlay_state._shared_ovs_vsctl", fake_ovs,
+            "agent.network.cmd.ovs_vsctl", fake_ovs,
         )
         result = await mgr._batch_read_ovs_ports()
         # Malformed JSON = no port_tags parsed, returns empty dict (not None)
@@ -356,7 +356,7 @@ class TestBatchReadOvsPorts:
             return 0, "", ""
 
         monkeypatch.setattr(
-            "agent.network.overlay_state._shared_ovs_vsctl", fake_ovs,
+            "agent.network.cmd.ovs_vsctl", fake_ovs,
         )
         result = await mgr._batch_read_ovs_ports()
         assert result is not None
@@ -377,7 +377,7 @@ class TestBatchReadOvsPorts:
             return 0, "", ""
 
         monkeypatch.setattr(
-            "agent.network.overlay_state._shared_ovs_vsctl", fake_ovs,
+            "agent.network.cmd.ovs_vsctl", fake_ovs,
         )
         result = await mgr._batch_read_ovs_ports()
         assert result is not None
@@ -487,7 +487,7 @@ class TestRecoverLinkTunnels:
             AsyncMock(return_value=None),
         )
 
-        # OVS fallback path uses module-level _shared_ovs_vsctl
+        # OVS fallback path uses module-level cmd.ovs_vsctl
         async def fake_ovs(*args):
             if args == ("list-ports", "arch-ovs"):
                 return 0, "vxlan-aaa11111\nvxlan-bbb22222\nvh-r1-e1\n", ""
@@ -500,7 +500,7 @@ class TestRecoverLinkTunnels:
             return 0, "", ""
 
         monkeypatch.setattr(
-            "agent.network.overlay_state._shared_ovs_vsctl", fake_ovs,
+            "agent.network.cmd.ovs_vsctl", fake_ovs,
         )
 
         # Patch read_vxlan_link_info at its source module (imported locally
@@ -557,7 +557,7 @@ class TestRecoverLinkTunnels:
                 return 100002, "10.0.0.3", "10.0.0.1"
             return 0, "", ""
 
-        monkeypatch.setattr("agent.network.overlay_state._shared_ovs_vsctl", fake_ovs)
+        monkeypatch.setattr("agent.network.cmd.ovs_vsctl", fake_ovs)
         monkeypatch.setattr("agent.network.overlay_vxlan.read_vxlan_link_info", fake_read)
 
         count = await mgr.recover_link_tunnels()
@@ -576,7 +576,7 @@ class TestRecoverLinkTunnels:
         )
 
         monkeypatch.setattr(
-            "agent.network.overlay_state._shared_ovs_vsctl",
+            "agent.network.cmd.ovs_vsctl",
             AsyncMock(side_effect=[
                 (0, "vxlan-xxx\n", ""),  # list-ports
                 (0, "2050", ""),          # get tag
@@ -600,7 +600,7 @@ class TestRecoverLinkTunnels:
         )
         mgr.declare_state = AsyncMock(side_effect=Exception("parse error"))
         monkeypatch.setattr(
-            "agent.network.overlay_state._shared_ovs_vsctl",
+            "agent.network.cmd.ovs_vsctl",
             AsyncMock(return_value=(1, "", "")),  # OVS scan also fails
         )
 

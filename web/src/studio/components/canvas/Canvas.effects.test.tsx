@@ -65,7 +65,7 @@ const createAnnotation = (overrides: Partial<Annotation> = {}): Annotation => ({
   id: 'ann-1', type: 'text' as const, x: 200, y: 200, ...overrides,
 });
 
-describe('Canvas (round 11)', () => {
+describe('Canvas - effects and state', () => {
   const noop = vi.fn();
   const defaultProps = {
     nodes: [] as Node[],

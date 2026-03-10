@@ -23,7 +23,7 @@ from app.state import (
     NodeActualState,
     NodeDesiredState,
 )
-from app.tasks.jobs import _release_db_transaction_for_io
+from app.utils.db import release_db_transaction_for_io as _release_db_transaction_for_io
 from app.utils.time import utcnow
 
 logger = logging.getLogger(__name__)

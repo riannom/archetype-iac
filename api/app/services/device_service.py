@@ -53,13 +53,6 @@ def get_config_by_device(device_id: str):
     return None
 
 
-def canonicalize_device_id(device_id: str | None) -> str | None:
-    """Module-level helper kept patchable for tests."""
-    from app.image_store import canonicalize_device_id as image_store_canonicalize_device_id
-
-    return image_store_canonicalize_device_id(device_id)
-
-
 def find_custom_device(device_id: str):
     """Module-level helper kept patchable for tests."""
     from app.image_store import find_custom_device as image_store_find_custom_device
@@ -72,13 +65,6 @@ def get_device_override(device_id: str):
     from app.image_store import get_device_override as image_store_get_device_override
 
     return image_store_get_device_override(device_id)
-
-
-def find_image_reference(device_id: str, version: str | None = None) -> str | None:
-    """Module-level helper kept patchable for tests."""
-    from app.image_store import find_image_reference as image_store_find_image_reference
-
-    return image_store_find_image_reference(device_id, version)
 
 
 def get_image_runtime_metadata(image_reference: str | None) -> dict:
@@ -379,6 +365,7 @@ class DeviceService:
             DeviceHasImagesError: If device has assigned images
         """
         from app.image_store import (
+            canonicalize_device_id,
             find_custom_device,
             delete_custom_device as store_delete_device,
             get_device_image_count,
@@ -425,7 +412,7 @@ class DeviceService:
         Raises:
             DeviceNotFoundError: If device not found
         """
-        from app.image_store import find_custom_device, get_device_override
+        from app.image_store import canonicalize_device_id, find_custom_device, get_device_override
         from agent.vendors import _get_vendor_options
 
         base_config = {}
@@ -503,7 +490,7 @@ class DeviceService:
             DeviceNotFoundError: If device not found
             DeviceValidationError: If no valid override fields provided
         """
-        from app.image_store import find_custom_device, set_device_override
+        from app.image_store import canonicalize_device_id, find_custom_device, set_device_override
 
         # Allowed override fields
         ALLOWED_OVERRIDE_FIELDS = {
@@ -561,7 +548,7 @@ class DeviceService:
         Raises:
             DeviceNotFoundError: If device not found
         """
-        from app.image_store import delete_device_override, find_custom_device
+        from app.image_store import canonicalize_device_id, delete_device_override, find_custom_device
 
         # Verify device exists
         is_built_in = get_config_by_device(device_id) is not None
@@ -598,6 +585,8 @@ class DeviceService:
             nic_driver, machine_type, libvirt_driver, efi_boot, efi_vars
             (keys present only when values are non-default / explicitly set)
         """
+        from app.image_store import canonicalize_device_id, find_image_reference
+
         specs: dict = {}
 
         # Layer 1: Built-in vendor config
@@ -712,7 +701,7 @@ class DeviceService:
         Raises:
             DeviceValidationError: If device is not built-in or already hidden
         """
-        from app.image_store import hide_device, is_device_hidden
+        from app.image_store import canonicalize_device_id, hide_device, is_device_hidden
 
         canonical_id = canonicalize_device_id(device_id) or device_id
         if get_config_by_device(device_id) is None:
@@ -736,7 +725,7 @@ class DeviceService:
         Raises:
             DeviceValidationError: If device is not built-in or not hidden
         """
-        from app.image_store import unhide_device, is_device_hidden
+        from app.image_store import canonicalize_device_id, unhide_device, is_device_hidden
 
         canonical_id = canonicalize_device_id(device_id) or device_id
         if get_config_by_device(device_id) is None:

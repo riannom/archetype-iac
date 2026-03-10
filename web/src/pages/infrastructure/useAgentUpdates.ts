@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useNotifications } from '../../contexts/NotificationContext';
 import { apiRequest } from '../../api';
+import { useModalState } from '../../hooks/useModalState';
 import type { HostDetailed, UpdateStatus } from './infrastructureTypes';
 
 export function useAgentUpdates(
@@ -15,7 +16,7 @@ export function useAgentUpdates(
 
   const [updatingAgents, setUpdatingAgents] = useState<Set<string>>(new Set());
   const [updateStatuses, setUpdateStatuses] = useState<Map<string, UpdateStatus>>(new Map());
-  const [customUpdateTarget, setCustomUpdateTarget] = useState<{ hostId: string; hostName: string } | null>(null);
+  const customUpdateModal = useModalState<{ hostId: string; hostName: string }>();
   const [customVersion, setCustomVersion] = useState('');
 
   const removeUpdatingAgent = useCallback((hostId: string) => {
@@ -178,8 +179,11 @@ export function useAgentUpdates(
   return {
     updatingAgents,
     updateStatuses,
-    customUpdateTarget,
-    setCustomUpdateTarget,
+    customUpdateTarget: customUpdateModal.data,
+    setCustomUpdateTarget: (target: { hostId: string; hostName: string } | null) => {
+      if (target) customUpdateModal.open(target);
+      else customUpdateModal.close();
+    },
     customVersion,
     setCustomVersion,
     triggerUpdate,

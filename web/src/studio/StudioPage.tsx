@@ -1,11 +1,11 @@
 import React, { useCallback, useEffect, useMemo, useState, useRef } from 'react';
-import Sidebar, { SidebarTab } from './components/Sidebar';
+import Sidebar from './components/Sidebar';
 import Canvas from './components/Canvas';
 import TopBar from './components/TopBar';
 import PropertiesPanel from './components/PropertiesPanel';
 import ConsoleManager from './components/ConsoleManager';
 import RuntimeControl from './components/RuntimeControl';
-import TaskLogPanel, { TaskLogEntry } from './components/TaskLogPanel';
+import TaskLogPanel from './components/TaskLogPanel';
 import Auth from './components/Auth';
 import Dashboard from './components/Dashboard';
 import SystemStatusStrip from './components/SystemStatusStrip';
@@ -18,8 +18,8 @@ import LogsView from './components/LogsView';
 import VerificationPanel from './components/VerificationPanel';
 import ScenarioPanel from './components/ScenarioPanel';
 import InfraView from './components/InfraView';
-import { Annotation, AnnotationType, CanvasTool, DeviceModel, Link, Node, ExternalNetworkNode, DeviceNode, isExternalNetworkNode, isDeviceNode } from './types';
-import { API_BASE_URL, apiRequest, rawApiRequest } from '../api';
+import { Annotation, AnnotationType, DeviceModel, Link, Node, ExternalNetworkNode, DeviceNode, isExternalNetworkNode, isDeviceNode } from './types';
+import { apiRequest, rawApiRequest } from '../api';
 import { usePortManager } from './hooks/usePortManager';
 import { useLabStateWS } from './hooks/useLabStateWS';
 import { useTheme } from '../theme/index';
@@ -42,6 +42,9 @@ import { useNodeStates, RuntimeStatus } from './hooks/useNodeStates';
 import { useConsoleManager } from './hooks/useConsoleManager';
 import { useJobTracking } from './hooks/useJobTracking';
 import { useLabDataLoading, LabSummary } from './hooks/useLabDataLoading';
+import { useStudioModals } from './hooks/useStudioModals';
+import { useStudioAuth } from './hooks/useStudioAuth';
+import { useCanvasInteraction } from './hooks/useCanvasInteraction';
 import './studio.css';
 import 'xterm/css/xterm.css';
 
@@ -55,48 +58,34 @@ const StudioPage: React.FC = () => {
   const [activeLab, setActiveLab] = useState<LabSummary | null>(null);
   const [view, setView] = useState<'designer' | 'configs' | 'logs' | 'runtime' | 'tests' | 'scenarios' | 'infra'>('designer');
   const isDesignerView = view === 'designer';
-  const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-  const [sidebarTab, setSidebarTab] = useState<SidebarTab>('library');
-  const [focusNodeId, setFocusNodeId] = useState<string | null>(null);
-  const [activeTool, setActiveTool] = useState<CanvasTool>('pointer');
-  const [showYamlModal, setShowYamlModal] = useState(false);
-  const [yamlContent, setYamlContent] = useState('');
   const [showAgentIndicators, setShowAgentIndicators] = useState<boolean>(() => {
     return localStorage.getItem('archetype_show_agent_indicators') !== 'false';
   });
-  const [authRequired, setAuthRequired] = useState(false);
-  const [authError, setAuthError] = useState<string | null>(null);
-  const [authLoading, setAuthLoading] = useState(false);
-  // Config viewer modal state
-  const [configViewerOpen, setConfigViewerOpen] = useState(false);
-  const [configViewerNode, setConfigViewerNode] = useState<{ id: string; name: string } | null>(null);
-  const [configViewerSnapshot, setConfigViewerSnapshot] = useState<{ content: string; label: string } | null>(null);
-  // Job log modal state
-  const [jobLogModalOpen, setJobLogModalOpen] = useState(false);
-  const [jobLogModalJobId, setJobLogModalJobId] = useState<string | null>(null);
-  // Task log entry modal (for non-job entries)
-  const [taskLogEntryModalOpen, setTaskLogEntryModalOpen] = useState(false);
-  const [taskLogEntryModalEntry, setTaskLogEntryModalEntry] = useState<TaskLogEntry | null>(null);
 
   const initialNodeSyncLabRef = useRef<string | null>(null);
 
-  const isUnauthorized = (error: unknown) => error instanceof Error && error.message.toLowerCase().includes('unauthorized');
+  // --- Extracted hooks ---
 
-  const studioRequest = useCallback(
-    async <T,>(path: string, options: RequestInit = {}) => {
-      try {
-        return await apiRequest<T>(path, options);
-      } catch (error) {
-        if (isUnauthorized(error)) {
-          setAuthRequired(true);
-        }
-        throw error;
-      }
-    },
-    []
-  );
+  const {
+    authRequired, authError, authLoading,
+    studioRequest, handleLogin: attemptLogin, beginLogout,
+  } = useStudioAuth();
+
+  const {
+    selectedId, setSelectedId, selectedIds, activeTool, setActiveTool,
+    focusNodeId, setFocusNodeId,
+    sidebarCollapsed, setSidebarCollapsed, sidebarTab, setSidebarTab,
+    handleSelectTool, handleCanvasSelect, handleSelectMultiple, clearSelection,
+  } = useCanvasInteraction();
+
+  const {
+    configViewerOpen, configViewerNode, configViewerSnapshot,
+    handleOpenConfigViewer, handleCloseConfigViewer,
+    jobLogModalOpen, jobLogModalJobId, handleCloseJobLogModal,
+    taskLogEntryModalOpen, taskLogEntryModalEntry, handleCloseTaskLogEntryModal,
+    handleTaskLogEntryClick,
+    showYamlModal, yamlContent, openYamlPreview, closeYamlPreview,
+  } = useStudioModals();
 
   // --- Hook compositions ---
 
@@ -160,17 +149,6 @@ const StudioPage: React.FC = () => {
     onScenarioStep: handleWSScenarioStep,
     enabled: !!activeLab,
   });
-
-  // ESC key returns to pointer tool
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && activeTool !== 'pointer') {
-        setActiveTool('pointer');
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [activeTool]);
 
   // Derive canvas highlights from the currently-running scenario step
   const activeScenarioHighlights = useMemo(() => {
@@ -284,7 +262,7 @@ const StudioPage: React.FC = () => {
     setActiveLab(lab);
     setAnnotations([]);
     consoleManager.resetConsoles();
-    setSelectedId(null);
+    clearSelection();
     setView('designer');
   };
 
@@ -297,13 +275,11 @@ const StudioPage: React.FC = () => {
   }, [activeLab, consoleManager]);
 
   const handleLogout = useCallback(() => {
-    localStorage.removeItem('token');
+    beginLogout();
     clearUser();
-    setAuthRequired(true);
-    setAuthError(null);
     setActiveLab(null);
     consoleManager.resetConsoles();
-  }, [clearUser, consoleManager]);
+  }, [beginLogout, clearUser, consoleManager]);
 
   const handleDeleteLab = async (labId: string) => {
     await studioRequest(`/labs/${labId}`, { method: 'DELETE' });
@@ -400,12 +376,6 @@ const StudioPage: React.FC = () => {
     setTimeout(() => triggerTopologySave(), 100);
   };
 
-  const handleSelectTool = useCallback((tool: CanvasTool) => {
-    setActiveTool(tool);
-    if (tool !== 'pointer') {
-      setSelectedId(null);
-    }
-  }, []);
 
   const handleCanvasToolCreate = useCallback((type: AnnotationType, x: number, y: number, opts?: { width?: number; height?: number; targetX?: number; targetY?: number }) => {
     const id = Math.random().toString(36).slice(2, 9);
@@ -551,19 +521,6 @@ const StudioPage: React.FC = () => {
     consoleManager.handleDockWindow(windowId, setIsTaskLogVisible);
   }, [consoleManager, setIsTaskLogVisible]);
 
-  const handleOpenConfigViewer = useCallback((nodeId?: string, nodeName?: string, snapshotContent?: string, snapshotLabel?: string) => {
-    if (nodeId && nodeName) {
-      setConfigViewerNode({ id: nodeId, name: nodeName });
-    } else {
-      setConfigViewerNode(null);
-    }
-    if (snapshotContent !== undefined && snapshotLabel) {
-      setConfigViewerSnapshot({ content: snapshotContent, label: snapshotLabel });
-    } else {
-      setConfigViewerSnapshot(null);
-    }
-    setConfigViewerOpen(true);
-  }, []);
 
   const handleToggleAgentIndicators = useCallback(() => {
     setShowAgentIndicators(prev => {
@@ -601,31 +558,6 @@ const StudioPage: React.FC = () => {
     }
   }, [activeLab?.id, activeScenarioJobId, addNotification, setActiveScenarioJobId]);
 
-  const handleCloseConfigViewer = useCallback(() => {
-    setConfigViewerOpen(false);
-    setConfigViewerNode(null);
-    setConfigViewerSnapshot(null);
-  }, []);
-
-  const handleTaskLogEntryClick = useCallback((entry: TaskLogEntry) => {
-    if (entry.jobId) {
-      setJobLogModalJobId(entry.jobId);
-      setJobLogModalOpen(true);
-      return;
-    }
-    setTaskLogEntryModalEntry(entry);
-    setTaskLogEntryModalOpen(true);
-  }, []);
-
-  const handleCloseJobLogModal = useCallback(() => {
-    setJobLogModalOpen(false);
-    setJobLogModalJobId(null);
-  }, []);
-
-  const handleCloseTaskLogEntryModal = useCallback(() => {
-    setTaskLogEntryModalOpen(false);
-    setTaskLogEntryModalEntry(null);
-  }, []);
 
   const handleNodeMove = useCallback((id: string, x: number, y: number) => {
     setNodes((prev) => prev.map((node) => (node.id === id ? { ...node, x, y } : node)));
@@ -785,15 +717,6 @@ const StudioPage: React.FC = () => {
     triggerLayoutSave();
   };
 
-  const handleCanvasSelect = useCallback((id: string | null) => {
-    setSelectedId(id);
-    setSelectedIds(new Set());
-  }, []);
-
-  const handleSelectMultiple = useCallback((ids: Set<string>) => {
-    setSelectedIds(ids);
-    setSelectedId(null);
-  }, []);
 
   const handleDelete = (id: string) => {
     const isAnnotation = annotations.some((ann) => ann.id === id);
@@ -802,8 +725,7 @@ const StudioPage: React.FC = () => {
     setNodes((prev) => prev.filter((node) => node.id !== id));
     setLinks((prev) => prev.filter((link) => link.id !== id && link.source !== id && link.target !== id));
     setAnnotations((prev) => prev.filter((ann) => ann.id !== id));
-    setSelectedId(null);
-    setSelectedIds(new Set());
+    clearSelection();
     // Trigger layout save if an annotation was deleted
     if (isAnnotation) {
       triggerLayoutSave();
@@ -817,8 +739,7 @@ const StudioPage: React.FC = () => {
   const handleExport = async () => {
     if (!activeLab) return;
     const data = await studioRequest<{ content: string }>(`/labs/${activeLab.id}/export-yaml`);
-    setYamlContent(data.content || '');
-    setShowYamlModal(true);
+    openYamlPreview(data.content || '');
   };
 
   const handleDownloadBundle = async (lab: LabSummary) => {
@@ -857,34 +778,11 @@ const StudioPage: React.FC = () => {
   };
 
   const handleLogin = async (username: string, password?: string) => {
-    setAuthError(null);
-    setAuthLoading(true);
-    try {
-      const body = new URLSearchParams();
-      body.set('username', username);
-      body.set('password', password || '');
-      const response = await fetch(`${API_BASE_URL}/auth/login`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: body.toString(),
-      });
-      if (!response.ok) {
-        const message = await response.text();
-        throw new Error(message || 'Login failed');
-      }
-      const data = (await response.json()) as { access_token?: string };
-      if (!data.access_token) {
-        throw new Error('Login failed');
-      }
-      localStorage.setItem('token', data.access_token);
-      setAuthRequired(false);
+    const success = await attemptLogin(username, password);
+    if (success) {
       await refreshUser();
       await loadLabs();
       await refreshDeviceCatalog();
-    } catch (error) {
-      setAuthError(error instanceof Error ? error.message : 'Login failed');
-    } finally {
-      setAuthLoading(false);
     }
   };
 
@@ -1021,7 +919,7 @@ const StudioPage: React.FC = () => {
                 selectedId={selectedId}
                 onFocusNode={(id) => { setFocusNodeId(id); }}
                 onOpenConsole={handleOpenConsole}
-                onSelectNode={(id) => { setSelectedId(id); setSelectedIds(new Set()); }}
+                onSelectNode={(id) => { handleCanvasSelect(id); }}
                 collapsed={sidebarCollapsed}
                 onToggleCollapse={() => setSidebarCollapsed(c => !c)}
               />
@@ -1251,7 +1149,7 @@ const StudioPage: React.FC = () => {
           <div className="bg-white dark:bg-stone-900 border border-stone-200 dark:border-stone-700 rounded-2xl w-[700px] max-h-[85vh] flex flex-col overflow-hidden shadow-2xl">
             <div className="p-5 border-b border-stone-100 dark:border-stone-800 flex justify-between items-center">
               <h3 className="text-stone-900 dark:text-stone-100 font-bold text-sm uppercase">YAML Preview</h3>
-              <button onClick={() => setShowYamlModal(false)} className="text-stone-500 hover:text-stone-900 dark:hover:text-white">
+              <button onClick={closeYamlPreview} className="text-stone-500 hover:text-stone-900 dark:hover:text-white">
                 <i className="fa-solid fa-times"></i>
               </button>
             </div>
@@ -1259,7 +1157,7 @@ const StudioPage: React.FC = () => {
               {yamlContent}
             </div>
             <div className="p-5 border-t border-stone-100 dark:border-stone-800 flex justify-end gap-3">
-              <button onClick={() => setShowYamlModal(false)} className="px-6 py-2 bg-sage-600 text-white font-black rounded-lg">
+              <button onClick={closeYamlPreview} className="px-6 py-2 bg-sage-600 text-white font-black rounded-lg">
                 DONE
               </button>
             </div>

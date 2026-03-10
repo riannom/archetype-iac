@@ -14,9 +14,7 @@ from pathlib import Path
 from typing import Any, TYPE_CHECKING
 
 from agent.config import settings
-from agent.network.cmd import (
-    ovs_vsctl as _shared_ovs_vsctl,
-)
+from agent.network import cmd as _cmd
 
 if TYPE_CHECKING:
     from agent.network.overlay import OverlayManager
@@ -42,7 +40,7 @@ async def batch_read_ovs_ports(bridge_name: str) -> dict[str, dict[str, Any]] | 
     result: dict[str, dict[str, Any]] = {}
 
     # Step 0: scope to ports on this bridge only
-    code, stdout, _ = await _shared_ovs_vsctl("list-ports", bridge_name)
+    code, stdout, _ = await _cmd.ovs_vsctl("list-ports", bridge_name)
     if code != 0:
         logger.warning(f"OVS list-ports failed for {bridge_name} (rc={code}), skipping read")
         return None
@@ -55,7 +53,7 @@ async def batch_read_ovs_ports(bridge_name: str) -> dict[str, dict[str, Any]] | 
 
     # Batch 1: port names + VLAN tags (global table, filtered to bridge_ports)
     port_tags: dict[str, int] = {}
-    code, json_out, _ = await _shared_ovs_vsctl(
+    code, json_out, _ = await _cmd.ovs_vsctl(
         "--format=json", "--", "--columns=name,tag", "list", "Port",
     )
     if code == 0 and json_out.strip():
@@ -78,7 +76,7 @@ async def batch_read_ovs_ports(bridge_name: str) -> dict[str, dict[str, Any]] | 
 
     # Batch 2: interface type + ofport (global table, filtered to bridge_ports)
     iface_info: dict[str, tuple[str, int]] = {}  # name -> (type, ofport)
-    code, json_out, _ = await _shared_ovs_vsctl(
+    code, json_out, _ = await _cmd.ovs_vsctl(
         "--format=json", "--", "--columns=name,type,ofport", "list", "Interface",
     )
     if code == 0 and json_out.strip():
@@ -414,7 +412,7 @@ async def recover_link_tunnels(manager: OverlayManager) -> int:
             for tunnel in manager._link_tunnels.values()
             if tunnel.link_id and tunnel.link_id != tunnel.interface_name
         }
-        code, stdout, _ = await _shared_ovs_vsctl(
+        code, stdout, _ = await _cmd.ovs_vsctl(
             "list-ports", manager._bridge_name
         )
         if code != 0:
@@ -426,7 +424,7 @@ async def recover_link_tunnels(manager: OverlayManager) -> int:
         ]
 
         for port_name in port_names:
-            code, tag_out, _ = await _shared_ovs_vsctl(
+            code, tag_out, _ = await _cmd.ovs_vsctl(
                 "get", "port", port_name, "tag"
             )
             local_vlan = 0

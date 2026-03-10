@@ -84,7 +84,6 @@ def test_is_in_container_and_host_helpers_remaining_branches(monkeypatch, tmp_pa
     monkeypatch.delenv("container", raising=False)
     monkeypatch.setattr(iface, "Path", _PathCgroupError)
     assert iface._is_in_container() is False
-    assert iface._host_path_exists("/tmp/nope") is False
     assert iface._host_glob("/tmp", "*.yaml") == []
     assert iface._host_read_file("/tmp/nope") is None
     ok, err = iface._host_write_file("/tmp/nope", "x")

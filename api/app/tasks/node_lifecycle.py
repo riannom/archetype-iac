@@ -84,7 +84,7 @@ def _get_container_name(lab_id: str, node_name: str) -> str:
 from app.tasks.node_lifecycle_agents import AgentResolutionMixin  # noqa: E402
 from app.tasks.node_lifecycle_deploy import DeploymentMixin  # noqa: E402
 from app.tasks.node_lifecycle_stop import StopMixin  # noqa: E402
-from app.tasks.jobs import _release_db_transaction_for_io as _release_db_tx_for_io  # noqa: E402
+from app.utils.db import release_db_transaction_for_io as _release_db_tx_for_io  # noqa: E402
 
 
 class NodeLifecycleManager(AgentResolutionMixin, DeploymentMixin, StopMixin):

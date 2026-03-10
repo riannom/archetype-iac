@@ -21,6 +21,12 @@ from typing import Any
 import docker
 from docker.errors import APIError, NotFound
 
+from agent.labels import (
+    LABEL_LAB_ID,
+    LABEL_NODE_INTERFACE_COUNT,
+    LABEL_NODE_KIND,
+    LABEL_PROVIDER,
+)
 from agent.network.docker_plugin import get_docker_ovs_plugin
 
 logger = logging.getLogger(__name__)
@@ -246,12 +252,6 @@ def get_docker_network_manager(docker_client: docker.DockerClient) -> DockerNetw
 # ---------------------------------------------------------------------------
 # These functions accept the provider instance to access its Docker client,
 # retry helper, and naming utilities.
-
-LABEL_LAB_ID = "archetype.lab_id"
-LABEL_NODE_KIND = "archetype.node_kind"
-LABEL_NODE_INTERFACE_COUNT = "archetype.node_interface_count"
-LABEL_PROVIDER = "archetype.provider"
-
 
 async def create_lab_networks(provider: Any, lab_id: str, max_interfaces: int = 8) -> dict[str, str]:
     """Create Docker networks for lab interfaces via OVS plugin.

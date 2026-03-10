@@ -72,7 +72,7 @@ function renderLinkTable(props: Partial<React.ComponentProps<typeof LinkTable>> 
 
 // ─── Tests ──────────────────────────────────────────────────────────
 
-describe('LinkTable — round 12 comprehensive coverage', () => {
+describe('LinkTable - interactions', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockPersistedStates = {};

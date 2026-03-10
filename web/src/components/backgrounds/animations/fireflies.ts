@@ -3,7 +3,8 @@
  * Softly glowing fireflies drifting in the night
  */
 
-import { useRef, useEffect, useCallback } from 'react';
+import { useRef, useCallback } from 'react';
+import { useCanvasAnimation } from './useCanvasAnimation';
 
 interface Firefly {
   x: number;
@@ -24,7 +25,6 @@ export function useFireflies(
   active: boolean
 ) {
   const firefliesRef = useRef<Firefly[]>([]);
-  const animationRef = useRef<number | undefined>(undefined);
   const timeRef = useRef<number>(0);
 
   const createFirefly = useCallback((canvas: HTMLCanvasElement): Firefly => {
@@ -41,83 +41,62 @@ export function useFireflies(
     };
   }, []);
 
-  useEffect(() => {
-    if (!active) return;
+  useCanvasAnimation(
+    canvasRef,
+    active,
+    {
+      onInit: (_ctx, canvas) => {
+        const fireflyCount = Math.floor((canvas.width * canvas.height) / 40000);
+        firefliesRef.current = Array.from({ length: Math.max(15, fireflyCount) }, () =>
+          createFirefly(canvas)
+        );
+      },
 
-    const canvas = canvasRef.current;
-    if (!canvas) return;
+      onFrame: (ctx, canvas) => {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        timeRef.current += 0.016;
 
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
+        const opacityMultiplier = opacity / 50;
 
-    const resizeCanvas = () => {
-      canvas.width = window.innerWidth;
-      canvas.height = window.innerHeight;
-    };
-    resizeCanvas();
-    window.addEventListener('resize', resizeCanvas);
+        firefliesRef.current.forEach((firefly) => {
+          firefly.x += firefly.vx + Math.sin(timeRef.current * 0.5 + firefly.driftPhase) * 0.2;
+          firefly.y += firefly.vy + Math.cos(timeRef.current * 0.3 + firefly.driftPhase) * 0.15;
 
-    const fireflyCount = Math.floor((canvas.width * canvas.height) / 40000);
-    firefliesRef.current = Array.from({ length: Math.max(15, fireflyCount) }, () =>
-      createFirefly(canvas)
-    );
+          if (firefly.x < -20) firefly.x = canvas.width + 20;
+          if (firefly.x > canvas.width + 20) firefly.x = -20;
+          if (firefly.y < -20) firefly.y = canvas.height + 20;
+          if (firefly.y > canvas.height + 20) firefly.y = -20;
 
-    const animate = () => {
-      if (!canvas || !ctx) return;
+          const glowCycle = Math.sin(timeRef.current * firefly.glowSpeed + firefly.glowPhase);
+          const brightness = Math.max(0, glowCycle) * firefly.maxBrightness;
 
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      timeRef.current += 0.016;
+          if (brightness > 0.05) {
+            const warmColor = darkMode
+              ? { r: 255, g: 230, b: 100 }
+              : { r: 200, g: 180, b: 50 };
 
-      const opacityMultiplier = opacity / 50;
+            const glowSize = firefly.size * 4 * (0.5 + brightness * 0.5);
+            const gradient = ctx.createRadialGradient(
+              firefly.x, firefly.y, 0,
+              firefly.x, firefly.y, glowSize
+            );
+            gradient.addColorStop(0, `rgba(${warmColor.r}, ${warmColor.g}, ${warmColor.b}, ${brightness * 0.6 * opacityMultiplier})`);
+            gradient.addColorStop(0.4, `rgba(${warmColor.r}, ${warmColor.g}, ${warmColor.b}, ${brightness * 0.2 * opacityMultiplier})`);
+            gradient.addColorStop(1, `rgba(${warmColor.r}, ${warmColor.g}, ${warmColor.b}, 0)`);
 
-      firefliesRef.current.forEach((firefly) => {
-        firefly.x += firefly.vx + Math.sin(timeRef.current * 0.5 + firefly.driftPhase) * 0.2;
-        firefly.y += firefly.vy + Math.cos(timeRef.current * 0.3 + firefly.driftPhase) * 0.15;
+            ctx.fillStyle = gradient;
+            ctx.beginPath();
+            ctx.arc(firefly.x, firefly.y, glowSize, 0, Math.PI * 2);
+            ctx.fill();
 
-        if (firefly.x < -20) firefly.x = canvas.width + 20;
-        if (firefly.x > canvas.width + 20) firefly.x = -20;
-        if (firefly.y < -20) firefly.y = canvas.height + 20;
-        if (firefly.y > canvas.height + 20) firefly.y = -20;
-
-        const glowCycle = Math.sin(timeRef.current * firefly.glowSpeed + firefly.glowPhase);
-        const brightness = Math.max(0, glowCycle) * firefly.maxBrightness;
-
-        if (brightness > 0.05) {
-          const warmColor = darkMode
-            ? { r: 255, g: 230, b: 100 }
-            : { r: 200, g: 180, b: 50 };
-
-          const glowSize = firefly.size * 4 * (0.5 + brightness * 0.5);
-          const gradient = ctx.createRadialGradient(
-            firefly.x, firefly.y, 0,
-            firefly.x, firefly.y, glowSize
-          );
-          gradient.addColorStop(0, `rgba(${warmColor.r}, ${warmColor.g}, ${warmColor.b}, ${brightness * 0.6 * opacityMultiplier})`);
-          gradient.addColorStop(0.4, `rgba(${warmColor.r}, ${warmColor.g}, ${warmColor.b}, ${brightness * 0.2 * opacityMultiplier})`);
-          gradient.addColorStop(1, `rgba(${warmColor.r}, ${warmColor.g}, ${warmColor.b}, 0)`);
-
-          ctx.fillStyle = gradient;
-          ctx.beginPath();
-          ctx.arc(firefly.x, firefly.y, glowSize, 0, Math.PI * 2);
-          ctx.fill();
-
-          ctx.fillStyle = `rgba(255, 255, 200, ${brightness * opacityMultiplier})`;
-          ctx.beginPath();
-          ctx.arc(firefly.x, firefly.y, firefly.size * 0.5, 0, Math.PI * 2);
-          ctx.fill();
-        }
-      });
-
-      animationRef.current = requestAnimationFrame(animate);
-    };
-
-    animate();
-
-    return () => {
-      window.removeEventListener('resize', resizeCanvas);
-      if (animationRef.current) {
-        cancelAnimationFrame(animationRef.current);
-      }
-    };
-  }, [canvasRef, darkMode, opacity, createFirefly, active]);
+            ctx.fillStyle = `rgba(255, 255, 200, ${brightness * opacityMultiplier})`;
+            ctx.beginPath();
+            ctx.arc(firefly.x, firefly.y, firefly.size * 0.5, 0, Math.PI * 2);
+            ctx.fill();
+          }
+        });
+      },
+    },
+    [darkMode, opacity, createFirefly]
+  );
 }
