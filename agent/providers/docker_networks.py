@@ -296,8 +296,9 @@ async def create_lab_networks(provider: Any, lab_id: str, max_interfaces: int = 
                     )
                     networks[interface_name] = network_name
                     continue
-                except NotFound:
-                    pass
+                except Exception as _inspect_err:
+                    if not isinstance(_inspect_err, NotFound):
+                        raise
 
                 try:
                     await provider._retry_docker_call(
@@ -305,7 +306,9 @@ async def create_lab_networks(provider: Any, lab_id: str, max_interfaces: int = 
                         provider.docker.networks.create,
                         **provider._lab_network_create_kwargs(network_name, lab_id, interface_name),
                     )
-                except APIError as create_err:
+                except Exception as create_err:
+                    if not isinstance(create_err, APIError):
+                        raise
                     if create_err.status_code == 409:
                         action = await provider._resolve_conflicting_lab_network(
                             network_name,
