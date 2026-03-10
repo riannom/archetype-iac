@@ -1113,6 +1113,7 @@ class LibvirtProvider(Provider, VlanPersistenceMixin):
                 "reserved_nics": libvirt_config.reserved_nics,
                 "cpu_sockets": libvirt_config.cpu_sockets,
                 "needs_nested_vmx": libvirt_config.needs_nested_vmx,
+                "cpu_features_disable": libvirt_config.cpu_features_disable,
                 "interface_count": interface_count,
                 "_display_name": display_name,
             }
@@ -1919,6 +1920,7 @@ class LibvirtProvider(Provider, VlanPersistenceMixin):
                 "reserved_nics": libvirt_config.reserved_nics,
                 "cpu_sockets": libvirt_config.cpu_sockets,
                 "needs_nested_vmx": libvirt_config.needs_nested_vmx,
+                "cpu_features_disable": libvirt_config.cpu_features_disable,
                 "data_volume_gb": data_volume_gb if data_volume_gb is not None else libvirt_config.data_volume_gb,
                 "interface_count": interface_count or 1,
                 "_display_name": display_name or node_name,
