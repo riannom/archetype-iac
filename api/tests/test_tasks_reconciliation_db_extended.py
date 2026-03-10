@@ -551,7 +551,9 @@ class TestDoReconcileLabRuntimeIdentity:
         lab = make_lab(test_db, test_user.id, state="running", agent_id=host.id)
         node_def = make_node(test_db, lab.id, gui_id="r1", display_name="R1", host_id=host.id)
         make_node_state(test_db, lab.id, "r1", "R1", actual_state="starting", desired_state="running", node_definition_id=node_def.id, )
-        placement = make_placement(test_db, lab.id, "R1", host.id, node_definition_id=node_def.id, status="starting", runtime_id="runtime-old", )
+        placement = make_placement(test_db, lab.id, "R1", host.id, node_definition_id=node_def.id, status="starting")
+        placement.runtime_id = "runtime-old"
+        test_db.commit()
 
         with _ReconcileContext(agent_status_nodes=[{
             "name": "R1",
@@ -575,7 +577,9 @@ class TestDoReconcileLabRuntimeIdentity:
         lab = make_lab(test_db, test_user.id, state="running", agent_id=host.id)
         node_def = make_node(test_db, lab.id, gui_id="r1", display_name="R1", host_id=host.id)
         make_node_state(test_db, lab.id, "r1", "R1", actual_state="starting", desired_state="running", node_definition_id=node_def.id, )
-        placement = make_placement(test_db, lab.id, "R1", host.id, node_definition_id=node_def.id, status="deployed", runtime_id="runtime-old", )
+        placement = make_placement(test_db, lab.id, "R1", host.id, node_definition_id=node_def.id, status="deployed")
+        placement.runtime_id = "runtime-old"
+        test_db.commit()
 
         with _ReconcileContext(agent_status_nodes=[{
             "name": "R1",
@@ -597,7 +601,9 @@ class TestDoReconcileLabRuntimeIdentity:
         lab = make_lab(test_db, test_user.id, state="running", agent_id=host.id)
         node_def = make_node(test_db, lab.id, gui_id="r1", display_name="R1", host_id=host.id)
         node_state = make_node_state(test_db, lab.id, "r1", "R1", actual_state="stopped", desired_state="running", node_definition_id=node_def.id, )
-        placement = make_placement(test_db, lab.id, "R1", host.id, node_definition_id=node_def.id, status="deployed", runtime_id="runtime-123", )
+        placement = make_placement(test_db, lab.id, "R1", host.id, node_definition_id=node_def.id, status="deployed")
+        placement.runtime_id = "runtime-123"
+        test_db.commit()
 
         with _ReconcileContext(agent_status_nodes=[{
             "name": "wrong-name",
