@@ -6,7 +6,8 @@
  * Pre-generates all random values to avoid flickering.
  */
 
-import { useEffect, useRef } from 'react';
+import { useRef } from 'react';
+import { useCanvasAnimation } from './useCanvasAnimation';
 
 interface Chime {
   x: number;
@@ -46,25 +47,20 @@ export function useWindChimes(
   const chimesRef = useRef<Chime[]>([]);
   const soundRingsRef = useRef<SoundRing[]>([]);
   const starsRef = useRef<Star[]>([]);
-  const animationRef = useRef<number>(0);
   const timeRef = useRef<number>(0);
 
-  useEffect(() => {
-    if (!active) return;
-
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-
-    const resize = () => {
-      canvas.width = window.innerWidth;
-      canvas.height = window.innerHeight;
-      initializeElements();
+  function getMaterialColors(material: Chime['material']) {
+    const colors: Record<Chime['material'], { body: string; highlight: string; shadow: string }> = {
+      brass: { body: '#c9a227', highlight: '#e8c547', shadow: '#8a6d1b' },
+      silver: { body: '#a8a8a8', highlight: '#d0d0d0', shadow: '#686868' },
+      copper: { body: '#b87333', highlight: '#da9054', shadow: '#8a5522' },
+      glass: { body: 'rgba(180, 220, 255, 0.6)', highlight: 'rgba(255, 255, 255, 0.8)', shadow: 'rgba(100, 150, 200, 0.4)' },
     };
+    return colors[material];
+  }
 
-    const initializeElements = () => {
+  useCanvasAnimation(canvasRef, active, {
+    onInit: (_ctx, canvas) => {
       const width = canvas.width;
       const height = canvas.height;
 
@@ -101,19 +97,14 @@ export function useWindChimes(
       }
 
       soundRingsRef.current = [];
-    };
+    },
+    onFrame: (ctx, canvas) => {
+      timeRef.current += 16;
+      const time = timeRef.current;
 
-    const getMaterialColors = (material: Chime['material'], _darkMode: boolean) => {
-      const colors: Record<Chime['material'], { body: string; highlight: string; shadow: string }> = {
-        brass: { body: '#c9a227', highlight: '#e8c547', shadow: '#8a6d1b' },
-        silver: { body: '#a8a8a8', highlight: '#d0d0d0', shadow: '#686868' },
-        copper: { body: '#b87333', highlight: '#da9054', shadow: '#8a5522' },
-        glass: { body: 'rgba(180, 220, 255, 0.6)', highlight: 'rgba(255, 255, 255, 0.8)', shadow: 'rgba(100, 150, 200, 0.4)' },
-      };
-      return colors[material];
-    };
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-    const drawBackground = () => {
+      // Draw background
       const gradient = ctx.createLinearGradient(0, 0, 0, canvas.height);
       if (darkMode) {
         gradient.addColorStop(0, '#0a0a15');
@@ -144,9 +135,8 @@ export function useWindChimes(
       ctx.arc(moonX, moonY, 40, 0, Math.PI * 2);
       ctx.fillStyle = darkMode ? '#ffffd8' : '#fff8e0';
       ctx.fill();
-    };
 
-    const drawStars = (time: number) => {
+      // Draw stars
       starsRef.current.forEach((star) => {
         const twinkle = Math.sin(time * 0.002 + star.twinklePhase) * 0.4 + 0.6;
         ctx.beginPath();
@@ -154,10 +144,8 @@ export function useWindChimes(
         ctx.fillStyle = `rgba(255, 255, 255, ${0.5 * twinkle})`;
         ctx.fill();
       });
-    };
 
-    const drawHangingRod = () => {
-      // Top rod that chimes hang from
+      // Draw hanging rod
       ctx.beginPath();
       ctx.moveTo(canvas.width * 0.1, 25);
       ctx.lineTo(canvas.width * 0.9, 25);
@@ -165,90 +153,90 @@ export function useWindChimes(
       ctx.lineWidth = 4;
       ctx.lineCap = 'round';
       ctx.stroke();
-    };
 
-    const drawChime = (chime: Chime, _time: number) => {
-      // Update swing
-      chime.swingPhase += chime.swingSpeed;
-      const swing = Math.sin(chime.swingPhase) * chime.swingAmplitude;
+      // Draw chimes
+      chimesRef.current.forEach((chime) => {
+        // Update swing
+        chime.swingPhase += chime.swingSpeed;
+        const swing = Math.sin(chime.swingPhase) * chime.swingAmplitude;
 
-      // Smooth resonance transitions
-      chime.resonance += (chime.targetResonance - chime.resonance) * 0.05;
-      chime.targetResonance *= 0.995;
+        // Smooth resonance transitions
+        chime.resonance += (chime.targetResonance - chime.resonance) * 0.05;
+        chime.targetResonance *= 0.995;
 
-      // Occasionally trigger resonance (simulating wind)
-      if (Math.random() > 0.998) {
-        chime.targetResonance = 0.5 + Math.random() * 0.5;
+        // Occasionally trigger resonance (simulating wind)
+        if (Math.random() > 0.998) {
+          chime.targetResonance = 0.5 + Math.random() * 0.5;
 
-        // Create sound ring
-        soundRingsRef.current.push({
-          x: chime.x,
-          y: chime.baseY + chime.length * 0.5,
-          radius: chime.width,
-          maxRadius: 50 + chime.length * 0.5,
-          opacity: 0.6,
-          hue: chime.material === 'glass' ? 200 : chime.material === 'copper' ? 30 : chime.material === 'brass' ? 45 : 0,
-        });
-      }
+          // Create sound ring
+          soundRingsRef.current.push({
+            x: chime.x,
+            y: chime.baseY + chime.length * 0.5,
+            radius: chime.width,
+            maxRadius: 50 + chime.length * 0.5,
+            opacity: 0.6,
+            hue: chime.material === 'glass' ? 200 : chime.material === 'copper' ? 30 : chime.material === 'brass' ? 45 : 0,
+          });
+        }
 
-      ctx.save();
-      ctx.translate(chime.x, chime.baseY);
-      ctx.rotate(swing);
+        ctx.save();
+        ctx.translate(chime.x, chime.baseY);
+        ctx.rotate(swing);
 
-      const colors = getMaterialColors(chime.material, darkMode);
+        const colors = getMaterialColors(chime.material);
 
-      // String
-      ctx.beginPath();
-      ctx.moveTo(0, 0);
-      ctx.lineTo(0, 15);
-      ctx.strokeStyle = '#888';
-      ctx.lineWidth = 1;
-      ctx.stroke();
+        // String
+        ctx.beginPath();
+        ctx.moveTo(0, 0);
+        ctx.lineTo(0, 15);
+        ctx.strokeStyle = '#888';
+        ctx.lineWidth = 1;
+        ctx.stroke();
 
-      // Chime tube
-      const tubeGradient = ctx.createLinearGradient(-chime.width / 2, 0, chime.width / 2, 0);
-      if (chime.material === 'glass') {
-        tubeGradient.addColorStop(0, 'rgba(150, 200, 255, 0.3)');
-        tubeGradient.addColorStop(0.3, 'rgba(200, 230, 255, 0.5)');
-        tubeGradient.addColorStop(0.5, 'rgba(255, 255, 255, 0.6)');
-        tubeGradient.addColorStop(0.7, 'rgba(200, 230, 255, 0.5)');
-        tubeGradient.addColorStop(1, 'rgba(150, 200, 255, 0.3)');
-      } else {
-        tubeGradient.addColorStop(0, colors.shadow);
-        tubeGradient.addColorStop(0.3, colors.body);
-        tubeGradient.addColorStop(0.5, colors.highlight);
-        tubeGradient.addColorStop(0.7, colors.body);
-        tubeGradient.addColorStop(1, colors.shadow);
-      }
+        // Chime tube
+        const tubeGradient = ctx.createLinearGradient(-chime.width / 2, 0, chime.width / 2, 0);
+        if (chime.material === 'glass') {
+          tubeGradient.addColorStop(0, 'rgba(150, 200, 255, 0.3)');
+          tubeGradient.addColorStop(0.3, 'rgba(200, 230, 255, 0.5)');
+          tubeGradient.addColorStop(0.5, 'rgba(255, 255, 255, 0.6)');
+          tubeGradient.addColorStop(0.7, 'rgba(200, 230, 255, 0.5)');
+          tubeGradient.addColorStop(1, 'rgba(150, 200, 255, 0.3)');
+        } else {
+          tubeGradient.addColorStop(0, colors.shadow);
+          tubeGradient.addColorStop(0.3, colors.body);
+          tubeGradient.addColorStop(0.5, colors.highlight);
+          tubeGradient.addColorStop(0.7, colors.body);
+          tubeGradient.addColorStop(1, colors.shadow);
+        }
 
-      ctx.beginPath();
-      ctx.roundRect(-chime.width / 2, 15, chime.width, chime.length, 3);
-      ctx.fillStyle = tubeGradient;
-      ctx.fill();
-
-      // Resonance glow
-      if (chime.resonance > 0.05) {
-        ctx.shadowColor = chime.material === 'glass' ? '#88ccff' : colors.highlight;
-        ctx.shadowBlur = 15 * chime.resonance;
+        ctx.beginPath();
+        ctx.roundRect(-chime.width / 2, 15, chime.width, chime.length, 3);
+        ctx.fillStyle = tubeGradient;
         ctx.fill();
-        ctx.shadowBlur = 0;
-      }
 
-      // Top cap
-      ctx.beginPath();
-      ctx.ellipse(0, 15, chime.width / 2 + 2, 3, 0, 0, Math.PI * 2);
-      ctx.fillStyle = colors.body;
-      ctx.fill();
+        // Resonance glow
+        if (chime.resonance > 0.05) {
+          ctx.shadowColor = chime.material === 'glass' ? '#88ccff' : colors.highlight;
+          ctx.shadowBlur = 15 * chime.resonance;
+          ctx.fill();
+          ctx.shadowBlur = 0;
+        }
 
-      // Bottom cap
-      ctx.beginPath();
-      ctx.ellipse(0, 15 + chime.length, chime.width / 2 + 2, 3, 0, 0, Math.PI * 2);
-      ctx.fill();
+        // Top cap
+        ctx.beginPath();
+        ctx.ellipse(0, 15, chime.width / 2 + 2, 3, 0, 0, Math.PI * 2);
+        ctx.fillStyle = colors.body;
+        ctx.fill();
 
-      ctx.restore();
-    };
+        // Bottom cap
+        ctx.beginPath();
+        ctx.ellipse(0, 15 + chime.length, chime.width / 2 + 2, 3, 0, 0, Math.PI * 2);
+        ctx.fill();
 
-    const drawSoundRings = () => {
+        ctx.restore();
+      });
+
+      // Draw sound rings
       soundRingsRef.current.forEach((ring, index) => {
         ring.radius += 1;
         ring.opacity -= 0.01;
@@ -266,34 +254,6 @@ export function useWindChimes(
         ctx.lineWidth = 2;
         ctx.stroke();
       });
-    };
-
-    const animate = () => {
-      timeRef.current += 16;
-      const time = timeRef.current;
-
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-      drawBackground();
-      drawStars(time);
-      drawHangingRod();
-
-      // Draw chimes
-      chimesRef.current.forEach((chime) => drawChime(chime, time));
-
-      // Draw sound visualization
-      drawSoundRings();
-
-      animationRef.current = requestAnimationFrame(animate);
-    };
-
-    resize();
-    window.addEventListener('resize', resize);
-    animate();
-
-    return () => {
-      window.removeEventListener('resize', resize);
-      cancelAnimationFrame(animationRef.current);
-    };
-  }, [canvasRef, darkMode, opacity, active]);
+    },
+  }, [darkMode, opacity]);
 }

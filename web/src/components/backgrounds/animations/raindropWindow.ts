@@ -6,7 +6,8 @@
  * Pre-generates all random values to avoid flickering.
  */
 
-import { useEffect, useRef } from 'react';
+import { useRef } from 'react';
+import { useCanvasAnimation } from './useCanvasAnimation';
 
 interface Raindrop {
   x: number;
@@ -44,25 +45,10 @@ export function useRaindropWindow(
   const dropsRef = useRef<Raindrop[]>([]);
   const lightsRef = useRef<BackgroundLight[]>([]);
   const streamsRef = useRef<StreamLine[]>([]);
-  const animationRef = useRef<number>(0);
   const timeRef = useRef<number>(0);
 
-  useEffect(() => {
-    if (!active) return;
-
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-
-    const resize = () => {
-      canvas.width = window.innerWidth;
-      canvas.height = window.innerHeight;
-      initializeElements();
-    };
-
-    const initializeElements = () => {
+  useCanvasAnimation(canvasRef, active, {
+    onInit: (_ctx, canvas) => {
       const width = canvas.width;
       const height = canvas.height;
 
@@ -85,7 +71,7 @@ export function useRaindropWindow(
         dropsRef.current.push(createDrop(width, height, true));
       }
 
-      // Create stream lines (water trails that stay)
+      // Create stream lines
       streamsRef.current = [];
       for (let i = 0; i < 8; i++) {
         const segments: { y: number; offset: number }[] = [];
@@ -104,20 +90,14 @@ export function useRaindropWindow(
           opacity: 0.1 + Math.random() * 0.15,
         });
       }
-    };
+    },
 
-    const createDrop = (width: number, height: number, randomY: boolean): Raindrop => ({
-      x: Math.random() * width,
-      y: randomY ? Math.random() * height : -20 - Math.random() * 50,
-      size: 4 + Math.random() * 8,
-      speed: 0.5 + Math.random() * 1,
-      wobblePhase: Math.random() * Math.PI * 2,
-      wobbleSpeed: 0.02 + Math.random() * 0.03,
-      trail: [],
-      maxTrailLength: 5 + Math.floor(Math.random() * 10),
-    });
+    onFrame: (ctx, canvas) => {
+      timeRef.current += 16;
+      const time = timeRef.current;
 
-    const drawBackground = () => {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
       // Rainy window background
       const gradient = ctx.createLinearGradient(0, 0, 0, canvas.height);
       if (darkMode) {
@@ -131,33 +111,27 @@ export function useRaindropWindow(
       }
       ctx.fillStyle = gradient;
       ctx.fillRect(0, 0, canvas.width, canvas.height);
-    };
 
-    const drawBokehLights = (time: number) => {
+      // Bokeh lights
       lightsRef.current.forEach((light) => {
         const pulse = Math.sin(time * 0.001 + light.pulsePhase) * 0.15 + 0.85;
-        const gradient = ctx.createRadialGradient(
-          light.x,
-          light.y,
-          0,
-          light.x,
-          light.y,
-          light.size
+        const lightGrad = ctx.createRadialGradient(
+          light.x, light.y, 0,
+          light.x, light.y, light.size
         );
 
         const alpha = light.brightness * pulse * (darkMode ? 0.3 : 0.25);
-        gradient.addColorStop(0, `hsla(${light.hue}, 60%, 70%, ${alpha})`);
-        gradient.addColorStop(0.5, `hsla(${light.hue}, 50%, 60%, ${alpha * 0.5})`);
-        gradient.addColorStop(1, 'transparent');
+        lightGrad.addColorStop(0, `hsla(${light.hue}, 60%, 70%, ${alpha})`);
+        lightGrad.addColorStop(0.5, `hsla(${light.hue}, 50%, 60%, ${alpha * 0.5})`);
+        lightGrad.addColorStop(1, 'transparent');
 
-        ctx.fillStyle = gradient;
+        ctx.fillStyle = lightGrad;
         ctx.beginPath();
         ctx.arc(light.x, light.y, light.size, 0, Math.PI * 2);
         ctx.fill();
       });
-    };
 
-    const drawStreamLines = () => {
+      // Stream lines
       streamsRef.current.forEach((stream) => {
         ctx.beginPath();
         ctx.moveTo(stream.x + stream.segments[0].offset, 0);
@@ -172,130 +146,81 @@ export function useRaindropWindow(
         ctx.lineWidth = 1;
         ctx.stroke();
       });
-    };
-
-    const drawRaindrop = (drop: Raindrop, time: number) => {
-      // Update position
-      const wobble = Math.sin(time * drop.wobbleSpeed + drop.wobblePhase) * 0.5;
-      drop.x += wobble * 0.1;
-      drop.y += drop.speed;
-
-      // Add to trail
-      if (Math.random() > 0.7) {
-        drop.trail.push({
-          x: drop.x,
-          y: drop.y,
-          size: drop.size * 0.3,
-        });
-        if (drop.trail.length > drop.maxTrailLength) {
-          drop.trail.shift();
-        }
-      }
-
-      // Draw trail
-      drop.trail.forEach((point, index) => {
-        const trailOpacity = (index / drop.trail.length) * 0.18;
-        ctx.beginPath();
-        ctx.arc(point.x, point.y, point.size, 0, Math.PI * 2);
-        ctx.fillStyle = darkMode
-          ? `rgba(150, 180, 220, ${trailOpacity})`
-          : `rgba(200, 220, 240, ${trailOpacity})`;
-        ctx.fill();
-      });
-
-      // Draw main drop
-      ctx.save();
-      ctx.translate(drop.x, drop.y);
-
-      // Drop shadow/refraction effect
-      const shadowGradient = ctx.createRadialGradient(
-        drop.size * 0.2,
-        drop.size * 0.2,
-        0,
-        0,
-        0,
-        drop.size * 1.5
-      );
-      shadowGradient.addColorStop(0, 'rgba(0, 0, 0, 0.1)');
-      shadowGradient.addColorStop(1, 'transparent');
-      ctx.fillStyle = shadowGradient;
-      ctx.beginPath();
-      ctx.arc(drop.size * 0.2, drop.size * 0.2, drop.size * 1.5, 0, Math.PI * 2);
-      ctx.fill();
-
-      // Main drop body
-      const dropGradient = ctx.createRadialGradient(
-        -drop.size * 0.3,
-        -drop.size * 0.3,
-        0,
-        0,
-        0,
-        drop.size
-      );
-      if (darkMode) {
-        dropGradient.addColorStop(0, 'rgba(180, 200, 230, 0.35)');
-        dropGradient.addColorStop(0.5, 'rgba(140, 160, 200, 0.2)');
-        dropGradient.addColorStop(1, 'rgba(100, 120, 160, 0.08)');
-      } else {
-        dropGradient.addColorStop(0, 'rgba(220, 235, 250, 0.4)');
-        dropGradient.addColorStop(0.5, 'rgba(180, 200, 230, 0.22)');
-        dropGradient.addColorStop(1, 'rgba(140, 160, 200, 0.08)');
-      }
-
-      // Elongated drop shape
-      ctx.beginPath();
-      ctx.ellipse(0, 0, drop.size * 0.8, drop.size, 0, 0, Math.PI * 2);
-      ctx.fillStyle = dropGradient;
-      ctx.fill();
-
-      // Highlight
-      ctx.beginPath();
-      ctx.arc(-drop.size * 0.3, -drop.size * 0.3, drop.size * 0.25, 0, Math.PI * 2);
-      ctx.fillStyle = 'rgba(255, 255, 255, 0.25)';
-      ctx.fill();
-
-      ctx.restore();
-    };
-
-    const drawWindowFrame = () => {
-      // Subtle window frame edges
-      const frameWidth = 20;
-      const gradient = ctx.createLinearGradient(0, 0, frameWidth, 0);
-      gradient.addColorStop(0, darkMode ? 'rgba(30, 30, 40, 0.8)' : 'rgba(60, 60, 70, 0.6)');
-      gradient.addColorStop(1, 'transparent');
-
-      // Left edge
-      ctx.fillStyle = gradient;
-      ctx.fillRect(0, 0, frameWidth, canvas.height);
-
-      // Right edge
-      ctx.save();
-      ctx.translate(canvas.width, 0);
-      ctx.scale(-1, 1);
-      ctx.fillRect(0, 0, frameWidth, canvas.height);
-      ctx.restore();
-
-      // Top condensation effect
-      const topGradient = ctx.createLinearGradient(0, 0, 0, 100);
-      topGradient.addColorStop(0, darkMode ? 'rgba(80, 100, 130, 0.2)' : 'rgba(150, 170, 200, 0.15)');
-      topGradient.addColorStop(1, 'transparent');
-      ctx.fillStyle = topGradient;
-      ctx.fillRect(0, 0, canvas.width, 100);
-    };
-
-    const animate = () => {
-      timeRef.current += 16;
-      const time = timeRef.current;
-
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-      drawBackground();
-      drawBokehLights(time);
-      drawStreamLines();
 
       // Update and draw drops
       dropsRef.current.forEach((drop, index) => {
-        drawRaindrop(drop, time);
+        // Update position
+        const wobble = Math.sin(time * drop.wobbleSpeed + drop.wobblePhase) * 0.5;
+        drop.x += wobble * 0.1;
+        drop.y += drop.speed;
+
+        // Add to trail
+        if (Math.random() > 0.7) {
+          drop.trail.push({
+            x: drop.x,
+            y: drop.y,
+            size: drop.size * 0.3,
+          });
+          if (drop.trail.length > drop.maxTrailLength) {
+            drop.trail.shift();
+          }
+        }
+
+        // Draw trail
+        drop.trail.forEach((point, ti) => {
+          const trailOpacity = (ti / drop.trail.length) * 0.18;
+          ctx.beginPath();
+          ctx.arc(point.x, point.y, point.size, 0, Math.PI * 2);
+          ctx.fillStyle = darkMode
+            ? `rgba(150, 180, 220, ${trailOpacity})`
+            : `rgba(200, 220, 240, ${trailOpacity})`;
+          ctx.fill();
+        });
+
+        // Draw main drop
+        ctx.save();
+        ctx.translate(drop.x, drop.y);
+
+        // Drop shadow/refraction effect
+        const shadowGradient = ctx.createRadialGradient(
+          drop.size * 0.2, drop.size * 0.2, 0,
+          0, 0, drop.size * 1.5
+        );
+        shadowGradient.addColorStop(0, 'rgba(0, 0, 0, 0.1)');
+        shadowGradient.addColorStop(1, 'transparent');
+        ctx.fillStyle = shadowGradient;
+        ctx.beginPath();
+        ctx.arc(drop.size * 0.2, drop.size * 0.2, drop.size * 1.5, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Main drop body
+        const dropGradient = ctx.createRadialGradient(
+          -drop.size * 0.3, -drop.size * 0.3, 0,
+          0, 0, drop.size
+        );
+        if (darkMode) {
+          dropGradient.addColorStop(0, 'rgba(180, 200, 230, 0.35)');
+          dropGradient.addColorStop(0.5, 'rgba(140, 160, 200, 0.2)');
+          dropGradient.addColorStop(1, 'rgba(100, 120, 160, 0.08)');
+        } else {
+          dropGradient.addColorStop(0, 'rgba(220, 235, 250, 0.4)');
+          dropGradient.addColorStop(0.5, 'rgba(180, 200, 230, 0.22)');
+          dropGradient.addColorStop(1, 'rgba(140, 160, 200, 0.08)');
+        }
+
+        // Elongated drop shape
+        ctx.beginPath();
+        ctx.ellipse(0, 0, drop.size * 0.8, drop.size, 0, 0, Math.PI * 2);
+        ctx.fillStyle = dropGradient;
+        ctx.fill();
+
+        // Highlight
+        ctx.beginPath();
+        ctx.arc(-drop.size * 0.3, -drop.size * 0.3, drop.size * 0.25, 0, Math.PI * 2);
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.25)';
+        ctx.fill();
+
+        ctx.restore();
 
         // Reset if off screen
         if (drop.y > canvas.height + 50) {
@@ -303,18 +228,39 @@ export function useRaindropWindow(
         }
       });
 
-      drawWindowFrame();
+      // Window frame
+      const frameWidth = 20;
+      const frameGrad = ctx.createLinearGradient(0, 0, frameWidth, 0);
+      frameGrad.addColorStop(0, darkMode ? 'rgba(30, 30, 40, 0.8)' : 'rgba(60, 60, 70, 0.6)');
+      frameGrad.addColorStop(1, 'transparent');
 
-      animationRef.current = requestAnimationFrame(animate);
+      ctx.fillStyle = frameGrad;
+      ctx.fillRect(0, 0, frameWidth, canvas.height);
+
+      ctx.save();
+      ctx.translate(canvas.width, 0);
+      ctx.scale(-1, 1);
+      ctx.fillRect(0, 0, frameWidth, canvas.height);
+      ctx.restore();
+
+      const topGradient = ctx.createLinearGradient(0, 0, 0, 100);
+      topGradient.addColorStop(0, darkMode ? 'rgba(80, 100, 130, 0.2)' : 'rgba(150, 170, 200, 0.15)');
+      topGradient.addColorStop(1, 'transparent');
+      ctx.fillStyle = topGradient;
+      ctx.fillRect(0, 0, canvas.width, 100);
+    },
+  }, [darkMode, opacity]);
+
+  function createDrop(width: number, height: number, randomY: boolean): Raindrop {
+    return {
+      x: Math.random() * width,
+      y: randomY ? Math.random() * height : -20 - Math.random() * 50,
+      size: 4 + Math.random() * 8,
+      speed: 0.5 + Math.random() * 1,
+      wobblePhase: Math.random() * Math.PI * 2,
+      wobbleSpeed: 0.02 + Math.random() * 0.03,
+      trail: [],
+      maxTrailLength: 5 + Math.floor(Math.random() * 10),
     };
-
-    resize();
-    window.addEventListener('resize', resize);
-    animate();
-
-    return () => {
-      window.removeEventListener('resize', resize);
-      cancelAnimationFrame(animationRef.current);
-    };
-  }, [canvasRef, darkMode, opacity, active]);
+  }
 }

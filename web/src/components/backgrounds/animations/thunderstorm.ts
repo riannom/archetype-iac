@@ -5,7 +5,8 @@
  * heavy rain, and atmospheric thunder effects.
  */
 
-import { useEffect, useRef } from 'react';
+import { useRef } from 'react';
+import { useCanvasAnimation } from './useCanvasAnimation';
 
 interface RainDrop {
   x: number;
@@ -50,145 +51,129 @@ export function useThunderstorm(
   const cloudsRef = useRef<Cloud[]>([]);
   const lightningRef = useRef<Lightning | null>(null);
   const ripplesRef = useRef<Ripple[]>([]);
-  const animationRef = useRef<number | undefined>(undefined);
   const timeRef = useRef(0);
   const flashRef = useRef(0);
   const nextLightningRef = useRef(Math.random() * 3 + 2);
   const windRef = useRef(0);
   const windTargetRef = useRef(0);
 
-  useEffect(() => {
-    if (!enabled) return;
-
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-
-    const resizeCanvas = () => {
-      canvas.width = window.innerWidth;
-      canvas.height = window.innerHeight;
+  function createRainDrop(w: number, h: number, initialSpawn: boolean): RainDrop {
+    return {
+      x: Math.random() * w * 1.5 - w * 0.25,
+      y: initialSpawn ? Math.random() * h : -20 - Math.random() * 100,
+      length: 15 + Math.random() * 25,
+      speed: 15 + Math.random() * 10,
+      windOffset: 0,
     };
+  }
 
-    resizeCanvas();
-    window.addEventListener('resize', resizeCanvas);
+  function createLightning(startX: number, startY: number, endY: number): Lightning {
+    const segments: { x: number; y: number }[] = [{ x: startX, y: startY }];
+    let currentX = startX;
+    let currentY = startY;
+    const segmentLength = 20 + Math.random() * 30;
+    const branches: { startIndex: number; segments: { x: number; y: number }[] }[] = [];
 
-    const width = canvas.width;
-    const height = canvas.height;
+    while (currentY < endY) {
+      currentX += (Math.random() - 0.5) * 60;
+      currentY += segmentLength + Math.random() * 20;
+      segments.push({ x: currentX, y: Math.min(currentY, endY) });
 
-    // Initialize rain
-    rainRef.current = [];
-    for (let i = 0; i < 300; i++) {
-      rainRef.current.push(createRainDrop(width, height, true));
-    }
+      // Chance to create a branch
+      if (Math.random() < 0.3 && segments.length > 2) {
+        const branchSegments: { x: number; y: number }[] = [];
+        let bx = currentX;
+        let by = currentY;
+        const branchDirection = Math.random() > 0.5 ? 1 : -1;
+        const branchLength = 2 + Math.floor(Math.random() * 4);
 
-    // Initialize clouds
-    cloudsRef.current = [];
-    for (let i = 0; i < 8; i++) {
-      cloudsRef.current.push({
-        x: Math.random() * width * 1.5 - width * 0.25,
-        y: Math.random() * height * 0.3,
-        width: 200 + Math.random() * 300,
-        height: 60 + Math.random() * 80,
-        speed: 0.2 + Math.random() * 0.3,
-        darkness: 0.3 + Math.random() * 0.4,
-      });
-    }
-
-    ripplesRef.current = [];
-
-    function createRainDrop(w: number, h: number, initialSpawn: boolean): RainDrop {
-      return {
-        x: Math.random() * w * 1.5 - w * 0.25,
-        y: initialSpawn ? Math.random() * h : -20 - Math.random() * 100,
-        length: 15 + Math.random() * 25,
-        speed: 15 + Math.random() * 10,
-        windOffset: 0,
-      };
-    }
-
-    function createLightning(startX: number, startY: number, endY: number): Lightning {
-      const segments: { x: number; y: number }[] = [{ x: startX, y: startY }];
-      let currentX = startX;
-      let currentY = startY;
-      const segmentLength = 20 + Math.random() * 30;
-      const branches: { startIndex: number; segments: { x: number; y: number }[] }[] = [];
-
-      while (currentY < endY) {
-        currentX += (Math.random() - 0.5) * 60;
-        currentY += segmentLength + Math.random() * 20;
-        segments.push({ x: currentX, y: Math.min(currentY, endY) });
-
-        // Chance to create a branch
-        if (Math.random() < 0.3 && segments.length > 2) {
-          const branchSegments: { x: number; y: number }[] = [];
-          let bx = currentX;
-          let by = currentY;
-          const branchDirection = Math.random() > 0.5 ? 1 : -1;
-          const branchLength = 2 + Math.floor(Math.random() * 4);
-
-          for (let i = 0; i < branchLength; i++) {
-            bx += branchDirection * (20 + Math.random() * 30);
-            by += 15 + Math.random() * 20;
-            branchSegments.push({ x: bx, y: by });
-          }
-
-          branches.push({ startIndex: segments.length - 1, segments: branchSegments });
+        for (let i = 0; i < branchLength; i++) {
+          bx += branchDirection * (20 + Math.random() * 30);
+          by += 15 + Math.random() * 20;
+          branchSegments.push({ x: bx, y: by });
         }
-      }
 
-      return {
-        x: startX,
-        y: startY,
-        segments,
-        brightness: 1,
-        life: 1,
-        branches,
-      };
+        branches.push({ startIndex: segments.length - 1, segments: branchSegments });
+      }
     }
 
-    function drawLightning(ctx: CanvasRenderingContext2D, lightning: Lightning) {
-      const alpha = lightning.life;
+    return {
+      x: startX,
+      y: startY,
+      segments,
+      brightness: 1,
+      life: 1,
+      branches,
+    };
+  }
 
-      // Main bolt
+  function drawLightning(ctx: CanvasRenderingContext2D, lightning: Lightning) {
+    const alpha = lightning.life;
+
+    // Main bolt
+    ctx.beginPath();
+    ctx.moveTo(lightning.segments[0].x, lightning.segments[0].y);
+    for (let i = 1; i < lightning.segments.length; i++) {
+      ctx.lineTo(lightning.segments[i].x, lightning.segments[i].y);
+    }
+    ctx.strokeStyle = `rgba(255, 255, 255, ${alpha})`;
+    ctx.lineWidth = 3;
+    ctx.stroke();
+
+    // Glow effect
+    ctx.strokeStyle = `rgba(200, 220, 255, ${alpha * 0.5})`;
+    ctx.lineWidth = 8;
+    ctx.stroke();
+
+    ctx.strokeStyle = `rgba(150, 180, 255, ${alpha * 0.3})`;
+    ctx.lineWidth = 15;
+    ctx.stroke();
+
+    // Draw branches
+    lightning.branches.forEach((branch) => {
+      const startPoint = lightning.segments[branch.startIndex];
       ctx.beginPath();
-      ctx.moveTo(lightning.segments[0].x, lightning.segments[0].y);
-      for (let i = 1; i < lightning.segments.length; i++) {
-        ctx.lineTo(lightning.segments[i].x, lightning.segments[i].y);
-      }
-      ctx.strokeStyle = `rgba(255, 255, 255, ${alpha})`;
-      ctx.lineWidth = 3;
-      ctx.stroke();
-
-      // Glow effect
-      ctx.strokeStyle = `rgba(200, 220, 255, ${alpha * 0.5})`;
-      ctx.lineWidth = 8;
-      ctx.stroke();
-
-      ctx.strokeStyle = `rgba(150, 180, 255, ${alpha * 0.3})`;
-      ctx.lineWidth = 15;
-      ctx.stroke();
-
-      // Draw branches
-      lightning.branches.forEach((branch) => {
-        const startPoint = lightning.segments[branch.startIndex];
-        ctx.beginPath();
-        ctx.moveTo(startPoint.x, startPoint.y);
-        branch.segments.forEach((seg) => {
-          ctx.lineTo(seg.x, seg.y);
-        });
-        ctx.strokeStyle = `rgba(255, 255, 255, ${alpha * 0.7})`;
-        ctx.lineWidth = 1.5;
-        ctx.stroke();
-
-        ctx.strokeStyle = `rgba(200, 220, 255, ${alpha * 0.3})`;
-        ctx.lineWidth = 4;
-        ctx.stroke();
+      ctx.moveTo(startPoint.x, startPoint.y);
+      branch.segments.forEach((seg) => {
+        ctx.lineTo(seg.x, seg.y);
       });
-    }
+      ctx.strokeStyle = `rgba(255, 255, 255, ${alpha * 0.7})`;
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
 
-    const animate = () => {
+      ctx.strokeStyle = `rgba(200, 220, 255, ${alpha * 0.3})`;
+      ctx.lineWidth = 4;
+      ctx.stroke();
+    });
+  }
+
+  useCanvasAnimation(canvasRef, enabled, {
+    onInit: (_ctx, canvas) => {
+      const width = canvas.width;
+      const height = canvas.height;
+
+      // Initialize rain
+      rainRef.current = [];
+      for (let i = 0; i < 300; i++) {
+        rainRef.current.push(createRainDrop(width, height, true));
+      }
+
+      // Initialize clouds
+      cloudsRef.current = [];
+      for (let i = 0; i < 8; i++) {
+        cloudsRef.current.push({
+          x: Math.random() * width * 1.5 - width * 0.25,
+          y: Math.random() * height * 0.3,
+          width: 200 + Math.random() * 300,
+          height: 60 + Math.random() * 80,
+          speed: 0.2 + Math.random() * 0.3,
+          darkness: 0.3 + Math.random() * 0.4,
+        });
+      }
+
+      ripplesRef.current = [];
+    },
+    onFrame: (ctx, canvas) => {
       const currentWidth = canvas.width;
       const currentHeight = canvas.height;
       ctx.clearRect(0, 0, currentWidth, currentHeight);
@@ -339,17 +324,6 @@ export function useThunderstorm(
       }
       ctx.fillStyle = groundGradient;
       ctx.fillRect(0, groundY, currentWidth, currentHeight - groundY);
-
-      animationRef.current = requestAnimationFrame(animate);
-    };
-
-    animate();
-
-    return () => {
-      window.removeEventListener('resize', resizeCanvas);
-      if (animationRef.current) {
-        cancelAnimationFrame(animationRef.current);
-      }
-    };
-  }, [canvasRef, darkMode, opacity, enabled]);
+    },
+  }, [darkMode, opacity]);
 }
