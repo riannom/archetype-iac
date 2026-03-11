@@ -54,11 +54,11 @@ class TestCrossLabStuckStopping:
 
         now = _naive_utcnow()
         ns1 = make_node_state(
-            test_db, lab1.id, "R1", NodeActualState.STOPPING.value,
+            test_db, lab1.id, "R1", actual_state=NodeActualState.STOPPING.value,
             stopping_started_at=now - timedelta(seconds=400),
         )
         ns2 = make_node_state(
-            test_db, lab2.id, "R2", NodeActualState.STOPPING.value,
+            test_db, lab2.id, "R2", actual_state=NodeActualState.STOPPING.value,
             stopping_started_at=now - timedelta(seconds=500),
         )
 
@@ -82,11 +82,11 @@ class TestCrossLabStuckStopping:
 
         now = _naive_utcnow()
         ns1 = make_node_state(
-            test_db, lab1.id, "R1", NodeActualState.STOPPING.value,
+            test_db, lab1.id, "R1", actual_state=NodeActualState.STOPPING.value,
             stopping_started_at=now - timedelta(seconds=400),
         )
         ns2 = make_node_state(
-            test_db, lab2.id, "R2", NodeActualState.STOPPING.value,
+            test_db, lab2.id, "R2", actual_state=NodeActualState.STOPPING.value,
             stopping_started_at=now - timedelta(seconds=400),
         )
 
@@ -117,12 +117,12 @@ class TestCrossLabStuckStarting:
 
         now = _naive_utcnow()
         ns1 = make_node_state(
-            test_db, lab1.id, "R1", NodeActualState.STARTING.value,
+            test_db, lab1.id, "R1", actual_state=NodeActualState.STARTING.value,
             starting_started_at=now - timedelta(seconds=400),
             image_sync_status="syncing",
         )
         ns2 = make_node_state(
-            test_db, lab2.id, "R2", NodeActualState.STARTING.value,
+            test_db, lab2.id, "R2", actual_state=NodeActualState.STARTING.value,
             starting_started_at=now - timedelta(seconds=400),
             image_sync_status=None,
         )
@@ -218,7 +218,7 @@ class TestStoppingCleanupCompleteness:
 
         now = _naive_utcnow()
         ns = make_node_state(
-            test_db, sample_lab.id, "R1", NodeActualState.STOPPING.value,
+            test_db, sample_lab.id, "R1", actual_state=NodeActualState.STOPPING.value,
             stopping_started_at=now - timedelta(seconds=400),
             boot_started_at=now - timedelta(seconds=600),
             is_ready=True,
@@ -241,7 +241,7 @@ class TestStoppingCleanupCompleteness:
 
         now = _naive_utcnow()
         ns = make_node_state(
-            test_db, sample_lab.id, "R1", NodeActualState.STOPPING.value,
+            test_db, sample_lab.id, "R1", actual_state=NodeActualState.STOPPING.value,
             stopping_started_at=now - timedelta(seconds=400),
             error_message="previous error",
         )
@@ -265,7 +265,7 @@ class TestStartingCleanupCompleteness:
 
         now = _naive_utcnow()
         ns = make_node_state(
-            test_db, sample_lab.id, "R1", NodeActualState.STARTING.value,
+            test_db, sample_lab.id, "R1", actual_state=NodeActualState.STARTING.value,
             starting_started_at=now - timedelta(seconds=400),
             boot_started_at=now - timedelta(seconds=300),
             is_ready=True,
@@ -287,7 +287,7 @@ class TestStartingCleanupCompleteness:
 
         now = _naive_utcnow()
         ns = make_node_state(
-            test_db, sample_lab.id, "R1", NodeActualState.STARTING.value,
+            test_db, sample_lab.id, "R1", actual_state=NodeActualState.STARTING.value,
             starting_started_at=now - timedelta(seconds=400),
         )
         make_job(test_db, sample_lab.id, test_user.id, status=JobStatus.FAILED.value)

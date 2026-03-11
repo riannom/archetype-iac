@@ -72,8 +72,8 @@ class TestRunSameHostConvergenceRound12:
             target_host_id=sample_host.id,
             vlan_tag=200,
         )
-        n1 = make_node(test_db, sample_lab.id, "R1", link.source_node, sample_host.id)
-        n2 = make_node(test_db, sample_lab.id, "R2", link.target_node, sample_host.id)
+        n1 = make_node(test_db, sample_lab.id, "R1", link.source_node, host_id=sample_host.id)
+        n2 = make_node(test_db, sample_lab.id, "R2", link.target_node, host_id=sample_host.id)
         _make_interface_mapping(
             test_db, sample_lab.id, n1.id,
             linux_interface="eth1", ovs_port="vh-src", vlan_tag=200,
@@ -119,8 +119,8 @@ class TestRunSameHostConvergenceRound12:
                 target_host_id=sample_host.id,
                 vlan_tag=300 + i,
             )
-            n_s = make_node(test_db, sample_lab.id, f"S{i}", sn, sample_host.id)
-            n_t = make_node(test_db, sample_lab.id, f"T{i}", tn, sample_host.id)
+            n_s = make_node(test_db, sample_lab.id, f"S{i}", sn, host_id=sample_host.id)
+            n_t = make_node(test_db, sample_lab.id, f"T{i}", tn, host_id=sample_host.id)
             _make_interface_mapping(
                 test_db, sample_lab.id, n_s.id,
                 linux_interface="eth1", ovs_port=f"vh-s{i}", vlan_tag=300 + i,
@@ -164,8 +164,8 @@ class TestRunSameHostConvergenceRound12:
             target_host_id=sample_host.id,
             vlan_tag=100,
         )
-        n1 = make_node(test_db, sample_lab.id, "R1", link.source_node, sample_host.id)
-        n2 = make_node(test_db, sample_lab.id, "R2", link.target_node, sample_host.id)
+        n1 = make_node(test_db, sample_lab.id, "R1", link.source_node, host_id=sample_host.id)
+        n2 = make_node(test_db, sample_lab.id, "R2", link.target_node, host_id=sample_host.id)
         _make_interface_mapping(
             test_db, sample_lab.id, n1.id,
             linux_interface="eth1", ovs_port="vh-s", vlan_tag=100,
@@ -202,8 +202,8 @@ class TestRunSameHostConvergenceRound12:
             target_host_id=sample_host.id,
             vlan_tag=None,  # no vlan_tag on link
         )
-        n1 = make_node(test_db, sample_lab.id, "R1", link.source_node, sample_host.id)
-        n2 = make_node(test_db, sample_lab.id, "R2", link.target_node, sample_host.id)
+        n1 = make_node(test_db, sample_lab.id, "R1", link.source_node, host_id=sample_host.id)
+        n2 = make_node(test_db, sample_lab.id, "R2", link.target_node, host_id=sample_host.id)
         _make_interface_mapping(
             test_db, sample_lab.id, n1.id,
             linux_interface="eth1", ovs_port="vh-s", vlan_tag=None,  # no tag
@@ -240,8 +240,8 @@ class TestRunSameHostConvergenceRound12:
             target_host_id=sample_host.id,
             vlan_tag=150,
         )
-        n1 = make_node(test_db, sample_lab.id, "R1", link.source_node, sample_host.id)
-        n2 = make_node(test_db, sample_lab.id, "R2", link.target_node, sample_host.id)
+        n1 = make_node(test_db, sample_lab.id, "R1", link.source_node, host_id=sample_host.id)
+        n2 = make_node(test_db, sample_lab.id, "R2", link.target_node, host_id=sample_host.id)
         _make_interface_mapping(
             test_db, sample_lab.id, n1.id,
             linux_interface="eth1", ovs_port="vh-s", vlan_tag=150,

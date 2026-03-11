@@ -329,7 +329,7 @@ class TestUpdateNodeStates:
         from app.routers.callbacks import _update_node_states
 
         lab = make_lab(test_db, test_user.id)
-        ns = make_node_state(test_db, lab.id, "R1", actual_state="starting")
+        ns = make_node_state(test_db, lab.id, "R1", actual_state="starting", desired="running")
 
         with patch(
             "app.routers.callbacks._auto_connect_pending_links",
@@ -352,7 +352,7 @@ class TestUpdateNodeStates:
         from app.routers.callbacks import _update_node_states
 
         lab = make_lab(test_db, test_user.id)
-        ns = make_node_state(test_db, lab.id, "R1", actual_state="error")
+        ns = make_node_state(test_db, lab.id, "R1", actual_state="error", desired="running")
         ns.error_message = "Previous error"
         test_db.commit()
 
@@ -377,7 +377,7 @@ class TestUpdateNodeStates:
         from app.routers.callbacks import _update_node_states
 
         lab = make_lab(test_db, test_user.id)
-        ns = make_node_state(test_db, lab.id, "R1", actual_state="error")
+        ns = make_node_state(test_db, lab.id, "R1", actual_state="error", desired="running")
         ns.error_message = "Previous error"
         test_db.commit()
 
@@ -402,7 +402,7 @@ class TestUpdateNodeStates:
         from app.routers.callbacks import _update_node_states
 
         lab = make_lab(test_db, test_user.id)
-        make_node_state(test_db, lab.id, "R1", actual_state="starting")
+        make_node_state(test_db, lab.id, "R1", actual_state="starting", desired="running")
 
         mock_connect = AsyncMock()
         mock_reattach = AsyncMock()
@@ -427,7 +427,7 @@ class TestUpdateNodeStates:
         from app.routers.callbacks import _update_node_states
 
         lab = make_lab(test_db, test_user.id)
-        make_node_state(test_db, lab.id, "R1", actual_state="running")
+        make_node_state(test_db, lab.id, "R1", actual_state="running", desired="running")
 
         mock_connect = AsyncMock()
         mock_reattach = AsyncMock()
@@ -460,7 +460,7 @@ class TestUpdateNodeStates:
         from app.routers.callbacks import _update_node_states
 
         lab = make_lab(test_db, test_user.id)
-        make_node_state(test_db, lab.id, "R1", actual_state="starting")
+        make_node_state(test_db, lab.id, "R1", actual_state="starting", desired="running")
 
         with patch(
             "app.routers.callbacks._auto_connect_pending_links",

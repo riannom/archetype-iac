@@ -64,7 +64,8 @@ class TestCaptureNodeIps:
     ):
         """IPs from agent status are persisted to NodeState records."""
         lab = make_lab(test_db, test_user)
-        ns = make_node_state(test_db, lab, node_id="n1", node_name="r1")
+        node_def = make_node(test_db, lab, display_name="r1", container_name="r1")
+        ns = make_node_state(test_db, lab, node_id="n1", node_name="r1", node_definition_id=node_def.id)
 
         agent_status = {
             "nodes": [
@@ -127,8 +128,10 @@ class TestCaptureNodeIps:
     ):
         """Nodes without IPs are skipped; nodes with IPs are updated."""
         lab = make_lab(test_db, test_user)
-        ns1 = make_node_state(test_db, lab, node_id="n1", node_name="r1")
-        ns2 = make_node_state(test_db, lab, node_id="n2", node_name="r2")
+        node_def1 = make_node(test_db, lab, display_name="r1", container_name="r1")
+        node_def2 = make_node(test_db, lab, display_name="r2", container_name="r2")
+        ns1 = make_node_state(test_db, lab, node_id="n1", node_name="r1", node_definition_id=node_def1.id)
+        ns2 = make_node_state(test_db, lab, node_id="n2", node_name="r2", node_definition_id=node_def2.id)
 
         agent_status = {
             "nodes": [
@@ -272,7 +275,10 @@ class TestGetNodeInfoForWebhook:
     def test_correct_fields(self, test_db: Session, test_user: models.User):
         """Returned dicts contain the expected keys."""
         lab = make_lab(test_db, test_user)
-        ns = make_node_state(test_db, lab, node_id="n1", node_name="r1")
+        ns = make_node_state(
+            test_db, lab, node_id="n1", node_name="r1",
+            actual_state="running", is_ready=True,
+        )
         ns.management_ip = "10.0.0.1"
         test_db.commit()
 

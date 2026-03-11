@@ -210,10 +210,11 @@ def make_node(
     db: Session,
     lab: models.Lab | str,
     gui_id: str | None = None,
-    display_name: str = "R1",
+    display_name: str | None = None,
     container_name: str | None = None,
     device: str = "linux",
     *,
+    name: str | None = None,
     node_id: str | None = None,
     host_id: str | None = None,
     node_type: str = "device",
@@ -222,14 +223,23 @@ def make_node(
     managed_interface_id: str | None = None,
     flush_only: bool = False,
 ) -> models.Node:
-    """Create and persist a Node definition."""
+    """Create and persist a Node definition.
+
+    The *gui_id* positional arg doubles as a general "name" when
+    *display_name* / *container_name* are not given explicitly.
+    Legacy callers may also pass ``name=`` as a keyword alias for
+    *display_name*.
+    """
     lab_id = lab.id if isinstance(lab, models.Lab) else lab
+
+    # Resolve display_name: explicit > legacy name= > gui_id > fallback
+    resolved_display = display_name or name or gui_id or "R1"
 
     kwargs: dict = dict(
         lab_id=lab_id,
-        gui_id=gui_id or display_name.lower(),
-        display_name=display_name,
-        container_name=container_name or display_name,
+        gui_id=gui_id or resolved_display.lower(),
+        display_name=resolved_display,
+        container_name=container_name or resolved_display,
         device=device,
         host_id=host_id,
         node_type=node_type,
@@ -285,17 +295,28 @@ def make_node_state(
     resolved_desired = desired_state or desired or "stopped"
     resolved_actual = actual_state or actual or "undeployed"
 
-    # Flexible positional args: supports both
+    # Flexible positional args: supports
     #   make_node_state(db, lab, node_id, node_name, ...)
     #   make_node_state(db, lab, node_name, ...)
-    if node_name is not None:
+    #   make_node_state(db, lab, Node_object, ...)
+    #   make_node_state(db, lab, None, ...)  — orphan with generated name
+    if isinstance(node_id_or_name, models.Node):
+        node_obj = node_id_or_name
+        node_definition_id = node_definition_id or node_obj.id
+        resolved_node_name = node_name or node_obj.gui_id or node_obj.display_name
+        resolved_node_id = node_id or node_obj.gui_id or resolved_node_name.lower()
+    elif node_name is not None:
         # Called with two positional strings: (node_id, node_name)
         resolved_node_id = node_id or node_id_or_name
         resolved_node_name = node_name
-    else:
+    elif node_id_or_name is not None:
         # Called with one positional string: treat as node_name
         resolved_node_name = node_id_or_name
         resolved_node_id = node_id or resolved_node_name.lower()
+    else:
+        # None passed explicitly — orphan node state
+        resolved_node_name = f"orphan-{uuid4().hex[:6]}"
+        resolved_node_id = node_id or resolved_node_name
 
     ns = models.NodeState(
         lab_id=lab_id,
@@ -488,25 +509,37 @@ def make_link_state(
 def make_link(
     db: Session,
     lab: models.Lab | str,
-    source_node_id: str,
+    source_node_id: str | models.Node,
     source_interface: str,
-    target_node_id: str,
+    target_node_id: str | models.Node,
     target_interface: str,
     *,
     link_name: str | None = None,
     config_json: str | None = None,
+    mtu: int | None = None,
+    bandwidth: int | None = None,
     flush_only: bool = False,
 ) -> models.Link:
     """Create and persist a Link definition."""
     lab_id = lab.id if isinstance(lab, models.Lab) else lab
 
-    link = models.Link(
+    # Accept Node objects as well as raw ID strings.
+    resolved_source = source_node_id.id if isinstance(source_node_id, models.Node) else source_node_id
+    resolved_target = target_node_id.id if isinstance(target_node_id, models.Node) else target_node_id
+
+    kwargs: dict = dict(
         lab_id=lab_id,
         link_name=link_name or f"{source_interface}-{target_interface}",
-        source_node_id=source_node_id,
+        source_node_id=resolved_source,
         source_interface=source_interface,
-        target_node_id=target_node_id,
+        target_node_id=resolved_target,
         target_interface=target_interface,
         config_json=config_json,
     )
+    if mtu is not None:
+        kwargs["mtu"] = mtu
+    if bandwidth is not None:
+        kwargs["bandwidth"] = bandwidth
+
+    link = models.Link(**kwargs)
     return _persist(db, link, flush_only=flush_only)

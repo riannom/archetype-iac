@@ -1531,6 +1531,7 @@ class TestInfraNotifications:
             sample_lab.id,
             actual_state="error",
             error_message="Container crash",
+            desired="running",
         )
 
         resp = test_client.get(
@@ -1602,6 +1603,8 @@ class TestExportInventory:
             sample_lab.id,
             node_name="R1",
             management_ip="172.20.0.2",
+            actual="running",
+            desired="running",
         )
 
         with patch("app.routers.labs.TopologyService") as MockTS:
@@ -1630,6 +1633,8 @@ class TestExportInventory:
             sample_lab.id,
             node_name="R1",
             management_ip="172.20.0.2",
+            actual="running",
+            desired="running",
         )
 
         with patch("app.routers.labs.TopologyService") as MockTS:
@@ -1658,6 +1663,8 @@ class TestExportInventory:
             sample_lab.id,
             node_name="R1",
             management_ip="172.20.0.2",
+            actual="running",
+            desired="running",
         )
 
         with patch("app.routers.labs.TopologyService") as MockTS:

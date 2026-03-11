@@ -90,7 +90,7 @@ class TestCheckNodesReady:
             test_db, sample_lab.id, "n1", "R1",
             desired="running", actual="running", is_ready=True,
         )
-        make_node(test_db, sample_lab.id, "nd1", "n1", "R1", "R1", device="linux")
+        make_node(test_db, sample_lab.id, "nd1", display_name="R1", container_name="R1", node_id="n1")
 
         mock_ac = MagicMock()
         mock_ac.is_agent_online = MagicMock(return_value=False)
@@ -122,7 +122,7 @@ class TestCheckNodesReady:
             test_db, sample_lab.id, "n1", "R1",
             desired="running", actual="running", is_ready=False,
         )
-        make_node(test_db, sample_lab.id, "nd1", "n1", "R1", "R1", device="linux")
+        make_node(test_db, sample_lab.id, "nd1", display_name="R1", container_name="R1", node_id="n1")
 
         mock_ac = MagicMock()
         mock_ac.is_agent_online = MagicMock(return_value=True)
@@ -154,7 +154,7 @@ class TestCheckNodesReady:
             test_db, sample_lab.id, "n1", "R1",
             desired="running", actual="running", is_ready=False,
         )
-        make_node(test_db, sample_lab.id, "nd1", "n1", "R1", "R1")
+        make_node(test_db, sample_lab.id, "nd1", display_name="R1", container_name="R1", node_id="n1")
 
         mock_ac = MagicMock()
         mock_ac.is_agent_online = MagicMock(return_value=True)
@@ -358,7 +358,7 @@ class TestGetNodeInterfaces:
     ):
         """Returns interface mappings for a specific node."""
         node = make_node(
-            test_db, sample_lab.id, "nd1", "n1", "R1", "R1", device="ceos"
+            test_db, sample_lab.id, "n1", display_name="R1", container_name="R1", device="ceos"
         )
         mapping = models.InterfaceMapping(
             lab_id=sample_lab.id,
@@ -396,7 +396,7 @@ class TestGetNodeInterfaces:
         self, test_client, auth_headers, sample_lab, test_db
     ):
         """Node with no mappings returns empty list."""
-        make_node(test_db, sample_lab.id, "nd1", "n1", "R1", "R1")
+        make_node(test_db, sample_lab.id, "n1", display_name="R1", container_name="R1")
 
         resp = test_client.get(
             f"/labs/{sample_lab.id}/nodes/n1/interfaces", headers=auth_headers
@@ -448,7 +448,7 @@ class TestSyncInterfaceMappings:
         self, test_client, auth_headers, sample_lab, test_db, sample_host, monkeypatch
     ):
         """Node-scoped sync uses the placement host and returns counts."""
-        node = make_node(test_db, sample_lab.id, "nd1", "n1", "R1", "R1")
+        node = make_node(test_db, sample_lab.id, "nd1", display_name="R1", container_name="R1", node_id="n1")
         placement = models.NodePlacement(
             lab_id=sample_lab.id,
             node_name=node.display_name,
@@ -479,7 +479,7 @@ class TestSyncInterfaceMappings:
         self, test_client, auth_headers, sample_lab, test_db, monkeypatch
     ):
         """Node-scoped sync returns conflict when no placement exists."""
-        node = make_node(test_db, sample_lab.id, "nd1", "n1", "R1", "R1")
+        node = make_node(test_db, sample_lab.id, "nd1", display_name="R1", container_name="R1", node_id="n1")
         mock_svc = MagicMock()
         monkeypatch.setattr("app.routers.labs.interface_mapping_service", mock_svc)
 
@@ -494,7 +494,7 @@ class TestNodeInterfaceDiagnostics:
     def test_returns_controller_and_agent_diagnostics(
         self, test_client, auth_headers, sample_lab, test_db, sample_host, monkeypatch
     ):
-        node = make_node(test_db, sample_lab.id, "nd1", "n1", "R1", "R1")
+        node = make_node(test_db, sample_lab.id, "nd1", display_name="R1", container_name="R1", node_id="n1")
         node_state = models.NodeState(
             lab_id=sample_lab.id,
             node_id=node.gui_id,
@@ -592,8 +592,10 @@ class TestInfraNotifications:
     ):
         """Tunnel in cleanup status surfaces as warning."""
         ls = make_link_state(
-            test_db, "ls1", sample_lab.id, "R1:eth1-R2:eth1",
-            "R1", "eth1", "R2", "eth1",
+            test_db, sample_lab.id,
+            link_name="R1:eth1-R2:eth1",
+            source_node="R1", source_interface="eth1",
+            target_node="R2", target_interface="eth1",
         )
         _make_vxlan_tunnel(
             test_db, "t1", sample_lab.id, ls.id, vni=5001,
@@ -617,8 +619,10 @@ class TestInfraNotifications:
     ):
         """Tunnel in failed status surfaces as error."""
         ls = make_link_state(
-            test_db, "ls2", sample_lab.id, "R1:eth2-R2:eth2",
-            "R1", "eth2", "R2", "eth2",
+            test_db, sample_lab.id,
+            link_name="R1:eth2-R2:eth2",
+            source_node="R1", source_interface="eth2",
+            target_node="R2", target_interface="eth2",
         )
         _make_vxlan_tunnel(
             test_db, "t2", sample_lab.id, ls.id, vni=5002,
@@ -639,8 +643,10 @@ class TestInfraNotifications:
     ):
         """Tunnel with error_message but active status still shows notification."""
         ls = make_link_state(
-            test_db, "ls3", sample_lab.id, "R3:eth1-R4:eth1",
-            "R3", "eth1", "R4", "eth1",
+            test_db, sample_lab.id,
+            link_name="R3:eth1-R4:eth1",
+            source_node="R3", source_interface="eth1",
+            target_node="R4", target_interface="eth1",
         )
         _make_vxlan_tunnel(
             test_db, "t3", sample_lab.id, ls.id, vni=5003,
@@ -660,8 +666,10 @@ class TestInfraNotifications:
     ):
         """Link in error state surfaces as notification."""
         make_link_state(
-            test_db, "ls-err", sample_lab.id, "R1:eth1-R2:eth1",
-            "R1", "eth1", "R2", "eth1",
+            test_db, sample_lab.id,
+            link_name="R1:eth1-R2:eth1",
+            source_node="R1", source_interface="eth1",
+            target_node="R2", target_interface="eth1",
             desired="up", actual="error", error_message="VLAN mismatch",
         )
 
@@ -703,14 +711,18 @@ class TestInfraNotifications:
         )
         # Error link
         make_link_state(
-            test_db, "ls-m", sample_lab.id, "R1:eth1-R2:eth1",
-            "R1", "eth1", "R2", "eth1",
+            test_db, sample_lab.id,
+            link_name="R1:eth1-R2:eth1",
+            source_node="R1", source_interface="eth1",
+            target_node="R2", target_interface="eth1",
             desired="up", actual="error",
         )
         # Failed tunnel
         ls2 = make_link_state(
-            test_db, "ls-m2", sample_lab.id, "R3:eth1-R4:eth1",
-            "R3", "eth1", "R4", "eth1",
+            test_db, sample_lab.id,
+            link_name="R3:eth1-R4:eth1",
+            source_node="R3", source_interface="eth1",
+            target_node="R4", target_interface="eth1",
         )
         _make_vxlan_tunnel(
             test_db, "t-m", sample_lab.id, ls2.id, vni=9999,

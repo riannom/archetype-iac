@@ -47,6 +47,16 @@ def _make_mixin(
     mixin.target_agent_id = target_agent_id
     mixin.agent = None
     mixin.log_parts = []
+
+    # _resolve_db_node lives on NodeLifecycleManager but the mixin calls it
+    # via self in _resolve_explicit_placements.  Provide the same logic here.
+    def _resolve_db_node(ns):
+        return (
+            mixin.db_nodes_map.get(ns.node_name)
+            or mixin.db_nodes_by_gui_id.get(ns.node_id)
+        )
+    mixin._resolve_db_node = _resolve_db_node
+
     return mixin
 
 
@@ -101,7 +111,7 @@ class TestGetCandidateAgents:
     ):
         """Online agents with fresh heartbeat should be returned."""
         host = make_host(test_db, name="online-agent")
-        ns = make_node_state(test_db, agent_lab, "R1")
+        ns = make_node_state(test_db, agent_lab, "R1", desired="running")
         mixin = _make_mixin(test_db, agent_lab, agent_job, [ns])
 
         with patch(
@@ -118,7 +128,7 @@ class TestGetCandidateAgents:
     ):
         """Offline agents should not be returned."""
         make_host(test_db, name="offline-agent", status="offline")
-        ns = make_node_state(test_db, agent_lab, "R1")
+        ns = make_node_state(test_db, agent_lab, "R1", desired="running")
         mixin = _make_mixin(test_db, agent_lab, agent_job, [ns])
 
         with patch(
@@ -140,7 +150,7 @@ class TestGetCandidateAgents:
             status="online",
             heartbeat_offset=timedelta(minutes=10),
         )
-        ns = make_node_state(test_db, agent_lab, "R1")
+        ns = make_node_state(test_db, agent_lab, "R1", desired="running")
         mixin = _make_mixin(test_db, agent_lab, agent_job, [ns])
 
         with patch(
@@ -165,7 +175,7 @@ class TestResolveExplicitPlacements:
     ):
         """Node with explicit host_id pointing to an online host should be assigned."""
         host = make_host(test_db, name="explicit-host")
-        ns = make_node_state(test_db, agent_lab, "R1")
+        ns = make_node_state(test_db, agent_lab, "R1", desired="running")
 
         node_def = models.Node(
             lab_id=agent_lab.id,
@@ -206,7 +216,7 @@ class TestResolveExplicitPlacements:
     ):
         """Node with explicit host_id pointing to an offline host should fail the job."""
         host = make_host(test_db, name="down-host", status="online")
-        ns = make_node_state(test_db, agent_lab, "R1")
+        ns = make_node_state(test_db, agent_lab, "R1", desired="running")
 
         node_def = models.Node(
             lab_id=agent_lab.id,
@@ -244,7 +254,7 @@ class TestResolveExplicitPlacements:
     ):
         """Node with explicit host that is unreachable (ping fails) should fail the job."""
         host = make_host(test_db, name="unreachable-host")
-        ns = make_node_state(test_db, agent_lab, "R1")
+        ns = make_node_state(test_db, agent_lab, "R1", desired="running")
 
         node_def = models.Node(
             lab_id=agent_lab.id,
@@ -285,7 +295,7 @@ class TestResolveExplicitPlacements:
         self, test_db: Session, agent_lab: models.Lab, agent_job: models.Job,
     ):
         """When no nodes have explicit host_id the method should succeed."""
-        ns = make_node_state(test_db, agent_lab, "R1")
+        ns = make_node_state(test_db, agent_lab, "R1", desired="running")
 
         mixin = _make_mixin(test_db, agent_lab, agent_job, [ns])
 
@@ -309,7 +319,7 @@ class TestResolveAutoPlacements:
     ):
         """Node with a valid sticky placement on an online host should reuse it."""
         host = make_host(test_db, name="sticky-host")
-        ns = make_node_state(test_db, agent_lab, "R1")
+        ns = make_node_state(test_db, agent_lab, "R1", desired="running")
 
         placement = models.NodePlacement(
             lab_id=agent_lab.id,
@@ -348,7 +358,7 @@ class TestResolveAutoPlacements:
     ):
         """Sticky placement on offline host should be evicted (status=failed)."""
         host = make_host(test_db, name="dead-host", status="online")
-        ns = make_node_state(test_db, agent_lab, "R1")
+        ns = make_node_state(test_db, agent_lab, "R1", desired="running")
 
         placement = models.NodePlacement(
             lab_id=agent_lab.id,
@@ -408,7 +418,7 @@ class TestResolveAutoPlacements:
         agent_lab.agent_id = fallback.id
         test_db.commit()
 
-        ns = make_node_state(test_db, agent_lab, "R1")
+        ns = make_node_state(test_db, agent_lab, "R1", desired="running")
 
         mixin = _make_mixin(test_db, agent_lab, agent_job, [ns])
 

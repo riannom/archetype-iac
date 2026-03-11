@@ -155,6 +155,7 @@ class TestCreateLinkIfReady:
         link = make_link_state(
             test_db, sample_lab.id,
             desired_state="up", actual_state="down",
+            source_node="archetype-test-r1", target_node="archetype-test-r2",
             source_host_id=sample_host.id, target_host_id=sample_host.id,
         )
 

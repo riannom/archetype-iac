@@ -3,7 +3,7 @@
 Covers gaps not addressed by test_tasks_node_lifecycle_deploy.py:
   - _deploy_single_node: all branches (no db_node, no image, create fails,
     start fails, start success, AgentUnavailableError, generic exception)
-  - _start_single_node: success, "not found" fallback to redeploy, generic
+  - _deploy_single_node: success, "not found" fallback to redeploy, generic
     error, AgentUnavailableError
   - _deploy_single_node_with_retry: first-try success, retry on transient,
     retry exhausted, non-transient stops retry
@@ -59,7 +59,7 @@ class TestDeploySingleNode:
         host = make_host(test_db)
         lab = make_lab(test_db, test_user, agent_id=host.id)
         job = make_job(test_db, lab, test_user)
-        ns = make_node_state(test_db, lab, "n1", "R1")
+        ns = make_node_state(test_db, lab, "n1", "R1", desired="running")
 
         manager = _make_manager(test_db, lab, job, ["n1"], agent=host)
         manager.db_nodes_map = {}  # no entry for R1
@@ -76,7 +76,7 @@ class TestDeploySingleNode:
         host = make_host(test_db)
         lab = make_lab(test_db, test_user, agent_id=host.id)
         job = make_job(test_db, lab, test_user)
-        ns = make_node_state(test_db, lab, "n1", "R1")
+        ns = make_node_state(test_db, lab, "n1", "R1", desired="running")
         node_def = make_node(test_db, lab, "n1", "R1", "R1", host_id=host.id)
 
         manager = _make_manager(test_db, lab, job, ["n1"], agent=host)
@@ -102,7 +102,7 @@ class TestDeploySingleNode:
         host = make_host(test_db)
         lab = make_lab(test_db, test_user, agent_id=host.id)
         job = make_job(test_db, lab, test_user)
-        ns = make_node_state(test_db, lab, "n1", "R1")
+        ns = make_node_state(test_db, lab, "n1", "R1", desired="running")
         node_def = make_node(test_db, lab, "n1", "R1", "R1", host_id=host.id)
 
         manager = _make_manager(test_db, lab, job, ["n1"], agent=host)
@@ -136,7 +136,7 @@ class TestDeploySingleNode:
         host = make_host(test_db)
         lab = make_lab(test_db, test_user, agent_id=host.id)
         job = make_job(test_db, lab, test_user)
-        ns = make_node_state(test_db, lab, "n1", "R1")
+        ns = make_node_state(test_db, lab, "n1", "R1", desired="running")
         node_def = make_node(test_db, lab, "n1", "R1", "R1", host_id=host.id)
 
         manager = _make_manager(test_db, lab, job, ["n1"], agent=host)
@@ -170,7 +170,7 @@ class TestDeploySingleNode:
         host = make_host(test_db)
         lab = make_lab(test_db, test_user, agent_id=host.id)
         job = make_job(test_db, lab, test_user)
-        ns = make_node_state(test_db, lab, "n1", "R1")
+        ns = make_node_state(test_db, lab, "n1", "R1", desired="running")
         node_def = make_node(test_db, lab, "n1", "R1", "R1", host_id=host.id)
 
         manager = _make_manager(test_db, lab, job, ["n1"], agent=host)
@@ -206,7 +206,7 @@ class TestDeploySingleNode:
         host = make_host(test_db)
         lab = make_lab(test_db, test_user, agent_id=host.id)
         job = make_job(test_db, lab, test_user)
-        ns = make_node_state(test_db, lab, "n1", "R1")
+        ns = make_node_state(test_db, lab, "n1", "R1", desired="running")
         node_def = make_node(test_db, lab, "n1", "R1", "R1", host_id=host.id)
 
         manager = _make_manager(test_db, lab, job, ["n1"], agent=host)
@@ -250,7 +250,7 @@ class TestDeploySingleNode:
         host = make_host(test_db)
         lab = make_lab(test_db, test_user, agent_id=host.id)
         job = make_job(test_db, lab, test_user)
-        ns = make_node_state(test_db, lab, "n1", "R1")
+        ns = make_node_state(test_db, lab, "n1", "R1", desired="running")
         node_def = make_node(
             test_db,
             lab,
@@ -303,7 +303,7 @@ class TestDeploySingleNode:
         host = make_host(test_db)
         lab = make_lab(test_db, test_user, agent_id=host.id)
         job = make_job(test_db, lab, test_user)
-        ns = make_node_state(test_db, lab, "n1", "R1")
+        ns = make_node_state(test_db, lab, "n1", "R1", desired="running")
         node_def = make_node(test_db, lab, "n1", "R1", "R1", host_id=host.id)
 
         manager = _make_manager(test_db, lab, job, ["n1"], agent=host)
@@ -343,7 +343,7 @@ class TestDeploySingleNode:
         host = make_host(test_db)
         lab = make_lab(test_db, test_user, agent_id=host.id)
         job = make_job(test_db, lab, test_user)
-        ns = make_node_state(test_db, lab, "n1", "R1")
+        ns = make_node_state(test_db, lab, "n1", "R1", desired="running")
         node_def = make_node(test_db, lab, "n1", "R1", "R1", host_id=host.id)
 
         manager = _make_manager(test_db, lab, job, ["n1"], agent=host)
@@ -385,7 +385,7 @@ class TestDeploySingleNode:
         host = make_host(test_db)
         lab = make_lab(test_db, test_user, agent_id=host.id)
         job = make_job(test_db, lab, test_user)
-        ns = make_node_state(test_db, lab, "n1", "R1")
+        ns = make_node_state(test_db, lab, "n1", "R1", desired="running")
         node_def = make_node(test_db, lab, "n1", "R1", "R1", host_id=host.id)
 
         manager = _make_manager(test_db, lab, job, ["n1"], agent=host)
@@ -417,7 +417,7 @@ class TestDeploySingleNode:
         host = make_host(test_db)
         lab = make_lab(test_db, test_user, agent_id=host.id)
         job = make_job(test_db, lab, test_user)
-        ns = make_node_state(test_db, lab, "n1", "R1")
+        ns = make_node_state(test_db, lab, "n1", "R1", desired="running")
         node_def = make_node(test_db, lab, "n1", "R1", "R1", host_id=host.id)
 
         manager = _make_manager(test_db, lab, job, ["n1"], agent=host)
@@ -451,7 +451,7 @@ class TestDeploySingleNode:
 
 
 class TestStartSingleNode:
-    """Tests for _start_single_node()."""
+    """Tests for _deploy_single_node() — formerly _start_single_node scenarios."""
 
     def _setup_manager(self, test_db, test_user):
         host = make_host(test_db)
@@ -461,20 +461,31 @@ class TestStartSingleNode:
         node_def = make_node(test_db, lab, "n1", "R1", "R1", host_id=host.id)
         manager = _make_manager(test_db, lab, job, ["n1"], agent=host)
         manager.db_nodes_map = {"R1": node_def}
-        return manager, ns, host
+        manager.explicit_snapshots_map = {}
+        manager.latest_snapshots_map = {}
+        manager._manifest = None
+        return manager, ns, host, node_def
 
     @pytest.mark.asyncio
     async def test_start_success_marks_running(self, test_db, test_user):
-        """Successful start marks node as RUNNING and returns node_name."""
-        manager, ns, _ = self._setup_manager(test_db, test_user)
+        """Successful deploy marks node as RUNNING and returns node_name."""
+        manager, ns, _, node_def = self._setup_manager(test_db, test_user)
 
         with (
+            patch.object(manager.topo_service, "get_interface_count_map", return_value={"R1": 4}),
             patch("app.tasks.node_lifecycle_deploy.resolve_node_image", return_value="linux:latest"),
             patch("app.tasks.node_lifecycle_deploy.get_image_provider", return_value="docker"),
+            patch("app.tasks.node_lifecycle_deploy.lab_workspace", return_value=MagicMock()),
+            patch("app.tasks.node_lifecycle_deploy.get_device_service") as mock_ds,
             patch("app.tasks.node_lifecycle_deploy.agent_client") as mock_ac,
         ):
+            mock_ds.return_value.resolve_hardware_specs.return_value = {}
+            mock_ac.create_node_on_agent = AsyncMock(return_value={"success": True})
             mock_ac.start_node_on_agent = AsyncMock(return_value={"success": True})
-            result = await manager._start_single_node(ns)
+            mock_ac.get_lab_status_from_agent = AsyncMock(
+                return_value={"nodes": [{"name": "R1", "node_definition_id": node_def.id, "runtime_id": "container://r1"}]}
+            )
+            result = await manager._deploy_single_node(ns)
 
         assert result == "R1"
         assert ns.actual_state == NodeActualState.RUNNING.value
@@ -482,84 +493,92 @@ class TestStartSingleNode:
         assert ns.boot_started_at is not None
 
     @pytest.mark.asyncio
-    async def test_not_found_falls_back_to_redeploy(self, test_db, test_user):
-        """'not found' error in start response triggers full _deploy_single_node."""
-        manager, ns, _ = self._setup_manager(test_db, test_user)
-
-        redeploy_called = False
-
-        async def _mock_redeploy(ns_arg):
-            nonlocal redeploy_called
-            redeploy_called = True
-            ns_arg.actual_state = NodeActualState.RUNNING.value
-            return ns_arg.node_name
-
-        manager._deploy_single_node = _mock_redeploy
+    async def test_create_failure_marks_error_state(self, test_db, test_user):
+        """Create failure marks node as ERROR."""
+        manager, ns, _, node_def = self._setup_manager(test_db, test_user)
 
         with (
+            patch.object(manager.topo_service, "get_interface_count_map", return_value={"R1": 4}),
             patch("app.tasks.node_lifecycle_deploy.resolve_node_image", return_value="linux:latest"),
             patch("app.tasks.node_lifecycle_deploy.get_image_provider", return_value="docker"),
+            patch("app.tasks.node_lifecycle_deploy.lab_workspace", return_value=MagicMock()),
+            patch("app.tasks.node_lifecycle_deploy.get_device_service") as mock_ds,
             patch("app.tasks.node_lifecycle_deploy.agent_client") as mock_ac,
         ):
-            mock_ac.start_node_on_agent = AsyncMock(
-                return_value={"success": False, "error": "domain not found"}
-            )
-            result = await manager._start_single_node(ns)
-
-        assert redeploy_called is True
-        assert result == "R1"
-
-    @pytest.mark.asyncio
-    async def test_generic_error_marks_error_state(self, test_db, test_user):
-        """Non-'not found' start failure marks node as ERROR."""
-        manager, ns, _ = self._setup_manager(test_db, test_user)
-
-        with (
-            patch("app.tasks.node_lifecycle_deploy.resolve_node_image", return_value="linux:latest"),
-            patch("app.tasks.node_lifecycle_deploy.get_image_provider", return_value="docker"),
-            patch("app.tasks.node_lifecycle_deploy.agent_client") as mock_ac,
-        ):
-            mock_ac.start_node_on_agent = AsyncMock(
+            mock_ds.return_value.resolve_hardware_specs.return_value = {}
+            mock_ac.create_node_on_agent = AsyncMock(
                 return_value={"success": False, "error": "permission denied"}
             )
-            result = await manager._start_single_node(ns)
+            result = await manager._deploy_single_node(ns)
 
         assert result is None
         assert ns.actual_state == NodeActualState.ERROR.value
         assert "permission denied" in (ns.error_message or "")
 
     @pytest.mark.asyncio
-    async def test_agent_unavailable_sets_pending(self, test_db, test_user):
-        """AgentUnavailableError in start sets node to PENDING."""
-        manager, ns, _ = self._setup_manager(test_db, test_user)
+    async def test_start_failure_marks_error_state(self, test_db, test_user):
+        """Start failure (after successful create) marks node as ERROR."""
+        manager, ns, _, node_def = self._setup_manager(test_db, test_user)
 
         with (
+            patch.object(manager.topo_service, "get_interface_count_map", return_value={"R1": 4}),
             patch("app.tasks.node_lifecycle_deploy.resolve_node_image", return_value="linux:latest"),
             patch("app.tasks.node_lifecycle_deploy.get_image_provider", return_value="docker"),
+            patch("app.tasks.node_lifecycle_deploy.lab_workspace", return_value=MagicMock()),
+            patch("app.tasks.node_lifecycle_deploy.get_device_service") as mock_ds,
             patch("app.tasks.node_lifecycle_deploy.agent_client") as mock_ac,
         ):
+            mock_ds.return_value.resolve_hardware_specs.return_value = {}
+            mock_ac.create_node_on_agent = AsyncMock(return_value={"success": True})
             mock_ac.start_node_on_agent = AsyncMock(
+                return_value={"success": False, "error": "start permission denied"}
+            )
+            result = await manager._deploy_single_node(ns)
+
+        assert result is None
+        assert ns.actual_state == NodeActualState.ERROR.value
+        assert "start permission denied" in (ns.error_message or "")
+
+    @pytest.mark.asyncio
+    async def test_agent_unavailable_sets_pending(self, test_db, test_user):
+        """AgentUnavailableError in deploy sets node to PENDING."""
+        manager, ns, _, node_def = self._setup_manager(test_db, test_user)
+
+        with (
+            patch.object(manager.topo_service, "get_interface_count_map", return_value={"R1": 4}),
+            patch("app.tasks.node_lifecycle_deploy.resolve_node_image", return_value="linux:latest"),
+            patch("app.tasks.node_lifecycle_deploy.get_image_provider", return_value="docker"),
+            patch("app.tasks.node_lifecycle_deploy.lab_workspace", return_value=MagicMock()),
+            patch("app.tasks.node_lifecycle_deploy.get_device_service") as mock_ds,
+            patch("app.tasks.node_lifecycle_deploy.agent_client") as mock_ac,
+        ):
+            mock_ds.return_value.resolve_hardware_specs.return_value = {}
+            mock_ac.create_node_on_agent = AsyncMock(
                 side_effect=AgentUnavailableError("agent-1", "timeout")
             )
-            result = await manager._start_single_node(ns)
+            result = await manager._deploy_single_node(ns)
 
         assert result is None
         assert ns.actual_state == NodeActualState.PENDING.value
 
     @pytest.mark.asyncio
     async def test_exception_marks_error(self, test_db, test_user):
-        """Unexpected exception in _start_single_node marks node as ERROR."""
-        manager, ns, _ = self._setup_manager(test_db, test_user)
+        """Unexpected exception in _deploy_single_node marks node as ERROR."""
+        manager, ns, _, node_def = self._setup_manager(test_db, test_user)
 
         with (
+            patch.object(manager.topo_service, "get_interface_count_map", return_value={"R1": 4}),
             patch("app.tasks.node_lifecycle_deploy.resolve_node_image", return_value="linux:latest"),
             patch("app.tasks.node_lifecycle_deploy.get_image_provider", return_value="docker"),
+            patch("app.tasks.node_lifecycle_deploy.lab_workspace", return_value=MagicMock()),
+            patch("app.tasks.node_lifecycle_deploy.get_device_service") as mock_ds,
             patch("app.tasks.node_lifecycle_deploy.agent_client") as mock_ac,
         ):
-            mock_ac.start_node_on_agent = AsyncMock(
+            mock_ds.return_value.resolve_hardware_specs.return_value = {}
+            mock_ac.create_node_on_agent = AsyncMock(
                 side_effect=ValueError("malformed response")
             )
-            result = await manager._start_single_node(ns)
+            result = await manager._deploy_single_node(ns)
 
         assert result is None
         assert ns.actual_state == NodeActualState.ERROR.value
@@ -580,7 +599,7 @@ class TestDeploySingleNodeWithRetry:
         host = make_host(test_db)
         lab = make_lab(test_db, test_user, agent_id=host.id)
         job = make_job(test_db, lab, test_user)
-        ns = make_node_state(test_db, lab, "n1", "R1")
+        ns = make_node_state(test_db, lab, "n1", "R1", desired="running")
 
         manager = _make_manager(test_db, lab, job, ["n1"], agent=host)
         call_count = 0
@@ -605,7 +624,7 @@ class TestDeploySingleNodeWithRetry:
         host = make_host(test_db)
         lab = make_lab(test_db, test_user, agent_id=host.id)
         job = make_job(test_db, lab, test_user)
-        ns = make_node_state(test_db, lab, "n1", "R1")
+        ns = make_node_state(test_db, lab, "n1", "R1", desired="running")
 
         manager = _make_manager(test_db, lab, job, ["n1"], agent=host)
         call_count = 0
@@ -639,7 +658,7 @@ class TestDeploySingleNodeWithRetry:
         host = make_host(test_db)
         lab = make_lab(test_db, test_user, agent_id=host.id)
         job = make_job(test_db, lab, test_user)
-        ns = make_node_state(test_db, lab, "n1", "R1")
+        ns = make_node_state(test_db, lab, "n1", "R1", desired="running")
 
         manager = _make_manager(test_db, lab, job, ["n1"], agent=host)
 
@@ -667,7 +686,7 @@ class TestDeploySingleNodeWithRetry:
         host = make_host(test_db)
         lab = make_lab(test_db, test_user, agent_id=host.id)
         job = make_job(test_db, lab, test_user)
-        ns = make_node_state(test_db, lab, "n1", "R1")
+        ns = make_node_state(test_db, lab, "n1", "R1", desired="running")
 
         manager = _make_manager(test_db, lab, job, ["n1"], agent=host)
         call_count = 0
@@ -1270,8 +1289,8 @@ class TestConnectSameHostLinksExtended:
         lab = make_lab(test_db, test_user, agent_id=host.id)
         job = make_job(test_db, lab, test_user)
 
-        ns1 = make_node_state(test_db, lab, "n1", "R1", actual="running")
-        ns2 = make_node_state(test_db, lab, "n2", "R2", actual="stopped")  # Not running
+        ns1 = make_node_state(test_db, lab, "n1", "R1", actual="running", desired="running")
+        ns2 = make_node_state(test_db, lab, "n2", "R2", actual="stopped")  # Not running, desired="running")
         ns1.is_ready = True
         test_db.commit()
         make_placement(test_db, lab, "R1", host.id)
@@ -1321,8 +1340,8 @@ class TestConnectSameHostLinksExtended:
         lab = make_lab(test_db, test_user, agent_id=host.id)
         job = make_job(test_db, lab, test_user)
 
-        ns1 = make_node_state(test_db, lab, "n1", "R1", actual="running")
-        ns2 = make_node_state(test_db, lab, "n2", "R2", actual="running")
+        ns1 = make_node_state(test_db, lab, "n1", "R1", actual="running", desired="running")
+        ns2 = make_node_state(test_db, lab, "n2", "R2", actual="running", desired="running")
         ns1.is_ready = True
         ns2.is_ready = True
         test_db.commit()
@@ -1373,8 +1392,8 @@ class TestConnectSameHostLinksExtended:
         lab = make_lab(test_db, test_user, agent_id=host.id)
         job = make_job(test_db, lab, test_user)
 
-        ns1 = make_node_state(test_db, lab, "n1", "R1", actual="running")
-        ns2 = make_node_state(test_db, lab, "n2", "R2", actual="running")
+        ns1 = make_node_state(test_db, lab, "n1", "R1", actual="running", desired="running")
+        ns2 = make_node_state(test_db, lab, "n2", "R2", actual="running", desired="running")
         ns1.is_ready = True
         ns2.is_ready = True
         test_db.commit()
@@ -1421,8 +1440,8 @@ class TestConnectSameHostLinksExtended:
         lab = make_lab(test_db, test_user, agent_id=host.id)
         job = make_job(test_db, lab, test_user)
 
-        ns1 = make_node_state(test_db, lab, "n1", "R1", actual="running")
-        ns2 = make_node_state(test_db, lab, "n2", "R2", actual="running")
+        ns1 = make_node_state(test_db, lab, "n1", "R1", actual="running", desired="running")
+        ns2 = make_node_state(test_db, lab, "n2", "R2", actual="running", desired="running")
         ns1.is_ready = True
         ns2.is_ready = True
         test_db.commit()
@@ -1474,8 +1493,8 @@ class TestConnectSameHostLinksExtended:
         lab = make_lab(test_db, test_user, agent_id=host.id)
         job = make_job(test_db, lab, test_user)
 
-        ns1 = make_node_state(test_db, lab, "n1", "R1", actual="running")
-        ns2 = make_node_state(test_db, lab, "n2", "R2", actual="running")
+        ns1 = make_node_state(test_db, lab, "n1", "R1", actual="running", desired="running")
+        ns2 = make_node_state(test_db, lab, "n2", "R2", actual="running", desired="running")
         ns1.is_ready = True
         ns2.is_ready = True
         test_db.commit()
@@ -1529,9 +1548,9 @@ class TestConnectSameHostLinksExtended:
         lab = make_lab(test_db, test_user, agent_id=host.id)
         job = make_job(test_db, lab, test_user)
 
-        ns1 = make_node_state(test_db, lab, "n1", "R1", actual="running")
-        ns2 = make_node_state(test_db, lab, "n2", "R2", actual="running")
-        ns3 = make_node_state(test_db, lab, "n3", "R3", actual="running")
+        ns1 = make_node_state(test_db, lab, "n1", "R1", actual="running", desired="running")
+        ns2 = make_node_state(test_db, lab, "n2", "R2", actual="running", desired="running")
+        ns3 = make_node_state(test_db, lab, "n3", "R3", actual="running", desired="running")
         ns1.is_ready = True
         ns2.is_ready = True
         ns3.is_ready = True
@@ -1588,8 +1607,8 @@ class TestConnectSameHostLinksExtended:
         lab = make_lab(test_db, test_user, agent_id=host.id)
         job = make_job(test_db, lab, test_user)
 
-        ns1 = make_node_state(test_db, lab, "n1", "R1", actual="running")
-        ns2 = make_node_state(test_db, lab, "n2", "R2", actual="running")
+        ns1 = make_node_state(test_db, lab, "n1", "R1", actual="running", desired="running")
+        ns2 = make_node_state(test_db, lab, "n2", "R2", actual="running", desired="running")
         ns1.is_ready = True
         ns2.is_ready = True
         test_db.commit()
@@ -1632,8 +1651,8 @@ class TestConnectSameHostLinksExtended:
         lab = make_lab(test_db, test_user, agent_id=host.id)
         job = make_job(test_db, lab, test_user)
 
-        ns1 = make_node_state(test_db, lab, "n1", "R1", actual="running")
-        ns2 = make_node_state(test_db, lab, "n2", "R2", actual="running")
+        ns1 = make_node_state(test_db, lab, "n1", "R1", actual="running", desired="running")
+        ns2 = make_node_state(test_db, lab, "n2", "R2", actual="running", desired="running")
         ns1.is_ready = True
         ns2.is_ready = False
         test_db.commit()
