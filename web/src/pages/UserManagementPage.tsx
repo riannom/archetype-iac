@@ -7,6 +7,9 @@ import { apiRequest } from '../api';
 import { ArchetypeIcon } from '../components/icons';
 import AdminMenuButton from '../components/AdminMenuButton';
 import { formatDate } from '../utils/format';
+import UserCreateModal from './UserCreateModal';
+import UserEditModal from './UserEditModal';
+import UserPasswordModal from './UserPasswordModal';
 
 // ============================================================================
 // Types
@@ -17,26 +20,7 @@ interface UsersResponse {
   total: number;
 }
 
-interface CreateUserPayload {
-  username: string;
-  password: string;
-  email?: string;
-  global_role?: GlobalRole;
-}
-
-interface EditUserPayload {
-  email?: string;
-  global_role?: GlobalRole;
-}
-
 type ModalType = 'create' | 'edit' | 'password' | null;
-
-const GLOBAL_ROLES: { value: GlobalRole; label: string; description: string }[] = [
-  { value: 'super_admin', label: 'Super Admin', description: 'Full system access' },
-  { value: 'admin', label: 'Admin', description: 'Manage users and labs' },
-  { value: 'operator', label: 'Operator', description: 'Deploy and manage labs' },
-  { value: 'viewer', label: 'Viewer', description: 'Read-only access' },
-];
 
 // ============================================================================
 // Helpers
@@ -67,13 +51,6 @@ function formatRoleLabel(role: GlobalRole): string {
   }
 }
 
-function getPasswordStrength(password: string): { label: string; color: string; width: string } {
-  if (password.length === 0) return { label: '', color: '', width: 'w-0' };
-  if (password.length < 10) return { label: 'Weak', color: 'bg-red-500', width: 'w-1/3' };
-  if (password.length < 15) return { label: 'Moderate', color: 'bg-amber-500', width: 'w-2/3' };
-  return { label: 'Strong', color: 'bg-green-500', width: 'w-full' };
-}
-
 
 // ============================================================================
 // Component
@@ -94,21 +71,6 @@ const UserManagementPage: React.FC = () => {
   // Modal state
   const [activeModal, setActiveModal] = useState<ModalType>(null);
   const [selectedUser, setSelectedUser] = useState<User | null>(null);
-  const [modalError, setModalError] = useState<string | null>(null);
-  const [modalLoading, setModalLoading] = useState(false);
-
-  // Create user form
-  const [createUsername, setCreateUsername] = useState('');
-  const [createPassword, setCreatePassword] = useState('');
-  const [createEmail, setCreateEmail] = useState('');
-  const [createRole, setCreateRole] = useState<GlobalRole>('viewer');
-
-  // Edit user form
-  const [editEmail, setEditEmail] = useState('');
-  const [editRole, setEditRole] = useState<GlobalRole>('viewer');
-
-  // Password reset form
-  const [newPassword, setNewPassword] = useState('');
 
   // Toggle loading
   const [togglingUser, setTogglingUser] = useState<string | null>(null);
@@ -141,35 +103,22 @@ const UserManagementPage: React.FC = () => {
   // Modal Helpers
   // ============================================================================
 
-  const resetModalState = () => {
+  const closeModal = () => {
     setActiveModal(null);
     setSelectedUser(null);
-    setModalError(null);
-    setModalLoading(false);
-    setCreateUsername('');
-    setCreatePassword('');
-    setCreateEmail('');
-    setCreateRole('viewer');
-    setEditEmail('');
-    setEditRole('viewer');
-    setNewPassword('');
   };
 
   const openCreateModal = () => {
-    resetModalState();
     setActiveModal('create');
+    setSelectedUser(null);
   };
 
   const openEditModal = (u: User) => {
-    resetModalState();
     setSelectedUser(u);
-    setEditEmail(u.email || '');
-    setEditRole(u.global_role);
     setActiveModal('edit');
   };
 
   const openPasswordModal = (u: User) => {
-    resetModalState();
     setSelectedUser(u);
     setActiveModal('password');
   };
@@ -177,80 +126,6 @@ const UserManagementPage: React.FC = () => {
   // ============================================================================
   // Actions
   // ============================================================================
-
-  const handleCreateUser = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!createUsername.trim() || !createPassword.trim()) {
-      setModalError('Username and password are required.');
-      return;
-    }
-    setModalLoading(true);
-    setModalError(null);
-    try {
-      const payload: CreateUserPayload = {
-        username: createUsername.trim(),
-        password: createPassword,
-        global_role: createRole,
-      };
-      if (createEmail.trim()) {
-        payload.email = createEmail.trim();
-      }
-      await apiRequest<User>('/users', {
-        method: 'POST',
-        body: JSON.stringify(payload),
-      });
-      resetModalState();
-      await loadUsers();
-    } catch (err) {
-      setModalError(err instanceof Error ? err.message : 'Failed to create user');
-    } finally {
-      setModalLoading(false);
-    }
-  };
-
-  const handleEditUser = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!selectedUser) return;
-    setModalLoading(true);
-    setModalError(null);
-    try {
-      const payload: EditUserPayload = {
-        email: editEmail.trim() || undefined,
-        global_role: editRole,
-      };
-      await apiRequest<User>(`/users/${selectedUser.id}`, {
-        method: 'PATCH',
-        body: JSON.stringify(payload),
-      });
-      resetModalState();
-      await loadUsers();
-    } catch (err) {
-      setModalError(err instanceof Error ? err.message : 'Failed to update user');
-    } finally {
-      setModalLoading(false);
-    }
-  };
-
-  const handleResetPassword = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!selectedUser || !newPassword.trim()) {
-      setModalError('Password is required.');
-      return;
-    }
-    setModalLoading(true);
-    setModalError(null);
-    try {
-      await apiRequest<{ status: string }>(`/users/${selectedUser.id}/password`, {
-        method: 'PUT',
-        body: JSON.stringify({ new_password: newPassword }),
-      });
-      resetModalState();
-    } catch (err) {
-      setModalError(err instanceof Error ? err.message : 'Failed to reset password');
-    } finally {
-      setModalLoading(false);
-    }
-  };
 
   const handleToggleActive = async (u: User) => {
     setTogglingUser(u.id);
@@ -279,9 +154,6 @@ const UserManagementPage: React.FC = () => {
   // Render
   // ============================================================================
 
-  const passwordStrength = activeModal === 'create'
-    ? getPasswordStrength(createPassword)
-    : getPasswordStrength(newPassword);
   return (
     <>
       <div className="h-screen bg-stone-50/72 dark:bg-stone-900/72 backdrop-blur-[1px] flex flex-col overflow-hidden">
@@ -495,349 +367,25 @@ const UserManagementPage: React.FC = () => {
         onClose={() => setShowThemeSelector(false)}
       />
 
-      {/* Create User Modal */}
-      {activeModal === 'create' && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-white dark:bg-stone-900 rounded-2xl shadow-2xl w-full max-w-md mx-4">
-            <div className="p-6 border-b border-stone-200 dark:border-stone-800">
-              <div className="flex items-center justify-between">
-                <h2 className="text-lg font-bold text-stone-900 dark:text-white flex items-center gap-2">
-                  <i className="fa-solid fa-user-plus text-sage-600 dark:text-sage-400"></i>
-                  Create User
-                </h2>
-                <button
-                  onClick={resetModalState}
-                  className="text-stone-400 hover:text-stone-600 dark:hover:text-stone-300 transition-colors"
-                >
-                  <i className="fa-solid fa-times text-lg"></i>
-                </button>
-              </div>
-            </div>
+      <UserCreateModal
+        isOpen={activeModal === 'create'}
+        onClose={closeModal}
+        onCreated={loadUsers}
+      />
 
-            <form onSubmit={handleCreateUser}>
-              <div className="p-6 space-y-4">
-                {/* Username */}
-                <div>
-                  <label className="block text-xs font-medium text-stone-600 dark:text-stone-400 mb-1.5">
-                    Username <span className="text-red-500">*</span>
-                  </label>
-                  <input
-                    type="text"
-                    value={createUsername}
-                    onChange={(e) => setCreateUsername(e.target.value)}
-                    className="w-full px-3 py-2 bg-stone-50 dark:bg-stone-800 border border-stone-300 dark:border-stone-700 rounded-lg text-sm text-stone-900 dark:text-white placeholder-stone-400 dark:placeholder-stone-500 focus:outline-none focus:ring-2 focus:ring-sage-500/50 focus:border-sage-500"
-                    placeholder="Enter username"
-                    autoFocus
-                    required
-                  />
-                </div>
+      <UserEditModal
+        isOpen={activeModal === 'edit'}
+        user={selectedUser}
+        onClose={closeModal}
+        onSaved={loadUsers}
+      />
 
-                {/* Password */}
-                <div>
-                  <label className="block text-xs font-medium text-stone-600 dark:text-stone-400 mb-1.5">
-                    Password <span className="text-red-500">*</span>
-                  </label>
-                  <input
-                    type="password"
-                    value={createPassword}
-                    onChange={(e) => setCreatePassword(e.target.value)}
-                    className="w-full px-3 py-2 bg-stone-50 dark:bg-stone-800 border border-stone-300 dark:border-stone-700 rounded-lg text-sm text-stone-900 dark:text-white placeholder-stone-400 dark:placeholder-stone-500 focus:outline-none focus:ring-2 focus:ring-sage-500/50 focus:border-sage-500"
-                    placeholder="Enter password"
-                    required
-                  />
-                  {/* Password strength indicator */}
-                  {createPassword.length > 0 && (
-                    <div className="mt-2">
-                      <div className="h-1.5 bg-stone-200 dark:bg-stone-700 rounded-full overflow-hidden">
-                        <div className={`h-full ${passwordStrength.color} ${passwordStrength.width} rounded-full transition-all duration-300`}></div>
-                      </div>
-                      <span className={`text-[10px] font-medium mt-1 block ${
-                        passwordStrength.label === 'Weak' ? 'text-red-500' :
-                        passwordStrength.label === 'Moderate' ? 'text-amber-500' :
-                        'text-green-500'
-                      }`}>
-                        {passwordStrength.label}
-                        {passwordStrength.label === 'Weak' && ' — use at least 10 characters'}
-                        {passwordStrength.label === 'Moderate' && ' — use 15+ characters for strong'}
-                      </span>
-                    </div>
-                  )}
-                </div>
-
-                {/* Email */}
-                <div>
-                  <label className="block text-xs font-medium text-stone-600 dark:text-stone-400 mb-1.5">
-                    Email <span className="text-stone-400 dark:text-stone-500">(optional)</span>
-                  </label>
-                  <input
-                    type="email"
-                    value={createEmail}
-                    onChange={(e) => setCreateEmail(e.target.value)}
-                    className="w-full px-3 py-2 bg-stone-50 dark:bg-stone-800 border border-stone-300 dark:border-stone-700 rounded-lg text-sm text-stone-900 dark:text-white placeholder-stone-400 dark:placeholder-stone-500 focus:outline-none focus:ring-2 focus:ring-sage-500/50 focus:border-sage-500"
-                    placeholder="user@example.com"
-                  />
-                </div>
-
-                {/* Role */}
-                <div>
-                  <label className="block text-xs font-medium text-stone-600 dark:text-stone-400 mb-1.5">
-                    Role
-                  </label>
-                  <select
-                    value={createRole}
-                    onChange={(e) => setCreateRole(e.target.value as GlobalRole)}
-                    className="w-full px-3 py-2 bg-stone-50 dark:bg-stone-800 border border-stone-300 dark:border-stone-700 rounded-lg text-sm text-stone-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-sage-500/50 focus:border-sage-500"
-                  >
-                    {GLOBAL_ROLES.map((r) => (
-                      <option key={r.value} value={r.value}>
-                        {r.label} — {r.description}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                {/* Modal error */}
-                {modalError && (
-                  <div className="p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg text-sm text-red-700 dark:text-red-300">
-                    {modalError}
-                  </div>
-                )}
-              </div>
-
-              <div className="p-6 border-t border-stone-200 dark:border-stone-800 flex justify-end gap-3">
-                <button
-                  type="button"
-                  onClick={resetModalState}
-                  className="px-4 py-2 glass-control text-stone-600 dark:text-stone-400 rounded-lg transition-all text-sm font-medium"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={modalLoading || !createUsername.trim() || !createPassword.trim()}
-                  className={`px-4 py-2 rounded-lg transition-all text-sm font-medium ${
-                    !modalLoading && createUsername.trim() && createPassword.trim()
-                      ? 'bg-sage-600 hover:bg-sage-700 text-white'
-                      : 'bg-stone-200 dark:bg-stone-800 text-stone-400 cursor-not-allowed'
-                  }`}
-                >
-                  {modalLoading ? (
-                    <>
-                      <i className="fa-solid fa-spinner fa-spin mr-2"></i>
-                      Creating...
-                    </>
-                  ) : (
-                    <>
-                      <i className="fa-solid fa-user-plus mr-2"></i>
-                      Create User
-                    </>
-                  )}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {/* Edit User Modal */}
-      {activeModal === 'edit' && selectedUser && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-white dark:bg-stone-900 rounded-2xl shadow-2xl w-full max-w-md mx-4">
-            <div className="p-6 border-b border-stone-200 dark:border-stone-800">
-              <div className="flex items-center justify-between">
-                <h2 className="text-lg font-bold text-stone-900 dark:text-white flex items-center gap-2">
-                  <i className="fa-solid fa-pen-to-square text-sage-600 dark:text-sage-400"></i>
-                  Edit User
-                </h2>
-                <button
-                  onClick={resetModalState}
-                  className="text-stone-400 hover:text-stone-600 dark:hover:text-stone-300 transition-colors"
-                >
-                  <i className="fa-solid fa-times text-lg"></i>
-                </button>
-              </div>
-              <p className="text-xs text-stone-500 dark:text-stone-400 mt-1">
-                Editing <strong className="text-stone-700 dark:text-stone-300">{selectedUser.username}</strong>
-              </p>
-            </div>
-
-            <form onSubmit={handleEditUser}>
-              <div className="p-6 space-y-4">
-                {/* Email */}
-                <div>
-                  <label className="block text-xs font-medium text-stone-600 dark:text-stone-400 mb-1.5">
-                    Email
-                  </label>
-                  <input
-                    type="email"
-                    value={editEmail}
-                    onChange={(e) => setEditEmail(e.target.value)}
-                    className="w-full px-3 py-2 bg-stone-50 dark:bg-stone-800 border border-stone-300 dark:border-stone-700 rounded-lg text-sm text-stone-900 dark:text-white placeholder-stone-400 dark:placeholder-stone-500 focus:outline-none focus:ring-2 focus:ring-sage-500/50 focus:border-sage-500"
-                    placeholder="user@example.com"
-                    autoFocus
-                  />
-                </div>
-
-                {/* Role */}
-                <div>
-                  <label className="block text-xs font-medium text-stone-600 dark:text-stone-400 mb-1.5">
-                    Role
-                  </label>
-                  <select
-                    value={editRole}
-                    onChange={(e) => setEditRole(e.target.value as GlobalRole)}
-                    className="w-full px-3 py-2 bg-stone-50 dark:bg-stone-800 border border-stone-300 dark:border-stone-700 rounded-lg text-sm text-stone-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-sage-500/50 focus:border-sage-500"
-                  >
-                    {GLOBAL_ROLES.map((r) => (
-                      <option key={r.value} value={r.value}>
-                        {r.label} — {r.description}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                {/* Modal error */}
-                {modalError && (
-                  <div className="p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg text-sm text-red-700 dark:text-red-300">
-                    {modalError}
-                  </div>
-                )}
-              </div>
-
-              <div className="p-6 border-t border-stone-200 dark:border-stone-800 flex justify-end gap-3">
-                <button
-                  type="button"
-                  onClick={resetModalState}
-                  className="px-4 py-2 glass-control text-stone-600 dark:text-stone-400 rounded-lg transition-all text-sm font-medium"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={modalLoading}
-                  className={`px-4 py-2 rounded-lg transition-all text-sm font-medium ${
-                    !modalLoading
-                      ? 'bg-sage-600 hover:bg-sage-700 text-white'
-                      : 'bg-stone-200 dark:bg-stone-800 text-stone-400 cursor-not-allowed'
-                  }`}
-                >
-                  {modalLoading ? (
-                    <>
-                      <i className="fa-solid fa-spinner fa-spin mr-2"></i>
-                      Saving...
-                    </>
-                  ) : (
-                    <>
-                      <i className="fa-solid fa-check mr-2"></i>
-                      Save Changes
-                    </>
-                  )}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {/* Reset Password Modal */}
-      {activeModal === 'password' && selectedUser && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-white dark:bg-stone-900 rounded-2xl shadow-2xl w-full max-w-md mx-4">
-            <div className="p-6 border-b border-stone-200 dark:border-stone-800">
-              <div className="flex items-center justify-between">
-                <h2 className="text-lg font-bold text-stone-900 dark:text-white flex items-center gap-2">
-                  <i className="fa-solid fa-key text-amber-500"></i>
-                  Reset Password
-                </h2>
-                <button
-                  onClick={resetModalState}
-                  className="text-stone-400 hover:text-stone-600 dark:hover:text-stone-300 transition-colors"
-                >
-                  <i className="fa-solid fa-times text-lg"></i>
-                </button>
-              </div>
-              <p className="text-xs text-stone-500 dark:text-stone-400 mt-1">
-                Setting new password for <strong className="text-stone-700 dark:text-stone-300">{selectedUser.username}</strong>
-              </p>
-            </div>
-
-            <form onSubmit={handleResetPassword}>
-              <div className="p-6 space-y-4">
-                {/* New Password */}
-                <div>
-                  <label className="block text-xs font-medium text-stone-600 dark:text-stone-400 mb-1.5">
-                    New Password <span className="text-red-500">*</span>
-                  </label>
-                  <input
-                    type="password"
-                    value={newPassword}
-                    onChange={(e) => setNewPassword(e.target.value)}
-                    className="w-full px-3 py-2 bg-stone-50 dark:bg-stone-800 border border-stone-300 dark:border-stone-700 rounded-lg text-sm text-stone-900 dark:text-white placeholder-stone-400 dark:placeholder-stone-500 focus:outline-none focus:ring-2 focus:ring-sage-500/50 focus:border-sage-500"
-                    placeholder="Enter new password"
-                    autoFocus
-                    required
-                  />
-                  {/* Password strength indicator */}
-                  {newPassword.length > 0 && (
-                    <div className="mt-2">
-                      <div className="h-1.5 bg-stone-200 dark:bg-stone-700 rounded-full overflow-hidden">
-                        <div className={`h-full ${passwordStrength.color} ${passwordStrength.width} rounded-full transition-all duration-300`}></div>
-                      </div>
-                      <span className={`text-[10px] font-medium mt-1 block ${
-                        passwordStrength.label === 'Weak' ? 'text-red-500' :
-                        passwordStrength.label === 'Moderate' ? 'text-amber-500' :
-                        'text-green-500'
-                      }`}>
-                        {passwordStrength.label}
-                        {passwordStrength.label === 'Weak' && ' — use at least 10 characters'}
-                        {passwordStrength.label === 'Moderate' && ' — use 15+ characters for strong'}
-                      </span>
-                    </div>
-                  )}
-                </div>
-
-                {/* Modal error */}
-                {modalError && (
-                  <div className="p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg text-sm text-red-700 dark:text-red-300">
-                    {modalError}
-                  </div>
-                )}
-              </div>
-
-              <div className="p-6 border-t border-stone-200 dark:border-stone-800 flex justify-end gap-3">
-                <button
-                  type="button"
-                  onClick={resetModalState}
-                  className="px-4 py-2 glass-control text-stone-600 dark:text-stone-400 rounded-lg transition-all text-sm font-medium"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={modalLoading || !newPassword.trim()}
-                  className={`px-4 py-2 rounded-lg transition-all text-sm font-medium ${
-                    !modalLoading && newPassword.trim()
-                      ? 'bg-amber-600 hover:bg-amber-700 text-white'
-                      : 'bg-stone-200 dark:bg-stone-800 text-stone-400 cursor-not-allowed'
-                  }`}
-                >
-                  {modalLoading ? (
-                    <>
-                      <i className="fa-solid fa-spinner fa-spin mr-2"></i>
-                      Resetting...
-                    </>
-                  ) : (
-                    <>
-                      <i className="fa-solid fa-key mr-2"></i>
-                      Reset Password
-                    </>
-                  )}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
+      <UserPasswordModal
+        isOpen={activeModal === 'password'}
+        user={selectedUser}
+        onClose={closeModal}
+        onReset={loadUsers}
+      />
     </>
   );
 };
