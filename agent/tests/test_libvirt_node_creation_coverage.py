@@ -258,6 +258,7 @@ class TestCreateNode:
             config_inject_method=None, config_inject_partition=None,
             config_inject_fs_type=None, config_inject_path=None,
             config_inject_iso_volume_label=None, config_inject_iso_filename=None,
+            cpu_features_disable=[],
         )
         provider._create_node_pre_sync = MagicMock(return_value=None)
         provider._get_base_image = MagicMock(return_value=None)
@@ -283,6 +284,7 @@ class TestCreateNode:
             config_inject_method=None, config_inject_partition=None,
             config_inject_fs_type=None, config_inject_path=None,
             config_inject_iso_volume_label=None, config_inject_iso_filename=None,
+            cpu_features_disable=[],
         )
         mock_vendor.return_value = None
         provider._create_node_pre_sync = MagicMock(return_value=None)
@@ -321,6 +323,7 @@ class TestCreateNode:
             config_inject_method=None, config_inject_partition=None,
             config_inject_fs_type=None, config_inject_path=None,
             config_inject_iso_volume_label=None, config_inject_iso_filename=None,
+            cpu_features_disable=[],
         )
         mock_vendor.return_value = None
         provider._create_node_pre_sync = MagicMock(return_value=None)
@@ -361,6 +364,7 @@ class TestCreateNode:
             config_inject_method=None, config_inject_partition=None,
             config_inject_fs_type=None, config_inject_path=None,
             config_inject_iso_volume_label=None, config_inject_iso_filename=None,
+            cpu_features_disable=[],
         )
         provider._create_node_pre_sync = MagicMock(return_value=None)
         provider._get_base_image = MagicMock(return_value="/images/test.qcow2")

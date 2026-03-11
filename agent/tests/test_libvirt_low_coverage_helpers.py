@@ -1093,6 +1093,7 @@ async def test_deploy_mixed_success_and_errors(monkeypatch, tmp_path):
         reserved_nics=0,
         cpu_sockets=1,
         needs_nested_vmx=False,
+        cpu_features_disable=[],
     )
     monkeypatch.setattr(libvirt_mod, "get_libvirt_config", lambda _kind: cfg)
 
@@ -1159,6 +1160,7 @@ async def test_deploy_returns_failure_when_all_nodes_fail(monkeypatch, tmp_path)
         reserved_nics=0,
         cpu_sockets=1,
         needs_nested_vmx=False,
+        cpu_features_disable=[],
     )
     monkeypatch.setattr(libvirt_mod, "get_libvirt_config", lambda _kind: cfg)
 
@@ -1720,6 +1722,7 @@ async def test_create_node_early_and_error_paths(monkeypatch, tmp_path):
         config_inject_path="/startup-config",
         config_inject_iso_volume_label="config",
         config_inject_iso_filename="startup-config",
+        cpu_features_disable=[],
     )
     monkeypatch.setattr(libvirt_mod, "get_libvirt_config", lambda _kind: cfg)
     monkeypatch.setattr(libvirt_mod, "get_vendor_config", lambda _kind: SimpleNamespace(default_startup_config=None))
@@ -1785,6 +1788,7 @@ async def test_create_node_define_and_success_paths(monkeypatch, tmp_path):
         config_inject_path="/startup-config",
         config_inject_iso_volume_label="config",
         config_inject_iso_filename="startup-config",
+        cpu_features_disable=[],
     )
     monkeypatch.setattr(libvirt_mod, "get_libvirt_config", lambda _kind: cfg)
     monkeypatch.setattr(libvirt_mod, "get_vendor_config", lambda _kind: SimpleNamespace(default_startup_config=None))
