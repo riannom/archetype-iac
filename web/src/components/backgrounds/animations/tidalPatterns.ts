@@ -5,7 +5,8 @@
  * gentle tide advancing and receding.
  */
 
-import { useEffect, useRef } from 'react';
+import { useRef } from 'react';
+import { useCanvasAnimation } from './useCanvasAnimation';
 
 interface SandRipple {
   y: number;
@@ -38,44 +39,28 @@ export function useTidalPatterns(
   const ripplesRef = useRef<SandRipple[]>([]);
   const foamRef = useRef<WaterFoam[]>([]);
   const sparklesRef = useRef<Sparkle[]>([]);
-  const animationRef = useRef<number | undefined>(undefined);
   const timeRef = useRef(0);
   const tidePhaseRef = useRef(0);
 
-  useEffect(() => {
-    if (!enabled) return;
+  useCanvasAnimation(canvasRef, enabled, {
+    onInit: (_ctx, canvas) => {
+      const height = canvas.height;
 
-    const canvas = canvasRef.current;
-    if (!canvas) return;
+      // Initialize sand ripples
+      ripplesRef.current = [];
+      for (let y = 50; y < height; y += 25) {
+        ripplesRef.current.push({
+          y,
+          amplitude: 2 + Math.random() * 3,
+          frequency: 0.015 + Math.random() * 0.01,
+          phase: Math.random() * Math.PI * 2,
+        });
+      }
 
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-
-    const resizeCanvas = () => {
-      canvas.width = window.innerWidth;
-      canvas.height = window.innerHeight;
-    };
-
-    resizeCanvas();
-    window.addEventListener('resize', resizeCanvas);
-
-    const height = canvas.height;
-
-    // Initialize sand ripples
-    ripplesRef.current = [];
-    for (let y = 50; y < height; y += 25) {
-      ripplesRef.current.push({
-        y,
-        amplitude: 2 + Math.random() * 3,
-        frequency: 0.015 + Math.random() * 0.01,
-        phase: Math.random() * Math.PI * 2,
-      });
-    }
-
-    foamRef.current = [];
-    sparklesRef.current = [];
-
-    const animate = () => {
+      foamRef.current = [];
+      sparklesRef.current = [];
+    },
+    onFrame: (ctx, canvas) => {
       const currentWidth = canvas.width;
       const currentHeight = canvas.height;
       ctx.clearRect(0, 0, currentWidth, currentHeight);
@@ -228,17 +213,6 @@ export function useTidalPatterns(
       if (sparklesRef.current.length > 50) {
         sparklesRef.current = sparklesRef.current.slice(-40);
       }
-
-      animationRef.current = requestAnimationFrame(animate);
-    };
-
-    animate();
-
-    return () => {
-      window.removeEventListener('resize', resizeCanvas);
-      if (animationRef.current) {
-        cancelAnimationFrame(animationRef.current);
-      }
-    };
-  }, [canvasRef, darkMode, opacity, enabled]);
+    },
+  }, [darkMode, opacity]);
 }

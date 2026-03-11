@@ -3,7 +3,8 @@
  * Gentle floating protection shields
  */
 
-import { useRef, useEffect, useCallback } from 'react';
+import { useRef } from 'react';
+import { useCanvasAnimation } from './useCanvasAnimation';
 
 interface Shield {
   x: number;
@@ -22,12 +23,11 @@ export function useFloatingShields(
   darkMode: boolean,
   opacity: number,
   active: boolean
-) {
+): void {
   const shieldsRef = useRef<Shield[]>([]);
-  const animationRef = useRef<number | undefined>(undefined);
   const timeRef = useRef<number>(0);
 
-  const createShield = useCallback((canvas: HTMLCanvasElement): Shield => {
+  function createShield(canvas: HTMLCanvasElement): Shield {
     return {
       x: Math.random() * canvas.width,
       y: Math.random() * canvas.height,
@@ -39,15 +39,15 @@ export function useFloatingShields(
       opacity: 0.3 + Math.random() * 0.3,
       pulsePhase: Math.random() * Math.PI * 2,
     };
-  }, []);
+  }
 
-  const drawShield = useCallback((
+  function drawShield(
     ctx: CanvasRenderingContext2D,
     shield: Shield,
     isDark: boolean,
     opacityMultiplier: number,
     time: number
-  ) => {
+  ) {
     ctx.save();
     ctx.translate(shield.x, shield.y);
     ctx.rotate(shield.rotation);
@@ -84,60 +84,38 @@ export function useFloatingShields(
     ctx.stroke();
 
     ctx.restore();
-  }, []);
+  }
 
-  useEffect(() => {
-    if (!active) return;
+  useCanvasAnimation(
+    canvasRef,
+    active,
+    {
+      onInit: (_ctx, canvas) => {
+        const shieldCount = Math.floor((canvas.width * canvas.height) / 80000);
+        shieldsRef.current = Array.from({ length: Math.max(5, shieldCount) }, () =>
+          createShield(canvas)
+        );
+      },
+      onFrame: (ctx, canvas) => {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        timeRef.current += 0.016;
 
-    const canvas = canvasRef.current;
-    if (!canvas) return;
+        const opacityMultiplier = opacity / 50;
 
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
+        shieldsRef.current.forEach((shield) => {
+          shield.x += shield.vx;
+          shield.y += shield.vy;
+          shield.rotation += shield.rotationSpeed;
 
-    const resizeCanvas = () => {
-      canvas.width = window.innerWidth;
-      canvas.height = window.innerHeight;
-    };
-    resizeCanvas();
-    window.addEventListener('resize', resizeCanvas);
+          if (shield.x < -50) shield.x = canvas.width + 50;
+          if (shield.x > canvas.width + 50) shield.x = -50;
+          if (shield.y < -50) shield.y = canvas.height + 50;
+          if (shield.y > canvas.height + 50) shield.y = -50;
 
-    const shieldCount = Math.floor((canvas.width * canvas.height) / 80000);
-    shieldsRef.current = Array.from({ length: Math.max(5, shieldCount) }, () =>
-      createShield(canvas)
-    );
-
-    const animate = () => {
-      if (!canvas || !ctx) return;
-
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      timeRef.current += 0.016;
-
-      const opacityMultiplier = opacity / 50;
-
-      shieldsRef.current.forEach((shield) => {
-        shield.x += shield.vx;
-        shield.y += shield.vy;
-        shield.rotation += shield.rotationSpeed;
-
-        if (shield.x < -50) shield.x = canvas.width + 50;
-        if (shield.x > canvas.width + 50) shield.x = -50;
-        if (shield.y < -50) shield.y = canvas.height + 50;
-        if (shield.y > canvas.height + 50) shield.y = -50;
-
-        drawShield(ctx, shield, darkMode, opacityMultiplier, timeRef.current);
-      });
-
-      animationRef.current = requestAnimationFrame(animate);
-    };
-
-    animate();
-
-    return () => {
-      window.removeEventListener('resize', resizeCanvas);
-      if (animationRef.current) {
-        cancelAnimationFrame(animationRef.current);
-      }
-    };
-  }, [canvasRef, darkMode, opacity, createShield, drawShield, active]);
+          drawShield(ctx, shield, darkMode, opacityMultiplier, timeRef.current);
+        });
+      },
+    },
+    [darkMode, opacity]
+  );
 }
