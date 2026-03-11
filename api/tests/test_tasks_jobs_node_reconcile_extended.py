@@ -140,7 +140,7 @@ class TestCreateCrossHostLinksNewLinks:
         make_link(
             test_db, sample_lab.id,
             n1.id, "eth1", n2.id, "eth1",
-            "R1:eth1-R2:eth1",
+            link_name="R1:eth1-R2:eth1",
         )
 
         mock_create = AsyncMock(return_value=(1, 0))

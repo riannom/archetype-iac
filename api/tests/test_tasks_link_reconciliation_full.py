@@ -149,12 +149,13 @@ class TestCreateLinkIfReady:
         """Link is created when both endpoint nodes are running on the same host."""
         from app.tasks.live_links import create_link_if_ready
 
-        make_node_state(test_db, sample_lab.id, "archetype-test-r1", actual_state="running", is_ready=True, desired="running")
-        make_node_state(test_db, sample_lab.id, "archetype-test-r2", actual_state="running", is_ready=True, desired="running")
+        make_node_state(test_db, sample_lab.id, "archetype-test-r1", actual_state="running", is_ready=True)
+        make_node_state(test_db, sample_lab.id, "archetype-test-r2", actual_state="running", is_ready=True)
 
         link = make_link_state(
             test_db, sample_lab.id,
             desired_state="up", actual_state="down",
+            source_node="archetype-test-r1", target_node="archetype-test-r2",
             source_host_id=sample_host.id, target_host_id=sample_host.id,
         )
 
@@ -264,8 +265,8 @@ class TestCreateLinkIfReadyAdditional:
         """Link creation is skipped when source node is not running."""
         from app.tasks.live_links import create_link_if_ready
 
-        make_node_state(test_db, sample_lab.id, "archetype-test-r1", actual_state="stopped", desired="running")
-        make_node_state(test_db, sample_lab.id, "archetype-test-r2", actual_state="running", desired="running")
+        make_node_state(test_db, sample_lab.id, "archetype-test-r1", actual_state="stopped")
+        make_node_state(test_db, sample_lab.id, "archetype-test-r2", actual_state="running")
 
         link = make_link_state(
             test_db, sample_lab.id,

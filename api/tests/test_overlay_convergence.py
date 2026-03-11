@@ -556,6 +556,7 @@ async def test_convergence_protects_in_progress_links(test_db, sample_lab, multi
         actual_state="creating",
         source_host_id=multiple_hosts[0].id,
         target_host_id=multiple_hosts[1].id,
+        is_cross_host=True,
     )
     test_db.commit()
 

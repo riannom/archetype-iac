@@ -388,7 +388,7 @@ class TestCleanupStuckJobs:
 
         lab = make_lab(test_db, owner_id=admin_user.id)
         old_time = datetime.now(timezone.utc) - timedelta(minutes=30)
-        make_job(test_db, lab_id=lab.id, status="running", created_at=old_time)
+        make_job(test_db, lab_id=lab.id, status="running", created_at=old_time, action="deploy")
 
         resp = test_client.post(
             "/cleanup-stuck-jobs?max_age_minutes=5", headers=admin_auth_headers

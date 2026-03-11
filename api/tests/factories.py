@@ -210,11 +210,10 @@ def make_node(
     db: Session,
     lab: models.Lab | str,
     gui_id: str | None = None,
-    display_name: str | None = None,
+    display_name: str = "R1",
     container_name: str | None = None,
     device: str = "linux",
     *,
-    name: str | None = None,
     node_id: str | None = None,
     host_id: str | None = None,
     node_type: str = "device",
@@ -223,24 +222,14 @@ def make_node(
     managed_interface_id: str | None = None,
     flush_only: bool = False,
 ) -> models.Node:
-    """Create and persist a Node definition.
-
-    Accepts ``name=`` as an alias for ``display_name`` (and ``container_name``
-    when neither is set explicitly).  When only ``gui_id`` is provided,
-    ``display_name`` and ``container_name`` are derived from it so that
-    multiple nodes in the same lab get distinct ``container_name`` values.
-    """
+    """Create and persist a Node definition."""
     lab_id = lab.id if isinstance(lab, models.Lab) else lab
-
-    # ``name=`` is a legacy alias used by many old _make_node helpers.
-    resolved_display = display_name or name or gui_id or "R1"
-    resolved_container = container_name or resolved_display
 
     kwargs: dict = dict(
         lab_id=lab_id,
-        gui_id=gui_id or resolved_display.lower(),
-        display_name=resolved_display,
-        container_name=resolved_container,
+        gui_id=gui_id or display_name.lower(),
+        display_name=display_name,
+        container_name=container_name or display_name,
         device=device,
         host_id=host_id,
         node_type=node_type,
@@ -262,7 +251,7 @@ def make_node(
 def make_node_state(
     db: Session,
     lab: models.Lab | str,
-    node_id_or_name=None,
+    node_id_or_name: str = "R1",
     node_name: str | None = None,
     *,
     node_id: str | None = None,
@@ -288,12 +277,6 @@ def make_node_state(
 
     If *updated_at* is provided, the column is set via a raw UPDATE after
     the initial insert (to bypass any ``onupdate`` trigger on the column).
-
-    The 3rd positional argument can be:
-      - A string used as node_name (or node_id when *node_name* is also given)
-      - A ``models.Node`` object (extracts ``id`` as ``node_definition_id``,
-        ``container_name`` as ``node_name``)
-      - ``None`` (defaults to ``"R1"``)
     """
     lab_id = lab.id if isinstance(lab, models.Lab) else lab
 
@@ -302,24 +285,16 @@ def make_node_state(
     resolved_desired = desired_state or desired or "stopped"
     resolved_actual = actual_state or actual or "undeployed"
 
-    # If a Node object is passed as the 3rd positional, extract its fields.
-    if isinstance(node_id_or_name, models.Node):
-        node_obj = node_id_or_name
-        node_definition_id = node_definition_id or node_obj.id
-        node_id_or_name = node_obj.gui_id
-        if node_name is None:
-            node_name = node_obj.container_name
-
     # Flexible positional args: supports both
     #   make_node_state(db, lab, node_id, node_name, ...)
     #   make_node_state(db, lab, node_name, ...)
     if node_name is not None:
         # Called with two positional strings: (node_id, node_name)
-        resolved_node_id = node_id or node_id_or_name or node_name.lower()
+        resolved_node_id = node_id or node_id_or_name
         resolved_node_name = node_name
     else:
         # Called with one positional string: treat as node_name
-        resolved_node_name = node_id_or_name or "R1"
+        resolved_node_name = node_id_or_name
         resolved_node_id = node_id or resolved_node_name.lower()
 
     ns = models.NodeState(
@@ -513,25 +488,37 @@ def make_link_state(
 def make_link(
     db: Session,
     lab: models.Lab | str,
-    source_node_id: str,
+    source_node_id: str | models.Node,
     source_interface: str,
-    target_node_id: str,
+    target_node_id: str | models.Node,
     target_interface: str,
     *,
     link_name: str | None = None,
     config_json: str | None = None,
+    mtu: int | None = None,
+    bandwidth: int | None = None,
     flush_only: bool = False,
 ) -> models.Link:
     """Create and persist a Link definition."""
     lab_id = lab.id if isinstance(lab, models.Lab) else lab
 
-    link = models.Link(
+    # Accept Node objects as well as raw ID strings.
+    resolved_source = source_node_id.id if isinstance(source_node_id, models.Node) else source_node_id
+    resolved_target = target_node_id.id if isinstance(target_node_id, models.Node) else target_node_id
+
+    kwargs: dict = dict(
         lab_id=lab_id,
         link_name=link_name or f"{source_interface}-{target_interface}",
-        source_node_id=source_node_id,
+        source_node_id=resolved_source,
         source_interface=source_interface,
-        target_node_id=target_node_id,
+        target_node_id=resolved_target,
         target_interface=target_interface,
         config_json=config_json,
     )
+    if mtu is not None:
+        kwargs["mtu"] = mtu
+    if bandwidth is not None:
+        kwargs["bandwidth"] = bandwidth
+
+    link = models.Link(**kwargs)
     return _persist(db, link, flush_only=flush_only)

@@ -156,13 +156,13 @@ def _make_nlm(session=None, node_states=None, db_nodes=None):
 
 class TestDominantDeviceType:
     def test_single_known_type(self):
-        ns = SimpleNamespace(node_name="r1")
+        ns = SimpleNamespace(node_name="r1", node_id="r1")
         db_node = SimpleNamespace(device="ceos")
         nlm = _make_nlm(node_states=[ns], db_nodes={"r1": db_node})
         assert nlm._dominant_device_type() == "ceos"
 
     def test_unknown_type_returns_other(self):
-        ns = SimpleNamespace(node_name="r1")
+        ns = SimpleNamespace(node_name="r1", node_id="r1")
         db_node = SimpleNamespace(device="unknown_vendor_xyz")
         nlm = _make_nlm(node_states=[ns], db_nodes={"r1": db_node})
         result = nlm._dominant_device_type()
@@ -174,12 +174,12 @@ class TestDominantDeviceType:
         assert nlm._dominant_device_type() == "other"
 
     def test_missing_db_node_defaults_to_linux(self):
-        ns = SimpleNamespace(node_name="r1")
+        ns = SimpleNamespace(node_name="r1", node_id="r1")
         nlm = _make_nlm(node_states=[ns], db_nodes={})
         assert nlm._dominant_device_type() == "linux"
 
     def test_most_common_wins(self):
-        states = [SimpleNamespace(node_name=f"r{i}") for i in range(3)]
+        states = [SimpleNamespace(node_name=f"r{i}", node_id=f"r{i}") for i in range(3)]
         db_nodes = {
             "r0": SimpleNamespace(device="ceos"),
             "r1": SimpleNamespace(device="srlinux"),
@@ -196,9 +196,9 @@ class TestDominantDeviceType:
 class TestGroupNodesByDeviceType:
     def test_groups_by_type(self):
         states = [
-            SimpleNamespace(node_name="r1"),
-            SimpleNamespace(node_name="r2"),
-            SimpleNamespace(node_name="s1"),
+            SimpleNamespace(node_name="r1", node_id="r1"),
+            SimpleNamespace(node_name="r2", node_id="r2"),
+            SimpleNamespace(node_name="s1", node_id="s1"),
         ]
         db_nodes = {
             "r1": SimpleNamespace(device="ceos"),
@@ -215,7 +215,7 @@ class TestGroupNodesByDeviceType:
         assert len(group_dict["srlinux"]) == 1
 
     def test_unknown_type_grouped_as_other(self):
-        states = [SimpleNamespace(node_name="r1")]
+        states = [SimpleNamespace(node_name="r1", node_id="r1")]
         db_nodes = {"r1": SimpleNamespace(device="vendor_xyz")}
         nlm = _make_nlm(db_nodes=db_nodes)
         groups = nlm._group_nodes_by_device_type(states)

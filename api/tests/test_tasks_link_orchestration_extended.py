@@ -39,13 +39,15 @@ class TestCreateExternalNetworkLinksExtended:
             is_up=True,
         )
         device_node = make_node(
-            test_db, sample_lab, sample_host,
+            test_db, sample_lab,
             gui_id="n1", display_name="R1", container_name="r1",
+            host_id=sample_host.id,
         )
         ext_node = make_node(
-            test_db, sample_lab, sample_host,
+            test_db, sample_lab,
             gui_id="ext1", display_name="External", container_name="ext1",
             node_type="external", managed_interface_id=managed_iface.id,
+            host_id=sample_host.id,
         )
         link_def = make_link(test_db, sample_lab, device_node, "eth1", ext_node, "_external")
         link_state = make_link_state(
@@ -88,20 +90,23 @@ class TestCreateExternalNetworkLinksExtended:
             is_up=True,
         )
         device1 = make_node(
-            test_db, sample_lab, sample_host,
+            test_db, sample_lab,
             gui_id="n1", display_name="R1", container_name="r1",
+            host_id=sample_host.id,
         )
         device2 = make_node(
-            test_db, sample_lab, sample_host,
+            test_db, sample_lab,
             gui_id="n2", display_name="R2", container_name="r2",
+            host_id=sample_host.id,
         )
         ext_node = make_node(
-            test_db, sample_lab, sample_host,
+            test_db, sample_lab,
             gui_id="ext1", display_name="External", container_name="ext1",
             node_type="external", managed_interface_id=managed_iface.id,
+            host_id=sample_host.id,
         )
-        link_def1 = make_link(test_db, sample_lab, device1, "eth1", ext_node, "_external")
-        link_def2 = make_link(test_db, sample_lab, device2, "eth1", ext_node, "_external")
+        link_def1 = make_link(test_db, sample_lab, device1, "eth1", ext_node, "_external", link_name="r1:eth1-_ext:eth99:_external")
+        link_def2 = make_link(test_db, sample_lab, device2, "eth1", ext_node, "_external", link_name="r2:eth1-_ext:eth99:_external")
         ls1 = make_link_state(
             test_db, sample_lab,
             link_name="r1:eth1-_ext:eth99:_external",
@@ -182,13 +187,15 @@ class TestCreateExternalNetworkLinksExtended:
             is_up=True,
         )
         device_node = make_node(
-            test_db, sample_lab, sample_host,
+            test_db, sample_lab,
             gui_id="n1", display_name="R1", container_name="r1",
+            host_id=sample_host.id,
         )
         ext_node = make_node(
-            test_db, sample_lab, sample_host,
+            test_db, sample_lab,
             gui_id="ext1", display_name="External", container_name="ext1",
             node_type="external", managed_interface_id=managed_iface.id,
+            host_id=sample_host.id,
         )
         link_def = make_link(test_db, sample_lab, device_node, "eth1", ext_node, "_external")
         link_state = make_link_state(
@@ -237,13 +244,15 @@ class TestCreateExternalNetworkLinksExtended:
             is_up=True,
         )
         ext_node = make_node(
-            test_db, sample_lab, host_a,
+            test_db, sample_lab,
             gui_id="ext1", display_name="External", container_name="ext1",
             node_type="external", managed_interface_id=managed_iface.id,
+            host_id=host_a.id,
         )
         device_node = make_node(
-            test_db, sample_lab, host_b,
+            test_db, sample_lab,
             gui_id="n1", display_name="R1", container_name="r1",
+            host_id=host_b.id,
         )
         link_def = make_link(test_db, sample_lab, device_node, "eth1", ext_node, "_external")
         link_state = make_link_state(
@@ -302,13 +311,15 @@ class TestCreateExternalNetworkLinksExtended:
             is_up=True,
         )
         ext_node = make_node(
-            test_db, sample_lab, host_a,
+            test_db, sample_lab,
             gui_id="ext1", display_name="External", container_name="ext1",
             node_type="external", managed_interface_id=managed_iface.id,
+            host_id=host_a.id,
         )
         device_node = make_node(
-            test_db, sample_lab, host_b,
+            test_db, sample_lab,
             gui_id="n1", display_name="R1", container_name="r1",
+            host_id=host_b.id,
         )
         link_def = make_link(test_db, sample_lab, device_node, "eth1", ext_node, "_external")
         link_state = make_link_state(
@@ -353,12 +364,14 @@ class TestCreateDeploymentLinksExtended:
         from app.tasks.link_orchestration import create_deployment_links
 
         node1 = make_node(
-            test_db, sample_lab, sample_host,
+            test_db, sample_lab,
             gui_id="n1", display_name="R1", container_name="r1", device="ceos",
+            host_id=sample_host.id,
         )
         node2 = make_node(
-            test_db, sample_lab, sample_host,
+            test_db, sample_lab,
             gui_id="n2", display_name="R2", container_name="r2", device="ceos",
+            host_id=sample_host.id,
         )
         make_link(test_db, sample_lab, node1, "Ethernet1", node2, "Ethernet2")
         test_db.commit()
@@ -394,12 +407,14 @@ class TestCreateDeploymentLinksExtended:
         from app.tasks.link_orchestration import create_deployment_links
 
         node1 = make_node(
-            test_db, sample_lab, sample_host,
+            test_db, sample_lab,
             gui_id="n1", display_name="R1", container_name="r1",
+            host_id=sample_host.id,
         )
         node2 = make_node(
-            test_db, sample_lab, sample_host,
+            test_db, sample_lab,
             gui_id="n2", display_name="R2", container_name="r2",
+            host_id=sample_host.id,
         )
         make_link(test_db, sample_lab, node1, "eth1", node2, "eth1")
         test_db.add_all([
@@ -470,12 +485,14 @@ class TestCreateDeploymentLinksExtended:
         from app.tasks.link_orchestration import create_deployment_links
 
         node1 = make_node(
-            test_db, sample_lab, sample_host,
+            test_db, sample_lab,
             gui_id="n1", display_name="R1", container_name="r1",
+            host_id=sample_host.id,
         )
         node2 = make_node(
-            test_db, sample_lab, sample_host,
+            test_db, sample_lab,
             gui_id="n2", display_name="R2", container_name="r2",
+            host_id=sample_host.id,
         )
         link = make_link(test_db, sample_lab, node1, "eth1", node2, "eth1")
         test_db.flush()
@@ -719,12 +736,14 @@ class TestCreateSameHostLinkExtended:
         sample_host.git_sha = "2a2e4f7b18b512faf1802f60303a0e8a77a0e0d1"
 
         make_node(
-            test_db, sample_lab, sample_host,
+            test_db, sample_lab,
             gui_id="n1", display_name="CEOS-5", container_name="ceos_5", device="ceos",
+            host_id=sample_host.id,
         )
         make_node(
-            test_db, sample_lab, sample_host,
+            test_db, sample_lab,
             gui_id="n2", display_name="CISCO_N9KV-4", container_name="cisco_n9kv_4", device="cisco_n9kv",
+            host_id=sample_host.id,
         )
         link_state = make_link_state(
             test_db, sample_lab,

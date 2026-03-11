@@ -61,6 +61,16 @@ def _make_mixin(
     mixin.agent = None
     mixin.log_parts = []
     mixin._broadcast_state = MagicMock()
+
+    # _resolve_db_node lives on NodeLifecycleManager but the mixin calls it
+    # via self in _resolve_explicit_placements.  Provide the same logic here.
+    def _resolve_db_node(ns):
+        return (
+            mixin.db_nodes_map.get(ns.node_name)
+            or mixin.db_nodes_by_gui_id.get(ns.node_id)
+        )
+    mixin._resolve_db_node = _resolve_db_node
+
     return mixin
 
 
