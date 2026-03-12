@@ -5,7 +5,8 @@
  * firefly-like lava particles rising into the night sky.
  */
 
-import { useEffect, useRef } from 'react';
+import { useRef } from 'react';
+import { useCanvasAnimation } from './useCanvasAnimation';
 
 interface LavaParticle {
   x: number;
@@ -52,217 +53,209 @@ export function useVolcanicIslands(
   const palmsRef = useRef<PalmTree[]>([]);
   const wavesRef = useRef<OceanWave[]>([]);
   const starsRef = useRef<Star[]>([]);
-  const animationRef = useRef<number | undefined>(undefined);
   const timeRef = useRef(0);
   const glowPulseRef = useRef(0);
+  const horizonYRef = useRef(0);
+  const volcanoXRef = useRef(0);
+  const volcanoYRef = useRef(0);
 
-  useEffect(() => {
-    if (!enabled) return;
+  function drawVolcano(ctx: CanvasRenderingContext2D, x: number, baseY: number) {
+    const glowIntensity = 0.6 + Math.sin(glowPulseRef.current) * 0.3;
 
-    const canvas = canvasRef.current;
-    if (!canvas) return;
+    // Sky glow behind volcano (draw first, behind everything)
+    const skyGlow = ctx.createRadialGradient(
+      x,
+      baseY - 80,
+      30,
+      x,
+      baseY - 80,
+      250
+    );
+    skyGlow.addColorStop(0, `rgba(255, 80, 0, ${glowIntensity * 0.2})`);
+    skyGlow.addColorStop(0.4, `rgba(200, 40, 0, ${glowIntensity * 0.1})`);
+    skyGlow.addColorStop(1, 'rgba(100, 20, 0, 0)');
 
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
+    ctx.beginPath();
+    ctx.arc(x, baseY - 80, 250, 0, Math.PI * 2);
+    ctx.fillStyle = skyGlow;
+    ctx.fill();
 
-    const resizeCanvas = () => {
-      canvas.width = window.innerWidth;
-      canvas.height = window.innerHeight;
-    };
+    // Calculate offset to align volcano base with horizon
+    const baseOffset = 160; // How far down the base extends from baseY
 
-    resizeCanvas();
-    window.addEventListener('resize', resizeCanvas);
+    // Volcano mountain silhouette - much larger and more dramatic
+    ctx.beginPath();
+    ctx.moveTo(x - 180, baseY + baseOffset);
+    // Left slope with slight ridge
+    ctx.lineTo(x - 120, baseY + 60);
+    ctx.lineTo(x - 100, baseY + 70);
+    ctx.lineTo(x - 50, baseY - 20);
+    // Crater rim
+    ctx.lineTo(x - 25, baseY - 40);
+    ctx.lineTo(x - 15, baseY - 30); // Crater dip
+    ctx.lineTo(x + 15, baseY - 30); // Crater dip
+    ctx.lineTo(x + 25, baseY - 40);
+    // Right slope
+    ctx.lineTo(x + 50, baseY - 20);
+    ctx.lineTo(x + 100, baseY + 70);
+    ctx.lineTo(x + 120, baseY + 60);
+    ctx.lineTo(x + 180, baseY + baseOffset);
+    ctx.closePath();
 
-    const width = canvas.width;
-    const height = canvas.height;
-    const horizonY = height * 0.55;
-    const volcanoX = width * 0.85;
-    const volcanoY = horizonY - height * 0.15;
+    // Medium darkness for good contrast
+    ctx.fillStyle = darkMode ? '#151010' : '#201510';
+    ctx.fill();
 
-    // Initialize stars
-    starsRef.current = [];
-    for (let i = 0; i < 60; i++) {
-      starsRef.current.push({
-        x: Math.random() * width,
-        y: Math.random() * horizonY * 0.7,
-        size: 0.5 + Math.random() * 1.2,
-        twinklePhase: Math.random() * Math.PI * 2,
-      });
-    }
+    // Add subtle highlight on left slope for depth
+    ctx.beginPath();
+    ctx.moveTo(x - 180, baseY + baseOffset);
+    ctx.lineTo(x - 120, baseY + 60);
+    ctx.lineTo(x - 100, baseY + 70);
+    ctx.lineTo(x - 50, baseY - 20);
+    ctx.lineTo(x - 25, baseY - 40);
+    ctx.lineTo(x - 180, baseY + baseOffset);
+    ctx.closePath();
+    ctx.fillStyle = darkMode ? 'rgba(50, 30, 25, 0.4)' : 'rgba(70, 40, 30, 0.3)';
+    ctx.fill();
 
-    // Initialize palm trees on the foreground island
-    palmsRef.current = [];
-    const islandLeft = width * 0.05;
-    const islandRight = width * 0.35;
-    for (let i = 0; i < 5; i++) {
-      const x = islandLeft + Math.random() * (islandRight - islandLeft);
-      palmsRef.current.push({
-        x,
-        y: horizonY + 10 + Math.random() * 20,
-        height: 60 + Math.random() * 40,
-        trunkCurve: (Math.random() - 0.5) * 30,
-        frondCount: 6 + Math.floor(Math.random() * 3),
-        swayPhase: Math.random() * Math.PI * 2,
-        swaySpeed: 0.01 + Math.random() * 0.01,
-      });
-    }
+    // Volcanic glow at crater - larger
+    const craterGlow = ctx.createRadialGradient(
+      x,
+      baseY - 25,
+      8,
+      x,
+      baseY - 25,
+      80
+    );
+    craterGlow.addColorStop(0, `rgba(255, 120, 20, ${glowIntensity * 0.9})`);
+    craterGlow.addColorStop(0.2, `rgba(255, 80, 0, ${glowIntensity * 0.6})`);
+    craterGlow.addColorStop(0.5, `rgba(255, 50, 0, ${glowIntensity * 0.3})`);
+    craterGlow.addColorStop(0.7, `rgba(200, 30, 0, ${glowIntensity * 0.15})`);
+    craterGlow.addColorStop(1, 'rgba(100, 0, 0, 0)');
 
-    // Initialize ocean waves
-    wavesRef.current = [];
-    for (let i = 0; i < 4; i++) {
-      wavesRef.current.push({
-        y: horizonY + 20 + i * 25,
-        phase: Math.random() * Math.PI * 2,
-        speed: 0.01 + Math.random() * 0.01,
-        amplitude: 3 + Math.random() * 4,
-      });
-    }
+    ctx.beginPath();
+    ctx.arc(x, baseY - 25, 80, 0, Math.PI * 2);
+    ctx.fillStyle = craterGlow;
+    ctx.fill();
 
-    particlesRef.current = [];
+    // Lava glow inside crater
+    const lavaGlow = ctx.createRadialGradient(
+      x,
+      baseY - 28,
+      0,
+      x,
+      baseY - 28,
+      20
+    );
+    lavaGlow.addColorStop(0, `rgba(255, 200, 100, ${glowIntensity})`);
+    lavaGlow.addColorStop(0.5, `rgba(255, 150, 50, ${glowIntensity * 0.7})`);
+    lavaGlow.addColorStop(1, `rgba(255, 100, 0, ${glowIntensity * 0.3})`);
 
-    const drawVolcano = (ctx: CanvasRenderingContext2D, x: number, baseY: number) => {
-      const glowIntensity = 0.6 + Math.sin(glowPulseRef.current) * 0.3;
+    ctx.beginPath();
+    ctx.arc(x, baseY - 28, 20, 0, Math.PI * 2);
+    ctx.fillStyle = lavaGlow;
+    ctx.fill();
+  }
 
-      // Sky glow behind volcano (draw first, behind everything)
-      const skyGlow = ctx.createRadialGradient(
-        x,
-        baseY - 80,
-        30,
-        x,
-        baseY - 80,
-        250
-      );
-      skyGlow.addColorStop(0, `rgba(255, 80, 0, ${glowIntensity * 0.2})`);
-      skyGlow.addColorStop(0.4, `rgba(200, 40, 0, ${glowIntensity * 0.1})`);
-      skyGlow.addColorStop(1, 'rgba(100, 20, 0, 0)');
+  function drawPalmTree(ctx: CanvasRenderingContext2D, palm: PalmTree) {
+    const sway = Math.sin(palm.swayPhase) * 5;
 
-      ctx.beginPath();
-      ctx.arc(x, baseY - 80, 250, 0, Math.PI * 2);
-      ctx.fillStyle = skyGlow;
-      ctx.fill();
+    // Trunk
+    ctx.beginPath();
+    ctx.moveTo(palm.x, palm.y);
+    const topX = palm.x + palm.trunkCurve + sway;
+    const topY = palm.y - palm.height;
 
-      // Calculate offset to align volcano base with horizon
-      const baseOffset = 160; // How far down the base extends from baseY
+    // Curved trunk using quadratic bezier
+    ctx.quadraticCurveTo(
+      palm.x + palm.trunkCurve * 0.5,
+      palm.y - palm.height * 0.5,
+      topX,
+      topY
+    );
 
-      // Volcano mountain silhouette - much larger and more dramatic
-      ctx.beginPath();
-      ctx.moveTo(x - 180, baseY + baseOffset);
-      // Left slope with slight ridge
-      ctx.lineTo(x - 120, baseY + 60);
-      ctx.lineTo(x - 100, baseY + 70);
-      ctx.lineTo(x - 50, baseY - 20);
-      // Crater rim
-      ctx.lineTo(x - 25, baseY - 40);
-      ctx.lineTo(x - 15, baseY - 30); // Crater dip
-      ctx.lineTo(x + 15, baseY - 30); // Crater dip
-      ctx.lineTo(x + 25, baseY - 40);
-      // Right slope
-      ctx.lineTo(x + 50, baseY - 20);
-      ctx.lineTo(x + 100, baseY + 70);
-      ctx.lineTo(x + 120, baseY + 60);
-      ctx.lineTo(x + 180, baseY + baseOffset);
-      ctx.closePath();
+    ctx.strokeStyle = darkMode ? '#0a0505' : '#1a0f0a';
+    ctx.lineWidth = 4;
+    ctx.stroke();
 
-      // Medium darkness for good contrast
-      ctx.fillStyle = darkMode ? '#151010' : '#201510';
-      ctx.fill();
-
-      // Add subtle highlight on left slope for depth
-      ctx.beginPath();
-      ctx.moveTo(x - 180, baseY + baseOffset);
-      ctx.lineTo(x - 120, baseY + 60);
-      ctx.lineTo(x - 100, baseY + 70);
-      ctx.lineTo(x - 50, baseY - 20);
-      ctx.lineTo(x - 25, baseY - 40);
-      ctx.lineTo(x - 180, baseY + baseOffset);
-      ctx.closePath();
-      ctx.fillStyle = darkMode ? 'rgba(50, 30, 25, 0.4)' : 'rgba(70, 40, 30, 0.3)';
-      ctx.fill();
-
-      // Volcanic glow at crater - larger
-      const craterGlow = ctx.createRadialGradient(
-        x,
-        baseY - 25,
-        8,
-        x,
-        baseY - 25,
-        80
-      );
-      craterGlow.addColorStop(0, `rgba(255, 120, 20, ${glowIntensity * 0.9})`);
-      craterGlow.addColorStop(0.2, `rgba(255, 80, 0, ${glowIntensity * 0.6})`);
-      craterGlow.addColorStop(0.5, `rgba(255, 50, 0, ${glowIntensity * 0.3})`);
-      craterGlow.addColorStop(0.7, `rgba(200, 30, 0, ${glowIntensity * 0.15})`);
-      craterGlow.addColorStop(1, 'rgba(100, 0, 0, 0)');
+    // Fronds
+    const frondLength = 35 + Math.random() * 15;
+    for (let i = 0; i < palm.frondCount; i++) {
+      const angle = (i / palm.frondCount) * Math.PI - Math.PI / 2;
+      const frondSway = Math.sin(palm.swayPhase + i * 0.3) * 0.1;
 
       ctx.beginPath();
-      ctx.arc(x, baseY - 25, 80, 0, Math.PI * 2);
-      ctx.fillStyle = craterGlow;
-      ctx.fill();
+      ctx.moveTo(topX, topY);
 
-      // Lava glow inside crater
-      const lavaGlow = ctx.createRadialGradient(
-        x,
-        baseY - 28,
-        0,
-        x,
-        baseY - 28,
-        20
-      );
-      lavaGlow.addColorStop(0, `rgba(255, 200, 100, ${glowIntensity})`);
-      lavaGlow.addColorStop(0.5, `rgba(255, 150, 50, ${glowIntensity * 0.7})`);
-      lavaGlow.addColorStop(1, `rgba(255, 100, 0, ${glowIntensity * 0.3})`);
+      const endX = topX + Math.cos(angle + frondSway) * frondLength;
+      const endY = topY + Math.sin(angle + frondSway) * frondLength * 0.6 + 10;
+      const ctrlX = topX + Math.cos(angle + frondSway) * frondLength * 0.6;
+      const ctrlY = topY + Math.sin(angle + frondSway) * frondLength * 0.3;
 
-      ctx.beginPath();
-      ctx.arc(x, baseY - 28, 20, 0, Math.PI * 2);
-      ctx.fillStyle = lavaGlow;
-      ctx.fill();
-    };
-
-    const drawPalmTree = (ctx: CanvasRenderingContext2D, palm: PalmTree) => {
-      const sway = Math.sin(palm.swayPhase) * 5;
-
-      // Trunk
-      ctx.beginPath();
-      ctx.moveTo(palm.x, palm.y);
-      const topX = palm.x + palm.trunkCurve + sway;
-      const topY = palm.y - palm.height;
-
-      // Curved trunk using quadratic bezier
-      ctx.quadraticCurveTo(
-        palm.x + palm.trunkCurve * 0.5,
-        palm.y - palm.height * 0.5,
-        topX,
-        topY
-      );
-
-      ctx.strokeStyle = darkMode ? '#0a0505' : '#1a0f0a';
-      ctx.lineWidth = 4;
+      ctx.quadraticCurveTo(ctrlX, ctrlY, endX, endY);
+      ctx.strokeStyle = darkMode ? '#080505' : '#151010';
+      ctx.lineWidth = 2;
       ctx.stroke();
+    }
+  }
 
-      // Fronds
-      const frondLength = 35 + Math.random() * 15;
-      for (let i = 0; i < palm.frondCount; i++) {
-        const angle = (i / palm.frondCount) * Math.PI - Math.PI / 2;
-        const frondSway = Math.sin(palm.swayPhase + i * 0.3) * 0.1;
+  useCanvasAnimation(canvasRef, enabled, {
+    onInit: (_ctx, canvas) => {
+      const width = canvas.width;
+      const height = canvas.height;
+      const horizonY = height * 0.55;
+      horizonYRef.current = horizonY;
+      volcanoXRef.current = width * 0.85;
+      volcanoYRef.current = horizonY - height * 0.15;
 
-        ctx.beginPath();
-        ctx.moveTo(topX, topY);
-
-        const endX = topX + Math.cos(angle + frondSway) * frondLength;
-        const endY = topY + Math.sin(angle + frondSway) * frondLength * 0.6 + 10;
-        const ctrlX = topX + Math.cos(angle + frondSway) * frondLength * 0.6;
-        const ctrlY = topY + Math.sin(angle + frondSway) * frondLength * 0.3;
-
-        ctx.quadraticCurveTo(ctrlX, ctrlY, endX, endY);
-        ctx.strokeStyle = darkMode ? '#080505' : '#151010';
-        ctx.lineWidth = 2;
-        ctx.stroke();
+      // Initialize stars
+      starsRef.current = [];
+      for (let i = 0; i < 60; i++) {
+        starsRef.current.push({
+          x: Math.random() * width,
+          y: Math.random() * horizonY * 0.7,
+          size: 0.5 + Math.random() * 1.2,
+          twinklePhase: Math.random() * Math.PI * 2,
+        });
       }
-    };
 
-    const animate = () => {
+      // Initialize palm trees on the foreground island
+      palmsRef.current = [];
+      const islandLeft = width * 0.05;
+      const islandRight = width * 0.35;
+      for (let i = 0; i < 5; i++) {
+        const x = islandLeft + Math.random() * (islandRight - islandLeft);
+        palmsRef.current.push({
+          x,
+          y: horizonY + 10 + Math.random() * 20,
+          height: 60 + Math.random() * 40,
+          trunkCurve: (Math.random() - 0.5) * 30,
+          frondCount: 6 + Math.floor(Math.random() * 3),
+          swayPhase: Math.random() * Math.PI * 2,
+          swaySpeed: 0.01 + Math.random() * 0.01,
+        });
+      }
+
+      // Initialize ocean waves
+      wavesRef.current = [];
+      for (let i = 0; i < 4; i++) {
+        wavesRef.current.push({
+          y: horizonY + 20 + i * 25,
+          phase: Math.random() * Math.PI * 2,
+          speed: 0.01 + Math.random() * 0.01,
+          amplitude: 3 + Math.random() * 4,
+        });
+      }
+
+      particlesRef.current = [];
+    },
+    onFrame: (ctx, canvas) => {
       const currentWidth = canvas.width;
       const currentHeight = canvas.height;
+      const horizonY = horizonYRef.current;
+      const volcanoX = volcanoXRef.current;
+      const volcanoY = volcanoYRef.current;
+
       ctx.clearRect(0, 0, currentWidth, currentHeight);
       timeRef.current += 0.016;
       glowPulseRef.current += 0.02;
@@ -417,17 +410,6 @@ export function useVolcanicIslands(
       if (particlesRef.current.length > 100) {
         particlesRef.current = particlesRef.current.slice(-80);
       }
-
-      animationRef.current = requestAnimationFrame(animate);
-    };
-
-    animate();
-
-    return () => {
-      window.removeEventListener('resize', resizeCanvas);
-      if (animationRef.current) {
-        cancelAnimationFrame(animationRef.current);
-      }
-    };
-  }, [canvasRef, darkMode, opacity, enabled]);
+    },
+  }, [darkMode, opacity]);
 }

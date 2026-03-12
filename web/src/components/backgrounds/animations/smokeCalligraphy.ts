@@ -5,7 +5,8 @@
  * The trails occasionally form brush-stroke-like shapes before dissolving.
  */
 
-import { useEffect, useRef } from 'react';
+import { useRef } from 'react';
+import { useCanvasAnimation } from './useCanvasAnimation';
 
 interface SmokeParticle {
   x: number;
@@ -38,99 +39,49 @@ export function useSmokeCalligraphy(
 ): void {
   const particlesRef = useRef<SmokeParticle[]>([]);
   const sourcesRef = useRef<SmokeSource[]>([]);
-  const animationRef = useRef<number>(0);
   const timeRef = useRef<number>(0);
 
-  useEffect(() => {
-    if (!active) return;
+  function initializeSources(canvas: HTMLCanvasElement) {
+    const { width, height } = canvas;
+    particlesRef.current = [];
+    sourcesRef.current = [];
 
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-
-    const resize = () => {
-      canvas.width = window.innerWidth;
-      canvas.height = window.innerHeight;
-      initializeSources();
-    };
-
-    const initializeSources = () => {
-      const { width, height } = canvas;
-      particlesRef.current = [];
-      sourcesRef.current = [];
-
-      // Create 2-3 smoke sources at bottom of screen
-      const sourceCount = 2 + Math.floor(Math.random() * 2);
-      for (let i = 0; i < sourceCount; i++) {
-        sourcesRef.current.push({
-          x: width * 0.2 + (i / (sourceCount - 1 || 1)) * width * 0.6,
-          y: height * 0.9,
-          emitRate: 30 + Math.random() * 20,
-          emitTimer: 0,
-          swayPhase: Math.random() * Math.PI * 2,
-          active: true,
-          lifetime: 10000 + Math.random() * 20000,
-        });
-      }
-    };
-
-    const createParticle = (source: SmokeSource): SmokeParticle => {
-      const sway = Math.sin(source.swayPhase) * 2;
-      return {
-        x: source.x + sway + (Math.random() - 0.5) * 4,
-        y: source.y,
-        vx: (Math.random() - 0.5) * 0.3,
-        vy: -0.8 - Math.random() * 0.4,
-        size: 15 + Math.random() * 20,
-        opacity: 0.4 + Math.random() * 0.2,
-        life: 0,
-        maxLife: 400 + Math.random() * 200,
-        turbulencePhase: Math.random() * Math.PI * 2,
-        turbulenceSpeed: 0.02 + Math.random() * 0.02,
-      };
-    };
-
-    const drawSmoke = () => {
-      const opacityMult = opacity / 50;
-
-      // Draw each particle
-      particlesRef.current.forEach((p) => {
-        const lifeRatio = p.life / p.maxLife;
-        const fadeIn = Math.min(1, p.life / 30);
-        const fadeOut = 1 - Math.pow(lifeRatio, 2);
-        const alpha = p.opacity * fadeIn * fadeOut * opacityMult;
-
-        if (alpha <= 0) return;
-
-        // Size grows as smoke rises and disperses
-        const currentSize = p.size * (1 + lifeRatio * 2);
-
-        // Create soft gradient for each smoke puff
-        const gradient = ctx.createRadialGradient(
-          p.x, p.y, 0,
-          p.x, p.y, currentSize
-        );
-
-        if (darkMode) {
-          gradient.addColorStop(0, `rgba(180, 175, 170, ${alpha * 0.6})`);
-          gradient.addColorStop(0.4, `rgba(150, 145, 140, ${alpha * 0.3})`);
-          gradient.addColorStop(1, `rgba(120, 115, 110, 0)`);
-        } else {
-          gradient.addColorStop(0, `rgba(100, 95, 90, ${alpha * 0.5})`);
-          gradient.addColorStop(0.4, `rgba(130, 125, 120, ${alpha * 0.25})`);
-          gradient.addColorStop(1, `rgba(160, 155, 150, 0)`);
-        }
-
-        ctx.fillStyle = gradient;
-        ctx.beginPath();
-        ctx.arc(p.x, p.y, currentSize, 0, Math.PI * 2);
-        ctx.fill();
+    // Create 2-3 smoke sources at bottom of screen
+    const sourceCount = 2 + Math.floor(Math.random() * 2);
+    for (let i = 0; i < sourceCount; i++) {
+      sourcesRef.current.push({
+        x: width * 0.2 + (i / (sourceCount - 1 || 1)) * width * 0.6,
+        y: height * 0.9,
+        emitRate: 30 + Math.random() * 20,
+        emitTimer: 0,
+        swayPhase: Math.random() * Math.PI * 2,
+        active: true,
+        lifetime: 10000 + Math.random() * 20000,
       });
-    };
+    }
+  }
 
-    const animate = () => {
+  function createParticle(source: SmokeSource): SmokeParticle {
+    const sway = Math.sin(source.swayPhase) * 2;
+    return {
+      x: source.x + sway + (Math.random() - 0.5) * 4,
+      y: source.y,
+      vx: (Math.random() - 0.5) * 0.3,
+      vy: -0.8 - Math.random() * 0.4,
+      size: 15 + Math.random() * 20,
+      opacity: 0.4 + Math.random() * 0.2,
+      life: 0,
+      maxLife: 400 + Math.random() * 200,
+      turbulencePhase: Math.random() * Math.PI * 2,
+      turbulenceSpeed: 0.02 + Math.random() * 0.02,
+    };
+  }
+
+  useCanvasAnimation(canvasRef, active, {
+    onInit: (_ctx, canvas) => {
+      initializeSources(canvas);
+    },
+    onFrame: (ctx, canvas) => {
       const { width, height } = canvas;
       timeRef.current += 16;
 
@@ -191,18 +142,41 @@ export function useSmokeCalligraphy(
         return p.life < p.maxLife && p.y > -50;
       });
 
-      drawSmoke();
+      // Draw smoke
+      const opacityMult = opacity / 50;
 
-      animationRef.current = requestAnimationFrame(animate);
-    };
+      particlesRef.current.forEach((p) => {
+        const lifeRatio = p.life / p.maxLife;
+        const fadeIn = Math.min(1, p.life / 30);
+        const fadeOut = 1 - Math.pow(lifeRatio, 2);
+        const alpha = p.opacity * fadeIn * fadeOut * opacityMult;
 
-    resize();
-    window.addEventListener('resize', resize);
-    animate();
+        if (alpha <= 0) return;
 
-    return () => {
-      window.removeEventListener('resize', resize);
-      cancelAnimationFrame(animationRef.current);
-    };
-  }, [canvasRef, darkMode, opacity, active]);
+        // Size grows as smoke rises and disperses
+        const currentSize = p.size * (1 + lifeRatio * 2);
+
+        // Create soft gradient for each smoke puff
+        const gradient = ctx.createRadialGradient(
+          p.x, p.y, 0,
+          p.x, p.y, currentSize
+        );
+
+        if (darkMode) {
+          gradient.addColorStop(0, `rgba(180, 175, 170, ${alpha * 0.6})`);
+          gradient.addColorStop(0.4, `rgba(150, 145, 140, ${alpha * 0.3})`);
+          gradient.addColorStop(1, `rgba(120, 115, 110, 0)`);
+        } else {
+          gradient.addColorStop(0, `rgba(100, 95, 90, ${alpha * 0.5})`);
+          gradient.addColorStop(0.4, `rgba(130, 125, 120, ${alpha * 0.25})`);
+          gradient.addColorStop(1, `rgba(160, 155, 150, 0)`);
+        }
+
+        ctx.fillStyle = gradient;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, currentSize, 0, Math.PI * 2);
+        ctx.fill();
+      });
+    },
+  }, [darkMode, opacity]);
 }

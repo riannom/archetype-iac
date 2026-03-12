@@ -6,7 +6,8 @@
  * Pre-generates all random values to avoid flickering.
  */
 
-import { useEffect, useRef } from 'react';
+import { useRef } from 'react';
+import { useCanvasAnimation } from './useCanvasAnimation';
 
 interface Stone {
   x: number;
@@ -46,26 +47,35 @@ export function useZenSandGarden(
   const ripplesRef = useRef<SandRipple[]>([]);
   const leavesRef = useRef<Leaf[]>([]);
   const rakePatternRef = useRef<{ x: number; curve: number }[]>([]);
-  const animationRef = useRef<number>(0);
   const timeRef = useRef<number>(0);
   const nextRippleRef = useRef<number>(0);
 
-  useEffect(() => {
-    if (!active) return;
+  // Helper to check if a point is within a stone's circular rake zone
+  function isInStoneZone(px: number, py: number): boolean {
+    for (const stone of stonesRef.current) {
+      // Calculate the exclusion zone radius (where concentric circles are drawn)
+      const maxRadius = Math.max(stone.width, stone.height) * 3;
+      // Transform point to stone's coordinate system (accounting for rotation)
+      const cos = Math.cos(-stone.rotation);
+      const sin = Math.sin(-stone.rotation);
+      const dx = px - stone.x;
+      const dy = py - stone.y;
+      const localX = dx * cos - dy * sin;
+      const localY = dx * sin + dy * cos;
+      // Check if inside the elliptical zone (with some margin for the inner stone)
+      const normalizedDist = Math.sqrt(
+        (localX * localX) / (maxRadius * maxRadius) +
+        (localY * localY) / ((maxRadius * 0.7) * (maxRadius * 0.7))
+      );
+      if (normalizedDist < 1) {
+        return true;
+      }
+    }
+    return false;
+  }
 
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-
-    const resize = () => {
-      canvas.width = window.innerWidth;
-      canvas.height = window.innerHeight;
-      initializeElements();
-    };
-
-    const initializeElements = () => {
+  useCanvasAnimation(canvasRef, active, {
+    onInit: (_ctx, canvas) => {
       const width = canvas.width;
       const height = canvas.height;
 
@@ -159,33 +169,28 @@ export function useZenSandGarden(
       // Initialize ripples array
       ripplesRef.current = [];
       nextRippleRef.current = 2000 + Math.random() * 3000;
-    };
+    },
+    onFrame: (ctx, canvas) => {
+      timeRef.current += 16;
+      const time = timeRef.current;
 
-    // Helper to check if a point is within a stone's circular rake zone
-    const isInStoneZone = (px: number, py: number): boolean => {
-      for (const stone of stonesRef.current) {
-        // Calculate the exclusion zone radius (where concentric circles are drawn)
-        const maxRadius = Math.max(stone.width, stone.height) * 3;
-        // Transform point to stone's coordinate system (accounting for rotation)
-        const cos = Math.cos(-stone.rotation);
-        const sin = Math.sin(-stone.rotation);
-        const dx = px - stone.x;
-        const dy = py - stone.y;
-        const localX = dx * cos - dy * sin;
-        const localY = dx * sin + dy * cos;
-        // Check if inside the elliptical zone (with some margin for the inner stone)
-        const normalizedDist = Math.sqrt(
-          (localX * localX) / (maxRadius * maxRadius) +
-          (localY * localY) / ((maxRadius * 0.7) * (maxRadius * 0.7))
-        );
-        if (normalizedDist < 1) {
-          return true;
-        }
+      // Occasionally create new ripple
+      nextRippleRef.current -= 16;
+      if (nextRippleRef.current <= 0 && ripplesRef.current.length < 3) {
+        ripplesRef.current.push({
+          centerX: canvas.width * 0.2 + Math.random() * canvas.width * 0.6,
+          centerY: canvas.height * 0.2 + Math.random() * canvas.height * 0.6,
+          radius: 0,
+          maxRadius: 80 + Math.random() * 60,
+          opacity: 0.5,
+          speed: 0.3 + Math.random() * 0.2,
+        });
+        nextRippleRef.current = 3000 + Math.random() * 4000;
       }
-      return false;
-    };
 
-    const drawSand = (time: number) => {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      // Draw sand
       const width = canvas.width;
       const height = canvas.height;
 
@@ -267,9 +272,8 @@ export function useZenSandGarden(
           ctx.stroke();
         }
       }
-    };
 
-    const drawRipples = () => {
+      // Draw ripples
       ripplesRef.current.forEach((ripple, index) => {
         ripple.radius += ripple.speed;
         ripple.opacity -= 0.003;
@@ -287,9 +291,8 @@ export function useZenSandGarden(
         ctx.lineWidth = 2;
         ctx.stroke();
       });
-    };
 
-    const drawStones = () => {
+      // Draw stones
       stonesRef.current.forEach((stone) => {
         ctx.save();
         ctx.translate(stone.x, stone.y);
@@ -335,9 +338,8 @@ export function useZenSandGarden(
 
         ctx.restore();
       });
-    };
 
-    const drawLeaves = () => {
+      // Draw leaves
       leavesRef.current.forEach((leaf) => {
         ctx.save();
         ctx.translate(leaf.x, leaf.y);
@@ -355,43 +357,6 @@ export function useZenSandGarden(
 
         ctx.restore();
       });
-    };
-
-    const animate = () => {
-      timeRef.current += 16;
-      const time = timeRef.current;
-
-      // Occasionally create new ripple
-      nextRippleRef.current -= 16;
-      if (nextRippleRef.current <= 0 && ripplesRef.current.length < 3) {
-        ripplesRef.current.push({
-          centerX: canvas.width * 0.2 + Math.random() * canvas.width * 0.6,
-          centerY: canvas.height * 0.2 + Math.random() * canvas.height * 0.6,
-          radius: 0,
-          maxRadius: 80 + Math.random() * 60,
-          opacity: 0.5,
-          speed: 0.3 + Math.random() * 0.2,
-        });
-        nextRippleRef.current = 3000 + Math.random() * 4000;
-      }
-
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-      drawSand(time);
-      drawRipples();
-      drawStones();
-      drawLeaves();
-
-      animationRef.current = requestAnimationFrame(animate);
-    };
-
-    resize();
-    window.addEventListener('resize', resize);
-    animate();
-
-    return () => {
-      window.removeEventListener('resize', resize);
-      cancelAnimationFrame(animationRef.current);
-    };
-  }, [canvasRef, darkMode, opacity, active]);
+    },
+  }, [darkMode, opacity]);
 }

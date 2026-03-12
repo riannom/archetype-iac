@@ -3,7 +3,8 @@
  * Soft clouds drifting across a moonlit sky
  */
 
-import { useRef, useEffect } from 'react';
+import { useRef } from 'react';
+import { useCanvasAnimation } from './useCanvasAnimation';
 
 interface Cloud {
   x: number;
@@ -34,149 +35,154 @@ export function useMoonlitClouds(
 ) {
   const cloudsRef = useRef<Cloud[]>([]);
   const shootingStarsRef = useRef<ShootingStar[]>([]);
-  const animationRef = useRef<number | undefined>(undefined);
   const timeRef = useRef<number>(0);
 
-  useEffect(() => {
-    if (!active) return;
+  useCanvasAnimation(canvasRef, active, {
+    onInit: (_ctx, canvas) => {
+      const createCloud = (startX?: number): Cloud => {
+        const width = 100 + Math.random() * 150;
+        const height = 40 + Math.random() * 30;
+        const puffCount = 4 + Math.floor(Math.random() * 3);
+        const puffs = Array.from({ length: puffCount }, (_, i) => ({
+          x: (i / puffCount) * width - width / 2 + Math.random() * 20,
+          y: (Math.random() - 0.5) * height * 0.5,
+          r: 20 + Math.random() * 25,
+        }));
 
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-
-    const cloudColor = darkMode ? [180, 190, 210] : [200, 210, 230];
-    const moonGlow = darkMode ? [220, 230, 250] : [240, 245, 255];
-
-    const createCloud = (startX?: number): Cloud => {
-      const width = 100 + Math.random() * 150;
-      const height = 40 + Math.random() * 30;
-      const puffCount = 4 + Math.floor(Math.random() * 3);
-      const puffs = Array.from({ length: puffCount }, (_, i) => ({
-        x: (i / puffCount) * width - width / 2 + Math.random() * 20,
-        y: (Math.random() - 0.5) * height * 0.5,
-        r: 20 + Math.random() * 25,
-      }));
-
-      return {
-        x: startX ?? -width,
-        y: Math.random() * canvas.height * 0.6 + canvas.height * 0.1,
-        width,
-        height,
-        speed: 0.15 + Math.random() * 0.2,
-        opacity: 0.06 + Math.random() * 0.06,
-        puffs,
+        return {
+          x: startX ?? -width,
+          y: Math.random() * canvas.height * 0.6 + canvas.height * 0.1,
+          width,
+          height,
+          speed: 0.15 + Math.random() * 0.2,
+          opacity: 0.06 + Math.random() * 0.06,
+          puffs,
+        };
       };
-    };
-
-    const resizeCanvas = () => {
-      canvas.width = window.innerWidth;
-      canvas.height = window.innerHeight;
 
       const cloudCount = Math.floor(canvas.width / 300) + 3;
       cloudsRef.current = Array.from({ length: cloudCount }, () =>
         createCloud(Math.random() * (canvas.width + 200) - 100)
       );
-    };
-    resizeCanvas();
-    window.addEventListener('resize', resizeCanvas);
+    },
 
-    const drawCloud = (cloud: Cloud) => {
-      const opacityMultiplier = opacity / 50;
+    onFrame: (ctx, canvas) => {
+      const cloudColor = darkMode ? [180, 190, 210] : [200, 210, 230];
+      const moonGlow = darkMode ? [220, 230, 250] : [240, 245, 255];
 
-      ctx.save();
-      ctx.translate(cloud.x, cloud.y);
+      const createCloud = (startX?: number): Cloud => {
+        const width = 100 + Math.random() * 150;
+        const height = 40 + Math.random() * 30;
+        const puffCount = 4 + Math.floor(Math.random() * 3);
+        const puffs = Array.from({ length: puffCount }, (_, i) => ({
+          x: (i / puffCount) * width - width / 2 + Math.random() * 20,
+          y: (Math.random() - 0.5) * height * 0.5,
+          r: 20 + Math.random() * 25,
+        }));
 
-      // Draw cloud puffs
-      cloud.puffs.forEach(puff => {
-        const gradient = ctx.createRadialGradient(puff.x, puff.y, 0, puff.x, puff.y, puff.r);
-        gradient.addColorStop(0, `rgba(${cloudColor[0]}, ${cloudColor[1]}, ${cloudColor[2]}, ${cloud.opacity * opacityMultiplier})`);
-        gradient.addColorStop(0.6, `rgba(${cloudColor[0]}, ${cloudColor[1]}, ${cloudColor[2]}, ${cloud.opacity * opacityMultiplier * 0.5})`);
-        gradient.addColorStop(1, `rgba(${cloudColor[0]}, ${cloudColor[1]}, ${cloudColor[2]}, 0)`);
+        return {
+          x: startX ?? -width,
+          y: Math.random() * canvas.height * 0.6 + canvas.height * 0.1,
+          width,
+          height,
+          speed: 0.15 + Math.random() * 0.2,
+          opacity: 0.06 + Math.random() * 0.06,
+          puffs,
+        };
+      };
+
+      const drawCloud = (cloud: Cloud) => {
+        const opacityMultiplier = opacity / 50;
+
+        ctx.save();
+        ctx.translate(cloud.x, cloud.y);
+
+        // Draw cloud puffs
+        cloud.puffs.forEach(puff => {
+          const gradient = ctx.createRadialGradient(puff.x, puff.y, 0, puff.x, puff.y, puff.r);
+          gradient.addColorStop(0, `rgba(${cloudColor[0]}, ${cloudColor[1]}, ${cloudColor[2]}, ${cloud.opacity * opacityMultiplier})`);
+          gradient.addColorStop(0.6, `rgba(${cloudColor[0]}, ${cloudColor[1]}, ${cloudColor[2]}, ${cloud.opacity * opacityMultiplier * 0.5})`);
+          gradient.addColorStop(1, `rgba(${cloudColor[0]}, ${cloudColor[1]}, ${cloudColor[2]}, 0)`);
+
+          ctx.beginPath();
+          ctx.arc(puff.x, puff.y, puff.r, 0, Math.PI * 2);
+          ctx.fillStyle = gradient;
+          ctx.fill();
+        });
+
+        // Subtle moon glow effect on top edge
+        const glowGradient = ctx.createLinearGradient(0, -cloud.height, 0, cloud.height * 0.5);
+        glowGradient.addColorStop(0, `rgba(${moonGlow[0]}, ${moonGlow[1]}, ${moonGlow[2]}, ${cloud.opacity * opacityMultiplier * 0.3})`);
+        glowGradient.addColorStop(1, 'rgba(255, 255, 255, 0)');
 
         ctx.beginPath();
-        ctx.arc(puff.x, puff.y, puff.r, 0, Math.PI * 2);
-        ctx.fillStyle = gradient;
+        ctx.ellipse(0, -cloud.height * 0.3, cloud.width * 0.4, cloud.height * 0.4, 0, 0, Math.PI * 2);
+        ctx.fillStyle = glowGradient;
         ctx.fill();
-      });
 
-      // Subtle moon glow effect on top edge
-      const glowGradient = ctx.createLinearGradient(0, -cloud.height, 0, cloud.height * 0.5);
-      glowGradient.addColorStop(0, `rgba(${moonGlow[0]}, ${moonGlow[1]}, ${moonGlow[2]}, ${cloud.opacity * opacityMultiplier * 0.3})`);
-      glowGradient.addColorStop(1, 'rgba(255, 255, 255, 0)');
+        ctx.restore();
+      };
 
-      ctx.beginPath();
-      ctx.ellipse(0, -cloud.height * 0.3, cloud.width * 0.4, cloud.height * 0.4, 0, 0, Math.PI * 2);
-      ctx.fillStyle = glowGradient;
-      ctx.fill();
+      const drawShootingStar = (ss: ShootingStar) => {
+        const lifeRatio = ss.life / ss.maxLife;
+        const opacityMultiplier = opacity / 50;
+        const lineWidth = ss.isBig ? 4 : 2;
+        const headRadius = ss.isBig ? 12 : 5;
 
-      ctx.restore();
-    };
+        ctx.save();
+        ctx.translate(ss.x, ss.y);
+        ctx.rotate(ss.angle);
 
-    const drawShootingStar = (ss: ShootingStar) => {
-      const lifeRatio = ss.life / ss.maxLife;
-      const opacityMultiplier = opacity / 50;
-      const lineWidth = ss.isBig ? 4 : 2;
-      const headRadius = ss.isBig ? 12 : 5;
+        // Trail gradient
+        const trailGradient = ctx.createLinearGradient(-ss.length, 0, 0, 0);
+        trailGradient.addColorStop(0, 'transparent');
+        trailGradient.addColorStop(0.3, `rgba(255, 255, 255, ${lifeRatio * 0.3 * opacityMultiplier})`);
+        trailGradient.addColorStop(1, `rgba(255, 255, 255, ${lifeRatio * opacityMultiplier})`);
 
-      ctx.save();
-      ctx.translate(ss.x, ss.y);
-      ctx.rotate(ss.angle);
-
-      // Trail gradient
-      const trailGradient = ctx.createLinearGradient(-ss.length, 0, 0, 0);
-      trailGradient.addColorStop(0, 'transparent');
-      trailGradient.addColorStop(0.3, `rgba(255, 255, 255, ${lifeRatio * 0.3 * opacityMultiplier})`);
-      trailGradient.addColorStop(1, `rgba(255, 255, 255, ${lifeRatio * opacityMultiplier})`);
-
-      ctx.strokeStyle = trailGradient;
-      ctx.lineWidth = lineWidth;
-      ctx.beginPath();
-      ctx.moveTo(-ss.length, 0);
-      ctx.lineTo(0, 0);
-      ctx.stroke();
-
-      // Big stars get a wider, softer outer glow trail
-      if (ss.isBig) {
-        const outerTrail = ctx.createLinearGradient(-ss.length * 0.7, 0, 0, 0);
-        outerTrail.addColorStop(0, 'transparent');
-        outerTrail.addColorStop(0.5, `rgba(200, 220, 255, ${lifeRatio * 0.15 * opacityMultiplier})`);
-        outerTrail.addColorStop(1, `rgba(200, 220, 255, ${lifeRatio * 0.25 * opacityMultiplier})`);
-        ctx.strokeStyle = outerTrail;
-        ctx.lineWidth = 10;
+        ctx.strokeStyle = trailGradient;
+        ctx.lineWidth = lineWidth;
         ctx.beginPath();
-        ctx.moveTo(-ss.length * 0.7, 0);
+        ctx.moveTo(-ss.length, 0);
         ctx.lineTo(0, 0);
         ctx.stroke();
-      }
 
-      // Head glow
-      const headGlow = ctx.createRadialGradient(0, 0, 0, 0, 0, headRadius);
-      headGlow.addColorStop(0, `rgba(255, 255, 255, ${lifeRatio * opacityMultiplier})`);
-      headGlow.addColorStop(0.4, `rgba(220, 240, 255, ${lifeRatio * 0.7 * opacityMultiplier})`);
-      headGlow.addColorStop(1, 'transparent');
-      ctx.fillStyle = headGlow;
-      ctx.beginPath();
-      ctx.arc(0, 0, headRadius, 0, Math.PI * 2);
-      ctx.fill();
+        // Big stars get a wider, softer outer glow trail
+        if (ss.isBig) {
+          const outerTrail = ctx.createLinearGradient(-ss.length * 0.7, 0, 0, 0);
+          outerTrail.addColorStop(0, 'transparent');
+          outerTrail.addColorStop(0.5, `rgba(200, 220, 255, ${lifeRatio * 0.15 * opacityMultiplier})`);
+          outerTrail.addColorStop(1, `rgba(200, 220, 255, ${lifeRatio * 0.25 * opacityMultiplier})`);
+          ctx.strokeStyle = outerTrail;
+          ctx.lineWidth = 10;
+          ctx.beginPath();
+          ctx.moveTo(-ss.length * 0.7, 0);
+          ctx.lineTo(0, 0);
+          ctx.stroke();
+        }
 
-      // Big stars get an extra outer halo
-      if (ss.isBig) {
-        const halo = ctx.createRadialGradient(0, 0, headRadius * 0.5, 0, 0, headRadius * 2.5);
-        halo.addColorStop(0, `rgba(200, 220, 255, ${lifeRatio * 0.3 * opacityMultiplier})`);
-        halo.addColorStop(1, 'transparent');
-        ctx.fillStyle = halo;
+        // Head glow
+        const headGlow = ctx.createRadialGradient(0, 0, 0, 0, 0, headRadius);
+        headGlow.addColorStop(0, `rgba(255, 255, 255, ${lifeRatio * opacityMultiplier})`);
+        headGlow.addColorStop(0.4, `rgba(220, 240, 255, ${lifeRatio * 0.7 * opacityMultiplier})`);
+        headGlow.addColorStop(1, 'transparent');
+        ctx.fillStyle = headGlow;
         ctx.beginPath();
-        ctx.arc(0, 0, headRadius * 2.5, 0, Math.PI * 2);
+        ctx.arc(0, 0, headRadius, 0, Math.PI * 2);
         ctx.fill();
-      }
 
-      ctx.restore();
-    };
+        // Big stars get an extra outer halo
+        if (ss.isBig) {
+          const halo = ctx.createRadialGradient(0, 0, headRadius * 0.5, 0, 0, headRadius * 2.5);
+          halo.addColorStop(0, `rgba(200, 220, 255, ${lifeRatio * 0.3 * opacityMultiplier})`);
+          halo.addColorStop(1, 'transparent');
+          ctx.fillStyle = halo;
+          ctx.beginPath();
+          ctx.arc(0, 0, headRadius * 2.5, 0, Math.PI * 2);
+          ctx.fill();
+        }
 
-    const animate = () => {
-      if (!canvas || !ctx) return;
+        ctx.restore();
+      };
 
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       timeRef.current += 0.016;
@@ -230,17 +236,6 @@ export function useMoonlitClouds(
         drawShootingStar(ss);
         return ss.life > 0;
       });
-
-      animationRef.current = requestAnimationFrame(animate);
-    };
-
-    animate();
-
-    return () => {
-      window.removeEventListener('resize', resizeCanvas);
-      if (animationRef.current) {
-        cancelAnimationFrame(animationRef.current);
-      }
-    };
-  }, [canvasRef, darkMode, opacity, active]);
+    },
+  }, [darkMode, opacity]);
 }

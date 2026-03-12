@@ -1,14 +1,54 @@
 import React, { useCallback, useEffect, useMemo, useState, useRef } from 'react';
 import { TaskLogEntry } from './TaskLogPanel';
-import { LabLogEntry, LabLogsResponse, LabLogsQueryParams } from '../../api';
+import { LabLogEntry, LabLogsResponse } from '../../api';
 import { usePolling } from '../hooks/usePolling';
 import { downloadBlob } from '../../utils/download';
+import { useLogFilters } from './useLogFilters';
+import LogEntryDetail from './LogEntryDetail';
 
 interface LogsViewProps {
   labId: string;
   studioRequest: <T>(path: string, options?: RequestInit) => Promise<T>;
   realtimeEntries?: TaskLogEntry[];
 }
+
+// Level colors (matching TaskLogPanel)
+const levelColors: Record<string, string> = {
+  info: 'text-cyan-700 dark:text-cyan-400',
+  success: 'text-green-700 dark:text-green-400',
+  warning: 'text-amber-700 dark:text-yellow-400',
+  error: 'text-red-700 dark:text-red-400',
+};
+
+const levelBorders: Record<string, string> = {
+  info: 'border-l-cyan-500',
+  success: 'border-l-green-500',
+  warning: 'border-l-amber-500 dark:border-l-yellow-500',
+  error: 'border-l-red-500 bg-red-100/50 dark:bg-red-900/20',
+};
+
+// Format timestamp
+const formatTimestamp = (timestamp: string) => {
+  const date = new Date(timestamp);
+  return date.toLocaleTimeString('en-US', {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  });
+};
+
+// Format job action for display
+const formatJobAction = (action: string) => {
+  if (action.startsWith('sync:')) {
+    return action.replace('sync:', 'Sync ');
+  }
+  if (action.startsWith('node:')) {
+    const parts = action.split(':');
+    return `Node ${parts[1]} (${parts[2] || ''})`;
+  }
+  return action.toUpperCase();
+};
 
 const LogsView: React.FC<LogsViewProps> = ({
   labId,
@@ -22,13 +62,6 @@ const LogsView: React.FC<LogsViewProps> = ({
   const [autoScroll, setAutoScroll] = useState(true);
   const [copied, setCopied] = useState(false);
 
-  // Filters
-  const [selectedJobId, setSelectedJobId] = useState<string>('all');
-  const [selectedHostId, setSelectedHostId] = useState<string>('all');
-  const [selectedLevel, setSelectedLevel] = useState<string>('all');
-  const [selectedSince, setSelectedSince] = useState<string>('all');
-  const [searchQuery, setSearchQuery] = useState<string>('');
-
   // Host sidebar collapsed state
   const [hostSidebarCollapsed, setHostSidebarCollapsed] = useState(false);
 
@@ -41,17 +74,16 @@ const LogsView: React.FC<LogsViewProps> = ({
   const logContainerRef = useRef<HTMLDivElement | null>(null);
   const isInitialLoadRef = useRef(true);
 
-  // Build query params from filter state
-  const queryParams = useMemo((): LabLogsQueryParams => {
-    const params: LabLogsQueryParams = {};
-    if (selectedJobId !== 'all') params.job_id = selectedJobId;
-    if (selectedHostId !== 'all') params.host_id = selectedHostId;
-    if (selectedLevel !== 'all') params.level = selectedLevel;
-    if (selectedSince !== 'all') params.since = selectedSince;
-    if (searchQuery.trim()) params.search = searchQuery.trim();
-    params.limit = 500;
-    return params;
-  }, [selectedJobId, selectedHostId, selectedLevel, selectedSince, searchQuery]);
+  // Filter state from extracted hook
+  const filters = useLogFilters();
+  const {
+    selectedJobId, setSelectedJobId,
+    selectedHostId, setSelectedHostId,
+    selectedLevel, setSelectedLevel,
+    selectedSince, setSelectedSince,
+    searchQuery, setSearchQuery,
+    queryParams, hasActiveFilters, clearFilters,
+  } = filters;
 
   // Load logs
   const loadLogs = useCallback(async () => {
@@ -91,18 +123,6 @@ const LogsView: React.FC<LogsViewProps> = ({
       setLoadingJobLog(false);
     }
   }, [labId, studioRequest]);
-
-  // Check if any filters are active
-  const hasActiveFilters = selectedJobId !== 'all' || selectedHostId !== 'all' || selectedLevel !== 'all' || selectedSince !== 'all' || searchQuery.trim() !== '';
-
-  // Clear all filters
-  const clearFilters = useCallback(() => {
-    setSelectedJobId('all');
-    setSelectedHostId('all');
-    setSelectedLevel('all');
-    setSelectedSince('all');
-    setSearchQuery('');
-  }, []);
 
   useEffect(() => {
     loadLogs();
@@ -183,44 +203,6 @@ const LogsView: React.FC<LogsViewProps> = ({
     return Array.from(hosts).sort();
   }, [logs?.hosts]);
 
-  // Level colors (matching TaskLogPanel)
-  const levelColors: Record<string, string> = {
-    info: 'text-cyan-700 dark:text-cyan-400',
-    success: 'text-green-700 dark:text-green-400',
-    warning: 'text-amber-700 dark:text-yellow-400',
-    error: 'text-red-700 dark:text-red-400',
-  };
-
-  const levelBorders: Record<string, string> = {
-    info: 'border-l-cyan-500',
-    success: 'border-l-green-500',
-    warning: 'border-l-amber-500 dark:border-l-yellow-500',
-    error: 'border-l-red-500 bg-red-100/50 dark:bg-red-900/20',
-  };
-
-  // Format timestamp
-  const formatTimestamp = (timestamp: string) => {
-    const date = new Date(timestamp);
-    return date.toLocaleTimeString('en-US', {
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit',
-      hour12: false,
-    });
-  };
-
-  // Format job action for display
-  const formatJobAction = (action: string) => {
-    if (action.startsWith('sync:')) {
-      return action.replace('sync:', 'Sync ');
-    }
-    if (action.startsWith('node:')) {
-      const parts = action.split(':');
-      return `Node ${parts[1]} (${parts[2] || ''})`;
-    }
-    return action.toUpperCase();
-  };
-
   // Copy all visible logs
   const handleCopyAll = async () => {
     const text = allEntries
@@ -287,6 +269,18 @@ const LogsView: React.FC<LogsViewProps> = ({
     const blob = new Blob([text], { type: 'text/plain' });
     downloadBlob(blob, `lab-logs-${labId}-${new Date().toISOString().slice(0, 10)}.txt`);
   };
+
+  // Handle "Filter to this job" from detail view
+  const handleFilterToJob = useCallback((jobId: string) => {
+    setSelectedJobId(jobId);
+    setExpandedEntryIdx(null);
+  }, [setSelectedJobId]);
+
+  // Handle close detail view
+  const handleCloseDetail = useCallback(() => {
+    setExpandedEntryIdx(null);
+    setExpandedJobLog(null);
+  }, []);
 
   return (
     <div className="flex-1 bg-transparent flex flex-col overflow-hidden animate-in fade-in duration-300">
@@ -533,8 +527,7 @@ const LogsView: React.FC<LogsViewProps> = ({
                     <div
                       onClick={() => {
                         if (isExpanded) {
-                          setExpandedEntryIdx(null);
-                          setExpandedJobLog(null);
+                          handleCloseDetail();
                         } else {
                           setExpandedEntryIdx(idx);
                           if (entry.job_id) {
@@ -573,116 +566,18 @@ const LogsView: React.FC<LogsViewProps> = ({
                       <i className={`fa-solid fa-chevron-${isExpanded ? 'up' : 'down'} text-stone-400 dark:text-stone-600 shrink-0`} />
                     </div>
                     {isExpanded && (
-                      <div className="px-4 py-3 bg-stone-100 dark:bg-stone-800/70 border-l-2 border-l-stone-300 dark:border-l-stone-600 ml-0 relative">
-                        {/* Close button */}
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setExpandedEntryIdx(null);
-                            setExpandedJobLog(null);
-                          }}
-                          className="absolute top-2 right-2 p-1.5 text-stone-400 hover:text-stone-600 dark:hover:text-stone-300 hover:bg-stone-200 dark:hover:bg-stone-700 rounded transition-all"
-                          title="Collapse"
-                        >
-                          <i className="fa-solid fa-times" />
-                        </button>
-                        <div className="flex flex-col gap-2 pr-8">
-                          {/* Full message */}
-                          <div>
-                            <span className="text-[9px] font-bold text-stone-500 uppercase">Message</span>
-                            <p className="text-stone-700 dark:text-stone-300 whitespace-pre-wrap mt-1">{entry.message}</p>
-                          </div>
-                          {/* Metadata grid */}
-                          <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-[10px]">
-                            <div>
-                              <span className="text-stone-500">Timestamp:</span>{' '}
-                              <span className="text-stone-600 dark:text-stone-400">{new Date(entry.timestamp).toLocaleString()}</span>
-                            </div>
-                            <div>
-                              <span className="text-stone-500">Level:</span>{' '}
-                              <span className={`font-bold uppercase ${levelColors[entry.level] || 'text-stone-500'}`}>{entry.level}</span>
-                            </div>
-                            {entry.host_name && (
-                              <div>
-                                <span className="text-stone-500">Host:</span>{' '}
-                                <span className="text-stone-600 dark:text-stone-400">{entry.host_name}</span>
-                              </div>
-                            )}
-                            <div>
-                              <span className="text-stone-500">Source:</span>{' '}
-                              <span className="text-stone-600 dark:text-stone-400">{entry.source || (isRealtime ? 'realtime' : 'job')}</span>
-                            </div>
-                          </div>
-                          {/* Job details */}
-                          {job && (
-                            <div className="mt-2 p-2 bg-stone-200/50 dark:bg-stone-700/50 rounded">
-                              <span className="text-[9px] font-bold text-stone-500 uppercase">Job Details</span>
-                              <div className="mt-1 grid grid-cols-2 gap-x-4 gap-y-1 text-[10px]">
-                                <div>
-                                  <span className="text-stone-500">Action:</span>{' '}
-                                  <span className="text-stone-700 dark:text-stone-300">{formatJobAction(job.action)}</span>
-                                </div>
-                                <div>
-                                  <span className="text-stone-500">Status:</span>{' '}
-                                  <span className={job.status === 'failed' ? 'text-red-600 dark:text-red-400 font-bold' : job.status === 'completed' ? 'text-green-600 dark:text-green-400' : 'text-stone-700 dark:text-stone-300'}>
-                                    {job.status}
-                                  </span>
-                                </div>
-                                <div>
-                                  <span className="text-stone-500">ID:</span>{' '}
-                                  <span className="text-stone-600 dark:text-stone-400 font-mono">{job.id.slice(0, 8)}...</span>
-                                </div>
-                                <div>
-                                  <span className="text-stone-500">Created:</span>{' '}
-                                  <span className="text-stone-600 dark:text-stone-400">{new Date(job.created_at).toLocaleTimeString()}</span>
-                                </div>
-                              </div>
-                              {/* Filter to this job button */}
-                              <button
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  setSelectedJobId(job.id);
-                                  setExpandedEntryIdx(null);
-                                }}
-                                className="mt-2 px-2 py-1 text-[10px] bg-sage-600 hover:bg-sage-500 text-white rounded transition-all"
-                              >
-                                <i className="fa-solid fa-filter mr-1" />
-                                Filter to this job
-                              </button>
-
-                              {/* Full job log */}
-                              <div className="mt-3 pt-3 border-t border-stone-300 dark:border-stone-600">
-                                <span className="text-[9px] font-bold text-stone-500 uppercase">Full Job Log</span>
-                                {loadingJobLog ? (
-                                  <div className="mt-2 text-stone-500 dark:text-stone-400">
-                                    <i className="fa-solid fa-spinner fa-spin mr-2" />
-                                    Loading job log...
-                                  </div>
-                                ) : expandedJobLog ? (
-                                  <pre className="mt-2 p-2 bg-stone-900 dark:bg-black text-stone-100 text-[10px] rounded overflow-x-auto whitespace-pre-wrap max-h-60 overflow-y-auto custom-scrollbar">
-                                    {expandedJobLog}
-                                  </pre>
-                                ) : null}
-                              </div>
-                            </div>
-                          )}
-                          {/* Copy button */}
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              handleCopyEntry(entry, idx);
-                            }}
-                            className={`self-start px-2 py-1 text-[10px] rounded transition-all ${
-                              copiedEntryIdx === idx
-                                ? 'bg-green-200 dark:bg-green-800 text-green-700 dark:text-green-300'
-                                : 'bg-stone-200 dark:bg-stone-700 hover:bg-stone-300 dark:hover:bg-stone-600 text-stone-700 dark:text-stone-300'
-                            }`}
-                          >
-                            <i className={`fa-solid ${copiedEntryIdx === idx ? 'fa-check' : 'fa-copy'} mr-1`} />
-                            {copiedEntryIdx === idx ? 'Copied!' : 'Copy entry'}
-                          </button>
-                        </div>
-                      </div>
+                      <LogEntryDetail
+                        entry={entry}
+                        job={job}
+                        expandedJobLog={expandedJobLog}
+                        loadingJobLog={loadingJobLog}
+                        copiedEntryIdx={copiedEntryIdx}
+                        idx={idx}
+                        levelColors={levelColors}
+                        onFilterToJob={handleFilterToJob}
+                        onCopyEntry={handleCopyEntry}
+                        onClose={handleCloseDetail}
+                      />
                     )}
                   </div>
                 );

@@ -3,7 +3,8 @@
  * Gentle falling cherry blossom petals
  */
 
-import { useRef, useEffect, useCallback } from 'react';
+import { useRef } from 'react';
+import { useCanvasAnimation } from './useCanvasAnimation';
 
 interface Petal {
   x: number;
@@ -31,10 +32,9 @@ export function useSakuraPetals(
   active: boolean
 ) {
   const petalsRef = useRef<Petal[]>([]);
-  const animationRef = useRef<number | undefined>(undefined);
   const timeRef = useRef<number>(0);
 
-  const createPetal = useCallback((canvas: HTMLCanvasElement, startFromTop = true): Petal => {
+  function createPetal(canvas: HTMLCanvasElement, startFromTop = true): Petal {
     return {
       x: Math.random() * canvas.width,
       y: startFromTop ? -20 - Math.random() * 40 : Math.random() * canvas.height,
@@ -53,14 +53,14 @@ export function useSakuraPetals(
       isDrifting: Math.random() > 0.6,
       notchDepth: 0.15 + Math.random() * 0.15, // Heart notch varies 15-30% of petal height
     };
-  }, []);
+  }
 
-  const drawPetal = useCallback((
+  function drawPetal(
     ctx: CanvasRenderingContext2D,
     petal: Petal,
     isDark: boolean,
     opacityMultiplier: number
-  ) => {
+  ) {
     ctx.save();
     ctx.translate(petal.x, petal.y);
     ctx.rotate(petal.rotation);
@@ -169,32 +169,16 @@ export function useSakuraPetals(
     ctx.stroke();
 
     ctx.restore();
-  }, []);
+  }
 
-  useEffect(() => {
-    if (!active) return;
-
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-
-    const resizeCanvas = () => {
-      canvas.width = window.innerWidth;
-      canvas.height = window.innerHeight;
-    };
-    resizeCanvas();
-    window.addEventListener('resize', resizeCanvas);
-
-    const petalCount = Math.floor((canvas.width * canvas.height) / 25000);
-    petalsRef.current = Array.from({ length: petalCount }, () =>
-      createPetal(canvas, false)
-    );
-
-    const animate = () => {
-      if (!canvas || !ctx) return;
-
+  useCanvasAnimation(canvasRef, active, {
+    onInit: (_ctx, canvas) => {
+      const petalCount = Math.floor((canvas.width * canvas.height) / 25000);
+      petalsRef.current = Array.from({ length: petalCount }, () =>
+        createPetal(canvas, false)
+      );
+    },
+    onFrame: (ctx, canvas) => {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       timeRef.current += 0.016;
 
@@ -256,17 +240,6 @@ export function useSakuraPetals(
 
         drawPetal(ctx, petal, darkMode, opacityMultiplier);
       });
-
-      animationRef.current = requestAnimationFrame(animate);
-    };
-
-    animate();
-
-    return () => {
-      window.removeEventListener('resize', resizeCanvas);
-      if (animationRef.current) {
-        cancelAnimationFrame(animationRef.current);
-      }
-    };
-  }, [canvasRef, darkMode, opacity, createPetal, drawPetal, active]);
+    },
+  }, [darkMode, opacity]);
 }

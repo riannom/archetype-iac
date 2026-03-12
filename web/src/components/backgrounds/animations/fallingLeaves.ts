@@ -3,7 +3,8 @@
  * Autumn leaves drifting and swaying as they fall
  */
 
-import { useRef, useEffect, useCallback } from 'react';
+import { useRef } from 'react';
+import { useCanvasAnimation } from './useCanvasAnimation';
 
 interface Leaf {
   x: number;
@@ -41,12 +42,11 @@ export function useFallingLeaves(
   _darkMode: boolean,
   opacity: number,
   active: boolean
-) {
+): void {
   const leavesRef = useRef<Leaf[]>([]);
-  const animationRef = useRef<number | undefined>(undefined);
   const timeRef = useRef<number>(0);
 
-  const createLeaf = useCallback((canvas: HTMLCanvasElement, startFromTop = true): Leaf => {
+  function createLeaf(canvas: HTMLCanvasElement, startFromTop = true): Leaf {
     const baseVy = 0.4 + Math.random() * 0.5;
     return {
       x: Math.random() * canvas.width,
@@ -67,13 +67,13 @@ export function useFallingLeaves(
       flutterTimer: Math.random() * 100,
       isDrifting: Math.random() > 0.7, // Some leaves drift more sideways
     };
-  }, []);
+  }
 
-  const drawLeaf = useCallback((
+  function drawLeaf(
     ctx: CanvasRenderingContext2D,
     leaf: Leaf,
     opacityMultiplier: number
-  ) => {
+  ) {
     ctx.save();
     ctx.translate(leaf.x, leaf.y);
     ctx.rotate(leaf.rotation);
@@ -167,104 +167,82 @@ export function useFallingLeaves(
     ctx.stroke();
 
     ctx.restore();
-  }, []);
+  }
 
-  useEffect(() => {
-    if (!active) return;
+  useCanvasAnimation(
+    canvasRef,
+    active,
+    {
+      onInit: (_ctx, canvas) => {
+        const leafCount = Math.floor((canvas.width * canvas.height) / 30000);
+        leavesRef.current = Array.from({ length: Math.max(12, leafCount) }, () =>
+          createLeaf(canvas, false)
+        );
+      },
+      onFrame: (ctx, canvas) => {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        timeRef.current += 0.016;
 
-    const canvas = canvasRef.current;
-    if (!canvas) return;
+        const opacityMultiplier = opacity / 50;
 
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
+        leavesRef.current.forEach((leaf, index) => {
+          // Update flutter timer
+          leaf.flutterTimer += 1;
 
-    const resizeCanvas = () => {
-      canvas.width = window.innerWidth;
-      canvas.height = window.innerHeight;
-    };
-    resizeCanvas();
-    window.addEventListener('resize', resizeCanvas);
+          // Occasionally change drift direction (simulates catching air)
+          if (leaf.flutterTimer > 80 + Math.random() * 60) {
+            leaf.flutterTimer = 0;
+            leaf.isDrifting = !leaf.isDrifting;
+            leaf.targetRotationSpeed = (Math.random() - 0.5) * 0.06;
+            // Add a swoop effect
+            leaf.vx += (Math.random() - 0.5) * 0.8;
+          }
 
-    const leafCount = Math.floor((canvas.width * canvas.height) / 30000);
-    leavesRef.current = Array.from({ length: Math.max(12, leafCount) }, () =>
-      createLeaf(canvas, false)
-    );
+          // Smooth rotation speed changes
+          leaf.rotationSpeed += (leaf.targetRotationSpeed - leaf.rotationSpeed) * 0.02;
 
-    const animate = () => {
-      if (!canvas || !ctx) return;
+          // Update tilt (3D flutter effect)
+          leaf.tilt += leaf.tiltSpeed;
+          // Vary tilt speed for organic movement
+          leaf.tiltSpeed += (Math.sin(timeRef.current * 2 + leaf.tiltPhase) * 0.001);
+          leaf.tiltSpeed = Math.max(0.01, Math.min(0.05, leaf.tiltSpeed));
 
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      timeRef.current += 0.016;
+          // Horizontal sway - influenced by tilt
+          const sway = Math.sin(timeRef.current * 0.8 + leaf.swayPhase) * 0.4;
+          const tiltInfluence = Math.sin(leaf.tilt) * 0.3;
 
-      const opacityMultiplier = opacity / 50;
+          // Apply velocities with sway
+          if (leaf.isDrifting) {
+            // Drifting leaves move more sideways
+            leaf.vx += sway * 0.08 + tiltInfluence * 0.1;
+            leaf.vy *= 0.98; // Slow vertical when catching air
+            leaf.vy = Math.max(0.15, leaf.vy); // But never stop falling
+          } else {
+            // Normal falling
+            leaf.vx += sway * 0.03;
+            leaf.vy += 0.003; // Gentle acceleration
+            leaf.vy = Math.min(0.9, leaf.vy); // Terminal velocity
+          }
 
-      leavesRef.current.forEach((leaf, index) => {
-        // Update flutter timer
-        leaf.flutterTimer += 1;
+          // Air resistance on horizontal movement
+          leaf.vx *= 0.985;
 
-        // Occasionally change drift direction (simulates catching air)
-        if (leaf.flutterTimer > 80 + Math.random() * 60) {
-          leaf.flutterTimer = 0;
-          leaf.isDrifting = !leaf.isDrifting;
-          leaf.targetRotationSpeed = (Math.random() - 0.5) * 0.06;
-          // Add a swoop effect
-          leaf.vx += (Math.random() - 0.5) * 0.8;
-        }
+          // Apply movement
+          leaf.x += leaf.vx;
+          leaf.y += leaf.vy;
 
-        // Smooth rotation speed changes
-        leaf.rotationSpeed += (leaf.targetRotationSpeed - leaf.rotationSpeed) * 0.02;
+          // Rotation affected by horizontal movement
+          leaf.rotation += leaf.rotationSpeed + leaf.vx * 0.02;
 
-        // Update tilt (3D flutter effect)
-        leaf.tilt += leaf.tiltSpeed;
-        // Vary tilt speed for organic movement
-        leaf.tiltSpeed += (Math.sin(timeRef.current * 2 + leaf.tiltPhase) * 0.001);
-        leaf.tiltSpeed = Math.max(0.01, Math.min(0.05, leaf.tiltSpeed));
+          // Reset if off screen
+          if (leaf.y > canvas.height + 50 || leaf.x < -50 || leaf.x > canvas.width + 50) {
+            leavesRef.current[index] = createLeaf(canvas, true);
+          }
 
-        // Horizontal sway - influenced by tilt
-        const sway = Math.sin(timeRef.current * 0.8 + leaf.swayPhase) * 0.4;
-        const tiltInfluence = Math.sin(leaf.tilt) * 0.3;
-
-        // Apply velocities with sway
-        if (leaf.isDrifting) {
-          // Drifting leaves move more sideways
-          leaf.vx += sway * 0.08 + tiltInfluence * 0.1;
-          leaf.vy *= 0.98; // Slow vertical when catching air
-          leaf.vy = Math.max(0.15, leaf.vy); // But never stop falling
-        } else {
-          // Normal falling
-          leaf.vx += sway * 0.03;
-          leaf.vy += 0.003; // Gentle acceleration
-          leaf.vy = Math.min(0.9, leaf.vy); // Terminal velocity
-        }
-
-        // Air resistance on horizontal movement
-        leaf.vx *= 0.985;
-
-        // Apply movement
-        leaf.x += leaf.vx;
-        leaf.y += leaf.vy;
-
-        // Rotation affected by horizontal movement
-        leaf.rotation += leaf.rotationSpeed + leaf.vx * 0.02;
-
-        // Reset if off screen
-        if (leaf.y > canvas.height + 50 || leaf.x < -50 || leaf.x > canvas.width + 50) {
-          leavesRef.current[index] = createLeaf(canvas, true);
-        }
-
-        drawLeaf(ctx, leaf, opacityMultiplier);
-      });
-
-      animationRef.current = requestAnimationFrame(animate);
-    };
-
-    animate();
-
-    return () => {
-      window.removeEventListener('resize', resizeCanvas);
-      if (animationRef.current) {
-        cancelAnimationFrame(animationRef.current);
-      }
-    };
-  }, [canvasRef, opacity, createLeaf, drawLeaf, active]);
+          drawLeaf(ctx, leaf, opacityMultiplier);
+        });
+      },
+    },
+    [opacity]
+  );
 }

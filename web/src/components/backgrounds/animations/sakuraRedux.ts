@@ -5,7 +5,8 @@
  * Features a decorative cherry blossom branch from upper right corner.
  */
 
-import { useRef, useEffect, useCallback } from 'react';
+import { useRef } from 'react';
+import { useCanvasAnimation } from './useCanvasAnimation';
 
 interface FallingPetal {
   x: number;
@@ -48,11 +49,10 @@ export function useSakuraRedux(
 ) {
   const fallingPetalsRef = useRef<FallingPetal[]>([]);
   const groundPetalsRef = useRef<GroundPetal[]>([]);
-  const animationRef = useRef<number | undefined>(undefined);
   const timeRef = useRef<number>(0);
   const startTimeRef = useRef<number>(0);
 
-  const createFallingPetal = useCallback((canvas: HTMLCanvasElement, startFromTop = true): FallingPetal => {
+  function createFallingPetal(canvas: HTMLCanvasElement, startFromTop = true): FallingPetal {
     return {
       x: Math.random() * canvas.width,
       y: startFromTop ? -20 - Math.random() * 40 : Math.random() * canvas.height * 0.5,
@@ -71,9 +71,9 @@ export function useSakuraRedux(
       isDrifting: Math.random() > 0.6,
       notchDepth: 0.15 + Math.random() * 0.15,
     };
-  }, []);
+  }
 
-  const createGroundPetal = useCallback((fallingPetal: FallingPetal, groundY: number): GroundPetal => {
+  function createGroundPetal(fallingPetal: FallingPetal, groundY: number): GroundPetal {
     return {
       x: fallingPetal.x,
       y: groundY - Math.random() * 5, // Slight variation in landing position
@@ -84,9 +84,9 @@ export function useSakuraRedux(
       createdAt: Date.now(),
       layer: Math.random(), // Random layer for depth
     };
-  }, []);
+  }
 
-  const drawPetal = useCallback((
+  function drawPetal(
     ctx: CanvasRenderingContext2D,
     x: number,
     y: number,
@@ -96,7 +96,7 @@ export function useSakuraRedux(
     alpha: number,
     isDark: boolean,
     tiltFactor: number = 1
-  ) => {
+  ) {
     ctx.save();
     ctx.translate(x, y);
     ctx.rotate(rotation);
@@ -196,36 +196,20 @@ export function useSakuraRedux(
     ctx.stroke();
 
     ctx.restore();
-  }, []);
+  }
 
-  useEffect(() => {
-    if (!active) return;
+  useCanvasAnimation(canvasRef, active, {
+    onInit: (_ctx, canvas) => {
+      startTimeRef.current = Date.now();
 
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-
-    startTimeRef.current = Date.now();
-
-    const resizeCanvas = () => {
-      canvas.width = window.innerWidth;
-      canvas.height = window.innerHeight;
-    };
-    resizeCanvas();
-    window.addEventListener('resize', resizeCanvas);
-
-    // Initialize falling petals
-    const petalCount = Math.floor((canvas.width * canvas.height) / 30000);
-    fallingPetalsRef.current = Array.from({ length: Math.max(10, petalCount) }, () =>
-      createFallingPetal(canvas, false)
-    );
-    groundPetalsRef.current = [];
-
-    const animate = () => {
-      if (!canvas || !ctx) return;
-
+      // Initialize falling petals
+      const petalCount = Math.floor((canvas.width * canvas.height) / 30000);
+      fallingPetalsRef.current = Array.from({ length: Math.max(10, petalCount) }, () =>
+        createFallingPetal(canvas, false)
+      );
+      groundPetalsRef.current = [];
+    },
+    onFrame: (ctx, canvas) => {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       timeRef.current += 0.016;
       const currentTime = Date.now();
@@ -335,17 +319,6 @@ export function useSakuraRedux(
           tiltFactor
         );
       });
-
-      animationRef.current = requestAnimationFrame(animate);
-    };
-
-    animate();
-
-    return () => {
-      window.removeEventListener('resize', resizeCanvas);
-      if (animationRef.current) {
-        cancelAnimationFrame(animationRef.current);
-      }
-    };
-  }, [canvasRef, darkMode, opacity, createFallingPetal, createGroundPetal, drawPetal, active]);
+    },
+  }, [darkMode, opacity]);
 }
