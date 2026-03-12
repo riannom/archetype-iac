@@ -387,6 +387,15 @@ async def lab_up(
                 .all()
             )
             for ns in node_states:
+                # Respect manually-stopped nodes: skip nodes where the user
+                # explicitly set desired_state=STOPPED and the node is actually
+                # stopped/exited.  First deploy (actual=undeployed) still starts.
+                if (ns.desired_state == NodeDesiredState.STOPPED.value
+                        and ns.actual_state in (
+                            NodeActualState.STOPPED.value,
+                            NodeActualState.EXITED.value,
+                        )):
+                    continue
                 ns.desired_state = NodeDesiredState.RUNNING
                 ns.reset_enforcement(clear_error=True)
             database.commit()

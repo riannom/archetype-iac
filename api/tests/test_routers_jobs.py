@@ -16,6 +16,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
 from app import models
+from app.state import NodeActualState, NodeDesiredState
 
 
 class TestLabUp:
@@ -75,6 +76,142 @@ class TestLabUp:
         assert data["status"] == "queued"
         assert data["action"] == "up"
         assert data["lab_id"] == sample_lab.id
+
+
+class TestLabUpRespectsStoppedNodes:
+    """Tests that lab_up respects manually-stopped nodes."""
+
+    def _setup_lab_with_nodes(self, test_db, sample_lab, node_states_spec):
+        """Helper: create Node + NodeState records for the lab.
+
+        node_states_spec is a list of (name, desired, actual) tuples.
+        """
+        for name, desired, actual in node_states_spec:
+            node = models.Node(
+                lab_id=sample_lab.id,
+                gui_id=f"gui-{name}",
+                display_name=name,
+                container_name=f"archetype-test-{name}",
+                device="linux",
+            )
+            test_db.add(node)
+            ns = models.NodeState(
+                lab_id=sample_lab.id,
+                node_id=name,
+                node_name=name,
+                desired_state=desired,
+                actual_state=actual,
+            )
+            test_db.add(ns)
+        test_db.commit()
+
+    def _do_lab_up(self, test_client, sample_lab, sample_host, auth_headers, monkeypatch):
+        from app.config import settings
+        monkeypatch.setattr(settings, "image_sync_enabled", False)
+
+        with patch("app.routers.jobs.has_conflicting_job", return_value=(False, None)):
+            with patch("app.routers.jobs.agent_client.get_agent_for_lab", new_callable=AsyncMock) as mock_agent:
+                mock_agent.return_value = sample_host
+                with patch("app.routers.jobs.safe_create_task"):
+                    return test_client.post(
+                        f"/labs/{sample_lab.id}/up",
+                        headers=auth_headers,
+                    )
+
+    def test_manually_stopped_node_stays_stopped(
+        self,
+        test_client: TestClient,
+        test_db: Session,
+        sample_lab: models.Lab,
+        sample_host: models.Host,
+        auth_headers: dict,
+        monkeypatch,
+    ):
+        """Nodes with desired=stopped, actual=stopped are NOT set to running."""
+        self._setup_lab_with_nodes(test_db, sample_lab, [
+            ("r1", NodeDesiredState.STOPPED.value, NodeActualState.STOPPED.value),
+            ("r2", NodeDesiredState.STOPPED.value, NodeActualState.RUNNING.value),
+        ])
+
+        response = self._do_lab_up(test_client, sample_lab, sample_host, auth_headers, monkeypatch)
+        assert response.status_code == 200
+
+        # r1 (stopped/stopped) should stay stopped
+        ns_r1 = test_db.query(models.NodeState).filter_by(node_name="r1").one()
+        assert ns_r1.desired_state == NodeDesiredState.STOPPED.value
+
+        # r2 (stopped/running — mismatch) should be set to running
+        ns_r2 = test_db.query(models.NodeState).filter_by(node_name="r2").one()
+        assert ns_r2.desired_state == NodeDesiredState.RUNNING.value
+
+    def test_first_deploy_undeployed_nodes_set_to_running(
+        self,
+        test_client: TestClient,
+        test_db: Session,
+        sample_lab: models.Lab,
+        sample_host: models.Host,
+        auth_headers: dict,
+        monkeypatch,
+    ):
+        """First deploy: desired=stopped, actual=undeployed → set to RUNNING."""
+        self._setup_lab_with_nodes(test_db, sample_lab, [
+            ("r1", NodeDesiredState.STOPPED.value, NodeActualState.UNDEPLOYED.value),
+        ])
+
+        response = self._do_lab_up(test_client, sample_lab, sample_host, auth_headers, monkeypatch)
+        assert response.status_code == 200
+
+        ns = test_db.query(models.NodeState).filter_by(node_name="r1").one()
+        assert ns.desired_state == NodeDesiredState.RUNNING.value
+
+    def test_exited_node_with_desired_stopped_stays_stopped(
+        self,
+        test_client: TestClient,
+        test_db: Session,
+        sample_lab: models.Lab,
+        sample_host: models.Host,
+        auth_headers: dict,
+        monkeypatch,
+    ):
+        """Nodes with desired=stopped, actual=exited are NOT set to running."""
+        self._setup_lab_with_nodes(test_db, sample_lab, [
+            ("r1", NodeDesiredState.STOPPED.value, NodeActualState.EXITED.value),
+        ])
+
+        response = self._do_lab_up(test_client, sample_lab, sample_host, auth_headers, monkeypatch)
+        assert response.status_code == 200
+
+        ns = test_db.query(models.NodeState).filter_by(node_name="r1").one()
+        assert ns.desired_state == NodeDesiredState.STOPPED.value
+
+    def test_mixed_nodes_only_skips_manually_stopped(
+        self,
+        test_client: TestClient,
+        test_db: Session,
+        sample_lab: models.Lab,
+        sample_host: models.Host,
+        auth_headers: dict,
+        monkeypatch,
+    ):
+        """In a mixed lab, only manually-stopped nodes are skipped."""
+        self._setup_lab_with_nodes(test_db, sample_lab, [
+            ("r1", NodeDesiredState.RUNNING.value, NodeActualState.RUNNING.value),
+            ("q200", NodeDesiredState.STOPPED.value, NodeActualState.STOPPED.value),
+            ("sw1", NodeDesiredState.STOPPED.value, NodeActualState.UNDEPLOYED.value),
+            ("fw1", NodeDesiredState.RUNNING.value, NodeActualState.ERROR.value),
+        ])
+
+        response = self._do_lab_up(test_client, sample_lab, sample_host, auth_headers, monkeypatch)
+        assert response.status_code == 200
+
+        states = {
+            ns.node_name: ns.desired_state
+            for ns in test_db.query(models.NodeState).filter_by(lab_id=sample_lab.id).all()
+        }
+        assert states["r1"] == NodeDesiredState.RUNNING.value    # already running
+        assert states["q200"] == NodeDesiredState.STOPPED.value  # manually stopped → skipped
+        assert states["sw1"] == NodeDesiredState.RUNNING.value   # first deploy → started
+        assert states["fw1"] == NodeDesiredState.RUNNING.value   # error → retry
 
 
 class TestLabDown:
