@@ -20,7 +20,7 @@ from uuid import uuid4
 from sqlalchemy.orm import Session
 
 from app import agent_client, models
-from app.services.interface_naming import normalize_interface, denormalize_interface
+from app.services.interface_naming import denormalize_interface
 from app.utils.db import (
     release_db_transaction_for_io as _release_db_tx_for_io,
     reset_session_after_db_error as _reset_session_after_db_error,
@@ -179,24 +179,6 @@ def linux_to_vendor_interface(linux_if: str, device_type: str | None) -> str | N
         # Check if the input was actually an eth-style name that just uses eth naming
         if re.match(r"^eth\d+$", linux_if, re.IGNORECASE):
             return result  # eth naming device — eth1 IS the vendor name
-        return None
-    return result
-
-
-def vendor_to_linux_interface(vendor_if: str, device_type: str | None) -> str | None:
-    """Convert vendor interface name to Linux interface name.
-
-    Delegates to the centralized normalize_interface().
-
-    Args:
-        vendor_if: Vendor interface name (e.g., "Ethernet1")
-        device_type: Device type (e.g., "arista_ceos")
-
-    Returns:
-        Linux interface name or None if cannot convert
-    """
-    result = normalize_interface(vendor_if, device_type)
-    if result == vendor_if and not re.match(r"^eth\d+$", vendor_if, re.IGNORECASE):
         return None
     return result
 
@@ -365,68 +347,3 @@ def get_mapping(
     )
 
 
-def get_mapping_by_ovs_port(
-    database: Session,
-    ovs_port: str,
-) -> models.InterfaceMapping | None:
-    """Get interface mapping by OVS port name.
-
-    Args:
-        database: Database session
-        ovs_port: OVS port name (e.g., "vh614ed63ed40")
-
-    Returns:
-        InterfaceMapping or None
-    """
-    return (
-        database.query(models.InterfaceMapping)
-        .filter(models.InterfaceMapping.ovs_port == ovs_port)
-        .first()
-    )
-
-
-def update_vlan_tag(
-    database: Session,
-    lab_id: str,
-    node_id: str,
-    linux_interface: str,
-    vlan_tag: int,
-) -> bool:
-    """Update the VLAN tag for an interface mapping.
-
-    Args:
-        database: Database session
-        lab_id: Lab identifier
-        node_id: Node ID (database ID)
-        linux_interface: Linux interface name
-        vlan_tag: New VLAN tag
-
-    Returns:
-        True if mapping was updated, False if not found
-    """
-    mapping = get_mapping(database, lab_id, node_id, linux_interface)
-    if not mapping:
-        return False
-
-    mapping.vlan_tag = vlan_tag
-    database.commit()
-    return True
-
-
-def delete_lab_mappings(database: Session, lab_id: str) -> int:
-    """Delete all interface mappings for a lab.
-
-    Args:
-        database: Database session
-        lab_id: Lab identifier
-
-    Returns:
-        Number of mappings deleted
-    """
-    count = (
-        database.query(models.InterfaceMapping)
-        .filter(models.InterfaceMapping.lab_id == lab_id)
-        .delete()
-    )
-    database.commit()
-    return count

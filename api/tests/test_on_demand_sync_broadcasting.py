@@ -14,7 +14,7 @@ import pytest
 from sqlalchemy.orm import Session
 
 from app import models
-from app.state import ImageSyncStatus, NodeActualState
+from app.state import NodeActualState
 
 
 # ---------------------------------------------------------------------------
@@ -105,7 +105,7 @@ class TestBroadcastingDuringSync:
                 node_name=sync_node.node_name,
                 desired_state=sync_node.desired_state,
                 actual_state=sync_node.actual_state,
-                image_sync_status=ImageSyncStatus.SYNCING.value,
+                image_sync_status="syncing",
                 image_sync_message="Pushing ceos:4.28.0F to Broadcast Agent...",
             )
 
@@ -190,7 +190,7 @@ class TestBroadcastingDuringSync:
                 desired_state=sync_node.desired_state,
                 actual_state=NodeActualState.ERROR.value,
                 error_message="Image sync failed: timeout",
-                image_sync_status=ImageSyncStatus.FAILED.value,
+                image_sync_status="failed",
                 image_sync_message="Image sync failed: timeout",
             )
 

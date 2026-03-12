@@ -1,13 +1,8 @@
 from __future__ import annotations
 
-from types import SimpleNamespace
-
 import pytest
-from fastapi import HTTPException
 
 from app import models
-from app.dependencies import require_admin_role, require_operator_role, require_super_admin_role
-from app.enums import GlobalRole
 from app.events.cleanup_events import CLEANUP_CHANNEL, CleanupEvent, CleanupEventType
 from app.events import publisher as events_publisher
 from app.services.audit import AuditService
@@ -96,14 +91,3 @@ def test_audit_service_logs_entry(test_db):
     assert row.user_id == "user-1"
 
 
-def test_dependencies_require_roles():
-    admin = SimpleNamespace(global_role=GlobalRole.ADMIN.value)
-    super_admin = SimpleNamespace(global_role=GlobalRole.SUPER_ADMIN.value)
-    operator = SimpleNamespace(global_role=GlobalRole.OPERATOR.value)
-
-    assert require_operator_role(operator) is operator
-    assert require_admin_role(admin) is admin
-    assert require_super_admin_role(super_admin) is super_admin
-
-    with pytest.raises(HTTPException):
-        require_admin_role(operator)

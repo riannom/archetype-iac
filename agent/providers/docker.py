@@ -43,7 +43,6 @@ from agent.config import settings
 from agent.labels import (
     LABEL_LAB_ID,
     LABEL_NODE_DEFINITION_ID,
-    LABEL_NODE_DISPLAY_NAME,
     LABEL_NODE_KIND,
     LABEL_NODE_NAME,
     LABEL_PROVIDER,
@@ -210,15 +209,6 @@ echo "if-wait: Starting init"
 # Retry policy for transient Docker daemon/API failures on critical operations.
 DOCKER_OP_MAX_RETRIES = 3
 DOCKER_OP_RETRY_BASE_SECONDS = 0.2
-
-
-def _log_name_from_labels(labels: dict[str, str]) -> str:
-    """Format node name for logging from container labels."""
-    node_name = labels.get(LABEL_NODE_NAME, "")
-    display_name = labels.get(LABEL_NODE_DISPLAY_NAME, "")
-    if display_name and display_name != node_name:
-        return f"{display_name}({node_name})"
-    return node_name
 
 
 def _classify_existing_container_identity(

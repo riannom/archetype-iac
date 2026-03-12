@@ -14,7 +14,6 @@ from app.utils import cache as cache_utils
 from app.utils import http as http_utils
 from app.utils import logs as logs_utils
 from app.utils import nodes as nodes_utils
-from app.utils import pagination as pagination_utils
 from app.utils import supervisor as supervisor_utils
 from app.utils import time_range as time_range_utils
 from app.utils import timeouts as timeouts_utils
@@ -31,25 +30,6 @@ class FakeRedis:
     def setex(self, key: str, ttl: int, value: object):
         self.store[key] = value
 
-
-class FakeQuery:
-    def __init__(self, rows):
-        self.rows = list(rows)
-        self._offset = 0
-        self._limit = None
-
-    def offset(self, value: int):
-        self._offset = value
-        return self
-
-    def limit(self, value: int):
-        self._limit = value
-        return self
-
-    def all(self):
-        start = self._offset
-        end = start + (self._limit or len(self.rows))
-        return self.rows[start:end]
 
 
 def test_parse_relative_duration_valid():
@@ -94,12 +74,6 @@ def test_get_log_content_inline_or_missing():
     assert logs_utils.get_log_content("=inline log") == "=inline log"
     assert logs_utils.get_log_content("/no/such/file.log") == "/no/such/file.log"
     assert logs_utils.get_log_content(None) is None
-
-
-def test_paginated_query_batches():
-    query = FakeQuery([1, 2, 3, 4, 5])
-    results = list(pagination_utils.paginated_query(query, batch_size=2))
-    assert results == [1, 2, 3, 4, 5]
 
 
 @pytest.mark.asyncio

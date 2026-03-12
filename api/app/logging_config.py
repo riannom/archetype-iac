@@ -27,11 +27,6 @@ def get_correlation_id() -> str | None:
     return correlation_id_var.get()
 
 
-def set_correlation_id(correlation_id: str) -> None:
-    """Set the correlation ID in context."""
-    correlation_id_var.set(correlation_id)
-
-
 def generate_correlation_id() -> str:
     """Generate a new correlation ID."""
     return str(uuid4())

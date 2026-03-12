@@ -82,17 +82,3 @@ def test_metrics_service_dashboard_metrics(test_db) -> None:
     assert metrics["labs"]["running"] == 1
 
 
-def test_metrics_service_job_stats(test_db) -> None:
-    job = models.Job(
-        lab_id="lab",
-        user_id=None,
-        action="up",
-        status="completed",
-    )
-    test_db.add(job)
-    test_db.commit()
-
-    service = metrics_service.MetricsService(test_db)
-    stats = service.get_job_statistics(hours=1)
-    assert stats["total"] == 1
-    assert stats["by_status"]["completed"] == 1

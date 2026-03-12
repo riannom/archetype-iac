@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -269,69 +269,3 @@ class MetricsService:
 
         return result
 
-    def get_job_statistics(self, hours: int = 24) -> dict:
-        """Get job statistics for the specified time period.
-
-        Args:
-            hours: Number of hours to look back
-
-        Returns:
-            Job counts by status and action
-        """
-        from app import models
-
-        cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
-
-        jobs = (
-            self.session.query(models.Job)
-            .filter(models.Job.created_at >= cutoff)
-            .all()
-        )
-
-        by_status: dict[str, int] = {}
-        by_action: dict[str, int] = {}
-
-        for job in jobs:
-            status = job.status or "unknown"
-            action = job.action.split(":")[0] if job.action else "unknown"
-
-            by_status[status] = by_status.get(status, 0) + 1
-            by_action[action] = by_action.get(action, 0) + 1
-
-        return {
-            "period_hours": hours,
-            "total": len(jobs),
-            "by_status": by_status,
-            "by_action": by_action,
-        }
-
-    def get_node_state_summary(self) -> dict:
-        """Get summary of node states across all labs.
-
-        Returns:
-            Node counts by state and readiness
-        """
-        from app import models
-
-        node_states = self.session.query(models.NodeState).all()
-
-        by_state: dict[str, int] = {}
-        ready_count = 0
-        total_count = len(node_states)
-
-        for ns in node_states:
-            state = ns.actual_state or "unknown"
-            by_state[state] = by_state.get(state, 0) + 1
-            if ns.is_ready:
-                ready_count += 1
-
-        return {
-            "total": total_count,
-            "ready": ready_count,
-            "by_state": by_state,
-        }
-
-
-def get_metrics_service(session: "Session") -> MetricsService:
-    """Create a metrics service instance with the given session."""
-    return MetricsService(session)

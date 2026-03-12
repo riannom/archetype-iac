@@ -31,14 +31,6 @@ _runner = CleanupRunner()
 _cleanup_dirty_event = asyncio.Event()
 
 
-def is_cleanup_dirty() -> bool:
-    return _cleanup_dirty_event.is_set()
-
-
-def clear_cleanup_dirty() -> None:
-    _cleanup_dirty_event.clear()
-
-
 # ---------------------------------------------------------------------------
 # Circuit breaker — prevents cascading failures in cleanup handlers
 # ---------------------------------------------------------------------------

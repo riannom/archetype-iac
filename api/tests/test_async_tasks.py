@@ -73,12 +73,12 @@ async def test_task_registry_register_and_cleanup() -> None:
     task = asyncio.create_task(work())
     await registry.register(task, "task-1")
 
-    assert "task-1" in registry.get_running_tasks()
+    assert "task-1" in registry._tasks
 
     await task
     await asyncio.sleep(0)
 
-    assert "task-1" not in registry.get_running_tasks()
+    assert "task-1" not in registry._tasks
 
 
 @pytest.mark.asyncio

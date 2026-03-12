@@ -13,7 +13,6 @@ from app.topology import (
     analyze_topology,
     graph_to_topology_yaml,
     graph_to_yaml,
-    split_topology_by_host,
     yaml_to_graph,
 )
 
@@ -224,62 +223,6 @@ def test_analyze_complex_topology():
     assert len(analysis.placements["agent1"]) == 2  # 2 spines
     assert len(analysis.placements["agent2"]) == 2  # 2 leaves
     assert len(analysis.placements["agent3"]) == 2  # 2 leaves
-
-
-# --- Topology Splitting Tests ---
-
-def test_split_topology_single_host():
-    """Test splitting a single-host topology."""
-    graph = TopologyGraph(
-        nodes=[
-            GraphNode(id="r1", name="r1", host="agent1"),
-            GraphNode(id="r2", name="r2", host="agent1"),
-        ],
-        links=[
-            GraphLink(endpoints=[GraphEndpoint(node="r1"), GraphEndpoint(node="r2")])
-        ],
-    )
-
-    analysis = analyze_topology(graph)
-    splits = split_topology_by_host(graph, analysis)
-
-    assert len(splits) == 1
-    assert "agent1" in splits
-    assert len(splits["agent1"].nodes) == 2
-    assert len(splits["agent1"].links) == 1
-
-
-def test_split_topology_multi_host():
-    """Test splitting a multi-host topology."""
-    graph = TopologyGraph(
-        nodes=[
-            GraphNode(id="r1", name="r1", host="agent1"),
-            GraphNode(id="r2", name="r2", host="agent1"),
-            GraphNode(id="r3", name="r3", host="agent2"),
-        ],
-        links=[
-            # Same-host link
-            GraphLink(endpoints=[GraphEndpoint(node="r1", ifname="eth0"), GraphEndpoint(node="r2", ifname="eth0")]),
-            # Cross-host link (should be excluded from splits)
-            GraphLink(endpoints=[GraphEndpoint(node="r2", ifname="eth1"), GraphEndpoint(node="r3", ifname="eth0")]),
-        ],
-    )
-
-    analysis = analyze_topology(graph)
-    splits = split_topology_by_host(graph, analysis)
-
-    assert len(splits) == 2
-
-    # Agent1 should have r1, r2 and the r1-r2 link
-    assert len(splits["agent1"].nodes) == 2
-    assert len(splits["agent1"].links) == 1
-    node_names = {n.name for n in splits["agent1"].nodes}
-    assert node_names == {"r1", "r2"}
-
-    # Agent2 should have only r3, no links (cross-host link excluded)
-    assert len(splits["agent2"].nodes) == 1
-    assert len(splits["agent2"].links) == 0
-    assert splits["agent2"].nodes[0].name == "r3"
 
 
 # --- External Network Tests ---

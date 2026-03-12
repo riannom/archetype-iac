@@ -177,22 +177,6 @@ export function isExternalNetworkNode(node: Node): node is ExternalNetworkNode {
   return 'nodeType' in node && node.nodeType === 'external';
 }
 
-// Legacy Node type for backward compatibility (alias to DeviceNode)
-export type LegacyNode = {
-  id: string;
-  name: string;
-  container_name?: string;
-  type: DeviceType;
-  model: string;
-  version: string;
-  x: number;
-  y: number;
-  label?: string;
-  cpu?: number;
-  memory?: number;
-  config?: string;
-};
-
 export interface Link {
   id: string;
   source: string;

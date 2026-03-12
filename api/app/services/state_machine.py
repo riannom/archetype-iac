@@ -9,8 +9,6 @@ import logging
 
 from app.state import (
     LabState,
-    LinkActualState,
-    LinkDesiredState,
     NodeActualState,
     NodeDesiredState,
 )
@@ -233,72 +231,6 @@ class NodeStateMachine:
             "error": "error",
         }
         return display_map.get(actual_state, "error")
-
-
-class LinkStateMachine:
-    """Centralized state transition logic for links.
-
-    Link state lifecycle:
-        unknown -> pending -> creating -> up
-        creating -> error (on failure)
-        up <-> down (via desired_state changes)
-        error -> pending (retry)
-    """
-
-    VALID_TRANSITIONS: dict[LinkActualState, set[LinkActualState]] = {
-        LinkActualState.UNKNOWN: {LinkActualState.PENDING, LinkActualState.UP, LinkActualState.DOWN},
-        LinkActualState.PENDING: {LinkActualState.CREATING, LinkActualState.UP, LinkActualState.ERROR},
-        LinkActualState.CREATING: {LinkActualState.UP, LinkActualState.DOWN, LinkActualState.ERROR},
-        LinkActualState.UP: {LinkActualState.DOWN, LinkActualState.ERROR},
-        LinkActualState.DOWN: {LinkActualState.PENDING, LinkActualState.UP, LinkActualState.ERROR},
-        LinkActualState.ERROR: {LinkActualState.PENDING, LinkActualState.DOWN, LinkActualState.UP},
-    }
-
-    # States eligible for auto-connect attempts
-    CONNECTABLE_STATES: set[LinkActualState] = {
-        LinkActualState.UNKNOWN,
-        LinkActualState.PENDING,
-        LinkActualState.DOWN,
-        LinkActualState.ERROR,
-    }
-
-    @classmethod
-    def can_transition(cls, current: LinkActualState, target: LinkActualState) -> bool:
-        """Check if a state transition is valid."""
-        if current == target:
-            return True
-        return target in cls.VALID_TRANSITIONS.get(current, set())
-
-    @classmethod
-    def matches_desired(cls, actual: LinkActualState, desired: LinkDesiredState) -> bool:
-        """Check if actual state matches the desired state."""
-        if desired == LinkDesiredState.UP:
-            return actual == LinkActualState.UP
-        elif desired == LinkDesiredState.DOWN:
-            return actual == LinkActualState.DOWN
-        return False
-
-    @classmethod
-    def should_auto_connect(
-        cls,
-        actual: LinkActualState,
-        desired: LinkDesiredState,
-        source_node_running: bool,
-        target_node_running: bool,
-    ) -> bool:
-        """Determine if a link should be auto-connected.
-
-        Links are auto-connected when:
-        - Desired state is UP
-        - Both endpoint nodes are running
-        - Current state is eligible for connection
-        """
-        return (
-            desired == LinkDesiredState.UP
-            and source_node_running
-            and target_node_running
-            and actual in cls.CONNECTABLE_STATES
-        )
 
 
 class LabStateMachine:
