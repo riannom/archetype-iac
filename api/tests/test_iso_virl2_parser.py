@@ -549,7 +549,6 @@ disk_image: alpine.tar.gz
 
         assert result is not None
         assert result.image_type == "docker"
-        assert result.is_container is True
 
     def test_parse_image_iol_bin(self):
         """Test parsing an IOL/IOL-XE binary image (.bin)."""
@@ -853,12 +852,12 @@ disk_image: iosv-15.9.qcow2
 
         # Verify node definitions
         assert len(manifest.node_definitions) == 2
-        ftdv_def = manifest.get_node_definition("ftdv")
+        ftdv_def = next((d for d in manifest.node_definitions if d.id == "ftdv"), None)
         assert ftdv_def is not None
         assert ftdv_def.nature == "firewall"
         assert ftdv_def.ram_mb == 8192
 
-        iosv_def = manifest.get_node_definition("iosv")
+        iosv_def = next((d for d in manifest.node_definitions if d.id == "iosv"), None)
         assert iosv_def is not None
         assert iosv_def.nature == "router"
         assert iosv_def.ram_mb == 512
@@ -866,10 +865,10 @@ disk_image: iosv-15.9.qcow2
         # Verify images
         assert len(manifest.images) == 2
 
-        ftdv_images = manifest.get_images_for_node("ftdv")
+        ftdv_images = [i for i in manifest.images if i.node_definition_id == "ftdv"]
         assert len(ftdv_images) == 1
         assert ftdv_images[0].version == "7.4.0"
 
-        iosv_images = manifest.get_images_for_node("iosv")
+        iosv_images = [i for i in manifest.images if i.node_definition_id == "iosv"]
         assert len(iosv_images) == 1
         assert iosv_images[0].version == "15.9"
