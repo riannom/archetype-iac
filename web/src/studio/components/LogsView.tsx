@@ -27,7 +27,9 @@ const levelBorders: Record<string, string> = {
   error: 'border-l-red-500 bg-red-100/50 dark:bg-red-900/20',
 };
 
-// Format timestamp
+// Intentionally NOT using formatTimestamp from utils/format.ts:
+// This version renders absolute HH:MM:SS time-of-day for log entries,
+// whereas the canonical formatTimestamp shows relative time ("5m ago").
 const formatTimestamp = (timestamp: string) => {
   const date = new Date(timestamp);
   return date.toLocaleTimeString('en-US', {

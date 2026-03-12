@@ -1929,183 +1929,24 @@ class LibvirtProvider(Provider, VlanPersistenceMixin):
                 "_display_name": display_name or node_name,
             }
 
-            disks_dir = self._disks_dir(workspace)
+            # Phase 2: storage preparation
+            storage_result = await self._prepare_storage(
+                node_config, kind, node_name, workspace, libvirt_config,
+                image, image_sha256, startup_config,
+            )
+            if isinstance(storage_result, NodeActionResult):
+                return storage_result
+            overlay_path, config_iso_path, config_disk_path, data_volume_path, inject_summary = storage_result
 
-            # Get base image
-            base_image = self._get_base_image(node_config)
-            if not base_image:
-                return NodeActionResult(
-                    success=False,
-                    node_name=node_name,
-                    error=f"No base image found for node {node_name} (image={image})",
-                )
-
-            # Verify backing image integrity
-            try:
-                self._verify_backing_image(base_image, image_sha256)
-            except RuntimeError as e:
-                return NodeActionResult(
-                    success=False,
-                    node_name=node_name,
-                    error=str(e),
-                )
-
-            # Phase 2: disk preparation (async subprocess)
-            overlay_path = disks_dir / f"{node_name}.qcow2"
-            if not await self._create_overlay_disk(base_image, overlay_path):
-                return NodeActionResult(
-                    success=False,
-                    node_name=node_name,
-                    error=f"Failed to create overlay disk for {node_name}",
-                )
-
-            if libvirt_config.needs_nested_vmx:
-                await asyncio.to_thread(self._patch_vjunos_svm_compat, overlay_path)
-
-            canonical_kind = self._canonical_kind(kind)
-
-            # Inject startup-config
-            inject_summary = ""
-            if not startup_config:
-                config_file = workspace / "configs" / node_name / "startup-config"
-                if config_file.exists():
-                    startup_config = config_file.read_text()
-            if not startup_config:
-                vendor = get_vendor_config(kind)
-                if vendor and vendor.default_startup_config:
-                    startup_config = vendor.default_startup_config.replace("{hostname}", node_name)
-                    logger.info("Using default startup config for %s (%s)", node_name, kind)
-            if startup_config and (
-                canonical_kind != "cisco_n9kv" or settings.n9kv_boot_modifications_enabled
-            ):
-                startup_config = self._prepare_startup_config_for_injection(
-                    kind, startup_config, node_name=node_name
-                )
-
-            if startup_config and canonical_kind == "cisco_n9kv" and not settings.n9kv_boot_modifications_enabled:
-                inject_summary = "skipped=n9kv_boot_modifications_disabled"
-                logger.info(
-                    "Skipping N9Kv startup-config injection for %s (boot mutations disabled)",
-                    node_name,
-                )
-            elif startup_config and libvirt_config.config_inject_method == "bootflash":
-                from agent.providers.bootflash_inject import inject_startup_config
-
-                inject_diag: dict[str, Any] = {}
-                inject_ok = await asyncio.to_thread(
-                    inject_startup_config,
-                    overlay_path,
-                    startup_config,
-                    partition=libvirt_config.config_inject_partition,
-                    fs_type=libvirt_config.config_inject_fs_type,
-                    config_path=libvirt_config.config_inject_path,
-                    diagnostics=inject_diag,
-                )
-                inject_summary = self._format_injection_diagnostics(inject_ok, inject_diag)
-                if inject_summary:
-                    logger.info("Config injection details for %s: %s", node_name, inject_summary)
-                if inject_ok:
-                    logger.info("Injected startup config for %s (%d bytes)", node_name, len(startup_config))
-                else:
-                    logger.warning("Config injection failed for %s; VM will boot without config", node_name)
-
-            config_iso_path: Path | None = None
-            if startup_config and libvirt_config.config_inject_method == "iso":
-                from agent.providers.iso_inject import create_config_iso
-                config_iso_path = disks_dir / f"{node_name}-config.iso"
-                iso_ok = await asyncio.to_thread(
-                    create_config_iso,
-                    config_iso_path,
-                    startup_config,
-                    volume_label=libvirt_config.config_inject_iso_volume_label or "config",
-                    filename=libvirt_config.config_inject_iso_filename or "startup-config",
-                )
-                if iso_ok:
-                    logger.info("Created config ISO for %s (%d bytes)", node_name, len(startup_config))
-                else:
-                    logger.warning("Config ISO creation failed for %s; VM will boot without config", node_name)
-                    config_iso_path = None
-
-            config_disk_path: Path | None = None
-            if startup_config and libvirt_config.config_inject_method == "config_disk":
-                from agent.providers.config_disk_inject import create_config_disk
-                config_disk_path = disks_dir / f"{node_name}-config.img"
-                disk_ok = await asyncio.to_thread(
-                    create_config_disk, config_disk_path, startup_config,
-                )
-                if disk_ok:
-                    logger.info("Created config disk for %s (%d bytes)", node_name, len(startup_config))
-                else:
-                    logger.warning("Config disk creation failed for %s; VM will boot without config", node_name)
-                    config_disk_path = None
-
-            data_volume_path = None
-            data_volume_size = node_config.get("data_volume_gb")
-            if data_volume_size:
-                data_volume_path = disks_dir / f"{node_name}-data.qcow2"
-                if not await self._create_data_volume(data_volume_path, data_volume_size):
-                    return NodeActionResult(
-                        success=False,
-                        node_name=node_name,
-                        error=f"Failed to create data volume for {node_name}",
-                    )
-
-            # Phase 3: VLAN + management network (libvirt thread for mgmt)
-            iface_count = node_config.get("interface_count", 1)
-            reserved_nics = node_config.get("reserved_nics", 0)
-            vlan_tags = self._allocate_vlans(lab_id, node_name, iface_count + reserved_nics, workspace)
-
-            include_management_interface, management_network = await self._run_libvirt(
-                self._resolve_management_network, lab_id, node_name, kind,
+            # Phase 3: build domain XML
+            xml = await self._build_domain_xml(
+                domain_name, node_config, kind, lab_id, node_name, workspace,
+                overlay_path, data_volume_path, config_iso_path, config_disk_path,
             )
 
-            # Serial log for lock-free readiness observation
-            serial_log_dir = workspace / "serial-logs"
-            serial_log_dir.mkdir(parents=True, exist_ok=True)
-            try:
-                serial_log_dir.chmod(0o777)
-            except OSError:
-                pass
-            serial_log_path = serial_log_dir / f"{domain_name}.log"
-            try:
-                serial_log_path.touch(exist_ok=True)
-                serial_log_path.chmod(0o666)
-            except OSError:
-                pass
-
-            xml = self._generate_domain_xml(
-                domain_name,
-                node_config,
-                overlay_path,
-                data_volume_path,
-                interface_count=iface_count,
-                vlan_tags=vlan_tags,
-                kind=kind,
-                include_management_interface=include_management_interface,
-                management_network=management_network,
-                config_iso_path=config_iso_path,
-                config_disk_path=config_disk_path,
-                serial_log_path=serial_log_path,
-            )
-
-            # Phase 4: define domain (libvirt thread)
-            ok = await self._run_libvirt(self._define_domain_sync, domain_name, xml)
-            if not ok:
-                return NodeActionResult(
-                    success=False,
-                    node_name=node_name,
-                    error=f"Failed to define domain {domain_name}",
-                )
-
-            details = f"Defined domain {domain_name}"
-            if inject_summary:
-                details = f"{details}\nConfig injection: {inject_summary}"
-
-            return NodeActionResult(
-                success=True,
-                node_name=node_name,
-                new_status=NodeStatus.STOPPED,
-                stdout=details,
+            # Phase 4: define domain
+            return await self._define_and_start_domain(
+                domain_name, xml, node_name, inject_summary,
             )
 
         except libvirt.libvirtError as e:
@@ -2121,6 +1962,218 @@ class LibvirtProvider(Provider, VlanPersistenceMixin):
                 node_name=node_name,
                 error=str(e),
             )
+
+    async def _prepare_storage(
+        self,
+        node_config,
+        kind,
+        node_name,
+        workspace,
+        libvirt_config,
+        image,
+        image_sha256,
+        startup_config,
+    ):
+        disks_dir = self._disks_dir(workspace)
+
+        # Get base image
+        base_image = self._get_base_image(node_config)
+        if not base_image:
+            return NodeActionResult(
+                success=False,
+                node_name=node_name,
+                error=f"No base image found for node {node_name} (image={image})",
+            )
+
+        # Verify backing image integrity
+        try:
+            self._verify_backing_image(base_image, image_sha256)
+        except RuntimeError as e:
+            return NodeActionResult(
+                success=False,
+                node_name=node_name,
+                error=str(e),
+            )
+
+        # Overlay disk creation
+        overlay_path = disks_dir / f"{node_name}.qcow2"
+        if not await self._create_overlay_disk(base_image, overlay_path):
+            return NodeActionResult(
+                success=False,
+                node_name=node_name,
+                error=f"Failed to create overlay disk for {node_name}",
+            )
+
+        if libvirt_config.needs_nested_vmx:
+            await asyncio.to_thread(self._patch_vjunos_svm_compat, overlay_path)
+
+        canonical_kind = self._canonical_kind(kind)
+
+        # Inject startup-config
+        inject_summary = ""
+        if not startup_config:
+            config_file = workspace / "configs" / node_name / "startup-config"
+            if config_file.exists():
+                startup_config = config_file.read_text()
+        if not startup_config:
+            vendor = get_vendor_config(kind)
+            if vendor and vendor.default_startup_config:
+                startup_config = vendor.default_startup_config.replace("{hostname}", node_name)
+                logger.info("Using default startup config for %s (%s)", node_name, kind)
+        if startup_config and (
+            canonical_kind != "cisco_n9kv" or settings.n9kv_boot_modifications_enabled
+        ):
+            startup_config = self._prepare_startup_config_for_injection(
+                kind, startup_config, node_name=node_name
+            )
+
+        if startup_config and canonical_kind == "cisco_n9kv" and not settings.n9kv_boot_modifications_enabled:
+            inject_summary = "skipped=n9kv_boot_modifications_disabled"
+            logger.info(
+                "Skipping N9Kv startup-config injection for %s (boot mutations disabled)",
+                node_name,
+            )
+        elif startup_config and libvirt_config.config_inject_method == "bootflash":
+            from agent.providers.bootflash_inject import inject_startup_config
+
+            inject_diag: dict[str, Any] = {}
+            inject_ok = await asyncio.to_thread(
+                inject_startup_config,
+                overlay_path,
+                startup_config,
+                partition=libvirt_config.config_inject_partition,
+                fs_type=libvirt_config.config_inject_fs_type,
+                config_path=libvirt_config.config_inject_path,
+                diagnostics=inject_diag,
+            )
+            inject_summary = self._format_injection_diagnostics(inject_ok, inject_diag)
+            if inject_summary:
+                logger.info("Config injection details for %s: %s", node_name, inject_summary)
+            if inject_ok:
+                logger.info("Injected startup config for %s (%d bytes)", node_name, len(startup_config))
+            else:
+                logger.warning("Config injection failed for %s; VM will boot without config", node_name)
+
+        config_iso_path: Path | None = None
+        if startup_config and libvirt_config.config_inject_method == "iso":
+            from agent.providers.iso_inject import create_config_iso
+            config_iso_path = disks_dir / f"{node_name}-config.iso"
+            iso_ok = await asyncio.to_thread(
+                create_config_iso,
+                config_iso_path,
+                startup_config,
+                volume_label=libvirt_config.config_inject_iso_volume_label or "config",
+                filename=libvirt_config.config_inject_iso_filename or "startup-config",
+            )
+            if iso_ok:
+                logger.info("Created config ISO for %s (%d bytes)", node_name, len(startup_config))
+            else:
+                logger.warning("Config ISO creation failed for %s; VM will boot without config", node_name)
+                config_iso_path = None
+
+        config_disk_path: Path | None = None
+        if startup_config and libvirt_config.config_inject_method == "config_disk":
+            from agent.providers.config_disk_inject import create_config_disk
+            config_disk_path = disks_dir / f"{node_name}-config.img"
+            disk_ok = await asyncio.to_thread(
+                create_config_disk, config_disk_path, startup_config,
+            )
+            if disk_ok:
+                logger.info("Created config disk for %s (%d bytes)", node_name, len(startup_config))
+            else:
+                logger.warning("Config disk creation failed for %s; VM will boot without config", node_name)
+                config_disk_path = None
+
+        data_volume_path = None
+        data_volume_size = node_config.get("data_volume_gb")
+        if data_volume_size:
+            data_volume_path = disks_dir / f"{node_name}-data.qcow2"
+            if not await self._create_data_volume(data_volume_path, data_volume_size):
+                return NodeActionResult(
+                    success=False,
+                    node_name=node_name,
+                    error=f"Failed to create data volume for {node_name}",
+                )
+
+        return overlay_path, config_iso_path, config_disk_path, data_volume_path, inject_summary
+
+    async def _build_domain_xml(
+        self,
+        domain_name,
+        node_config,
+        kind,
+        lab_id,
+        node_name,
+        workspace,
+        overlay_path,
+        data_volume_path,
+        config_iso_path,
+        config_disk_path,
+    ):
+        iface_count = node_config.get("interface_count", 1)
+        reserved_nics = node_config.get("reserved_nics", 0)
+        vlan_tags = self._allocate_vlans(lab_id, node_name, iface_count + reserved_nics, workspace)
+
+        include_management_interface, management_network = await self._run_libvirt(
+            self._resolve_management_network, lab_id, node_name, kind,
+        )
+
+        # Serial log for lock-free readiness observation
+        serial_log_dir = workspace / "serial-logs"
+        serial_log_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            serial_log_dir.chmod(0o777)
+        except OSError:
+            pass
+        serial_log_path = serial_log_dir / f"{domain_name}.log"
+        try:
+            serial_log_path.touch(exist_ok=True)
+            serial_log_path.chmod(0o666)
+        except OSError:
+            pass
+
+        xml = self._generate_domain_xml(
+            domain_name,
+            node_config,
+            overlay_path,
+            data_volume_path,
+            interface_count=iface_count,
+            vlan_tags=vlan_tags,
+            kind=kind,
+            include_management_interface=include_management_interface,
+            management_network=management_network,
+            config_iso_path=config_iso_path,
+            config_disk_path=config_disk_path,
+            serial_log_path=serial_log_path,
+        )
+
+        return xml
+
+    async def _define_and_start_domain(
+        self,
+        domain_name,
+        xml,
+        node_name,
+        inject_summary,
+    ):
+        ok = await self._run_libvirt(self._define_domain_sync, domain_name, xml)
+        if not ok:
+            return NodeActionResult(
+                success=False,
+                node_name=node_name,
+                error=f"Failed to define domain {domain_name}",
+            )
+
+        details = f"Defined domain {domain_name}"
+        if inject_summary:
+            details = f"{details}\nConfig injection: {inject_summary}"
+
+        return NodeActionResult(
+            success=True,
+            node_name=node_name,
+            new_status=NodeStatus.STOPPED,
+            stdout=details,
+        )
 
     async def probe_runtime_conflict(
         self,

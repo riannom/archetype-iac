@@ -14,7 +14,6 @@ class Settings(BaseSettings):
     iso_upload_dir: str = "/var/lib/archetype/uploads"
     # vrnetlab repository path for building VM images
     vrnetlab_path: str = "/opt/vrnetlab"
-    log_forward_url: str | None = None
     provider: str = "docker"
 
     local_auth_enabled: bool = True
@@ -30,8 +29,6 @@ class Settings(BaseSettings):
     access_token_expire_minutes: int = 480
     session_secret: str = ""
     agent_secret: str = ""  # Pre-shared secret for agent authentication (env: AGENT_SECRET)
-
-    max_concurrent_jobs_per_user: int = 2
 
     admin_username: str | None = None
     admin_email: str | None = None
@@ -60,8 +57,6 @@ class Settings(BaseSettings):
     # Background tasks
     agent_health_check_interval: int = 30
     agent_stale_timeout: int = 90
-    agent_cache_ttl: int = 30
-
     # State reconciliation settings
     # How often the reconciliation task runs (seconds)
     reconciliation_interval: int = 30
@@ -129,7 +124,6 @@ class Settings(BaseSettings):
 
     # Feature flags
     feature_multihost_labs: bool = True
-    feature_vxlan_overlay: bool = True
     # Auto-extract configs before destroy operations
     feature_auto_extract_on_destroy: bool = True
     # Auto-extract configs before stop operations (unified lifecycle)

@@ -219,20 +219,6 @@ function dedupeDeviceIds(deviceIds: string[]): string[] {
 }
 
 /**
- * Resolve an image's compatible device IDs against a known catalog.
- *
- * Keeps raw image IDs and adds matching known IDs via compatibility aliases.
- */
-export function resolveImageDeviceIdsForCatalog(
-  image: ImageLibraryEntry,
-  knownDeviceIds: Iterable<string>,
-  compatibilityAliases?: ImageCompatibilityAliasMap
-): string[] {
-  const resolved = buildResolvedImageDeviceIdsIndex([image], knownDeviceIds, compatibilityAliases);
-  return resolved.get(image.id) || [];
-}
-
-/**
  * Build a memoizable map of image_id -> resolved compatible device IDs.
  *
  * This pre-indexes compatibility tokens so large image catalogs avoid

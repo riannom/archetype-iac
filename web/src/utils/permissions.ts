@@ -17,10 +17,6 @@ export function hasMinGlobalRole(user: User | null, minRole: GlobalRole): boolea
   return userRank >= minRank;
 }
 
-export function canCreateLab(user: User | null): boolean {
-  return hasMinGlobalRole(user, 'operator');
-}
-
 export function canManageImages(user: User | null): boolean {
   return hasMinGlobalRole(user, 'admin');
 }
@@ -54,6 +50,3 @@ export function canEditLab(userRole: LabRole | null | undefined): boolean {
   return hasMinLabRole(userRole, 'editor');
 }
 
-export function canDeleteLab(userRole: LabRole | null | undefined): boolean {
-  return hasMinLabRole(userRole, 'owner');
-}

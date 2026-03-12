@@ -59,12 +59,6 @@ class TestDefaultSettings:
         settings = Settings()
         assert settings.access_token_expire_minutes == 480  # 8 hours
 
-    def test_max_concurrent_jobs_default(self):
-        """Max concurrent jobs per user has default."""
-        from app.config import Settings
-        settings = Settings()
-        assert settings.max_concurrent_jobs_per_user == 2
-
 
 class TestAgentTimeouts:
     """Tests for agent timeout settings."""
@@ -187,12 +181,6 @@ class TestFeatureFlags:
         from app.config import Settings
         settings = Settings()
         assert settings.feature_multihost_labs is True
-
-    def test_vxlan_overlay_enabled(self):
-        """VXLAN overlay feature is enabled by default."""
-        from app.config import Settings
-        settings = Settings()
-        assert settings.feature_vxlan_overlay is True
 
 
 class TestLoggingSettings:

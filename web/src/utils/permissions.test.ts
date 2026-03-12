@@ -1,14 +1,12 @@
 import { describe, it, expect } from 'vitest';
 import {
   hasMinGlobalRole,
-  canCreateLab,
   canManageImages,
   canManageAgents,
   canManageUsers,
   canViewInfrastructure,
   hasMinLabRole,
   canEditLab,
-  canDeleteLab,
   type LabRole,
 } from './permissions';
 import type { User, GlobalRole } from '../contexts/UserContext';
@@ -50,28 +48,6 @@ describe('hasMinGlobalRole', () => {
         expect(hasMinGlobalRole(createUser(userRole), minRole)).toBe(i >= j);
       });
     });
-  });
-});
-
-describe('canCreateLab', () => {
-  it('returns false for null user', () => {
-    expect(canCreateLab(null)).toBe(false);
-  });
-
-  it('returns false for viewer', () => {
-    expect(canCreateLab(createUser('viewer'))).toBe(false);
-  });
-
-  it('returns true for operator', () => {
-    expect(canCreateLab(createUser('operator'))).toBe(true);
-  });
-
-  it('returns true for admin', () => {
-    expect(canCreateLab(createUser('admin'))).toBe(true);
-  });
-
-  it('returns true for super_admin', () => {
-    expect(canCreateLab(createUser('super_admin'))).toBe(true);
   });
 });
 
@@ -219,24 +195,3 @@ describe('canEditLab', () => {
   });
 });
 
-describe('canDeleteLab', () => {
-  it('returns false for null role', () => {
-    expect(canDeleteLab(null)).toBe(false);
-  });
-
-  it('returns false for undefined role', () => {
-    expect(canDeleteLab(undefined)).toBe(false);
-  });
-
-  it('returns false for viewer', () => {
-    expect(canDeleteLab('viewer')).toBe(false);
-  });
-
-  it('returns false for editor', () => {
-    expect(canDeleteLab('editor')).toBe(false);
-  });
-
-  it('returns true for owner', () => {
-    expect(canDeleteLab('owner')).toBe(true);
-  });
-});
