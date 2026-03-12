@@ -18,7 +18,6 @@ from app import models
 from app.config import settings
 from app.services.resource_capacity import (
     AgentBucket,
-    AgentScore,
     CapacityCheckResult,
     DEFAULT_CPU_CORES,
     DEFAULT_MEMORY_MB,
