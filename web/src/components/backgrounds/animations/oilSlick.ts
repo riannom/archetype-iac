@@ -5,7 +5,8 @@
  * like oil on water. Slow morphing shapes with prismatic edges.
  */
 
-import { useEffect, useRef } from 'react';
+import { useRef } from 'react';
+import { useCanvasAnimation } from './useCanvasAnimation';
 
 interface OilBlob {
   x: number;
@@ -25,25 +26,10 @@ export function useOilSlick(
   active: boolean
 ): void {
   const blobsRef = useRef<OilBlob[]>([]);
-  const animationRef = useRef<number>(0);
   const timeRef = useRef<number>(0);
 
-  useEffect(() => {
-    if (!active) return;
-
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-
-    const resize = () => {
-      canvas.width = window.innerWidth;
-      canvas.height = window.innerHeight;
-      initializeBlobs();
-    };
-
-    const initializeBlobs = () => {
+  useCanvasAnimation(canvasRef, active, {
+    onInit: (_ctx, canvas) => {
       const { width, height } = canvas;
       blobsRef.current = [];
 
@@ -69,108 +55,108 @@ export function useOilSlick(
           morphSpeeds,
         });
       }
-    };
+    },
 
-    const getBlobPath = (blob: OilBlob, scale: number = 1): Path2D => {
-      const path = new Path2D();
-      const points = 64;
-
-      for (let i = 0; i <= points; i++) {
-        const angle = (i / points) * Math.PI * 2;
-
-        // Apply multiple morph frequencies for organic shape
-        let radiusOffset = 0;
-        blob.morphPhases.forEach((phase, idx) => {
-          const frequency = idx + 2;
-          const amplitude = 0.15 / (idx + 1);
-          radiusOffset += Math.sin(angle * frequency + phase) * amplitude;
-        });
-
-        const r = blob.radius * scale * (1 + radiusOffset);
-        const x = blob.x + Math.cos(angle) * r;
-        const y = blob.y + Math.sin(angle) * r;
-
-        if (i === 0) {
-          path.moveTo(x, y);
-        } else {
-          path.lineTo(x, y);
-        }
-      }
-
-      path.closePath();
-      return path;
-    };
-
-    const drawBlob = (blob: OilBlob) => {
-      const opacityMult = (opacity / 50) * 0.5;
-
-      // Draw multiple layers with different hue offsets for iridescence
-      const layers = 8;
-      for (let layer = layers - 1; layer >= 0; layer--) {
-        const layerScale = 0.3 + (layer / layers) * 0.7;
-        const path = getBlobPath(blob, layerScale);
-
-        // Iridescent hue cycling based on position and layer
-        const baseHue = (blob.hueOffset + blob.phase * 30 + layer * 40) % 360;
-
-        // Create gradient for this layer
-        const gradient = ctx.createRadialGradient(
-          blob.x - blob.radius * 0.2, blob.y - blob.radius * 0.2, 0,
-          blob.x, blob.y, blob.radius * layerScale
-        );
-
-        const layerOpacity = opacityMult * (0.3 + (layer / layers) * 0.3);
-
-        if (darkMode) {
-          gradient.addColorStop(0, `hsla(${baseHue}, 60%, 55%, ${layerOpacity})`);
-          gradient.addColorStop(0.3, `hsla(${(baseHue + 30) % 360}, 55%, 50%, ${layerOpacity * 0.8})`);
-          gradient.addColorStop(0.6, `hsla(${(baseHue + 60) % 360}, 50%, 45%, ${layerOpacity * 0.5})`);
-          gradient.addColorStop(1, `hsla(${(baseHue + 90) % 360}, 45%, 40%, ${layerOpacity * 0.2})`);
-        } else {
-          gradient.addColorStop(0, `hsla(${baseHue}, 70%, 65%, ${layerOpacity})`);
-          gradient.addColorStop(0.3, `hsla(${(baseHue + 30) % 360}, 65%, 60%, ${layerOpacity * 0.8})`);
-          gradient.addColorStop(0.6, `hsla(${(baseHue + 60) % 360}, 60%, 55%, ${layerOpacity * 0.5})`);
-          gradient.addColorStop(1, `hsla(${(baseHue + 90) % 360}, 55%, 50%, ${layerOpacity * 0.2})`);
-        }
-
-        ctx.fillStyle = gradient;
-        ctx.fill(path);
-      }
-
-      // Highlight edge for prismatic effect
-      const edgePath = getBlobPath(blob, 1);
-      const edgeGradient = ctx.createRadialGradient(
-        blob.x, blob.y, blob.radius * 0.8,
-        blob.x, blob.y, blob.radius * 1.1
-      );
-      const edgeHue = (blob.hueOffset + blob.phase * 50) % 360;
-      edgeGradient.addColorStop(0, 'transparent');
-      edgeGradient.addColorStop(0.5, `hsla(${edgeHue}, 80%, 70%, ${opacityMult * 0.15})`);
-      edgeGradient.addColorStop(1, 'transparent');
-
-      ctx.strokeStyle = edgeGradient;
-      ctx.lineWidth = 3;
-      ctx.stroke(edgePath);
-
-      // Inner shimmer
-      const shimmerX = blob.x + Math.sin(blob.phase * 2) * blob.radius * 0.2;
-      const shimmerY = blob.y + Math.cos(blob.phase * 2) * blob.radius * 0.2;
-      const shimmerGradient = ctx.createRadialGradient(
-        shimmerX, shimmerY, 0,
-        shimmerX, shimmerY, blob.radius * 0.4
-      );
-      shimmerGradient.addColorStop(0, `hsla(${(blob.hueOffset + 180) % 360}, 70%, 80%, ${opacityMult * 0.2})`);
-      shimmerGradient.addColorStop(1, 'transparent');
-
-      ctx.fillStyle = shimmerGradient;
-      ctx.beginPath();
-      ctx.arc(shimmerX, shimmerY, blob.radius * 0.4, 0, Math.PI * 2);
-      ctx.fill();
-    };
-
-    const animate = () => {
+    onFrame: (ctx, canvas) => {
       const { width, height } = canvas;
       timeRef.current += 16;
+
+      const getBlobPath = (blob: OilBlob, scale: number = 1): Path2D => {
+        const path = new Path2D();
+        const points = 64;
+
+        for (let i = 0; i <= points; i++) {
+          const angle = (i / points) * Math.PI * 2;
+
+          // Apply multiple morph frequencies for organic shape
+          let radiusOffset = 0;
+          blob.morphPhases.forEach((phase, idx) => {
+            const frequency = idx + 2;
+            const amplitude = 0.15 / (idx + 1);
+            radiusOffset += Math.sin(angle * frequency + phase) * amplitude;
+          });
+
+          const r = blob.radius * scale * (1 + radiusOffset);
+          const x = blob.x + Math.cos(angle) * r;
+          const y = blob.y + Math.sin(angle) * r;
+
+          if (i === 0) {
+            path.moveTo(x, y);
+          } else {
+            path.lineTo(x, y);
+          }
+        }
+
+        path.closePath();
+        return path;
+      };
+
+      const drawBlob = (blob: OilBlob) => {
+        const opacityMult = (opacity / 50) * 0.5;
+
+        // Draw multiple layers with different hue offsets for iridescence
+        const layers = 8;
+        for (let layer = layers - 1; layer >= 0; layer--) {
+          const layerScale = 0.3 + (layer / layers) * 0.7;
+          const path = getBlobPath(blob, layerScale);
+
+          // Iridescent hue cycling based on position and layer
+          const baseHue = (blob.hueOffset + blob.phase * 30 + layer * 40) % 360;
+
+          // Create gradient for this layer
+          const gradient = ctx.createRadialGradient(
+            blob.x - blob.radius * 0.2, blob.y - blob.radius * 0.2, 0,
+            blob.x, blob.y, blob.radius * layerScale
+          );
+
+          const layerOpacity = opacityMult * (0.3 + (layer / layers) * 0.3);
+
+          if (darkMode) {
+            gradient.addColorStop(0, `hsla(${baseHue}, 60%, 55%, ${layerOpacity})`);
+            gradient.addColorStop(0.3, `hsla(${(baseHue + 30) % 360}, 55%, 50%, ${layerOpacity * 0.8})`);
+            gradient.addColorStop(0.6, `hsla(${(baseHue + 60) % 360}, 50%, 45%, ${layerOpacity * 0.5})`);
+            gradient.addColorStop(1, `hsla(${(baseHue + 90) % 360}, 45%, 40%, ${layerOpacity * 0.2})`);
+          } else {
+            gradient.addColorStop(0, `hsla(${baseHue}, 70%, 65%, ${layerOpacity})`);
+            gradient.addColorStop(0.3, `hsla(${(baseHue + 30) % 360}, 65%, 60%, ${layerOpacity * 0.8})`);
+            gradient.addColorStop(0.6, `hsla(${(baseHue + 60) % 360}, 60%, 55%, ${layerOpacity * 0.5})`);
+            gradient.addColorStop(1, `hsla(${(baseHue + 90) % 360}, 55%, 50%, ${layerOpacity * 0.2})`);
+          }
+
+          ctx.fillStyle = gradient;
+          ctx.fill(path);
+        }
+
+        // Highlight edge for prismatic effect
+        const edgePath = getBlobPath(blob, 1);
+        const edgeGradient = ctx.createRadialGradient(
+          blob.x, blob.y, blob.radius * 0.8,
+          blob.x, blob.y, blob.radius * 1.1
+        );
+        const edgeHue = (blob.hueOffset + blob.phase * 50) % 360;
+        edgeGradient.addColorStop(0, 'transparent');
+        edgeGradient.addColorStop(0.5, `hsla(${edgeHue}, 80%, 70%, ${opacityMult * 0.15})`);
+        edgeGradient.addColorStop(1, 'transparent');
+
+        ctx.strokeStyle = edgeGradient;
+        ctx.lineWidth = 3;
+        ctx.stroke(edgePath);
+
+        // Inner shimmer
+        const shimmerX = blob.x + Math.sin(blob.phase * 2) * blob.radius * 0.2;
+        const shimmerY = blob.y + Math.cos(blob.phase * 2) * blob.radius * 0.2;
+        const shimmerGradient = ctx.createRadialGradient(
+          shimmerX, shimmerY, 0,
+          shimmerX, shimmerY, blob.radius * 0.4
+        );
+        shimmerGradient.addColorStop(0, `hsla(${(blob.hueOffset + 180) % 360}, 70%, 80%, ${opacityMult * 0.2})`);
+        shimmerGradient.addColorStop(1, 'transparent');
+
+        ctx.fillStyle = shimmerGradient;
+        ctx.beginPath();
+        ctx.arc(shimmerX, shimmerY, blob.radius * 0.4, 0, Math.PI * 2);
+        ctx.fill();
+      };
 
       // Clear
       ctx.fillStyle = darkMode ? 'rgba(10, 15, 20, 1)' : 'rgba(245, 248, 252, 1)';
@@ -209,17 +195,6 @@ export function useOilSlick(
       shimmerOverlay.addColorStop(1, 'transparent');
       ctx.fillStyle = shimmerOverlay;
       ctx.fillRect(0, 0, width, height);
-
-      animationRef.current = requestAnimationFrame(animate);
-    };
-
-    resize();
-    window.addEventListener('resize', resize);
-    animate();
-
-    return () => {
-      window.removeEventListener('resize', resize);
-      cancelAnimationFrame(animationRef.current);
-    };
-  }, [canvasRef, darkMode, opacity, active]);
+    },
+  }, [darkMode, opacity]);
 }

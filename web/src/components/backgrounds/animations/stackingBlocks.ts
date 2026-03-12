@@ -3,7 +3,8 @@
  * Bitcoin blocks gently falling and stacking
  */
 
-import { useRef, useEffect, useCallback } from 'react';
+import { useRef } from 'react';
+import { useCanvasAnimation } from './useCanvasAnimation';
 
 interface Block {
   x: number;
@@ -25,11 +26,11 @@ export function useStackingBlocks(
   active: boolean
 ) {
   const blocksRef = useRef<Block[]>([]);
-  const animationRef = useRef<number | undefined>(undefined);
   const timeRef = useRef<number>(0);
   const columnHeightsRef = useRef<number[]>([]);
+  const lastBlockTimeRef = useRef<number>(0);
 
-  const createBlock = useCallback((canvas: HTMLCanvasElement, column: number, columnHeights: number[], time: number): Block => {
+  function createBlock(canvas: HTMLCanvasElement, column: number, columnHeights: number[], time: number): Block {
     const size = 25 + Math.random() * 15;
     const targetY = canvas.height - columnHeights[column] - size / 2;
 
@@ -45,15 +46,15 @@ export function useStackingBlocks(
       column,
       hueShift: (time * 0.5 + Math.random() * 20) % 40 - 20, // Subtle color variation over time
     };
-  }, []);
+  }
 
-  const drawBlock = useCallback((
+  function drawBlock(
     ctx: CanvasRenderingContext2D,
     block: Block,
     isDark: boolean,
     opacityMultiplier: number,
     time: number
-  ) => {
+  ) {
     ctx.save();
     ctx.translate(block.x, block.y);
     ctx.rotate(block.rotation);
@@ -109,56 +110,41 @@ export function useStackingBlocks(
     ctx.font = `bold ${s * 0.25}px Arial`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillText('₿', 0, -s / 5);
+    ctx.fillText('\u20BF', 0, -s / 5);
 
     ctx.restore();
-  }, []);
+  }
 
-  useEffect(() => {
-    if (!active) return;
+  useCanvasAnimation(canvasRef, active, {
+    onInit: (_ctx, canvas) => {
+      const columnCount = Math.floor(canvas.width / 80);
+      columnHeightsRef.current = Array(columnCount).fill(0);
 
-    const canvas = canvasRef.current;
-    if (!canvas) return;
+      blocksRef.current = [];
+      for (let i = 0; i < 3; i++) {
+        const col = Math.floor(Math.random() * columnCount);
+        const block = createBlock(canvas, col, columnHeightsRef.current, 0);
+        block.y = block.targetY;
+        block.settled = true;
+        block.settleTime = 0;
+        columnHeightsRef.current[col] += block.size;
+        blocksRef.current.push(block);
+      }
 
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-
-    const resizeCanvas = () => {
-      canvas.width = window.innerWidth;
-      canvas.height = window.innerHeight;
-    };
-    resizeCanvas();
-    window.addEventListener('resize', resizeCanvas);
-
-    const columnCount = Math.floor(canvas.width / 80);
-    columnHeightsRef.current = Array(columnCount).fill(0);
-
-    blocksRef.current = [];
-    for (let i = 0; i < 3; i++) {
-      const col = Math.floor(Math.random() * columnCount);
-      const block = createBlock(canvas, col, columnHeightsRef.current, 0);
-      block.y = block.targetY;
-      block.settled = true;
-      block.settleTime = 0;
-      columnHeightsRef.current[col] += block.size;
-      blocksRef.current.push(block);
-    }
-
-    let lastBlockTime = 0;
-
-    const animate = () => {
-      if (!canvas || !ctx) return;
-
+      lastBlockTimeRef.current = 0;
+      timeRef.current = 0;
+    },
+    onFrame: (ctx, canvas) => {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       timeRef.current += 0.016;
 
       const opacityMultiplier = opacity / 50;
 
-      if (timeRef.current - lastBlockTime > 2 + Math.random() * 3) {
+      if (timeRef.current - lastBlockTimeRef.current > 2 + Math.random() * 3) {
         const col = Math.floor(Math.random() * columnHeightsRef.current.length);
         if (columnHeightsRef.current[col] < canvas.height * 0.6) {
           blocksRef.current.push(createBlock(canvas, col, columnHeightsRef.current, timeRef.current));
-          lastBlockTime = timeRef.current;
+          lastBlockTimeRef.current = timeRef.current;
         }
       }
 
@@ -188,17 +174,6 @@ export function useStackingBlocks(
         drawBlock(ctx, block, darkMode, opacityMultiplier, timeRef.current);
         return true;
       });
-
-      animationRef.current = requestAnimationFrame(animate);
-    };
-
-    animate();
-
-    return () => {
-      window.removeEventListener('resize', resizeCanvas);
-      if (animationRef.current) {
-        cancelAnimationFrame(animationRef.current);
-      }
-    };
-  }, [canvasRef, darkMode, opacity, createBlock, drawBlock, active]);
+    },
+  }, [darkMode, opacity]);
 }

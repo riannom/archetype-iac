@@ -6,7 +6,8 @@
  * Pre-generates all random values to avoid flickering.
  */
 
-import { useEffect, useRef } from 'react';
+import { useRef } from 'react';
+import { useCanvasAnimation } from './useCanvasAnimation';
 
 interface Sailboat {
   x: number;
@@ -53,25 +54,10 @@ export function useSunsetSailing(
   const wavesRef = useRef<Wave[]>([]);
   const birdsRef = useRef<Bird[]>([]);
   const cloudsRef = useRef<Cloud[]>([]);
-  const animationRef = useRef<number>(0);
   const timeRef = useRef<number>(0);
 
-  useEffect(() => {
-    if (!active) return;
-
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-
-    const resize = () => {
-      canvas.width = window.innerWidth;
-      canvas.height = window.innerHeight;
-      initializeElements();
-    };
-
-    const initializeElements = () => {
+  useCanvasAnimation(canvasRef, active, {
+    onInit: (_ctx, canvas) => {
       const width = canvas.width;
       const height = canvas.height;
 
@@ -140,10 +126,14 @@ export function useSunsetSailing(
           puffs,
         });
       }
+    },
+    onFrame: (ctx, canvas) => {
+      timeRef.current += 16;
+      const time = timeRef.current;
 
-    };
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-    const drawSky = () => {
+      // Draw sky
       const height = canvas.height;
       const gradient = ctx.createLinearGradient(0, 0, 0, height * 0.55);
 
@@ -161,27 +151,23 @@ export function useSunsetSailing(
       }
       ctx.fillStyle = gradient;
       ctx.fillRect(0, 0, canvas.width, height * 0.55);
-    };
 
-    const drawSun = () => {
-      // Only draw sun in dark mode
-      if (!darkMode) return;
+      // Draw sun (only in dark mode)
+      if (darkMode) {
+        const sunX = canvas.width * 0.7;
+        const sunY = canvas.height * 0.35;
+        const sunRadius = 40;
 
-      const sunX = canvas.width * 0.7;
-      const sunY = canvas.height * 0.35;
-      const sunRadius = 40;
+        ctx.beginPath();
+        ctx.arc(sunX, sunY, sunRadius, 0, Math.PI * 2);
+        const sunGradient = ctx.createRadialGradient(sunX, sunY, 0, sunX, sunY, sunRadius);
+        sunGradient.addColorStop(0, '#d4c4b4');
+        sunGradient.addColorStop(1, '#a49484');
+        ctx.fillStyle = sunGradient;
+        ctx.fill();
+      }
 
-      // Sun disc only (no glow)
-      ctx.beginPath();
-      ctx.arc(sunX, sunY, sunRadius, 0, Math.PI * 2);
-      const sunGradient = ctx.createRadialGradient(sunX, sunY, 0, sunX, sunY, sunRadius);
-      sunGradient.addColorStop(0, '#d4c4b4');
-      sunGradient.addColorStop(1, '#a49484');
-      ctx.fillStyle = sunGradient;
-      ctx.fill();
-    };
-
-    const drawClouds = () => {
+      // Draw clouds
       cloudsRef.current.forEach((cloud) => {
         cloud.x += cloud.speed;
         if (cloud.x > canvas.width + 100) {
@@ -197,10 +183,8 @@ export function useSunsetSailing(
           ctx.fill();
         });
       });
-    };
 
-    const drawWater = (time: number) => {
-      const height = canvas.height;
+      // Draw water
       const width = canvas.width;
 
       // Water base
@@ -246,67 +230,68 @@ export function useSunsetSailing(
         ctx.lineWidth = 1;
         ctx.stroke();
       });
-    };
 
-    const drawSailboat = (boat: Sailboat, time: number) => {
-      const bob = Math.sin(time * 0.002 + boat.bobPhase) * 3;
-      const tilt = Math.sin(time * 0.0015 + boat.bobPhase) * 0.05;
+      // Draw boats sorted by y position
+      const sortedBoats = [...boatsRef.current].sort((a, b) => a.y - b.y);
+      sortedBoats.forEach((boat) => {
+        const bob = Math.sin(time * 0.002 + boat.bobPhase) * 3;
+        const tilt = Math.sin(time * 0.0015 + boat.bobPhase) * 0.05;
 
-      ctx.save();
-      ctx.translate(boat.x, boat.y + bob);
-      ctx.rotate(tilt);
+        ctx.save();
+        ctx.translate(boat.x, boat.y + bob);
+        ctx.rotate(tilt);
 
-      const size = boat.size;
+        const size = boat.size;
 
-      // Hull
-      ctx.beginPath();
-      ctx.moveTo(-size, 0);
-      ctx.quadraticCurveTo(-size * 0.8, size * 0.4, 0, size * 0.3);
-      ctx.quadraticCurveTo(size * 0.8, size * 0.4, size, 0);
-      ctx.lineTo(size * 0.9, -size * 0.1);
-      ctx.lineTo(-size * 0.9, -size * 0.1);
-      ctx.closePath();
-      ctx.fillStyle = boat.hullColor;
-      ctx.fill();
+        // Hull
+        ctx.beginPath();
+        ctx.moveTo(-size, 0);
+        ctx.quadraticCurveTo(-size * 0.8, size * 0.4, 0, size * 0.3);
+        ctx.quadraticCurveTo(size * 0.8, size * 0.4, size, 0);
+        ctx.lineTo(size * 0.9, -size * 0.1);
+        ctx.lineTo(-size * 0.9, -size * 0.1);
+        ctx.closePath();
+        ctx.fillStyle = boat.hullColor;
+        ctx.fill();
 
-      // Mast
-      ctx.beginPath();
-      ctx.moveTo(0, -size * 0.1);
-      ctx.lineTo(0, -size * 1.5);
-      ctx.strokeStyle = '#4a3a2a';
-      ctx.lineWidth = 3;
-      ctx.stroke();
+        // Mast
+        ctx.beginPath();
+        ctx.moveTo(0, -size * 0.1);
+        ctx.lineTo(0, -size * 1.5);
+        ctx.strokeStyle = '#4a3a2a';
+        ctx.lineWidth = 3;
+        ctx.stroke();
 
-      // Main sail
-      ctx.beginPath();
-      ctx.moveTo(0, -size * 1.4);
-      ctx.quadraticCurveTo(size * 0.8, -size * 0.8, size * 0.6, -size * 0.2);
-      ctx.lineTo(0, -size * 0.2);
-      ctx.closePath();
-      ctx.fillStyle = boat.sailColor;
-      ctx.fill();
+        // Main sail
+        ctx.beginPath();
+        ctx.moveTo(0, -size * 1.4);
+        ctx.quadraticCurveTo(size * 0.8, -size * 0.8, size * 0.6, -size * 0.2);
+        ctx.lineTo(0, -size * 0.2);
+        ctx.closePath();
+        ctx.fillStyle = boat.sailColor;
+        ctx.fill();
 
-      // Small sail
-      ctx.beginPath();
-      ctx.moveTo(0, -size * 1.4);
-      ctx.quadraticCurveTo(-size * 0.4, -size * 0.9, -size * 0.3, -size * 0.4);
-      ctx.lineTo(0, -size * 0.4);
-      ctx.closePath();
-      ctx.fillStyle = boat.sailColor;
-      ctx.globalAlpha = 0.9;
-      ctx.fill();
-      ctx.globalAlpha = 1;
+        // Small sail
+        ctx.beginPath();
+        ctx.moveTo(0, -size * 1.4);
+        ctx.quadraticCurveTo(-size * 0.4, -size * 0.9, -size * 0.3, -size * 0.4);
+        ctx.lineTo(0, -size * 0.4);
+        ctx.closePath();
+        ctx.fillStyle = boat.sailColor;
+        ctx.globalAlpha = 0.9;
+        ctx.fill();
+        ctx.globalAlpha = 1;
 
-      ctx.restore();
+        ctx.restore();
 
-      // Move boat
-      boat.x += boat.speed;
-      if (boat.x > canvas.width + boat.size * 2) {
-        boat.x = -boat.size * 2;
-      }
-    };
+        // Move boat
+        boat.x += boat.speed;
+        if (boat.x > canvas.width + boat.size * 2) {
+          boat.x = -boat.size * 2;
+        }
+      });
 
-    const drawBirds = (_time: number) => {
+      // Draw birds
       birdsRef.current.forEach((bird) => {
         bird.x += bird.speed;
         bird.wingPhase += 0.1;
@@ -348,35 +333,6 @@ export function useSunsetSailing(
 
         ctx.restore();
       });
-    };
-
-    const animate = () => {
-      timeRef.current += 16;
-      const time = timeRef.current;
-
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-      drawSky();
-      drawSun();
-      drawClouds();
-      drawWater(time);
-
-      // Draw boats sorted by y position
-      const sortedBoats = [...boatsRef.current].sort((a, b) => a.y - b.y);
-      sortedBoats.forEach((boat) => drawSailboat(boat, time));
-
-      drawBirds(time);
-
-      animationRef.current = requestAnimationFrame(animate);
-    };
-
-    resize();
-    window.addEventListener('resize', resize);
-    animate();
-
-    return () => {
-      window.removeEventListener('resize', resize);
-      cancelAnimationFrame(animationRef.current);
-    };
-  }, [canvasRef, darkMode, opacity, active]);
+    },
+  }, [darkMode, opacity]);
 }
