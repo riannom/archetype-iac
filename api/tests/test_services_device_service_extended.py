@@ -349,23 +349,6 @@ class TestDeviceServiceCrudEdge:
         with pytest.raises(DeviceValidationError, match="already hidden"):
             service.hide_device("ceos")
 
-    def test_restore_not_hidden_raises(self, monkeypatch) -> None:
-        service = DeviceService()
-        monkeypatch.setattr(device_service, "get_config_by_device", lambda d: object())
-        monkeypatch.setattr("app.image_store.canonicalize_device_id", lambda d: d)
-        monkeypatch.setattr("app.image_store.is_device_hidden", lambda d: False)
-
-        with pytest.raises(DeviceValidationError, match="not hidden"):
-            service.restore_device("ceos")
-
-    def test_restore_non_builtin_raises(self, monkeypatch) -> None:
-        service = DeviceService()
-        monkeypatch.setattr(device_service, "get_config_by_device", lambda d: None)
-        monkeypatch.setattr("app.image_store.canonicalize_device_id", lambda d: d)
-
-        with pytest.raises(DeviceValidationError, match="Only built-in"):
-            service.restore_device("custom_only")
-
 
 # ---------------------------------------------------------------------------
 # Tests: DeviceService.update_device_config edge cases

@@ -380,33 +380,3 @@ class TestHasNodes:
         assert svc.has_nodes(sample_lab.id) is False
 
 
-# ---------------------------------------------------------------------------
-# get_reserved_interfaces_for_host
-# ---------------------------------------------------------------------------
-
-
-class TestGetReservedInterfaces:
-
-    def test_cross_host_link_reserved(self, test_db: Session, sample_lab: models.Lab):
-        make_host(test_db, "h1")
-        make_host(test_db, "h2")
-        n1 = make_node(test_db, sample_lab.id, "n1", "R1", host_id="h1")
-        n2 = make_node(test_db, sample_lab.id, "n2", "R2", host_id="h2")
-        make_link(test_db, sample_lab.id, n1.id, "eth1", n2.id, "eth1")
-        test_db.commit()
-
-        svc = TopologyService(test_db)
-        reserved = svc.get_reserved_interfaces_for_host(sample_lab.id, "h1")
-        assert ("R1", "eth1") in reserved
-        assert ("R2", "eth1") not in reserved  # R2 is on h2
-
-    def test_same_host_links_not_reserved(self, test_db: Session, sample_lab: models.Lab):
-        make_host(test_db, "h1")
-        n1 = make_node(test_db, sample_lab.id, "n1", "R1", host_id="h1")
-        n2 = make_node(test_db, sample_lab.id, "n2", "R2", host_id="h1")
-        make_link(test_db, sample_lab.id, n1.id, "eth1", n2.id, "eth1")
-        test_db.commit()
-
-        svc = TopologyService(test_db)
-        reserved = svc.get_reserved_interfaces_for_host(sample_lab.id, "h1")
-        assert len(reserved) == 0

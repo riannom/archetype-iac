@@ -79,47 +79,6 @@ def test_interface_name_translations() -> None:
     assert interface_mapping.linux_to_vendor_interface("lo", "ceos") is None
     assert interface_mapping.linux_to_vendor_interface("eth1", None) is None
 
-    assert interface_mapping.vendor_to_linux_interface("Ethernet1", "ceos") == "eth1"
-    # Juniper ge-0/0/{N}: port_start_index=0, dps=1 → eth{2 - 0 + 1} = eth3
-    assert interface_mapping.vendor_to_linux_interface("ge-0/0/2", "juniper_vjunosswitch") == "eth3"
-    assert interface_mapping.vendor_to_linux_interface("ge-0/0/2", "juniper_vjunosrouter") == "eth3"
-    assert interface_mapping.vendor_to_linux_interface("ge-0/0/2", "juniper_vjunosevolved") == "eth3"
-    # Device-aware translation: GigabitEthernet0/0/0/3 with port_start_index=0
-    # Formula: eth{3 - 0 + 3} = eth6 (dps=3: mgmt(1) + reserved_nics(2))
-    assert interface_mapping.vendor_to_linux_interface("GigabitEthernet0/0/0/3", "cisco_iosxr") == "eth6"
-    assert interface_mapping.vendor_to_linux_interface("weird0", "ceos") is None
-
-
-def test_update_vlan_tag(test_db, sample_lab) -> None:
-    node = models.Node(
-        lab_id=sample_lab.id,
-        gui_id="r1",
-        display_name="R1",
-        container_name="r1",
-        node_type="device",
-        device="linux",
-    )
-    test_db.add(node)
-    test_db.commit()
-
-    mapping = models.InterfaceMapping(
-        lab_id=sample_lab.id,
-        node_id=node.id,
-        linux_interface="eth1",
-        vlan_tag=100,
-    )
-    test_db.add(mapping)
-    test_db.commit()
-
-    assert interface_mapping.update_vlan_tag(test_db, sample_lab.id, node.id, "eth1", 200)
-
-    updated = (
-        test_db.query(models.InterfaceMapping)
-        .filter(models.InterfaceMapping.lab_id == sample_lab.id)
-        .first()
-    )
-    assert updated.vlan_tag == 200
-
 
 @pytest.mark.asyncio
 async def test_populate_from_agent_uses_port_state_for_libvirt_nodes(

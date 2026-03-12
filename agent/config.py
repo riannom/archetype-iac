@@ -145,11 +145,6 @@ class Settings(BaseSettings):
 
     # === Docker OVS Plugin Settings ===
 
-    # DEPRECATED: Management now uses OVS (same as data ports). These settings
-    # are retained to avoid breaking existing .env files but are no longer read.
-    mgmt_network_subnet_base: str = "172.20.0.0/16"
-    mgmt_network_enable_nat: bool = True
-
     # VXLAN settings for shared bridge (multi-host support)
     plugin_vxlan_vni_base: int = 200000  # Different range from overlay.py
     plugin_vxlan_vni_max: int = 299999

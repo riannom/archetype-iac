@@ -1,7 +1,7 @@
 """Extended tests for app.services.interface_mapping.
 
-Covers edge cases: duplicate ports, container name matching, get_mapping_by_ovs_port,
-delete_lab_mappings, populate_all_agents, and error handling not covered by existing tests.
+Covers edge cases: duplicate ports, container name matching,
+populate_all_agents, and error handling not covered by existing tests.
 """
 from __future__ import annotations
 
@@ -30,28 +30,6 @@ class TestLinuxToVendorEdgeCases:
         """Management-like interfaces should return None for standard devices."""
         result = interface_mapping.linux_to_vendor_interface("mgmt0", "ceos")
         assert result is None
-
-
-# ---------------------------------------------------------------------------
-# Tests: vendor_to_linux_interface edge cases
-# ---------------------------------------------------------------------------
-
-class TestVendorToLinuxEdgeCases:
-    def test_eth_input_passthrough(self) -> None:
-        """ethN input on any device should pass through."""
-        result = interface_mapping.vendor_to_linux_interface("eth5", "linux")
-        assert result == "eth5"
-
-    def test_unrecognized_vendor_name_returns_none(self) -> None:
-        """Random vendor name that doesn't match any pattern returns None."""
-        result = interface_mapping.vendor_to_linux_interface("weird0", "ceos")
-        assert result is None
-
-    def test_case_insensitive_eth_passthrough(self) -> None:
-        """Eth1 should be recognized as eth-style."""
-        result = interface_mapping.vendor_to_linux_interface("Eth1", "linux")
-        # normalize_interface should handle this
-        assert result is not None
 
 
 # ---------------------------------------------------------------------------
@@ -90,85 +68,6 @@ class TestGetMapping:
         assert result is not None
         assert result.ovs_port == "vh123"
         assert result.vlan_tag == 100
-
-
-# ---------------------------------------------------------------------------
-# Tests: get_mapping_by_ovs_port
-# ---------------------------------------------------------------------------
-
-class TestGetMappingByOvsPort:
-    def test_returns_none_for_nonexistent(self, test_db) -> None:
-        result = interface_mapping.get_mapping_by_ovs_port(test_db, "nonexistent")
-        assert result is None
-
-    def test_returns_mapping_when_exists(self, test_db, sample_lab) -> None:
-        node = models.Node(
-            lab_id=sample_lab.id,
-            gui_id="r1", display_name="R1",
-            container_name="r1", node_type="device", device="linux",
-        )
-        test_db.add(node)
-        test_db.commit()
-
-        mapping = models.InterfaceMapping(
-            lab_id=sample_lab.id,
-            node_id=node.id,
-            linux_interface="eth1",
-            ovs_port="vh999abc",
-        )
-        test_db.add(mapping)
-        test_db.commit()
-
-        result = interface_mapping.get_mapping_by_ovs_port(test_db, "vh999abc")
-        assert result is not None
-        assert result.linux_interface == "eth1"
-
-
-# ---------------------------------------------------------------------------
-# Tests: update_vlan_tag edge cases
-# ---------------------------------------------------------------------------
-
-class TestUpdateVlanTagEdge:
-    def test_returns_false_for_nonexistent(self, test_db, sample_lab) -> None:
-        result = interface_mapping.update_vlan_tag(
-            test_db, sample_lab.id, "fake-node", "eth1", 500
-        )
-        assert result is False
-
-
-# ---------------------------------------------------------------------------
-# Tests: delete_lab_mappings
-# ---------------------------------------------------------------------------
-
-class TestDeleteLabMappings:
-    def test_returns_zero_for_empty_lab(self, test_db, sample_lab) -> None:
-        count = interface_mapping.delete_lab_mappings(test_db, sample_lab.id)
-        assert count == 0
-
-    def test_deletes_all_mappings_for_lab(self, test_db, sample_lab) -> None:
-        node = models.Node(
-            lab_id=sample_lab.id,
-            gui_id="r1", display_name="R1",
-            container_name="r1", node_type="device", device="linux",
-        )
-        test_db.add(node)
-        test_db.commit()
-
-        for iface in ["eth1", "eth2", "eth3"]:
-            test_db.add(models.InterfaceMapping(
-                lab_id=sample_lab.id,
-                node_id=node.id,
-                linux_interface=iface,
-            ))
-        test_db.commit()
-
-        count = interface_mapping.delete_lab_mappings(test_db, sample_lab.id)
-        assert count == 3
-
-        remaining = test_db.query(models.InterfaceMapping).filter(
-            models.InterfaceMapping.lab_id == sample_lab.id
-        ).count()
-        assert remaining == 0
 
 
 # ---------------------------------------------------------------------------

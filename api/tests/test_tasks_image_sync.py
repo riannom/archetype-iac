@@ -369,57 +369,6 @@ class TestPullImagesOnRegistration:
         await pull_images_on_registration("nonexistent-host", test_db)
 
 
-class TestGetImagesFromTopology:
-    """Tests for the get_images_from_topology function."""
-
-    def test_extracts_images_from_valid_topology(self):
-        """Should extract image references from valid topology YAML."""
-        from app.tasks.image_sync import get_images_from_topology
-
-        topology = """
-name: test-lab
-topology:
-  nodes:
-    router1:
-      kind: ceos
-      image: ceos:4.28.0F
-    router2:
-      kind: ceos
-      image: ceos:4.28.0F
-    linux1:
-      kind: linux
-      image: alpine:latest
-"""
-        images = get_images_from_topology(topology)
-
-        assert len(images) == 2  # Unique images
-        assert "ceos:4.28.0F" in images
-        assert "alpine:latest" in images
-
-    def test_returns_empty_for_invalid_yaml(self):
-        """Should return empty list for invalid YAML."""
-        from app.tasks.image_sync import get_images_from_topology
-
-        images = get_images_from_topology("invalid: yaml: {{")
-
-        assert images == []
-
-    def test_returns_empty_for_topology_without_images(self):
-        """Should return empty list for topology without images."""
-        from app.tasks.image_sync import get_images_from_topology
-
-        topology = """
-name: test-lab
-topology:
-  nodes:
-    router1:
-      kind: linux
-"""
-        images = get_images_from_topology(topology)
-
-        assert images == []
-
-
 class TestGetImageToNodesMap:
     """Tests for the get_image_to_nodes_map function."""
 

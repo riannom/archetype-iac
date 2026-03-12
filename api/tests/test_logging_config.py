@@ -19,7 +19,6 @@ from app.logging_config import (
     correlation_id_var,
     generate_correlation_id,
     get_correlation_id,
-    set_correlation_id,
     setup_logging,
 )
 
@@ -53,7 +52,7 @@ class TestCorrelationId:
     def test_set_and_get_correlation_id(self):
         """Test that set_correlation_id and get_correlation_id work together."""
         test_id = "test-correlation-123"
-        set_correlation_id(test_id)
+        correlation_id_var.set(test_id)
         assert get_correlation_id() == test_id
 
     def test_get_correlation_id_default_is_none(self):
@@ -70,7 +69,7 @@ class TestCorrelationId:
         import asyncio
 
         async def task_with_id(task_id):
-            set_correlation_id(f"task-{task_id}")
+            correlation_id_var.set(f"task-{task_id}")
             await asyncio.sleep(0.01)  # Yield to other tasks
             return get_correlation_id()
 
@@ -187,7 +186,7 @@ class TestJSONFormatter:
 
     def test_format_includes_correlation_id_when_set(self):
         """Test that correlation ID is included when set."""
-        set_correlation_id("test-correlation-456")
+        correlation_id_var.set("test-correlation-456")
         try:
             record = logging.LogRecord(
                 name="test",
@@ -204,11 +203,11 @@ class TestJSONFormatter:
             assert "correlation_id" in parsed
             assert parsed["correlation_id"] == "test-correlation-456"
         finally:
-            set_correlation_id(None)
+            correlation_id_var.set(None)
 
     def test_format_excludes_correlation_id_when_not_set(self):
         """Test that correlation ID is not included when not set."""
-        set_correlation_id(None)
+        correlation_id_var.set(None)
         record = logging.LogRecord(
             name="test",
             level=logging.INFO,
@@ -393,7 +392,7 @@ class TestTextFormatter:
     def test_format_includes_correlation_id_when_set(self):
         """Test that correlation ID is included when set."""
         full_id = "abcd1234-5678-9abc-def0-123456789012"
-        set_correlation_id(full_id)
+        correlation_id_var.set(full_id)
         try:
             record = logging.LogRecord(
                 name="test",
@@ -408,11 +407,11 @@ class TestTextFormatter:
             # TextFormatter shows first 8 chars of correlation ID
             assert "[abcd1234]" in output
         finally:
-            set_correlation_id(None)
+            correlation_id_var.set(None)
 
     def test_format_excludes_correlation_id_when_not_set(self):
         """Test that no correlation ID brackets when not set."""
-        set_correlation_id(None)
+        correlation_id_var.set(None)
         record = logging.LogRecord(
             name="test",
             level=logging.INFO,
@@ -589,11 +588,11 @@ class TestLoggerOutput:
         handler.setFormatter(JSONFormatter())
         logger.addHandler(handler)
 
-        set_correlation_id("e2e-test-id-123")
+        correlation_id_var.set("e2e-test-id-123")
         try:
             logger.info("End to end test", extra={"custom_field": "value"})
         finally:
-            set_correlation_id(None)
+            correlation_id_var.set(None)
 
         captured = capsys.readouterr()
         output = json.loads(captured.out.strip())
@@ -615,11 +614,11 @@ class TestLoggerOutput:
         handler.setFormatter(TextFormatter())
         logger.addHandler(handler)
 
-        set_correlation_id("text-test-abc")
+        correlation_id_var.set("text-test-abc")
         try:
             logger.warning("Text format test")
         finally:
-            set_correlation_id(None)
+            correlation_id_var.set(None)
 
         captured = capsys.readouterr()
         output = captured.out.strip()

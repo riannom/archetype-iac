@@ -1206,60 +1206,6 @@ def _broadcast_nodes_sync_cleared(
         )
 
 
-def get_images_from_topology(topology_yaml: str) -> list[str]:
-    """Extract Docker image references from a topology YAML.
-
-    Args:
-        topology_yaml: The topology.yml content
-
-    Returns:
-        List of unique image references used in the topology
-    """
-    import yaml
-
-    try:
-        topology = yaml.safe_load(topology_yaml)
-        if not topology:
-            return []
-
-        images = set()
-        nodes = topology.get("topology", {}).get("nodes", {})
-
-        for node_name, node_config in nodes.items():
-            if isinstance(node_config, dict):
-                image = node_config.get("image")
-                if image:
-                    images.add(image)
-
-        return list(images)
-
-    except Exception as e:
-        logger.error(f"Error parsing topology: {e}")
-        return []
-
-
-def get_images_from_db(lab_id: str, database: Session) -> list[str]:
-    """Extract Docker image references from database topology.
-
-    Args:
-        lab_id: Lab ID to get images for
-        database: Database session
-
-    Returns:
-        List of unique image references used in the topology
-    """
-    images = (
-        database.query(models.Node.image)
-        .filter(
-            models.Node.lab_id == lab_id,
-            models.Node.image.isnot(None),
-        )
-        .distinct()
-        .all()
-    )
-    return [img[0] for img in images if img[0]]
-
-
 def get_image_to_nodes_map(topology_yaml: str) -> dict[str, list[str]]:
     """Extract a mapping from image references to node names.
 

@@ -84,20 +84,3 @@ class CarrierState(str, Enum):
     OFF = "off"
 
 
-class ImageSyncStatus(str, Enum):
-    """Status of image sync operations."""
-
-    CHECKING = "checking"
-    SYNCING = "syncing"
-    SYNCED = "synced"
-    FAILED = "failed"
-
-
-class VxlanTunnelStatus(str, Enum):
-    """Status of VXLAN tunnels for cross-host links."""
-
-    PENDING = "pending"
-    CREATING = "creating"
-    ACTIVE = "active"
-    ERROR = "error"
-    DELETING = "deleting"

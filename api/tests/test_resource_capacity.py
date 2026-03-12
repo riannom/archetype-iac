@@ -27,7 +27,6 @@ from app.services.resource_capacity import (
     calculate_node_requirements,
     check_capacity,
     check_multihost_capacity,
-    distribute_nodes_by_score,
     format_capacity_error,
     format_capacity_warnings,
     get_agent_capacity,
@@ -1087,95 +1086,6 @@ class TestScoreAgent:
         # Local: usable = 32768-8192 = 24576, avail = 24576-8192 = 16384, ratio = 16384/24576 ≈ 0.667
         # Plus local penalty. So local should be distinctly lower.
         assert score_agent(local).score < score_agent(remote).score
-
-
-# ---------------------------------------------------------------------------
-# 9. TestDistributeNodesByScore
-# ---------------------------------------------------------------------------
-
-
-class TestDistributeNodesByScore:
-    """Tests for distribute_nodes_by_score() proportional distribution."""
-
-    def test_equal_scores_equal_split(self):
-        """Two agents with equal scores get equal node counts."""
-        scores = {
-            "a1": AgentScore(score=0.5),
-            "a2": AgentScore(score=0.5),
-        }
-        result = distribute_nodes_by_score(["n1", "n2", "n3", "n4"], scores)
-        counts = {}
-        for agent_id in result.values():
-            counts[agent_id] = counts.get(agent_id, 0) + 1
-        assert counts["a1"] == 2
-        assert counts["a2"] == 2
-
-    def test_two_to_one_ratio(self):
-        """Scores in 2:1 ratio produce ~67:33 split."""
-        scores = {
-            "a1": AgentScore(score=0.8),
-            "a2": AgentScore(score=0.4),
-        }
-        result = distribute_nodes_by_score(
-            ["n1", "n2", "n3", "n4", "n5", "n6"], scores
-        )
-        counts = {}
-        for agent_id in result.values():
-            counts[agent_id] = counts.get(agent_id, 0) + 1
-        assert counts["a1"] == 4
-        assert counts["a2"] == 2
-
-    def test_single_node_goes_to_highest(self):
-        """Single node is assigned to the highest-scoring agent."""
-        scores = {
-            "a1": AgentScore(score=0.3),
-            "a2": AgentScore(score=0.9),
-        }
-        result = distribute_nodes_by_score(["n1"], scores)
-        assert result["n1"] == "a2"
-
-    def test_empty_inputs(self):
-        """Empty node list or empty scores returns empty dict."""
-        scores = {"a1": AgentScore(score=0.5)}
-        assert distribute_nodes_by_score([], scores) == {}
-        assert distribute_nodes_by_score(["n1"], {}) == {}
-
-    def test_all_zero_scores(self):
-        """All zero scores returns empty dict (no valid candidates)."""
-        scores = {
-            "a1": AgentScore(score=0.0),
-            "a2": AgentScore(score=0.0),
-        }
-        result = distribute_nodes_by_score(["n1", "n2"], scores)
-        assert result == {}
-
-    def test_three_agents_unequal(self):
-        """Three agents with varied scores get proportional allocation."""
-        scores = {
-            "a1": AgentScore(score=0.6),
-            "a2": AgentScore(score=0.3),
-            "a3": AgentScore(score=0.1),
-        }
-        result = distribute_nodes_by_score(
-            [f"n{i}" for i in range(10)], scores
-        )
-        counts = {}
-        for agent_id in result.values():
-            counts[agent_id] = counts.get(agent_id, 0) + 1
-        # 0.6/1.0 = 60% of 10 = 6, 0.3/1.0 = 30% of 10 = 3, 0.1/1.0 = 10% of 10 = 1
-        assert counts["a1"] == 6
-        assert counts["a2"] == 3
-        assert counts["a3"] == 1
-
-    def test_all_nodes_assigned(self):
-        """Every node gets an assignment."""
-        scores = {
-            "a1": AgentScore(score=0.7),
-            "a2": AgentScore(score=0.3),
-        }
-        nodes = [f"n{i}" for i in range(5)]
-        result = distribute_nodes_by_score(nodes, scores)
-        assert set(result.keys()) == set(nodes)
 
 
 # ---------------------------------------------------------------------------

@@ -305,40 +305,6 @@ def score_agent(host: models.Host) -> AgentScore:
     )
 
 
-def distribute_nodes_by_score(
-    node_names: list[str],
-    agent_scores: dict[str, AgentScore],
-) -> dict[str, str]:
-    """Distribute nodes across agents proportionally to their scores.
-
-    Returns a mapping of node_name -> agent_id. Uses a greedy approach:
-    each node is assigned to the agent with the highest remaining
-    fractional share, which produces a balanced distribution even for
-    small numbers of nodes.
-    """
-    if not node_names or not agent_scores:
-        return {}
-
-    total_score = sum(s.score for s in agent_scores.values())
-    if total_score == 0:
-        return {}
-
-    # Calculate fractional shares (how many nodes each agent "deserves")
-    shares: dict[str, float] = {
-        agent_id: (s.score / total_score) * len(node_names)
-        for agent_id, s in agent_scores.items()
-    }
-
-    assignments: dict[str, str] = {}
-    for node_name in node_names:
-        # Pick agent with highest remaining share
-        best_agent = max(shares, key=shares.get)  # type: ignore[arg-type]
-        assignments[node_name] = best_agent
-        shares[best_agent] -= 1.0
-
-    return assignments
-
-
 # ── Bin-Packing Placement ────────────────────────────────────────────
 
 

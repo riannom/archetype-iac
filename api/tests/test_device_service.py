@@ -190,7 +190,7 @@ def test_reset_device_config_uses_canonical_id_for_builtins(monkeypatch) -> None
     assert result["message"] == "Device 'c8000v' reset to defaults"
 
 
-def test_hide_restore_device_uses_canonical_device_id(monkeypatch) -> None:
+def test_hide_device_uses_canonical_device_id(monkeypatch) -> None:
     service = device_service.DeviceService()
 
     monkeypatch.setattr(
@@ -201,31 +201,20 @@ def test_hide_restore_device_uses_canonical_device_id(monkeypatch) -> None:
     monkeypatch.setattr("app.image_store.canonicalize_device_id", lambda device_id: "c8000v")
     monkeypatch.setattr("app.image_store.get_device_image_count", lambda device_id: 0)
 
-    hidden_state = {"value": False}
     calls: dict[str, str] = {}
 
     def fake_is_hidden(device_id: str) -> bool:
-        return hidden_state["value"] if device_id == "c8000v" else False
+        return False
 
     def fake_hide(device_id: str):
         calls["hide"] = device_id
-        hidden_state["value"] = True
-
-    def fake_unhide(device_id: str):
-        calls["unhide"] = device_id
-        hidden_state["value"] = False
 
     monkeypatch.setattr("app.image_store.is_device_hidden", fake_is_hidden)
     monkeypatch.setattr("app.image_store.hide_device", fake_hide)
-    monkeypatch.setattr("app.image_store.unhide_device", fake_unhide)
 
     hide_result = service.hide_device("cisco_c8000v")
     assert "c8000v" in hide_result["message"]
     assert calls["hide"] == "c8000v"
-
-    restore_result = service.restore_device("cisco_c8000v")
-    assert "c8000v" in restore_result["message"]
-    assert calls["unhide"] == "c8000v"
 
 
 def test_update_device_config_custom(monkeypatch) -> None:

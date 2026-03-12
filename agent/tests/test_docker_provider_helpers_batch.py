@@ -18,7 +18,6 @@ from agent.providers.docker import (
     ParsedTopology,
     TopologyLink,
     TopologyNode,
-    _log_name_from_labels,
 )
 from agent.schemas import DeployLink, DeployNode, DeployTopology
 
@@ -31,19 +30,6 @@ def _api_error(status_code: int, message: str = "api error") -> APIError:
     response = MagicMock()
     response.status_code = status_code
     return APIError(message, response=response)
-
-
-@pytest.mark.parametrize(
-    ("labels", "expected"),
-    [
-        ({LABEL_NODE_NAME: "r1"}, "r1"),
-        ({LABEL_NODE_NAME: "r1", LABEL_NODE_DISPLAY_NAME: "R1"}, "R1(r1)"),
-        ({LABEL_NODE_NAME: "r1", LABEL_NODE_DISPLAY_NAME: "r1"}, "r1"),
-        ({}, ""),
-    ],
-)
-def test_log_name_from_labels_formats_display_name(labels: dict[str, str], expected: str):
-    assert _log_name_from_labels(labels) == expected
 
 
 def test_topology_node_and_parsed_topology_log_name():

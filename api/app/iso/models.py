@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime
 from enum import Enum
 
 from pydantic import BaseModel, Field
@@ -107,11 +107,6 @@ class ParsedImage(BaseModel):
     # Original YAML content
     raw_yaml: dict = Field(default_factory=dict, description="Original YAML content")
 
-    @property
-    def is_container(self) -> bool:
-        """Check if this is a container image (tar.gz)."""
-        return self.disk_image_filename.endswith((".tar.gz", ".tar", ".tar.xz"))
-
 
 class ISOManifest(BaseModel):
     """Complete manifest of an ISO image.
@@ -130,17 +125,6 @@ class ISOManifest(BaseModel):
     # Parsing metadata
     parsed_at: datetime = Field(default_factory=datetime.utcnow)
     parse_errors: list[str] = Field(default_factory=list)
-
-    def get_node_definition(self, node_def_id: str) -> ParsedNodeDefinition | None:
-        """Get a node definition by ID."""
-        for node_def in self.node_definitions:
-            if node_def.id == node_def_id:
-                return node_def
-        return None
-
-    def get_images_for_node(self, node_def_id: str) -> list[ParsedImage]:
-        """Get all images associated with a node definition."""
-        return [img for img in self.images if img.node_definition_id == node_def_id]
 
 
 class ImageImportProgress(BaseModel):
@@ -181,32 +165,3 @@ class ISOSession(BaseModel):
     updated_at: datetime = Field(default_factory=datetime.utcnow)
     completed_at: datetime | None = None
 
-    def update_image_progress(
-        self,
-        image_id: str,
-        status: str,
-        progress_percent: int = 0,
-        error_message: str | None = None,
-    ):
-        """Update progress for a specific image."""
-        if image_id not in self.image_progress:
-            self.image_progress[image_id] = ImageImportProgress(image_id=image_id)
-
-        progress = self.image_progress[image_id]
-        progress.status = status
-        progress.progress_percent = progress_percent
-        if error_message:
-            progress.error_message = error_message
-        if status == "extracting" and not progress.started_at:
-            progress.started_at = datetime.now(timezone.utc)
-        if status in ("completed", "failed"):
-            progress.completed_at = datetime.now(timezone.utc)
-
-        self.updated_at = datetime.now(timezone.utc)
-
-    def calculate_overall_progress(self) -> int:
-        """Calculate overall progress based on individual image progress."""
-        if not self.image_progress:
-            return 0
-        total = sum(p.progress_percent for p in self.image_progress.values())
-        return total // len(self.image_progress)

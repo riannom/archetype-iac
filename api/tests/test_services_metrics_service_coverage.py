@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 from sqlalchemy.orm import Session
 
 from app import models
-from app.services.metrics_service import MetricsService, get_metrics_service
+from app.services.metrics_service import MetricsService
 
 
 class TestMetricsServiceDashboard:
@@ -161,56 +161,3 @@ class TestResourceDistribution:
         assert result["averages"]["cpu_percent"] == 25.5
 
 
-class TestJobStatistics:
-    def test_no_jobs(self, test_db: Session):
-        service = MetricsService(test_db)
-        result = service.get_job_statistics()
-        assert result["total"] == 0
-        assert result["period_hours"] == 24
-
-    def test_with_recent_jobs(self, test_db: Session, sample_lab: models.Lab, test_user: models.User):
-        for status, action in [("completed", "up"), ("failed", "down"), ("completed", "up:node")]:
-            job = models.Job(
-                lab_id=sample_lab.id,
-                user_id=test_user.id,
-                action=action,
-                status=status,
-            )
-            test_db.add(job)
-        test_db.commit()
-
-        service = MetricsService(test_db)
-        result = service.get_job_statistics()
-        assert result["total"] == 3
-        assert result["by_status"]["completed"] == 2
-        assert result["by_status"]["failed"] == 1
-        assert result["by_action"]["up"] == 2
-
-
-class TestNodeStateSummary:
-    def test_no_states(self, test_db: Session):
-        service = MetricsService(test_db)
-        result = service.get_node_state_summary()
-        assert result["total"] == 0
-        assert result["ready"] == 0
-
-    def test_with_node_states(self, test_db: Session, sample_lab_with_nodes):
-        lab, nodes = sample_lab_with_nodes
-        nodes[0].actual_state = "running"
-        nodes[0].is_ready = True
-        nodes[1].actual_state = "stopped"
-        nodes[1].is_ready = False
-        test_db.commit()
-
-        service = MetricsService(test_db)
-        result = service.get_node_state_summary()
-        assert result["total"] == 2
-        assert result["ready"] == 1
-        assert result["by_state"]["running"] == 1
-        assert result["by_state"]["stopped"] == 1
-
-
-class TestGetMetricsService:
-    def test_factory_returns_instance(self, test_db: Session):
-        service = get_metrics_service(test_db)
-        assert isinstance(service, MetricsService)

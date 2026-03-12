@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from unittest.mock import patch
 from uuid import uuid4
 
@@ -22,7 +22,7 @@ from app.services.device_service import (
     ResolvedDevice,
     get_resolver,
 )
-from app.services.metrics_service import MetricsService, get_metrics_service
+from app.services.metrics_service import MetricsService
 
 
 # ---------------------------------------------------------------------------
@@ -90,41 +90,6 @@ def _fresh_lab(db_session, *, state: str = "running") -> object:
     return lab
 
 
-def _fresh_job(db_session, *, status: str = "completed", action: str = "deploy", created_at=None) -> object:
-    """Create and persist a Job row."""
-    from app import models
-
-    if created_at is None:
-        created_at = datetime.now(timezone.utc)
-
-    job = models.Job(
-        id=str(uuid4()),
-        action=action,
-        status=status,
-        created_at=created_at,
-    )
-    db_session.add(job)
-    db_session.flush()
-    return job
-
-
-def _fresh_node_state(db_session, *, lab_id: str, actual_state: str = "running", is_ready: bool = True) -> object:
-    """Create and persist a NodeState row."""
-    from app import models
-
-    ns = models.NodeState(
-        id=str(uuid4()),
-        lab_id=lab_id,
-        node_id=str(uuid4()),
-        node_name=f"node-{uuid4().hex[:4]}",
-        actual_state=actual_state,
-        is_ready=is_ready,
-    )
-    db_session.add(ns)
-    db_session.flush()
-    return ns
-
-
 # ============================================================================
 # DeviceResolver — singleton pattern
 # ============================================================================
@@ -144,11 +109,6 @@ class TestGetResolverSingleton:
         r2 = get_resolver()
         assert r1 is r2
 
-    def test_get_metrics_service_factory(self, test_db):
-        """get_metrics_service() returns a MetricsService bound to the given session."""
-        svc = get_metrics_service(test_db)
-        assert isinstance(svc, MetricsService)
-        assert svc.session is test_db
 
 
 # ============================================================================
@@ -283,23 +243,6 @@ class TestMetricsServiceEmptyDB:
         assert result["averages"]["cpu_percent"] == 0.0
         assert result["averages"]["memory_percent"] == 0.0
 
-    def test_job_statistics_no_jobs(self, test_db):
-        """get_job_statistics with empty DB returns zero totals."""
-        svc = MetricsService(test_db)
-        result = svc.get_job_statistics(hours=24)
-
-        assert result["total"] == 0
-        assert result["by_status"] == {}
-        assert result["by_action"] == {}
-
-    def test_node_state_summary_no_nodes(self, test_db):
-        """get_node_state_summary with empty DB returns zero counts."""
-        svc = MetricsService(test_db)
-        result = svc.get_node_state_summary()
-
-        assert result["total"] == 0
-        assert result["ready"] == 0
-        assert result["by_state"] == {}
 
 
 # ============================================================================
@@ -425,48 +368,6 @@ class TestMetricsServiceWithData:
         assert len(result["agents"]) == 2
         assert result["averages"]["cpu_percent"] == 80.0
         assert result["averages"]["memory_percent"] == 60.0
-
-    def test_job_statistics_groups_by_status_and_action(self, test_db):
-        """get_job_statistics counts by status and action prefix."""
-        _fresh_job(test_db, status="completed", action="deploy:lab-123")
-        _fresh_job(test_db, status="completed", action="deploy:lab-456")
-        _fresh_job(test_db, status="failed", action="destroy:lab-789")
-
-        svc = MetricsService(test_db)
-        result = svc.get_job_statistics(hours=24)
-
-        assert result["total"] == 3
-        assert result["by_status"]["completed"] == 2
-        assert result["by_status"]["failed"] == 1
-        assert result["by_action"]["deploy"] == 2
-        assert result["by_action"]["destroy"] == 1
-
-    def test_job_statistics_respects_time_window(self, test_db):
-        """Jobs older than the requested hours window are excluded."""
-        old_ts = datetime.now(timezone.utc) - timedelta(hours=48)
-        _fresh_job(test_db, status="completed", action="deploy", created_at=old_ts)
-        _fresh_job(test_db, status="running", action="deploy")  # recent
-
-        svc = MetricsService(test_db)
-        result = svc.get_job_statistics(hours=24)
-
-        # Only the recent job falls within the 24h window
-        assert result["total"] == 1
-
-    def test_node_state_summary_counts_ready_and_by_state(self, test_db):
-        """get_node_state_summary counts ready nodes and groups by actual_state."""
-        lab = _fresh_lab(test_db, state="running")
-        _fresh_node_state(test_db, lab_id=lab.id, actual_state="running", is_ready=True)
-        _fresh_node_state(test_db, lab_id=lab.id, actual_state="running", is_ready=True)
-        _fresh_node_state(test_db, lab_id=lab.id, actual_state="stopped", is_ready=False)
-
-        svc = MetricsService(test_db)
-        result = svc.get_node_state_summary()
-
-        assert result["total"] == 3
-        assert result["ready"] == 2
-        assert result["by_state"]["running"] == 2
-        assert result["by_state"]["stopped"] == 1
 
     def test_count_labs_by_state_helper(self, test_db):
         """_count_labs_by_state correctly accumulates counts per state."""

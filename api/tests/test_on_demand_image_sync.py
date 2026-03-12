@@ -21,7 +21,7 @@ from sqlalchemy.orm import Session
 
 from app import models
 from app.config import settings
-from app.state import ImageSyncStatus, NodeActualState
+from app.state import NodeActualState
 
 
 # ---------------------------------------------------------------------------
@@ -203,7 +203,7 @@ class TestNodeStartTriggersImageSync:
                 test_db,
                 starting_lab.id,
                 [n.node_name for n in ceos_nodes],
-                ImageSyncStatus.SYNCING.value,
+                "syncing",
                 "Syncing ceos:4.28.0F to Remote Agent...",
             )
 
@@ -270,7 +270,7 @@ class TestNodeStartTriggersImageSync:
             test_db,
             starting_lab.id,
             [node.node_name],
-            ImageSyncStatus.SYNCING.value,
+            "syncing",
             "Syncing ceos:4.28.0F...",
         )
 
@@ -309,7 +309,7 @@ class TestNodeStartTriggersImageSync:
             test_db,
             starting_lab.id,
             [node.node_name],
-            ImageSyncStatus.SYNCING.value,
+            "syncing",
             "Re-syncing ceos:4.28.0F...",
         )
 
@@ -353,7 +353,7 @@ class TestNodeReloadTriggersImageSync:
             test_db,
             starting_lab.id,
             [node.node_name],
-            ImageSyncStatus.SYNCING.value,
+            "syncing",
             "Re-syncing image for reload...",
         )
 
@@ -407,7 +407,7 @@ class TestNonBlockingBehavior:
                 test_db,
                 starting_lab.id,
                 [n.node_name for n in ceos_nodes],
-                ImageSyncStatus.SYNCING.value,
+                "syncing",
                 "Starting sync...",
             )
 
@@ -435,7 +435,7 @@ class TestNonBlockingBehavior:
             test_db,
             starting_lab.id,
             all_node_names,
-            ImageSyncStatus.SYNCING.value,
+            "syncing",
             "Syncing multiple images...",
         )
 
@@ -496,7 +496,7 @@ class TestSyncCompletionTriggersNodeStart:
             test_db,
             starting_lab.id,
             [n.node_name for n in ceos_nodes],
-            ImageSyncStatus.SYNCING.value,
+            "syncing",
             "Syncing...",
         )
 
@@ -530,7 +530,7 @@ class TestSyncCompletionTriggersNodeStart:
         # Phase 1: syncing
         update_node_image_sync_status(
             test_db, starting_lab.id, [node.node_name],
-            ImageSyncStatus.SYNCING.value, "Syncing ceos:4.28.0F...",
+            "syncing", "Syncing ceos:4.28.0F...",
         )
         test_db.refresh(node)
         assert node.image_sync_status == "syncing"
@@ -582,7 +582,7 @@ class TestSyncFailureSetsNodeError:
         # Sync fails
         update_node_image_sync_status(
             test_db, starting_lab.id, [node.node_name],
-            ImageSyncStatus.FAILED.value, "Image sync failed: connection refused",
+            "failed", "Image sync failed: connection refused",
         )
         node.actual_state = NodeActualState.ERROR.value
         node.error_message = "Image sync failed: connection refused"
@@ -608,7 +608,7 @@ class TestSyncFailureSetsNodeError:
 
         update_node_image_sync_status(
             test_db, starting_lab.id, [node.node_name],
-            ImageSyncStatus.FAILED.value, "Sync timed out after 300s",
+            "failed", "Sync timed out after 300s",
         )
         node.actual_state = NodeActualState.ERROR.value
         node.error_message = "Sync timed out after 300s"
@@ -763,7 +763,7 @@ class TestMultipleNodesAndEdgeCases:
             test_db,
             starting_lab.id,
             [n.node_name for n in ceos_nodes],
-            ImageSyncStatus.SYNCING.value,
+            "syncing",
             "Syncing ceos:4.28.0F...",
         )
         for node in ceos_nodes:

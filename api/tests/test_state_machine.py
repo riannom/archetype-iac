@@ -7,11 +7,9 @@ from __future__ import annotations
 
 import pytest
 
-from app.services.state_machine import LabStateMachine, LinkStateMachine, NodeStateMachine
+from app.services.state_machine import LabStateMachine, NodeStateMachine
 from app.state import (
     LabState,
-    LinkActualState,
-    LinkDesiredState,
     NodeActualState,
     NodeDesiredState,
 )
@@ -438,121 +436,6 @@ class TestGetEnforcementAction:
 
 
 # ---------------------------------------------------------------------------
-# LinkStateMachine — Valid Transitions (parametrized)
-# ---------------------------------------------------------------------------
-
-_VALID_LINK_TRANSITIONS: list[tuple[LinkActualState, LinkActualState]] = []
-for _src, _dsts in LinkStateMachine.VALID_TRANSITIONS.items():
-    for _dst in _dsts:
-        _VALID_LINK_TRANSITIONS.append((_src, _dst))
-
-
-@pytest.mark.parametrize("current,target", _VALID_LINK_TRANSITIONS,
-                         ids=[f"{c.value}->{t.value}" for c, t in _VALID_LINK_TRANSITIONS])
-def test_valid_link_transition(current: LinkActualState, target: LinkActualState) -> None:
-    assert LinkStateMachine.can_transition(current, target)
-
-
-# Link self-transitions
-@pytest.mark.parametrize("state", list(LinkActualState), ids=[s.value for s in LinkActualState])
-def test_link_self_transition(state: LinkActualState) -> None:
-    assert LinkStateMachine.can_transition(state, state)
-
-
-# Key invalid link transitions
-_INVALID_LINK_TRANSITIONS = [
-    (LinkActualState.UP, LinkActualState.PENDING),
-    (LinkActualState.UP, LinkActualState.CREATING),
-    (LinkActualState.UP, LinkActualState.UNKNOWN),
-    (LinkActualState.CREATING, LinkActualState.PENDING),
-    (LinkActualState.CREATING, LinkActualState.UNKNOWN),
-]
-
-
-@pytest.mark.parametrize("current,target", _INVALID_LINK_TRANSITIONS,
-                         ids=[f"{c.value}->{t.value}" for c, t in _INVALID_LINK_TRANSITIONS])
-def test_invalid_link_transition(current: LinkActualState, target: LinkActualState) -> None:
-    assert not LinkStateMachine.can_transition(current, target)
-
-
-# ---------------------------------------------------------------------------
-# LinkStateMachine — matches_desired
-# ---------------------------------------------------------------------------
-
-class TestLinkMatchesDesired:
-    def test_up_matches_up(self) -> None:
-        assert LinkStateMachine.matches_desired(LinkActualState.UP, LinkDesiredState.UP)
-
-    def test_down_matches_down(self) -> None:
-        assert LinkStateMachine.matches_desired(LinkActualState.DOWN, LinkDesiredState.DOWN)
-
-    def test_up_does_not_match_down(self) -> None:
-        assert not LinkStateMachine.matches_desired(LinkActualState.UP, LinkDesiredState.DOWN)
-
-    def test_down_does_not_match_up(self) -> None:
-        assert not LinkStateMachine.matches_desired(LinkActualState.DOWN, LinkDesiredState.UP)
-
-    @pytest.mark.parametrize("actual", [
-        LinkActualState.UNKNOWN, LinkActualState.PENDING,
-        LinkActualState.CREATING, LinkActualState.ERROR,
-    ], ids=lambda s: s.value)
-    def test_transitional_matches_neither(self, actual: LinkActualState) -> None:
-        assert not LinkStateMachine.matches_desired(actual, LinkDesiredState.UP)
-        assert not LinkStateMachine.matches_desired(actual, LinkDesiredState.DOWN)
-
-
-# ---------------------------------------------------------------------------
-# LinkStateMachine — should_auto_connect
-# ---------------------------------------------------------------------------
-
-class TestShouldAutoConnect:
-    """Auto-connect requires: desired=UP, both nodes running, connectable state."""
-
-    @pytest.mark.parametrize("actual", list(LinkStateMachine.CONNECTABLE_STATES),
-                             ids=lambda s: s.value)
-    def test_auto_connect_when_connectable(self, actual: LinkActualState) -> None:
-        assert LinkStateMachine.should_auto_connect(
-            actual, LinkDesiredState.UP, source_node_running=True, target_node_running=True,
-        )
-
-    def test_no_auto_connect_when_already_up(self) -> None:
-        assert not LinkStateMachine.should_auto_connect(
-            LinkActualState.UP, LinkDesiredState.UP,
-            source_node_running=True, target_node_running=True,
-        )
-
-    def test_no_auto_connect_when_creating(self) -> None:
-        assert not LinkStateMachine.should_auto_connect(
-            LinkActualState.CREATING, LinkDesiredState.UP,
-            source_node_running=True, target_node_running=True,
-        )
-
-    def test_no_auto_connect_when_desired_down(self) -> None:
-        assert not LinkStateMachine.should_auto_connect(
-            LinkActualState.UNKNOWN, LinkDesiredState.DOWN,
-            source_node_running=True, target_node_running=True,
-        )
-
-    def test_no_auto_connect_when_source_not_running(self) -> None:
-        assert not LinkStateMachine.should_auto_connect(
-            LinkActualState.UNKNOWN, LinkDesiredState.UP,
-            source_node_running=False, target_node_running=True,
-        )
-
-    def test_no_auto_connect_when_target_not_running(self) -> None:
-        assert not LinkStateMachine.should_auto_connect(
-            LinkActualState.UNKNOWN, LinkDesiredState.UP,
-            source_node_running=True, target_node_running=False,
-        )
-
-    def test_no_auto_connect_when_both_not_running(self) -> None:
-        assert not LinkStateMachine.should_auto_connect(
-            LinkActualState.UNKNOWN, LinkDesiredState.UP,
-            source_node_running=False, target_node_running=False,
-        )
-
-
-# ---------------------------------------------------------------------------
 # LabStateMachine — compute_lab_state (all combinations)
 # ---------------------------------------------------------------------------
 
@@ -658,14 +541,6 @@ def test_all_node_states_have_transition_rules() -> None:
     """Every NodeActualState must have an entry in VALID_TRANSITIONS."""
     for state in NodeActualState:
         assert state in NodeStateMachine.VALID_TRANSITIONS, (
-            f"{state.value} missing from VALID_TRANSITIONS"
-        )
-
-
-def test_all_link_states_have_transition_rules() -> None:
-    """Every LinkActualState must have an entry in VALID_TRANSITIONS."""
-    for state in LinkActualState:
-        assert state in LinkStateMachine.VALID_TRANSITIONS, (
             f"{state.value} missing from VALID_TRANSITIONS"
         )
 

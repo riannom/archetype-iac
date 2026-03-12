@@ -170,10 +170,6 @@ class TaskRegistry:
                     f"{len(pending)} tasks did not complete within {timeout}s timeout"
                 )
 
-    def get_running_tasks(self) -> list[str]:
-        """Get names of currently running tasks."""
-        return [name for name, task in self._tasks.items() if not task.done()]
-
 
 # Global task registry
 task_registry = TaskRegistry()

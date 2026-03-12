@@ -22,7 +22,6 @@ from app.utils.naming import (
     sanitize_id,
 )
 from app.utils.cache import DEFAULT_TTL, cache_get, cache_set
-from app.utils.pagination import paginated_query
 from app.utils.image_integrity import QCOW2_MAGIC, validate_qcow2
 
 
@@ -46,28 +45,6 @@ class FakeRedis:
         self.store[key] = value
         self.ttls[key] = ttl
         self.setex_calls.append((key, ttl, value))
-
-
-class FakeQuery:
-    """SQLAlchemy Query stub backed by a plain list."""
-
-    def __init__(self, rows):
-        self._rows = list(rows)
-        self._offset = 0
-        self._limit = None
-
-    def offset(self, value: int):
-        self._offset = value
-        return self
-
-    def limit(self, value: int):
-        self._limit = value
-        return self
-
-    def all(self):
-        start = self._offset
-        end = start + (self._limit if self._limit is not None else len(self._rows))
-        return self._rows[start:end]
 
 
 # ===========================================================================
@@ -299,48 +276,6 @@ class TestCacheSet:
         cache_set("int-key", 123)
 
         assert json.loads(fake.store["cache:int-key"]) == 123
-
-
-# ===========================================================================
-# pagination.py
-# ===========================================================================
-
-
-class TestPaginatedQuery:
-    """Unit tests for paginated_query()."""
-
-    def test_single_full_batch(self):
-        query = FakeQuery(range(3))
-        assert list(paginated_query(query, batch_size=10)) == [0, 1, 2]
-
-    def test_multiple_batches_yields_all(self):
-        query = FakeQuery(range(10))
-        assert list(paginated_query(query, batch_size=3)) == list(range(10))
-
-    def test_exact_multiple_of_batch_size(self):
-        # 6 items, batch_size=3 → two full batches, then empty → stop
-        query = FakeQuery(range(6))
-        assert list(paginated_query(query, batch_size=3)) == list(range(6))
-
-    def test_batch_size_one(self):
-        query = FakeQuery([10, 20, 30])
-        assert list(paginated_query(query, batch_size=1)) == [10, 20, 30]
-
-    def test_large_batch_size_returns_all(self):
-        query = FakeQuery(range(5))
-        assert list(paginated_query(query, batch_size=1000)) == list(range(5))
-
-    def test_order_preserved(self):
-        items = ["z", "a", "m", "b"]
-        query = FakeQuery(items)
-        assert list(paginated_query(query, batch_size=2)) == items
-
-    def test_generator_is_lazy(self):
-        """paginated_query should return a generator, not eagerly load all rows."""
-        import types
-        query = FakeQuery(range(5))
-        result = paginated_query(query, batch_size=2)
-        assert isinstance(result, types.GeneratorType)
 
 
 # ===========================================================================

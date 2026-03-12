@@ -933,30 +933,6 @@ class DeviceService:
         hide_device(canonical_id)
         return {"message": f"Device '{canonical_id}' hidden successfully"}
 
-    def restore_device(self, device_id: str) -> dict:
-        """Restore a hidden built-in device.
-
-        Args:
-            device_id: Device identifier
-
-        Returns:
-            Success message dict
-
-        Raises:
-            DeviceValidationError: If device is not built-in or not hidden
-        """
-        from app.image_store import canonicalize_device_id, unhide_device, is_device_hidden
-
-        canonical_id = canonicalize_device_id(device_id) or device_id
-        if get_config_by_device(device_id) is None:
-            raise DeviceValidationError("Only built-in devices can be restored")
-
-        if not is_device_hidden(canonical_id):
-            raise DeviceValidationError(f"Device '{canonical_id}' is not hidden")
-
-        unhide_device(canonical_id)
-        return {"message": f"Device '{canonical_id}' restored successfully"}
-
 
 # Singleton instance
 _device_service: DeviceService | None = None
