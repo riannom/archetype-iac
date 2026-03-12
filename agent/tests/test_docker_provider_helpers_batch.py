@@ -9,7 +9,6 @@ from docker.errors import APIError, ImageNotFound
 
 from agent.providers import docker as docker_mod
 from agent.providers.base import NodeStatus
-from agent.labels import LABEL_NODE_DISPLAY_NAME
 from agent.providers.docker import (
     LABEL_LAB_ID,
     LABEL_NODE_NAME,
