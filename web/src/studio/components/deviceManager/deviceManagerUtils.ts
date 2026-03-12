@@ -1,3 +1,7 @@
+// Intentionally NOT using formatDate/formatTimestamp from utils/format.ts:
+// formatImageLogTime renders HH:MM:SS time-of-day (not relative time).
+// formatImageLogDate renders "Jan 15" without year (canonical includes year).
+// formatBuildTimestamp renders full locale datetime (canonical shows relative time).
 export function formatImageLogTime(timestamp: string): string {
   const date = new Date(timestamp);
   if (Number.isNaN(date.getTime())) return timestamp;

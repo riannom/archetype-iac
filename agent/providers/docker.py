@@ -2482,141 +2482,25 @@ class DockerProvider(Provider, VlanPersistenceMixin):
                 cpu=cpu,
                 cpu_limit=cpu_limit,
             )
-            log_name = node.log_name()
 
-            # Validate image exists
-            config = get_config_by_device(kind)
-            effective_image = image or (config.default_image if config else None)
-            if effective_image:
-                try:
-                    await asyncio.to_thread(self.docker.images.get, effective_image)
-                except ImageNotFound:
-                    return NodeActionResult(
-                        success=False,
-                        node_name=node_name,
-                        error=f"Docker image not found: {effective_image}",
-                    )
-
-            # Set up vendor-specific directories if needed
-            if is_ceos_kind(kind):
-                await asyncio.to_thread(
-                    self._setup_ceos_directories, node_name, node, workspace
-                )
-            elif is_cjunos_kind(kind):
-                await asyncio.to_thread(
-                    self._setup_cjunos_directories, node_name, node, workspace
-                )
-
-            # Ensure lab Docker networks (idempotent)
-            # Look up vendor config early so we can size networks correctly
-            vendor_config = get_config_by_device(kind)
-            has_mgmt = vendor_config and vendor_config.management_interface
-            reserved = vendor_config.reserved_nics if vendor_config else 0
-            if self.use_ovs_plugin:
-                # Devices with mgmt + reserved NICs need eth0..eth{reserved+iface_count}
-                total_interfaces = (reserved + iface_count) if has_mgmt else iface_count
-                await self._create_lab_networks(lab_id, max_interfaces=total_interfaces)
-
-            # Check if container already exists
-            try:
-                existing = await asyncio.to_thread(
-                    self.docker.containers.get, container_name
-                )
-                existing_identity = _classify_existing_container_identity(
-                    existing,
-                    lab_id=lab_id,
-                    node_name=node_name,
-                    node_definition_id=node_definition_id,
-                )
-                if existing_identity == "foreign":
-                    return NodeActionResult(
-                        success=False,
-                        node_name=node_name,
-                        error=(
-                            f"Runtime namespace conflict: container {container_name} exists "
-                            "but is not managed by Archetype"
-                        ),
-                    )
-                if existing_identity == "stale_managed":
-                    return NodeActionResult(
-                        success=False,
-                        node_name=node_name,
-                        error=(
-                            f"Runtime namespace conflict: managed container {container_name} "
-                            "belongs to a different node identity"
-                        ),
-                    )
-                if existing.status == "running":
-                    logger.info(f"Container {log_name} already running, skipping create")
-                    return NodeActionResult(
-                        success=True,
-                        node_name=node_name,
-                        new_status=NodeStatus.RUNNING,
-                        stdout=f"Container {container_name} already running",
-                    )
-                else:
-                    logger.info(f"Container {log_name} already exists in stopped state, skipping create")
-                    return NodeActionResult(
-                        success=True,
-                        node_name=node_name,
-                        new_status=NodeStatus.STOPPED,
-                        stdout=f"Container {container_name} already exists",
-                    )
-            except NotFound:
-                pass
-
-            # Build container config
-            container_config = self._create_container_config(
-                node, lab_id, workspace, interface_count=iface_count
+            # Prepare container config (validates image, sets up dirs, checks existing)
+            prep_result = await self._prepare_container_config(
+                node, lab_id, workspace, iface_count,
+                container_name=container_name,
+                node_definition_id=node_definition_id,
             )
+            # If prep returned a NodeActionResult, an early-exit condition was hit
+            if isinstance(prep_result, NodeActionResult):
+                return prep_result
 
-            import time as _time
-            from agent.metrics import docker_api_duration
-            _docker_t0 = _time.monotonic()
-            _docker_status = "success"
+            container_config, has_mgmt, reserved = prep_result
 
-            try:
-                if self.use_ovs_plugin:
-                    lab_prefix = self._lab_network_prefix(lab_id)
-                    if has_mgmt:
-                        first_network = f"{lab_prefix}-eth0"
-                        extra_count = reserved + iface_count
-                        extra_start = 1
-                    else:
-                        first_network = f"{lab_prefix}-eth1"
-                        extra_count = max(iface_count - 1, 0)
-                        extra_start = 2
-
-                    container_config["network"] = first_network
-                    logger.info(f"Creating container {log_name} with image {container_config['image']}")
-
-                    container = await asyncio.to_thread(
-                        lambda cfg=container_config: self.docker.containers.create(**cfg)
-                    )
-
-                    await self._attach_container_to_networks(
-                        container=container,
-                        lab_id=lab_id,
-                        interface_count=extra_count,
-                        interface_prefix="eth",
-                        start_index=extra_start,
-                    )
-
-                    await asyncio.sleep(0.5)
-                else:
-                    container_config["network_mode"] = "none"
-                    logger.info(f"Creating container {log_name} with image {container_config['image']}")
-
-                    container = await asyncio.to_thread(
-                        lambda cfg=container_config: self.docker.containers.create(**cfg)
-                    )
-            except Exception:
-                _docker_status = "error"
-                raise
-            finally:
-                docker_api_duration.labels(operation="create", status=_docker_status).observe(
-                    _time.monotonic() - _docker_t0
-                )
+            # Create the Docker container
+            container = await self._create_and_start_container(
+                container_config, node, lab_id, iface_count,
+                has_mgmt=has_mgmt,
+                reserved=reserved,
+            )
 
             return NodeActionResult(
                 success=True,
@@ -2638,6 +2522,170 @@ class DockerProvider(Provider, VlanPersistenceMixin):
                 node_name=node_name,
                 error=f"Container creation failed: {e}",
             )
+
+    async def _prepare_container_config(
+        self,
+        node,
+        lab_id,
+        workspace,
+        iface_count,
+        *,
+        container_name,
+        node_definition_id,
+    ):
+        kind = node.kind
+        node_name = node.name
+        log_name = node.log_name()
+
+        # Validate image exists
+        config = get_config_by_device(kind)
+        effective_image = node.image or (config.default_image if config else None)
+        if effective_image:
+            try:
+                await asyncio.to_thread(self.docker.images.get, effective_image)
+            except ImageNotFound:
+                return NodeActionResult(
+                    success=False,
+                    node_name=node_name,
+                    error=f"Docker image not found: {effective_image}",
+                )
+
+        # Set up vendor-specific directories if needed
+        if is_ceos_kind(kind):
+            await asyncio.to_thread(
+                self._setup_ceos_directories, node_name, node, workspace
+            )
+        elif is_cjunos_kind(kind):
+            await asyncio.to_thread(
+                self._setup_cjunos_directories, node_name, node, workspace
+            )
+
+        # Ensure lab Docker networks (idempotent)
+        # Look up vendor config early so we can size networks correctly
+        vendor_config = get_config_by_device(kind)
+        has_mgmt = vendor_config and vendor_config.management_interface
+        reserved = vendor_config.reserved_nics if vendor_config else 0
+        if self.use_ovs_plugin:
+            # Devices with mgmt + reserved NICs need eth0..eth{reserved+iface_count}
+            total_interfaces = (reserved + iface_count) if has_mgmt else iface_count
+            await self._create_lab_networks(lab_id, max_interfaces=total_interfaces)
+
+        # Check if container already exists
+        try:
+            existing = await asyncio.to_thread(
+                self.docker.containers.get, container_name
+            )
+            existing_identity = _classify_existing_container_identity(
+                existing,
+                lab_id=lab_id,
+                node_name=node_name,
+                node_definition_id=node_definition_id,
+            )
+            if existing_identity == "foreign":
+                return NodeActionResult(
+                    success=False,
+                    node_name=node_name,
+                    error=(
+                        f"Runtime namespace conflict: container {container_name} exists "
+                        "but is not managed by Archetype"
+                    ),
+                )
+            if existing_identity == "stale_managed":
+                return NodeActionResult(
+                    success=False,
+                    node_name=node_name,
+                    error=(
+                        f"Runtime namespace conflict: managed container {container_name} "
+                        "belongs to a different node identity"
+                    ),
+                )
+            if existing.status == "running":
+                logger.info(f"Container {log_name} already running, skipping create")
+                return NodeActionResult(
+                    success=True,
+                    node_name=node_name,
+                    new_status=NodeStatus.RUNNING,
+                    stdout=f"Container {container_name} already running",
+                )
+            else:
+                logger.info(f"Container {log_name} already exists in stopped state, skipping create")
+                return NodeActionResult(
+                    success=True,
+                    node_name=node_name,
+                    new_status=NodeStatus.STOPPED,
+                    stdout=f"Container {container_name} already exists",
+                )
+        except NotFound:
+            pass
+
+        # Build container config
+        container_config = self._create_container_config(
+            node, lab_id, workspace, interface_count=iface_count
+        )
+
+        return container_config, has_mgmt, reserved
+
+    async def _create_and_start_container(
+        self,
+        container_config,
+        node,
+        lab_id,
+        iface_count,
+        *,
+        has_mgmt,
+        reserved,
+    ):
+        log_name = node.log_name()
+
+        import time as _time
+        from agent.metrics import docker_api_duration
+        _docker_t0 = _time.monotonic()
+        _docker_status = "success"
+
+        try:
+            if self.use_ovs_plugin:
+                lab_prefix = self._lab_network_prefix(lab_id)
+                if has_mgmt:
+                    first_network = f"{lab_prefix}-eth0"
+                    extra_count = reserved + iface_count
+                    extra_start = 1
+                else:
+                    first_network = f"{lab_prefix}-eth1"
+                    extra_count = max(iface_count - 1, 0)
+                    extra_start = 2
+
+                container_config["network"] = first_network
+                logger.info(f"Creating container {log_name} with image {container_config['image']}")
+
+                container = await asyncio.to_thread(
+                    lambda cfg=container_config: self.docker.containers.create(**cfg)
+                )
+
+                await self._attach_container_to_networks(
+                    container=container,
+                    lab_id=lab_id,
+                    interface_count=extra_count,
+                    interface_prefix="eth",
+                    start_index=extra_start,
+                )
+
+                await asyncio.sleep(0.5)
+            else:
+                container_config["network_mode"] = "none"
+                logger.info(f"Creating container {log_name} with image {container_config['image']}")
+
+                container = await asyncio.to_thread(
+                    lambda cfg=container_config: self.docker.containers.create(**cfg)
+                )
+        except Exception:
+            _docker_status = "error"
+            raise
+        finally:
+            docker_api_duration.labels(operation="create", status=_docker_status).observe(
+                _time.monotonic() - _docker_t0
+            )
+
+        return container
 
     async def probe_runtime_conflict(
         self,

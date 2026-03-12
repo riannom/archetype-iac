@@ -89,7 +89,6 @@ describe("ConsoleManager", () => {
     onCloseTab: vi.fn(),
     onSetActiveTab: vi.fn(),
     onUpdateWindowPos: vi.fn(),
-    onUpdateWindowSize: vi.fn(),
   };
 
   beforeEach(() => {

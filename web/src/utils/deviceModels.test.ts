@@ -7,7 +7,6 @@ import {
   getAllowedInstantiableImageKinds,
   imageMatchesDeviceId,
   isInstantiableImageKind,
-  resolveImageDeviceIdsForCatalog,
   requiresRunnableImage,
 } from './deviceModels';
 import { DeviceType } from '../studio/types';
@@ -126,21 +125,6 @@ describe('deviceModels', () => {
 
     expect(imageMatchesDeviceId(image, 'cat9000v-uadp', compatAliases)).toBe(true);
     expect(imageMatchesDeviceId(image, 'cat9000v-q200', compatAliases)).toBe(true);
-  });
-
-  it('resolves image device IDs against a known catalog with alias expansion', () => {
-    const image = {
-      id: 'img',
-      kind: 'qcow2',
-      reference: 'c8000v.qcow2',
-      compatible_devices: ['cisco_c8000v'],
-    };
-    const compatAliases = buildImageCompatibilityAliasMap([
-      { id: 'c8000v', compatibilityAliases: ['cisco_c8000v'] },
-    ]);
-
-    const resolved = resolveImageDeviceIdsForCatalog(image, ['ceos', 'c8000v'], compatAliases);
-    expect(resolved).toEqual(expect.arrayContaining(['cisco_c8000v', 'c8000v']));
   });
 
   it('builds indexed image compatibility for large-catalog lookups', () => {

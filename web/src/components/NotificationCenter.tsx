@@ -34,6 +34,9 @@ export function NotificationCenter() {
 
   if (!preferences?.notification_settings.bell.enabled) return null;
 
+  // Intentionally NOT using formatTimestamp from utils/format.ts:
+  // This version accepts a Date object (not a string), shows "Just now" for <60s
+  // (canonical shows "${seconds}s ago"), and lacks the "Never" fallback for null.
   const formatTime = (date: Date) => {
     const now = new Date();
     const diff = now.getTime() - date.getTime();

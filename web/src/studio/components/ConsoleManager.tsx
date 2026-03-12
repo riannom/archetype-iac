@@ -19,7 +19,6 @@ interface ConsoleManagerProps {
   onCloseTab: (windowId: string, nodeId: string) => void;
   onSetActiveTab: (windowId: string, nodeId: string) => void;
   onUpdateWindowPos: (windowId: string, x: number, y: number) => void;
-  onUpdateWindowSize?: (windowId: string, width: number, height: number) => void;
   onMergeWindows?: (sourceWindowId: string, targetWindowId: string) => void;
   onSplitTab?: (windowId: string, deviceId: string, x: number, y: number) => void;
   onReorderTab?: (windowId: string, fromIndex: number, toIndex: number) => void;

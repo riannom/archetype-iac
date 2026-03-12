@@ -16,6 +16,10 @@ export const VersionModal: React.FC<VersionModalProps> = ({
 
   if (!isOpen) return null;
 
+  // Intentionally NOT using formatDate from utils/format.ts:
+  // This version uses month:'long' (e.g. "January 15, 2024") for release dates,
+  // whereas the canonical formatDate uses month:'short' (e.g. "Jan 15, 2024").
+  // It also uses the browser's default locale instead of 'en-US'.
   const formatDate = (dateString: string | null | undefined): string => {
     if (!dateString) return '';
     try {
