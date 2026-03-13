@@ -35,17 +35,6 @@ export function getResourceLevel(
 }
 
 /**
- * Get Tailwind background color class for a resource level.
- */
-export function getResourceBgColor(level: ResourceLevel): string {
-  switch (level) {
-    case 'danger': return 'bg-red-500';
-    case 'warning': return 'bg-amber-500';
-    case 'normal': return 'bg-green-500';
-  }
-}
-
-/**
  * Get CPU-specific color based on percentage.
  * Uses sage-500 for normal (brand color), amber for warning, red for danger.
  * @param percent - CPU usage percentage

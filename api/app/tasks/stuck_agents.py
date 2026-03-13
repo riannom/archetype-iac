@@ -35,10 +35,19 @@ def check_stuck_agent_updates():
 
             timeout = timedelta(seconds=settings.agent_update_timeout)
 
+            # Batch-load all hosts to avoid N+1 queries
+            host_ids = {job.host_id for job in stuck_jobs}
+            hosts_by_id = {
+                h.id: h
+                for h in session.query(models.Host)
+                .filter(models.Host.id.in_(host_ids))
+                .all()
+            }
+
             for job in stuck_jobs:
                 try:
                     # Check if target agent is offline
-                    host = session.get(models.Host, job.host_id)
+                    host = hosts_by_id.get(job.host_id)
                     agent_offline = host and host.status != "online"
 
                     # Determine reference timestamp (started_at if available, else created_at)

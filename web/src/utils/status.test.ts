@@ -1,7 +1,6 @@
 import {
   defaultThresholds,
   getResourceLevel,
-  getResourceBgColor,
   getCpuColor,
   getMemoryColor,
   getStorageColor,
@@ -16,7 +15,6 @@ describe('status utils', () => {
     expect(getResourceLevel(10, defaultThresholds.cpu)).toBe('normal');
     expect(getResourceLevel(70, defaultThresholds.cpu)).toBe('warning');
     expect(getResourceLevel(90, defaultThresholds.cpu)).toBe('danger');
-    expect(getResourceBgColor('danger')).toBe('bg-red-500');
     expect(getCpuColor(20)).toBe('bg-sage-500 dark:bg-sage-400');
     expect(getMemoryColor(80)).toBe('bg-amber-500 dark:bg-amber-400');
     expect(getStorageColor(99)).toBe('bg-red-500 dark:bg-red-400');

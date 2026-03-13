@@ -107,52 +107,6 @@
    Drag-and-Drop Animations & Visual Effects
    ===================================================== */
 
-/* Status Indicator Colors */
-.status-assigned {
-  --status-color: #10B981; /* Emerald - has image */
-}
-
-.status-unassigned {
-  --status-color: #F59E0B; /* Amber - needs image */
-}
-
-.status-dragging {
-  --status-color: #3B82F6; /* Blue - drag state */
-}
-
-.status-drop-valid {
-  --status-color: #22C55E; /* Green - valid target */
-}
-
-.status-drop-invalid {
-  --status-color: #EF4444; /* Red - invalid target */
-}
-
-/* Image Type Badge Colors */
-.image-docker {
-  --image-color: #2496ED; /* Docker blue */
-}
-
-.image-qcow2 {
-  --image-color: #FF6D00; /* Orange for disk images */
-}
-
-/* Drop zone pulse animation when drag is active */
-@keyframes dropZonePulse {
-  0%, 100% {
-    border-color: var(--color-neutral-400);
-    background-color: transparent;
-  }
-  50% {
-    border-color: var(--color-accent-500);
-    background-color: rgba(101, 163, 13, 0.05);
-  }
-}
-
-.drop-zone-active {
-  animation: dropZonePulse 1.5s ease-in-out infinite;
-}
-
 /* Drag ghost styling */
 .drag-ghost {
   transform: scale(1.05) rotate(2deg);
@@ -205,20 +159,6 @@
   box-shadow: 0 0 20px rgba(101, 163, 13, 0.3);
 }
 
-/* Status indicator animations */
-@keyframes statusPulse {
-  0%, 100% {
-    box-shadow: 0 0 0 0 var(--status-color);
-  }
-  50% {
-    box-shadow: 0 0 0 4px transparent;
-  }
-}
-
-.status-indicator {
-  animation: statusPulse 2s ease-in-out infinite;
-}
-
 /* Filter chip transitions */
 .filter-chip {
   transition: all 0.15s ease-out;
@@ -250,37 +190,6 @@
 .device-card-dropzone.active {
   border-color: var(--color-accent-500);
   background-color: rgba(101, 163, 13, 0.1);
-}
-
-/* Slide-in animations for panels */
-@keyframes slideInFromLeft {
-  from {
-    opacity: 0;
-    transform: translateX(-20px);
-  }
-  to {
-    opacity: 1;
-    transform: translateX(0);
-  }
-}
-
-@keyframes slideInFromRight {
-  from {
-    opacity: 0;
-    transform: translateX(20px);
-  }
-  to {
-    opacity: 1;
-    transform: translateX(0);
-  }
-}
-
-.slide-in-left {
-  animation: slideInFromLeft 0.3s ease-out;
-}
-
-.slide-in-right {
-  animation: slideInFromRight 0.3s ease-out;
 }
 
 /* Focus ring for accessibility */
