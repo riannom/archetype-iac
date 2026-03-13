@@ -1088,8 +1088,8 @@ def _trigger_re_reconcile(
         return
 
     runnable_node_ids = [
-        ns.node_id
-        for ns in session.query(models.NodeState)
+        row[0]
+        for row in session.query(models.NodeState.node_id)
         .filter(
             models.NodeState.lab_id == lab_id,
             models.NodeState.node_id.in_(node_ids),

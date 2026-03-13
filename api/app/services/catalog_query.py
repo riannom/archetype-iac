@@ -629,11 +629,11 @@ def sync_catalog_from_manifest(
 
     deleted_count = 0
     if prune_missing:
-        for row in session.query(models.CatalogImage).all():
-            if row.external_id in desired_external_ids:
-                continue
-            session.delete(row)
-            deleted_count += 1
+        deleted_count = (
+            session.query(models.CatalogImage)
+            .filter(~models.CatalogImage.external_id.in_(desired_external_ids))
+            .delete(synchronize_session="fetch")
+        )
 
     record_catalog_ingest_event(
         session,

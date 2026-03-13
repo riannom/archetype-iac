@@ -30,6 +30,24 @@ from app.services.interface_naming import normalize_interface
 from app.state import NodeActualState
 from app.utils.link import generate_link_name
 
+
+def _get_endpoint_nodes(
+    session: Session,
+    lab_id: str,
+    link_state: models.LinkState,
+) -> tuple[models.Node | None, models.Node | None]:
+    """Look up source and target Node objects for a link by container_name."""
+    nodes_by_name = {
+        n.container_name: n
+        for n in session.query(models.Node)
+        .filter(
+            models.Node.lab_id == lab_id,
+            models.Node.container_name.in_([link_state.source_node, link_state.target_node]),
+        )
+        .all()
+    }
+    return nodes_by_name.get(link_state.source_node), nodes_by_name.get(link_state.target_node)
+
 logger = logging.getLogger(__name__)
 
 
@@ -771,17 +789,7 @@ async def create_same_host_link(
 
     try:
         # Look up device types for accurate interface normalization
-        _endpoint_nodes = {
-            n.container_name: n
-            for n in session.query(models.Node)
-            .filter(
-                models.Node.lab_id == lab_id,
-                models.Node.container_name.in_([link_state.source_node, link_state.target_node]),
-            )
-            .all()
-        }
-        _src_node = _endpoint_nodes.get(link_state.source_node)
-        _tgt_node = _endpoint_nodes.get(link_state.target_node)
+        _src_node, _tgt_node = _get_endpoint_nodes(session, lab_id, link_state)
         source_iface = normalize_interface(link_state.source_interface, _src_node.device if _src_node else None) if link_state.source_interface else ""
         target_iface = normalize_interface(link_state.target_interface, _tgt_node.device if _tgt_node else None) if link_state.target_interface else ""
 
@@ -936,17 +944,7 @@ async def create_cross_host_link(
 
     try:
         # Look up device types for accurate interface normalization
-        _endpoint_nodes = {
-            n.container_name: n
-            for n in session.query(models.Node)
-            .filter(
-                models.Node.lab_id == lab_id,
-                models.Node.container_name.in_([link_state.source_node, link_state.target_node]),
-            )
-            .all()
-        }
-        _src_node = _endpoint_nodes.get(link_state.source_node)
-        _tgt_node = _endpoint_nodes.get(link_state.target_node)
+        _src_node, _tgt_node = _get_endpoint_nodes(session, lab_id, link_state)
         interface_a = normalize_interface(link_state.source_interface, _src_node.device if _src_node else None) if link_state.source_interface else ""
         interface_b = normalize_interface(link_state.target_interface, _tgt_node.device if _tgt_node else None) if link_state.target_interface else ""
 
