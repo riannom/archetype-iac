@@ -1,4 +1,4 @@
-export interface MemoryUsageLike {
+interface MemoryUsageLike {
   memory_percent: number;
   memory_used_gb: number;
   memory_total_gb: number;

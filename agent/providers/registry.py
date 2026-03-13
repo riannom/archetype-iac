@@ -160,7 +160,3 @@ def is_provider_available(name: str) -> bool:
     """
     return _registry.get().is_available(name)
 
-
-def reset_provider_registry() -> None:
-    """Reset the registry singleton (mainly for testing)."""
-    _registry.reset()

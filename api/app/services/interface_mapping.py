@@ -101,19 +101,16 @@ def _upsert_interface_mappings(
     result: dict[str, int],
 ) -> None:
     """Upsert InterfaceMapping rows from merged live agent port data."""
-    node_by_container = {n.container_name: n for n in nodes}
-    node_by_display = {n.display_name: n for n in nodes}
+    # Unified lookup: container_name entries take precedence over display_name
+    node_lookup: dict[str, models.Node] = {n.display_name: n for n in nodes}
+    node_lookup.update({n.container_name: n for n in nodes})
     now = datetime.now(timezone.utc)
 
     for (_key_name, linux_interface), port in merged_ports.items():
         runtime_name = port.get("runtime_name") or port.get("node_name") or ""
         node_name = port.get("node_name") or runtime_name
 
-        node = (
-            node_by_container.get(node_name)
-            or node_by_display.get(node_name)
-            or node_by_container.get(runtime_name)
-        )
+        node = node_lookup.get(node_name) or node_lookup.get(runtime_name)
         if not node:
             logger.debug(f"No node found for runtime {runtime_name} (tried: {node_name})")
             result["skipped"] += 1

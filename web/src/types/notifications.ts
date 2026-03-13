@@ -13,7 +13,7 @@ export interface Notification {
   suggestion?: string;
 }
 
-export interface ToastSettings {
+interface ToastSettings {
   enabled: boolean;
   position: 'bottom-right' | 'bottom-left' | 'top-right' | 'top-left';
   duration: number;
@@ -25,7 +25,7 @@ export interface ToastSettings {
   showSyncJobs: boolean;
 }
 
-export interface BellSettings {
+interface BellSettings {
   enabled: boolean;
   maxHistory: number;
   soundEnabled: boolean;
@@ -42,13 +42,13 @@ export interface NotificationSettings {
   bell: BellSettings;
 }
 
-export interface CanvasErrorIndicatorSettings {
+interface CanvasErrorIndicatorSettings {
   showIcon: boolean;
   showBorder: boolean;
   pulseAnimation: boolean;
 }
 
-export interface SidebarFilterSettings {
+interface SidebarFilterSettings {
   searchQuery: string;
   selectedVendors: string[];
   selectedTypes: string[];
@@ -68,7 +68,7 @@ export interface UserPreferences {
   canvas_settings: CanvasSettings;
 }
 
-export const DEFAULT_TOAST_SETTINGS: ToastSettings = {
+const DEFAULT_TOAST_SETTINGS: ToastSettings = {
   enabled: true,
   position: 'bottom-right',
   duration: 5000,
@@ -80,7 +80,7 @@ export const DEFAULT_TOAST_SETTINGS: ToastSettings = {
   showSyncJobs: false,
 };
 
-export const DEFAULT_BELL_SETTINGS: BellSettings = {
+const DEFAULT_BELL_SETTINGS: BellSettings = {
   enabled: true,
   maxHistory: 50,
   soundEnabled: false,
@@ -92,25 +92,25 @@ export const DEFAULT_BELL_SETTINGS: BellSettings = {
   showSyncJobs: false,
 };
 
-export const DEFAULT_NOTIFICATION_SETTINGS: NotificationSettings = {
+const DEFAULT_NOTIFICATION_SETTINGS: NotificationSettings = {
   toasts: DEFAULT_TOAST_SETTINGS,
   bell: DEFAULT_BELL_SETTINGS,
 };
 
-export const DEFAULT_CANVAS_ERROR_SETTINGS: CanvasErrorIndicatorSettings = {
+const DEFAULT_CANVAS_ERROR_SETTINGS: CanvasErrorIndicatorSettings = {
   showIcon: true,
   showBorder: true,
   pulseAnimation: true,
 };
 
-export const DEFAULT_SIDEBAR_FILTER_SETTINGS: SidebarFilterSettings = {
+const DEFAULT_SIDEBAR_FILTER_SETTINGS: SidebarFilterSettings = {
   searchQuery: '',
   selectedVendors: [],
   selectedTypes: [],
   imageStatus: 'all',
 };
 
-export const DEFAULT_CANVAS_SETTINGS: CanvasSettings = {
+const DEFAULT_CANVAS_SETTINGS: CanvasSettings = {
   errorIndicator: DEFAULT_CANVAS_ERROR_SETTINGS,
   showAgentIndicators: true,
   sidebarFilters: DEFAULT_SIDEBAR_FILTER_SETTINGS,

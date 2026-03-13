@@ -734,9 +734,6 @@ async def _try_extract_configs(
         hosts_by_id: Optional pre-loaded host dict. When provided,
             replaces per-host session.get() calls (D.3).
     """
-    if not settings.feature_auto_extract_on_enforcement:
-        return
-
     # Only extract from nodes that might still have configs (exited, error)
     restart_nodes = [
         ns for ns in nodes

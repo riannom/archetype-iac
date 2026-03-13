@@ -1,4 +1,4 @@
-export interface AgentStaleImageSummaryHost {
+interface AgentStaleImageSummaryHost {
   agent_id: string;
   agent_name: string;
   status: string;

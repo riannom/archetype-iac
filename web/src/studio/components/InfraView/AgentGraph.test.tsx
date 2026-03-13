@@ -7,7 +7,6 @@ import {
   type Position,
   WORLD_W,
   WORLD_H,
-  SAT_RADIUS,
   MAX_VISIBLE_SATELLITES,
   MIN_ZOOM,
   MAX_ZOOM,
@@ -169,7 +168,7 @@ describe('computeSatellitePositions', () => {
     const positions = computeSatellitePositions(center, nodes, new Set());
     positions.forEach((pos) => {
       const dist = Math.sqrt((pos.x - center.x) ** 2 + (pos.y - center.y) ** 2);
-      expect(dist).toBeCloseTo(SAT_RADIUS, 0);
+      expect(dist).toBeCloseTo(55, 0);
     });
   });
 });

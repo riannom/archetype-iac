@@ -821,8 +821,6 @@ async def build_support_bundle(
             "cleanup_job_retention_days": settings.cleanup_job_retention_days,
             "cleanup_config_snapshot_retention_days": settings.cleanup_config_snapshot_retention_days,
             "state_enforcement_enabled": settings.state_enforcement_enabled,
-            "image_sync_enabled": settings.image_sync_enabled,
-            "feature_multihost_labs": settings.feature_multihost_labs,
         },
     }
     writer.add_json(

@@ -4,11 +4,11 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { NotificationSettingsPanel } from './NotificationSettingsPanel';
 import {
   DEFAULT_USER_PREFERENCES,
-  DEFAULT_TOAST_SETTINGS,
-  DEFAULT_BELL_SETTINGS,
-  DEFAULT_CANVAS_ERROR_SETTINGS,
   type UserPreferences,
 } from '../types/notifications';
+
+const DEFAULT_TOAST_SETTINGS = DEFAULT_USER_PREFERENCES.notification_settings.toasts;
+const DEFAULT_BELL_SETTINGS = DEFAULT_USER_PREFERENCES.notification_settings.bell;
 
 let mockValue: any;
 

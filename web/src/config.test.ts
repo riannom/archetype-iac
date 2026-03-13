@@ -1,8 +1,7 @@
-import { APP_VERSION, APP_VERSION_LABEL } from './config';
+import { APP_VERSION } from './config';
 
 describe('config', () => {
-  it('exports version constants', () => {
+  it('exports version constant', () => {
     expect(APP_VERSION).toBeTruthy();
-    expect(APP_VERSION_LABEL).toBeTruthy();
   });
 });

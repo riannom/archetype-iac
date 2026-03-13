@@ -3,7 +3,6 @@ import {
   buildResolvedImageDeviceIdsIndex,
   buildDeviceModels,
   enrichDeviceCategories,
-  flattenVendorCategories,
   getAllowedInstantiableImageKinds,
   imageMatchesDeviceId,
   isInstantiableImageKind,
@@ -29,12 +28,6 @@ const vendorCategories = [
 ];
 
 describe('deviceModels', () => {
-  it('flattens vendor categories', () => {
-    const flat = flattenVendorCategories(vendorCategories);
-    expect(flat).toHaveLength(1);
-    expect(flat[0].id).toBe('linux');
-  });
-
   it('builds device models with image versions and unknown devices', () => {
     const images = [
       { id: 'img1', kind: 'docker', reference: 'linux:1.0', device_id: 'linux', version: '2.0' },

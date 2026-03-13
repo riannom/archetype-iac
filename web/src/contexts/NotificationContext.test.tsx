@@ -3,7 +3,6 @@ import { act, render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { beforeEach, vi } from 'vitest';
 import { NotificationProvider, useNotifications } from './NotificationContext';
 import { DEFAULT_USER_PREFERENCES } from '../types/notifications';
-import { DEFAULT_CANVAS_SETTINGS } from '../types/notifications';
 
 const mockUseUser = vi.fn(() => ({ user: null }));
 const mockUser = { id: 'user-1' };
@@ -117,7 +116,6 @@ describe('NotificationProvider', () => {
       ok: true,
       json: async () => ({
         ...DEFAULT_USER_PREFERENCES,
-        canvas_settings: DEFAULT_CANVAS_SETTINGS,
       }),
     });
     vi.stubGlobal('fetch', fetchMock);

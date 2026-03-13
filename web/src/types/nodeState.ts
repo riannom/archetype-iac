@@ -7,7 +7,7 @@
  */
 
 /** The 8 possible actual states a node can be in. */
-export type NodeActualState =
+type NodeActualState =
   | 'undeployed'
   | 'pending'
   | 'starting'
@@ -18,7 +18,7 @@ export type NodeActualState =
   | 'exited';
 
 /** The desired state for a node. */
-export type NodeDesiredState = 'stopped' | 'running';
+type NodeDesiredState = 'stopped' | 'running';
 
 /** Display-level runtime status shown in the UI. */
 export type NodeRuntimeStatus = 'stopped' | 'booting' | 'running' | 'stopping' | 'error';
@@ -75,12 +75,6 @@ export interface NodeStateData {
   /** Timestamp when node entered starting/deploying state (for elapsed timer) */
   starting_started_at?: string | null;
 }
-
-/** Subset of NodeStateEntry used by the Canvas component. */
-export type CanvasNodeState = Pick<NodeStateEntry, 'id' | 'node_id' | 'node_name' | 'host_id' | 'host_name' | 'actual_state' | 'error_message'>;
-
-/** Subset of NodeStateEntry used by Console components. */
-export type ConsoleNodeState = Pick<NodeStateEntry, 'id' | 'node_id' | 'actual_state' | 'is_ready'>;
 
 /** Map server display_state to frontend NodeRuntimeStatus. */
 const DISPLAY_STATE_MAP: Record<string, NodeRuntimeStatus | null> = {

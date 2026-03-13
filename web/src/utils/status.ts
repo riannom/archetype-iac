@@ -36,8 +36,6 @@ export function getResourceLevel(
 
 /**
  * Get Tailwind background color class for a resource level.
- * @param level - Resource level
- * @returns Tailwind class like 'bg-green-500', 'bg-amber-500', or 'bg-red-500'
  */
 export function getResourceBgColor(level: ResourceLevel): string {
   switch (level) {
@@ -88,9 +86,6 @@ export type LabStatus = 'running' | 'stopped' | 'pending' | 'error' | 'partial' 
 
 /**
  * Get color classes for runtime status display.
- * Returns a combination of background, text, and border colors for badges.
- * @param status - Runtime status
- * @returns Tailwind class string for status badge
  */
 export function getRuntimeStatusColor(status: LabStatus): string {
   switch (status) {

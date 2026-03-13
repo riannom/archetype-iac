@@ -2,7 +2,7 @@ import { getBackgroundById } from './backgrounds';
 
 type ThemeSuggestion = string | { light: string; dark: string };
 
-export const THEME_BACKGROUND_SUGGESTIONS: Record<string, ThemeSuggestion> = {
+const THEME_BACKGROUND_SUGGESTIONS: Record<string, ThemeSuggestion> = {
   'sage-stone': 'breath',
   'ocean': 'gentle-waves',
   'copper': { light: 'autumn-wind', dark: 'embers-rising' },

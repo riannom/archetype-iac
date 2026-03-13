@@ -8,11 +8,8 @@ export enum DeviceType {
   CONTAINER = 'container'
 }
 
-// Node type discriminator for canvas nodes
-export type NodeType = 'device' | 'external';
-
 // Connection type for external networks
-export type ExternalConnectionType = 'vlan' | 'bridge';
+type ExternalConnectionType = 'vlan' | 'bridge';
 
 export type AnnotationType = 'text' | 'rect' | 'circle' | 'arrow';
 
@@ -85,7 +82,7 @@ export interface DeviceConfig {
   effective: Record<string, unknown>;
 }
 
-export interface ImageHostStatus {
+interface ImageHostStatus {
   host_id: string;
   host_name: string;
   status: 'synced' | 'syncing' | 'failed' | 'missing' | 'unknown';
@@ -187,12 +184,6 @@ export interface Link {
   bandwidth?: string;
 }
 
-export interface Topology {
-  name: string;
-  nodes: Node[];
-  links: Link[];
-  annotations?: Annotation[];
-}
 
 export interface ConsoleWindow {
   id: string;
@@ -204,7 +195,7 @@ export interface ConsoleWindow {
 }
 
 // Layout persistence types
-export interface NodeLayout {
+interface NodeLayout {
   x: number;
   y: number;
   label?: string;
@@ -212,7 +203,7 @@ export interface NodeLayout {
   metadata?: Record<string, unknown>;
 }
 
-export interface AnnotationLayout {
+interface AnnotationLayout {
   id: string;
   type: string; // text, rect, circle, arrow
   x: number;
@@ -228,14 +219,14 @@ export interface AnnotationLayout {
   metadata?: Record<string, unknown>;
 }
 
-export interface LinkLayout {
+interface LinkLayout {
   color?: string;
   strokeWidth?: number;
   style?: string; // solid, dashed, dotted
   metadata?: Record<string, unknown>;
 }
 
-export interface CanvasState {
+interface CanvasState {
   zoom?: number;
   offsetX?: number;
   offsetY?: number;
@@ -319,11 +310,3 @@ export interface TestResult {
   error?: string | null;
 }
 
-export interface TestRunResult {
-  job_id: string;
-  total: number;
-  passed: number;
-  failed: number;
-  errors: number;
-  results: TestResult[];
-}

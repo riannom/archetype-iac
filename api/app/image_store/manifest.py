@@ -4,8 +4,6 @@ from __future__ import annotations
 import json
 import logging
 
-from app.config import settings
-
 from .aliases import (
     PLATFORM_SIBLINGS,
     RUNNABLE_IMAGE_KINDS,
@@ -158,7 +156,7 @@ def save_manifest(data: dict) -> None:
         logger.warning("Failed to persist image catalog from manifest payload", exc_info=True)
 
     # Runtime manifest writes are deprecated once DB catalog is seeded.
-    if wrote_catalog and not settings.catalog_manifest_mirror_enabled:
+    if wrote_catalog:
         return
 
     path = manifest_path()

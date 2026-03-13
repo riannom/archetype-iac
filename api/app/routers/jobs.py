@@ -295,7 +295,7 @@ async def lab_up(
             image_to_nodes = {}
             target_host_id = None
             target_sync_strategy = settings.image_sync_fallback_strategy
-            if settings.image_sync_enabled and settings.image_sync_pre_deploy_check:
+            if settings.image_sync_pre_deploy_check:
                 image_refs = service.get_required_images(lab.id)
                 if image_refs:
                     image_to_nodes = service.get_image_to_nodes_map(lab.id)

@@ -254,18 +254,6 @@ class DockerNetworkManager:
         return await asyncio.to_thread(_sync_detach)
 
 
-# Singleton instance
-_network_manager: DockerNetworkManager | None = None
-
-
-def get_docker_network_manager(docker_client: docker.DockerClient) -> DockerNetworkManager:
-    """Get or create the Docker network manager singleton."""
-    global _network_manager
-    if _network_manager is None:
-        _network_manager = DockerNetworkManager(docker_client)
-    return _network_manager
-
-
 # ---------------------------------------------------------------------------
 # Standalone network-lifecycle functions extracted from DockerProvider
 # ---------------------------------------------------------------------------

@@ -2,7 +2,7 @@
 // Types
 // ============================================================================
 
-export interface InfraSettings {
+interface InfraSettings {
   overlay_mtu: number;
   mtu_verification_enabled: boolean;
   overlay_preserve_container_mtu: boolean;
@@ -11,14 +11,14 @@ export interface InfraSettings {
   updated_by_id: string | null;
 }
 
-export interface AgentMeshNode {
+interface AgentMeshNode {
   id: string;
   name: string;
   address: string;
   status: string;
 }
 
-export interface AgentLinkOut {
+interface AgentLinkOut {
   id: string;
   source_agent_id: string;
   source_agent_name: string | null;
@@ -143,7 +143,7 @@ export interface NicGroupsResponse {
   total: number;
 }
 
-export interface LabInfo {
+interface LabInfo {
   id: string;
   name: string;
   state: string;
@@ -179,7 +179,7 @@ export interface ImageDetail {
   error_message: string | null;
 }
 
-export interface AgentInventoryImage {
+interface AgentInventoryImage {
   reference: string;
   display_reference: string;
   kind: string;

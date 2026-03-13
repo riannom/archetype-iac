@@ -12,7 +12,7 @@ export interface User {
   created_at: string;
 }
 
-export interface UserContextType {
+interface UserContextType {
   user: User | null;
   loading: boolean;
   error: string | null;

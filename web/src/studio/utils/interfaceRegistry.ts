@@ -11,7 +11,7 @@
 
 import { DeviceModel } from '../types';
 
-export interface InterfacePattern {
+interface InterfacePattern {
   /** Pattern template with {index} placeholder, e.g., "eth{index}" */
   pattern: string;
   /** Starting index for data interfaces (management uses index 0 typically) */
@@ -208,7 +208,7 @@ function resolveAlias(modelId: string): string {
  * First checks runtime patterns (from API), then falls back to defaults.
  * Also resolves server-provided alias mappings (e.g., "eos" -> "ceos").
  */
-export function getPattern(modelId: string): InterfacePattern {
+function getPattern(modelId: string): InterfacePattern {
   const normalizedId = normalizeToken(modelId);
 
   // Check runtime patterns first (populated from /vendors API)
@@ -235,47 +235,6 @@ export function getPattern(modelId: string): InterfacePattern {
 
   // Return generic fallback
   return FALLBACK_PATTERNS.generic;
-}
-
-/**
- * Check if patterns have been initialized from API data.
- */
-export function isInitialized(): boolean {
-  return Object.keys(_runtimePatterns).length > 0;
-}
-
-/**
- * Get all registered patterns (for debugging/testing).
- */
-export function getAllPatterns(): Record<string, InterfacePattern> {
-  return { ...FALLBACK_PATTERNS, ..._runtimePatterns };
-}
-
-/**
- * Generate an interface name for a given device model and index.
- */
-export function generateInterfaceName(modelId: string, index: number): string {
-  const pattern = getPattern(modelId);
-  return pattern.pattern.replace('{index}', String(index));
-}
-
-/**
- * Parse an interface name to extract its index.
- * Returns null if the interface doesn't match the expected pattern.
- */
-export function parseInterfaceIndex(modelId: string, interfaceName: string): number | null {
-  const pattern = getPattern(modelId);
-
-  // Build a regex from the pattern
-  const escaped = pattern.pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const regexStr = escaped.replace('\\{index\\}', '(\\d+)');
-  const regex = new RegExp(`^${regexStr}$`);
-
-  const match = interfaceName.match(regex);
-  if (match && match[1]) {
-    return parseInt(match[1], 10);
-  }
-  return null;
 }
 
 /**
@@ -327,24 +286,3 @@ export function getNextAvailableInterface(
   return pattern.pattern.replace('{index}', String(pattern.startIndex + usedInterfaces.size));
 }
 
-/**
- * Check if an interface name matches the expected pattern for a device.
- */
-export function isValidInterface(modelId: string, interfaceName: string): boolean {
-  const pattern = getPattern(modelId);
-  if (interfaceName === pattern.managementInterface) return true;
-  return parseInterfaceIndex(modelId, interfaceName) !== null;
-}
-
-/**
- * Get the management interface for a device model.
- */
-export function getManagementInterface(modelId: string): string {
-  const pattern = getPattern(modelId);
-  return pattern.managementInterface;
-}
-
-/**
- * @deprecated Use getPattern() instead. Maintained for backward compatibility.
- */
-export const DEFAULT_PATTERNS = FALLBACK_PATTERNS;
