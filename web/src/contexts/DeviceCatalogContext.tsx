@@ -39,7 +39,7 @@ interface VendorIdentityMapResponse {
   interface_aliases?: Record<string, string>;
 }
 
-export interface DeviceCatalogContextType {
+interface DeviceCatalogContextType {
   // Raw data from API
   vendorCategories: DeviceCategory[];
 

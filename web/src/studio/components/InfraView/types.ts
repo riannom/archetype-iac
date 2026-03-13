@@ -51,9 +51,3 @@ export interface CrossHostBundle {
   allUp: boolean;
 }
 
-export interface SatelliteNode {
-  containerName: string;
-  nodeName: string;
-  actualState: string;
-  hasCrossHostLink: boolean;
-}

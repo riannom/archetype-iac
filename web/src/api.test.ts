@@ -3,7 +3,6 @@ import {
   apiRequest,
   rawApiRequest,
   getSystemLogs,
-  getLabLogs,
   getVersionInfo,
   checkForUpdates,
   getLoginDefaults,
@@ -303,45 +302,6 @@ describe("api", () => {
       expect(url).toContain("service=worker");
       expect(url).toContain("level=WARNING");
       expect(url).toContain("limit=50");
-    });
-  });
-
-  // ---- getLabLogs ----
-
-  describe("getLabLogs", () => {
-    it("calls correct endpoint with no params", async () => {
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        status: 200,
-        json: () => Promise.resolve({ entries: [], jobs: [], hosts: [], total_count: 0, error_count: 0, has_more: false }),
-      });
-
-      await getLabLogs("lab-1");
-
-      expect(mockFetch).toHaveBeenCalledWith(
-        `${API_BASE_URL}/labs/lab-1/logs`,
-        expect.any(Object)
-      );
-    });
-
-    it("includes multiple params in query string", async () => {
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        status: 200,
-        json: () => Promise.resolve({ entries: [], jobs: [], hosts: [], total_count: 0, error_count: 0, has_more: false }),
-      });
-
-      await getLabLogs("lab-1", {
-        job_id: "job-1",
-        level: "error",
-        limit: 25,
-      });
-
-      const url = mockFetch.mock.calls[0][0];
-      expect(url).toContain("/labs/lab-1/logs?");
-      expect(url).toContain("job_id=job-1");
-      expect(url).toContain("level=error");
-      expect(url).toContain("limit=25");
     });
   });
 

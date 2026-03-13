@@ -1,8 +1,8 @@
-import { formatSize, getRuntimeStatusColor } from './index';
+import { formatSize, getConnectionStatusColor } from './index';
 
 describe('utils index exports', () => {
   it('re-exports utility helpers', () => {
     expect(formatSize(1024 * 1024)).toBe('1 MB');
-    expect(getRuntimeStatusColor('running')).toContain('green');
+    expect(getConnectionStatusColor('online')).toContain('green');
   });
 });

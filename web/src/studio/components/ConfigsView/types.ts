@@ -23,7 +23,3 @@ export interface ConfigsViewProps {
   onExtractConfigs: () => Promise<void>;
 }
 
-export interface OrphanedConfigGroup {
-  device_kind: string;
-  snapshots: ConfigSnapshot[];
-}

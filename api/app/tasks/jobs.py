@@ -152,7 +152,7 @@ async def _run_job_preflight_checks(
             "Aborting before deployment/destroy to avoid long timeout."
         )
 
-    if action == "up" and settings.image_sync_enabled and settings.image_sync_pre_deploy_check:
+    if action == "up" and settings.image_sync_pre_deploy_check:
         try:
             from app.tasks.image_sync import ensure_images_for_deployment
 
@@ -354,9 +354,6 @@ async def _auto_extract_configs_before_destroy(
         lab: Lab being destroyed
         agent: Agent running the lab (used as fallback if no placements exist)
     """
-    if not settings.feature_auto_extract_on_destroy:
-        return
-
     try:
         logger.info(f"Auto-extracting configs before destroy for lab {lab.id}")
 

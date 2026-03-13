@@ -39,9 +39,6 @@ class StopMixin:
         next start uses the most recent running config. Failure-tolerant:
         extraction errors are logged but don't block the stop operation.
         """
-        if not settings.feature_auto_extract_on_stop:
-            return
-
         # Extract from nodes that are running or in stopping transition
         extractable_states = {
             NodeActualState.RUNNING.value,

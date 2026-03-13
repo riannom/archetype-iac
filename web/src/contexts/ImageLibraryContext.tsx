@@ -3,7 +3,7 @@ import { apiRequest } from '../api';
 import { ImageLibraryEntry } from '../studio/types';
 import type { AgentStaleImageSummaryResponse } from '../types/agentImages';
 
-export interface ImageLibraryContextType {
+interface ImageLibraryContextType {
   imageLibrary: ImageLibraryEntry[];
   staleAgentSummary: AgentStaleImageSummaryResponse | null;
   loading: boolean;

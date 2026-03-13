@@ -1,7 +1,7 @@
 import { useCallback, useMemo, useState } from 'react';
 import { LabLogsQueryParams } from '../../api';
 
-export interface LogFiltersState {
+interface LogFiltersState {
   selectedJobId: string;
   setSelectedJobId: (id: string) => void;
   selectedHostId: string;

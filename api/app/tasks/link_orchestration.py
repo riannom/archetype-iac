@@ -60,19 +60,13 @@ def _mapping_present_for_endpoint(
         session.query(models.Node)
         .filter(
             models.Node.lab_id == lab_id,
-            models.Node.container_name == node_name,
+            or_(
+                models.Node.container_name == node_name,
+                models.Node.display_name == node_name,
+            ),
         )
         .first()
     )
-    if not node:
-        node = (
-            session.query(models.Node)
-            .filter(
-                models.Node.lab_id == lab_id,
-                models.Node.display_name == node_name,
-            )
-            .first()
-        )
     if not node:
         return False
 
@@ -777,16 +771,17 @@ async def create_same_host_link(
 
     try:
         # Look up device types for accurate interface normalization
-        _src_node = (
-            session.query(models.Node)
-            .filter(models.Node.lab_id == lab_id, models.Node.container_name == link_state.source_node)
-            .first()
-        )
-        _tgt_node = (
-            session.query(models.Node)
-            .filter(models.Node.lab_id == lab_id, models.Node.container_name == link_state.target_node)
-            .first()
-        )
+        _endpoint_nodes = {
+            n.container_name: n
+            for n in session.query(models.Node)
+            .filter(
+                models.Node.lab_id == lab_id,
+                models.Node.container_name.in_([link_state.source_node, link_state.target_node]),
+            )
+            .all()
+        }
+        _src_node = _endpoint_nodes.get(link_state.source_node)
+        _tgt_node = _endpoint_nodes.get(link_state.target_node)
         source_iface = normalize_interface(link_state.source_interface, _src_node.device if _src_node else None) if link_state.source_interface else ""
         target_iface = normalize_interface(link_state.target_interface, _tgt_node.device if _tgt_node else None) if link_state.target_interface else ""
 
@@ -941,16 +936,17 @@ async def create_cross_host_link(
 
     try:
         # Look up device types for accurate interface normalization
-        _src_node = (
-            session.query(models.Node)
-            .filter(models.Node.lab_id == lab_id, models.Node.container_name == link_state.source_node)
-            .first()
-        )
-        _tgt_node = (
-            session.query(models.Node)
-            .filter(models.Node.lab_id == lab_id, models.Node.container_name == link_state.target_node)
-            .first()
-        )
+        _endpoint_nodes = {
+            n.container_name: n
+            for n in session.query(models.Node)
+            .filter(
+                models.Node.lab_id == lab_id,
+                models.Node.container_name.in_([link_state.source_node, link_state.target_node]),
+            )
+            .all()
+        }
+        _src_node = _endpoint_nodes.get(link_state.source_node)
+        _tgt_node = _endpoint_nodes.get(link_state.target_node)
         interface_a = normalize_interface(link_state.source_interface, _src_node.device if _src_node else None) if link_state.source_interface else ""
         interface_b = normalize_interface(link_state.target_interface, _tgt_node.device if _tgt_node else None) if link_state.target_interface else ""
 

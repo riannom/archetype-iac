@@ -1339,7 +1339,6 @@ def extract_vm_config(
             paging_disable=settings.paging_disable,
         )
 
-    # TODO: Add SSH extraction method
     return ExtractionResult(
         success=False,
         error=f"Unsupported extraction method: {settings.method}"

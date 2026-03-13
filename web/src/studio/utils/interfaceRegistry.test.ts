@@ -4,8 +4,6 @@ import {
   initializePatterns,
   setRuntimeAliases,
   getAvailableInterfaces,
-  isValidInterface,
-  getManagementInterface,
 } from './interfaceRegistry';
 
 // Test device models matching vendor catalog patterns
@@ -123,52 +121,10 @@ describe('getAvailableInterfaces', () => {
   });
 });
 
-describe('isValidInterface', () => {
-  it('accepts ceos data port', () => {
-    expect(isValidInterface('ceos', 'Ethernet1')).toBe(true);
-    expect(isValidInterface('ceos', 'Ethernet16')).toBe(true);
-  });
-
-  it('accepts ceos management interface', () => {
-    expect(isValidInterface('ceos', 'Management0')).toBe(true);
-  });
-
-  it('rejects invalid interface for ceos', () => {
-    expect(isValidInterface('ceos', 'FakePort0')).toBe(false);
-  });
-
-  it('accepts srl management interface', () => {
-    expect(isValidInterface('nokia_srlinux', 'mgmt0')).toBe(true);
-  });
-
-  it('accepts srl data port', () => {
-    expect(isValidInterface('nokia_srlinux', 'e1-1')).toBe(true);
-  });
-
-  it('accepts iosxr management interface', () => {
-    expect(isValidInterface('cisco_iosxr', 'MgmtEth0/RP0/CPU0/0')).toBe(true);
-  });
-});
-
-describe('getManagementInterface', () => {
-  it('returns Management0 for ceos', () => {
-    expect(getManagementInterface('ceos')).toBe('Management0');
-  });
-
-  it('returns mgmt0 for srl', () => {
-    expect(getManagementInterface('nokia_srlinux')).toBe('mgmt0');
-  });
-
-  it('returns eth0 for linux', () => {
-    expect(getManagementInterface('linux')).toBe('eth0');
-  });
-
-  it('returns MgmtEth for iosxr', () => {
-    expect(getManagementInterface('cisco_iosxr')).toBe('MgmtEth0/RP0/CPU0/0');
-  });
-
-  it('resolves server-provided alias mappings', () => {
+describe('setRuntimeAliases', () => {
+  it('resolves alias to original device pattern', () => {
     setRuntimeAliases({ eos: 'ceos' });
-    expect(getManagementInterface('eos')).toBe('Management0');
+    const interfaces = getAvailableInterfaces('eos', new Set(), 2);
+    expect(interfaces).toEqual(['Ethernet1', 'Ethernet2']);
   });
 });

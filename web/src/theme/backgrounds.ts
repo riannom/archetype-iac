@@ -13,7 +13,7 @@ export type BackgroundCategory =
   | 'whimsical'
   | 'zen';
 
-export interface BackgroundPattern {
+interface BackgroundPattern {
   id: string;
   name: string;
   description?: string;

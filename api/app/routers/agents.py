@@ -465,7 +465,7 @@ async def register_agent(
     host_id = result["host_id"]
 
     # Phase 2: Fire-and-forget async tasks (no DB session held)
-    if host_id and settings.image_sync_enabled:
+    if host_id:
         from app.tasks.image_sync import reconcile_agent_images, pull_images_on_registration
 
         asyncio.create_task(reconcile_agent_images(host_id))
@@ -695,7 +695,6 @@ def heartbeat(
     )
     database.commit()
 
-    # TODO: Check for pending jobs to dispatch
     pending_jobs: list[str] = []
 
     return HeartbeatResponse(

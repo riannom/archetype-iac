@@ -1,4 +1,4 @@
-export interface GraphEndpoint {
+interface GraphEndpoint {
   node: string;
   ifname?: string | null;
 }

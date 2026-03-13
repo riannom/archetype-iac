@@ -110,22 +110,17 @@ async def create_link_if_ready(
         return False
 
     # Check NodeState.actual_state for both endpoints
-    source_state = (
-        session.query(models.NodeState)
+    _node_states = {
+        ns.node_name: ns
+        for ns in session.query(models.NodeState)
         .filter(
             models.NodeState.lab_id == lab_id,
-            models.NodeState.node_name == link_state.source_node,
+            models.NodeState.node_name.in_([link_state.source_node, link_state.target_node]),
         )
-        .first()
-    )
-    target_state = (
-        session.query(models.NodeState)
-        .filter(
-            models.NodeState.lab_id == lab_id,
-            models.NodeState.node_name == link_state.target_node,
-        )
-        .first()
-    )
+        .all()
+    }
+    source_state = _node_states.get(link_state.source_node)
+    target_state = _node_states.get(link_state.target_node)
 
     # Check if both nodes are running and ready. A running-but-unready node is
     # still in the normal initialization path; link creation should wait rather

@@ -122,18 +122,8 @@ class Settings(BaseSettings):
     placement_local_penalty: float = 0.85          # Score multiplier for local agent (0.85 = 15% reduction)
     placement_scoring_enabled: bool = True         # Feature flag (False = legacy job-count sort)
 
-    # Feature flags
-    feature_multihost_labs: bool = True
-    # Auto-extract configs before destroy operations
-    feature_auto_extract_on_destroy: bool = True
-    # Auto-extract configs before stop operations (unified lifecycle)
-    feature_auto_extract_on_stop: bool = True
+    # Auto-extract timeout for stop operations
     auto_extract_on_stop_timeout_seconds: float = 30.0
-    # Auto-extract configs before enforcement restart of crashed/exited nodes
-    feature_auto_extract_on_enforcement: bool = True
-    # Per-node lifecycle: create/start/stop/destroy individual containers
-    # When False, falls back to full topology deploy via agent
-    per_node_lifecycle_enabled: bool = True
 
     # Logging configuration
     log_format: str = "json"  # "json" or "text"
@@ -142,8 +132,6 @@ class Settings(BaseSettings):
     loki_url: str = "http://loki:3100"
 
     # Image synchronization settings
-    # Enable/disable image sync feature
-    image_sync_enabled: bool = True
     # ImageSyncJob pending timeout (seconds) - jobs in pending state longer than this are considered stuck
     image_sync_job_pending_timeout: int = 120  # 2 minutes
     # Fallback strategy when agent has no preference: push, pull, on_demand, disabled
@@ -166,9 +154,6 @@ class Settings(BaseSettings):
     image_archive_verify_interval_cycles: int = 6
 
     # Catalog cutover controls
-    # Keep manifest.json mirrored from DB catalog for legacy tooling.
-    # Runtime manifest usage is deprecated and disabled by default.
-    catalog_manifest_mirror_enabled: bool = False
     # Sync runtime vendor/custom-device identity into catalog tables on API startup.
     catalog_identity_startup_sync_enabled: bool = True
 

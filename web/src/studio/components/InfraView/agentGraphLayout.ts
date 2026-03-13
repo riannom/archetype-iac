@@ -18,7 +18,7 @@ export interface AgentPairSummary {
 export const WORLD_W = 800;
 export const WORLD_H = 600;
 
-export const SAT_RADIUS = 55;
+const SAT_RADIUS = 55;
 export const SAT_DOT_R = 5;
 export const MAX_VISIBLE_SATELLITES = 8;
 

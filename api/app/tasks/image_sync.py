@@ -445,9 +445,6 @@ async def push_image_on_upload(image_id: str, database: Session | None = None):
         image_id: The newly uploaded image ID
         database: Optional database session
     """
-    if not settings.image_sync_enabled:
-        return
-
     if database is not None:
         await _push_image_on_upload_impl(image_id, database)
     else:
@@ -482,9 +479,6 @@ async def pull_images_on_registration(host_id: str, database: Session | None = N
         host_id: The newly registered agent's host ID
         database: Optional database session
     """
-    if not settings.image_sync_enabled:
-        return
-
     if database is not None:
         await _pull_images_on_registration_impl(host_id, database)
     else:

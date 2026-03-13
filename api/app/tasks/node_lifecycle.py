@@ -145,8 +145,6 @@ class NodeLifecycleManager(AgentResolutionMixin, DeploymentMixin, StopMixin):
         self.agent: models.Host | None = None
         self.target_agent_id: str | None = None
 
-        # Topology graph — loaded once in _filter_topology_for_agent, reused
-        self.graph = None
         self.post_operation_cleanup_failed = False
 
     # Known device types for bounded Prometheus labels.
@@ -748,10 +746,7 @@ class NodeLifecycleManager(AgentResolutionMixin, DeploymentMixin, StopMixin):
 
     async def _check_assigned_host_image_gate(self) -> bool:
         """Verify required images for explicitly assigned hosts before lifecycle mutation."""
-        if not (
-            settings.image_sync_enabled
-            and settings.image_sync_pre_deploy_check
-        ):
+        if not settings.image_sync_pre_deploy_check:
             return True
 
         from app.tasks.image_sync import ensure_images_for_deployment
@@ -1396,10 +1391,7 @@ class NodeLifecycleManager(AgentResolutionMixin, DeploymentMixin, StopMixin):
         Returns updated (nodes_need_deploy, nodes_need_start) or None if all
         nodes are syncing/failed and there's nothing left to do this pass.
         """
-        if not (
-            settings.image_sync_enabled
-            and settings.image_sync_pre_deploy_check
-        ):
+        if not settings.image_sync_pre_deploy_check:
             return nodes_need_deploy, nodes_need_start
 
         from app.tasks.image_sync import check_and_start_image_sync
@@ -2008,154 +2000,6 @@ class NodeLifecycleManager(AgentResolutionMixin, DeploymentMixin, StopMixin):
     # ------------------------------------------------------------------ #
     #  Shared helpers                                                       #
     # ------------------------------------------------------------------ #
-
-    def _filter_topology_for_agent(
-        self, target_node_names: set[str]
-    ) -> tuple:
-        """Filter topology to include all nodes belonging to this agent.
-
-        Shared logic used by both deploy and start phases. Uses batch-loaded
-        maps to avoid N+1 queries (Phase 2.3).
-
-        Returns (filtered_graph, deployed_node_names).
-        """
-        from app.topology import TopologyGraph
-
-        if not self.graph:
-            self.graph = self.topo_service.export_to_graph(self.lab.id)
-
-        # Determine all nodes that should be on this agent
-        all_agent_node_names = set()
-        for n in self.graph.nodes:
-            node_key = n.container_name or n.name
-            db_node = self.db_nodes_map.get(node_key)
-            if db_node and db_node.host_id:
-                # Explicit host — include only if it matches this agent
-                if db_node.host_id == self.agent.id:
-                    all_agent_node_names.add(node_key)
-                    logger.debug(
-                        f"Job {self.job.id}: Added {node_key} "
-                        f"(explicit host match: {db_node.host_id})"
-                    )
-                else:
-                    logger.debug(
-                        f"Job {self.job.id}: Skipped {node_key} "
-                        f"(explicit host {db_node.host_id} != agent "
-                        f"{self.agent.id})"
-                    )
-            else:
-                # Auto-placed — include if in target set or has placement here
-                if node_key in target_node_names:
-                    all_agent_node_names.add(node_key)
-                    logger.debug(
-                        f"Job {self.job.id}: Added {node_key} "
-                        f"(auto-placed, in target set)"
-                    )
-                else:
-                    placement = self.placements_map.get(node_key)
-                    if placement and placement.host_id == self.agent.id:
-                        all_agent_node_names.add(node_key)
-                        logger.debug(
-                            f"Job {self.job.id}: Added {node_key} "
-                            f"(existing placement on this agent)"
-                        )
-
-        # Include existing running/stopped nodes on this agent
-        for node_name, ns in self.all_lab_states.items():
-            if ns.actual_state in ("running", "stopped"):
-                placement = self.placements_map.get(node_name)
-                if placement:
-                    if placement.host_id == self.agent.id:
-                        all_agent_node_names.add(node_name)
-                        logger.debug(
-                            f"Job {self.job.id}: Added existing {node_name} "
-                            f"(placement on this agent)"
-                        )
-                else:
-                    if (
-                        self.lab.agent_id == self.agent.id
-                        or self.lab.agent_id is None
-                    ):
-                        all_agent_node_names.add(node_name)
-                        logger.debug(
-                            f"Job {self.job.id}: Added existing {node_name} "
-                            f"(no placement, lab default agent match: "
-                            f"lab.agent_id={self.lab.agent_id}, "
-                            f"agent.id={self.agent.id})"
-                        )
-
-        # Filter graph nodes
-        filtered_nodes = [
-            n
-            for n in self.graph.nodes
-            if (n.container_name or n.name) in all_agent_node_names
-        ]
-
-        # Debug logging
-        for n in self.graph.nodes:
-            node_key = n.container_name or n.name
-            is_included = node_key in all_agent_node_names
-            logger.debug(
-                f"Node filtering for {node_key}: included={is_included}, "
-                f"agent={self.agent.id}, "
-                f"all_agent_nodes={list(all_agent_node_names)}"
-            )
-
-        # Filter links (both endpoints must be included)
-        filtered_node_names = {
-            n.container_name or n.name for n in filtered_nodes
-        }
-        filtered_node_ids = {n.id for n in filtered_nodes}
-        filtered_node_identifiers = filtered_node_names | filtered_node_ids
-        filtered_links = [
-            link
-            for link in self.graph.links
-            if all(
-                ep.node in filtered_node_identifiers
-                for ep in link.endpoints
-            )
-        ]
-
-        # Set interface counts
-        interface_count_map = self.topo_service.get_interface_count_map(
-            self.lab.id
-        )
-        for n in filtered_nodes:
-            node_key = n.container_name or n.name
-            iface_count = interface_count_map.get(node_key, 0)
-            if iface_count > 0:
-                vars_dict = dict(n.vars or {})
-                vars_dict["interface_count"] = iface_count
-                n.vars = vars_dict
-
-        filtered_graph = TopologyGraph(
-            nodes=filtered_nodes,
-            links=filtered_links,
-            defaults=self.graph.defaults,
-        )
-
-        deployed_node_names = target_node_names & filtered_node_names
-        return filtered_graph, deployed_node_names
-
-    def _validate_topology_placement(self, filtered_graph) -> list[str]:
-        """Verify all nodes in topology belong to this agent.
-
-        Uses batch-loaded node map (Phase 2.3).
-        Returns list of misplaced node descriptions, empty if all OK.
-        """
-        misplaced = []
-        for n in filtered_graph.nodes:
-            node_key = n.container_name or n.name
-            db_node = self.db_nodes_map.get(node_key)
-            if (
-                db_node
-                and db_node.host_id
-                and db_node.host_id != self.agent.id
-            ):
-                misplaced.append(
-                    f"{node_key} (assigned to {db_node.host_id})"
-                )
-        return misplaced
 
     def _broadcast_state(self, ns, name_suffix="state", **extra):
         """Fire-and-forget WebSocket broadcast of node state change."""

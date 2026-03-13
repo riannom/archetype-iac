@@ -267,13 +267,13 @@ export function buildResolvedImageDeviceIdsIndex(
   return resolvedByImageId;
 }
 
-export function normalizeDefaultDeviceScopeId(deviceId?: string | null): string | null {
+function normalizeDefaultDeviceScopeId(deviceId?: string | null): string | null {
   if (!deviceId) return null;
   const normalized = String(deviceId).trim().toLowerCase();
   return normalized || null;
 }
 
-export function getImageDefaultDeviceIds(image: ImageLibraryEntry): string[] {
+function getImageDefaultDeviceIds(image: ImageLibraryEntry): string[] {
   const scopedDefaults = (image.default_for_devices || [])
     .map((id) => normalizeDefaultDeviceScopeId(id))
     .filter((id): id is string => Boolean(id));
@@ -299,7 +299,7 @@ export function isImageDefaultForDevice(image: ImageLibraryEntry, deviceId?: str
 /**
  * Flatten vendor categories into a flat list of DeviceModels
  */
-export function flattenVendorCategories(categories: DeviceCategory[]): DeviceModel[] {
+function flattenVendorCategories(categories: DeviceCategory[]): DeviceModel[] {
   return categories.flatMap(cat => {
     if (cat.subCategories) {
       return cat.subCategories.flatMap(sub => sub.models);

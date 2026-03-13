@@ -61,7 +61,7 @@ export interface LogEntry {
   extra?: Record<string, unknown> | null;
 }
 
-export interface LogQueryResponse {
+interface LogQueryResponse {
   entries: LogEntry[];
   total_count: number;
   has_more: boolean;
@@ -207,22 +207,6 @@ export interface LabLogsQueryParams {
   limit?: number;
 }
 
-export async function getLabLogs(
-  labId: string,
-  params: LabLogsQueryParams = {}
-): Promise<LabLogsResponse> {
-  const queryString = buildQueryString({
-    job_id: params.job_id,
-    host_id: params.host_id,
-    level: params.level,
-    since: params.since,
-    search: params.search,
-    limit: params.limit,
-  });
-  const path = `/labs/${labId}/logs${queryString}`;
-
-  return apiRequest<LabLogsResponse>(path);
-}
 
 
 // --- Link Path Detail Types and Functions ---
@@ -242,7 +226,7 @@ export interface LinkEndpointDetail {
   vxlan_attached: boolean | null;
 }
 
-export interface VxlanTunnelDetail {
+interface VxlanTunnelDetail {
   vni: number;
   vlan_tag: number;
   agent_a_ip: string;
@@ -275,7 +259,7 @@ export async function getLinkDetail(
 
 // --- Interface Mapping Types and Functions ---
 
-export interface InterfaceMappingOut {
+interface InterfaceMappingOut {
   id: string;
   lab_id: string;
   node_id: string;
@@ -290,7 +274,7 @@ export interface InterfaceMappingOut {
   updated_at: string;
 }
 
-export interface InterfaceMappingsResponse {
+interface InterfaceMappingsResponse {
   mappings: InterfaceMappingOut[];
   total: number;
 }
@@ -312,7 +296,7 @@ export interface InfraNotification {
   timestamp: string | null;
 }
 
-export interface InfraNotificationsResponse {
+interface InfraNotificationsResponse {
   notifications: InfraNotification[];
 }
 
