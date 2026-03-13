@@ -455,8 +455,7 @@ class TestCategorizationMatchesTransitionalStates:
              patch("app.tasks.node_lifecycle_agents.agent_client", mock_ac), \
              patch("app.tasks.node_lifecycle_deploy.agent_client", mock_ac), \
              patch("app.tasks.node_lifecycle_stop.agent_client", mock_ac), \
-             patch("app.tasks.node_lifecycle.settings", mock_settings), \
-             patch("app.tasks.node_lifecycle_deploy.settings", mock_settings):
+             patch("app.tasks.node_lifecycle.settings", mock_settings):
             await run_node_reconcile(job.id, lab.id, ["node-1"])
 
         test_db.refresh(node_state)
@@ -528,7 +527,6 @@ class TestCategorizationMatchesTransitionalStates:
              patch("app.tasks.node_lifecycle_deploy.agent_client", mock_ac), \
              patch("app.tasks.node_lifecycle_stop.agent_client", mock_ac), \
              patch("app.tasks.node_lifecycle.settings", mock_settings), \
-             patch("app.tasks.node_lifecycle_deploy.settings", mock_settings), \
              patch("app.tasks.node_lifecycle_agents.settings", mock_settings):
             await run_node_reconcile(job.id, lab.id, ["node-1"])
 
@@ -1005,7 +1003,6 @@ class TestEarlyPlacementUpdate:
              patch("app.tasks.node_lifecycle_stop.agent_client", mock_ac), \
              patch("app.tasks.node_lifecycle.settings", mock_settings), \
              patch("app.tasks.node_lifecycle_agents.settings", mock_settings), \
-             patch("app.tasks.node_lifecycle_deploy.settings", mock_settings), \
              patch.object(test_db, "commit", tracking_commit):
             await run_node_reconcile(job.id, lab.id, ["node-1"])
 
