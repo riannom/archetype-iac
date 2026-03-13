@@ -1330,7 +1330,7 @@ class TestDeployNodes:
              patch("app.tasks.jobs._capture_node_ips", new_callable=AsyncMock), \
              patch("app.tasks.jobs._cleanup_orphan_containers", new_callable=AsyncMock), \
              patch("app.tasks.node_lifecycle_deploy.agent_client") as mock_ac, \
-             patch("app.tasks.node_lifecycle_deploy.settings") as mock_settings:
+             patch("app.tasks.node_lifecycle_deploy.settings"):
             mock_ac.deploy_to_agent = AsyncMock(return_value={"status": "completed"})
             mock_ac.get_lab_status_from_agent = AsyncMock(return_value={
                 "nodes": [{"name": "R1", "node_definition_id": node_def.id, "runtime_id": "runtime-r1"}]
@@ -1371,7 +1371,7 @@ class TestDeployNodes:
              patch("app.tasks.jobs.acquire_deploy_lock", return_value=(True, [])), \
              patch("app.tasks.jobs.release_deploy_lock"), \
              patch("app.tasks.node_lifecycle_deploy.agent_client") as mock_ac, \
-             patch("app.tasks.node_lifecycle_deploy.settings") as mock_settings:
+             patch("app.tasks.node_lifecycle_deploy.settings"):
             mock_ac.deploy_to_agent = AsyncMock(
                 return_value={"status": "failed", "error_message": "Timeout"}
             )
@@ -1410,7 +1410,7 @@ class TestDeployNodes:
              patch.object(manager, "_validate_topology_placement", return_value=[]), \
              patch("app.tasks.node_lifecycle_deploy.graph_to_deploy_topology", return_value={}), \
              patch("app.tasks.jobs.acquire_deploy_lock", return_value=(False, ["R1"])), \
-             patch("app.tasks.node_lifecycle_deploy.settings") as mock_settings:
+             patch("app.tasks.node_lifecycle_deploy.settings"):
             await manager._deploy_nodes([ns])
 
         assert ns.actual_state == NodeActualState.ERROR.value
@@ -1428,7 +1428,7 @@ class TestDeployNodes:
         manager.node_states = [ns]
 
         with patch.object(manager.topo_service, "has_nodes", return_value=False), \
-             patch("app.tasks.node_lifecycle_deploy.settings") as mock_settings:
+             patch("app.tasks.node_lifecycle_deploy.settings"):
             await manager._deploy_nodes([ns])
 
         assert ns.actual_state == NodeActualState.ERROR.value
@@ -1468,7 +1468,7 @@ class TestDeployNodes:
              patch("app.tasks.jobs.acquire_deploy_lock", return_value=(True, [])), \
              patch("app.tasks.jobs.release_deploy_lock"), \
              patch("app.tasks.node_lifecycle_deploy.agent_client") as mock_ac, \
-             patch("app.tasks.node_lifecycle_deploy.settings") as mock_settings:
+             patch("app.tasks.node_lifecycle_deploy.settings"):
             mock_ac.deploy_to_agent = AsyncMock(
                 side_effect=AgentUnavailableError("Connection refused")
             )
