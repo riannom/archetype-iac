@@ -448,9 +448,7 @@ class TestCategorizationMatchesTransitionalStates:
         })
         mock_settings = MagicMock()
         mock_settings.resource_validation_enabled = False
-        mock_settings.image_sync_enabled = False
         mock_settings.image_sync_pre_deploy_check = False
-        mock_settings.per_node_lifecycle_enabled = False
 
         with patch("app.tasks.jobs.get_session", mock_get_session(test_db)), \
              patch("app.tasks.node_lifecycle.agent_client", mock_ac), \
@@ -522,9 +520,7 @@ class TestCategorizationMatchesTransitionalStates:
         mock_ac.get_lab_status_from_agent = AsyncMock(return_value={"nodes": []})
         mock_settings = MagicMock()
         mock_settings.resource_validation_enabled = False
-        mock_settings.image_sync_enabled = False
         mock_settings.image_sync_pre_deploy_check = False
-        mock_settings.per_node_lifecycle_enabled = False
 
         with patch("app.tasks.jobs.get_session", mock_get_session(test_db)), \
              patch("app.tasks.node_lifecycle.agent_client", mock_ac), \
@@ -999,9 +995,7 @@ class TestEarlyPlacementUpdate:
         )
         mock_settings = MagicMock()
         mock_settings.resource_validation_enabled = False
-        mock_settings.image_sync_enabled = False
         mock_settings.image_sync_pre_deploy_check = False
-        mock_settings.per_node_lifecycle_enabled = False
         mock_settings.placement_scoring_enabled = False
 
         with patch("app.tasks.jobs.get_session", mock_get_session(test_db)), \

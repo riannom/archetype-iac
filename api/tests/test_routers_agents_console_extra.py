@@ -8,7 +8,6 @@ from app import models
 
 
 def test_register_agent_creates_and_updates(test_client, test_db, monkeypatch, agent_auth_headers) -> None:
-    monkeypatch.setattr("app.config.settings.image_sync_enabled", False)
     # Prevent background convergence task from racing with second register call
     monkeypatch.setattr("app.routers.agents.asyncio.create_task", lambda coro: coro.close())
 
@@ -40,7 +39,6 @@ def test_register_agent_creates_and_updates(test_client, test_db, monkeypatch, a
 
 
 def test_register_agent_restart_marks_job_failed(test_client, test_db, monkeypatch, agent_auth_headers) -> None:
-    monkeypatch.setattr("app.config.settings.image_sync_enabled", False)
     monkeypatch.setattr("app.routers.agents.asyncio.create_task", lambda coro: coro.close())
 
     # Use naive datetime strings (no timezone suffix) to avoid SQLite

@@ -180,7 +180,6 @@ class TestNodeStartTriggersImageSync:
     ):
         """When image is missing on agent, node should transition to
         image_sync_status='syncing' rather than actual_state='error'."""
-        monkeypatch.setattr(settings, "image_sync_enabled", True)
         monkeypatch.setattr(settings, "image_sync_pre_deploy_check", True)
 
         with (
@@ -379,7 +378,6 @@ class TestNonBlockingBehavior:
     ):
         """run_node_reconcile must complete quickly even when sync would take
         600 seconds. Confirms the non-blocking design."""
-        monkeypatch.setattr(settings, "image_sync_enabled", True)
         monkeypatch.setattr(settings, "image_sync_pre_deploy_check", True)
 
         # Simulate that sync is started but takes forever

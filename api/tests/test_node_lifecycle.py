@@ -17,7 +17,6 @@ from app.agent_client import AgentUnavailableError
 from app.schemas.lab import CrossHostLink
 from app.state import JobStatus, NodeActualState
 from app.tasks.node_lifecycle import LifecycleResult, NodeLifecycleManager, _get_container_name
-import app.tasks.node_lifecycle_deploy as nlc_deploy
 from tests.factories import make_host, make_job, make_lab, make_node, make_node_state, make_placement
 
 
@@ -1332,7 +1331,6 @@ class TestDeployNodes:
              patch("app.tasks.jobs._cleanup_orphan_containers", new_callable=AsyncMock), \
              patch("app.tasks.node_lifecycle_deploy.agent_client") as mock_ac, \
              patch("app.tasks.node_lifecycle_deploy.settings") as mock_settings:
-            mock_settings.per_node_lifecycle_enabled = False
             mock_ac.deploy_to_agent = AsyncMock(return_value={"status": "completed"})
             mock_ac.get_lab_status_from_agent = AsyncMock(return_value={
                 "nodes": [{"name": "R1", "node_definition_id": node_def.id, "runtime_id": "runtime-r1"}]
@@ -1374,7 +1372,6 @@ class TestDeployNodes:
              patch("app.tasks.jobs.release_deploy_lock"), \
              patch("app.tasks.node_lifecycle_deploy.agent_client") as mock_ac, \
              patch("app.tasks.node_lifecycle_deploy.settings") as mock_settings:
-            mock_settings.per_node_lifecycle_enabled = False
             mock_ac.deploy_to_agent = AsyncMock(
                 return_value={"status": "failed", "error_message": "Timeout"}
             )
@@ -1414,7 +1411,6 @@ class TestDeployNodes:
              patch("app.tasks.node_lifecycle_deploy.graph_to_deploy_topology", return_value={}), \
              patch("app.tasks.jobs.acquire_deploy_lock", return_value=(False, ["R1"])), \
              patch("app.tasks.node_lifecycle_deploy.settings") as mock_settings:
-            mock_settings.per_node_lifecycle_enabled = False
             await manager._deploy_nodes([ns])
 
         assert ns.actual_state == NodeActualState.ERROR.value
@@ -1433,7 +1429,6 @@ class TestDeployNodes:
 
         with patch.object(manager.topo_service, "has_nodes", return_value=False), \
              patch("app.tasks.node_lifecycle_deploy.settings") as mock_settings:
-            mock_settings.per_node_lifecycle_enabled = False
             await manager._deploy_nodes([ns])
 
         assert ns.actual_state == NodeActualState.ERROR.value
@@ -1474,7 +1469,6 @@ class TestDeployNodes:
              patch("app.tasks.jobs.release_deploy_lock"), \
              patch("app.tasks.node_lifecycle_deploy.agent_client") as mock_ac, \
              patch("app.tasks.node_lifecycle_deploy.settings") as mock_settings:
-            mock_settings.per_node_lifecycle_enabled = False
             mock_ac.deploy_to_agent = AsyncMock(
                 side_effect=AgentUnavailableError("Connection refused")
             )
@@ -1641,9 +1635,7 @@ class TestExecuteOrchestration:
         mock_ac.check_node_readiness = AsyncMock(return_value={"is_ready": True})
         mock_settings = MagicMock()
         mock_settings.resource_validation_enabled = False
-        mock_settings.image_sync_enabled = False
         mock_settings.image_sync_pre_deploy_check = False
-        mock_settings.per_node_lifecycle_enabled = False
 
         with patch.object(manager.topo_service, "get_nodes", return_value=[node_def]), \
              patch("app.tasks.node_lifecycle.agent_client", mock_ac), \
@@ -1690,9 +1682,7 @@ class TestExecuteOrchestration:
         })
         mock_settings = MagicMock()
         mock_settings.resource_validation_enabled = False
-        mock_settings.image_sync_enabled = False
         mock_settings.image_sync_pre_deploy_check = False
-        mock_settings.per_node_lifecycle_enabled = False
 
         with patch.object(manager.topo_service, "get_nodes", return_value=[node_def]), \
              patch("app.tasks.node_lifecycle.agent_client", mock_ac), \
@@ -1756,9 +1746,7 @@ class TestExecuteOrchestration:
         })
         mock_settings = MagicMock()
         mock_settings.resource_validation_enabled = False
-        mock_settings.image_sync_enabled = False
         mock_settings.image_sync_pre_deploy_check = False
-        mock_settings.per_node_lifecycle_enabled = False
 
         with patch.object(manager.topo_service, "get_nodes", return_value=[node_def1, node_def2]), \
              patch("app.tasks.node_lifecycle.agent_client", mock_ac), \
@@ -1813,9 +1801,7 @@ class TestExecuteOrchestration:
         )
         mock_settings = MagicMock()
         mock_settings.resource_validation_enabled = True
-        mock_settings.image_sync_enabled = False
         mock_settings.image_sync_pre_deploy_check = False
-        mock_settings.per_node_lifecycle_enabled = False
 
         with patch.object(manager.topo_service, "get_nodes", return_value=[node_def]), \
              patch("app.tasks.node_lifecycle.agent_client", mock_ac), \
@@ -1879,9 +1865,7 @@ class TestExecuteOrchestration:
         })
         mock_settings = MagicMock()
         mock_settings.resource_validation_enabled = False
-        mock_settings.image_sync_enabled = False
         mock_settings.image_sync_pre_deploy_check = False
-        mock_settings.per_node_lifecycle_enabled = False
 
         with patch.object(manager.topo_service, "get_nodes", return_value=[node_def1, node_def2]), \
              patch("app.tasks.node_lifecycle.agent_client", mock_ac), \
@@ -2213,11 +2197,11 @@ class TestStartNodesPerNode:
 
 
 class TestDeployDispatch:
-    """Test _deploy_nodes dispatches based on per_node_lifecycle_enabled."""
+    """Test _deploy_nodes dispatches to per-node path."""
 
     @pytest.mark.asyncio
-    async def test_dispatches_to_per_node_when_enabled(self, test_db, test_user, monkeypatch):
-        """With per_node_lifecycle_enabled=True, uses per-node path."""
+    async def test_dispatches_to_per_node(self, test_db, test_user):
+        """_deploy_nodes uses per-node path."""
         host = make_host(test_db)
         lab = make_lab(test_db, test_user, agent_id=host.id)
         job = make_job(test_db, lab, test_user)
@@ -2226,36 +2210,11 @@ class TestDeployDispatch:
         manager = _make_manager(test_db, lab, job, [ns.node_id], agent=host)
         manager.node_states = [ns]
 
-        monkeypatch.setattr(nlc_deploy.settings, "per_node_lifecycle_enabled", True)
-
         manager._deploy_nodes_per_node = AsyncMock()
-        manager._deploy_nodes_topology = AsyncMock()
 
         await manager._deploy_nodes([ns])
 
         manager._deploy_nodes_per_node.assert_called_once_with([ns])
-        manager._deploy_nodes_topology.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_dispatches_to_topology_when_disabled(self, test_db, test_user, monkeypatch):
-        """With per_node_lifecycle_enabled=False, uses topology path."""
-        host = make_host(test_db)
-        lab = make_lab(test_db, test_user, agent_id=host.id)
-        job = make_job(test_db, lab, test_user)
-        ns = make_node_state(test_db, lab, "n1", "R1", desired="running", actual="pending")
-
-        manager = _make_manager(test_db, lab, job, [ns.node_id], agent=host)
-        manager.node_states = [ns]
-
-        monkeypatch.setattr(nlc_deploy.settings, "per_node_lifecycle_enabled", False)
-
-        manager._deploy_nodes_per_node = AsyncMock()
-        manager._deploy_nodes_topology = AsyncMock()
-
-        await manager._deploy_nodes([ns])
-
-        manager._deploy_nodes_topology.assert_called_once_with([ns])
-        manager._deploy_nodes_per_node.assert_not_called()
 
 
 class TestIsCeosKind:
@@ -2314,19 +2273,7 @@ class TestAutoExtractBeforeStop:
                 "app.services.config_service.ConfigService.save_extracted_config",
                 mock_save,
             ):
-                from app.tasks import node_lifecycle
-                original = node_lifecycle.settings.feature_auto_extract_on_stop
-                object.__setattr__(
-                    node_lifecycle.settings, "feature_auto_extract_on_stop", True
-                )
-                try:
-                    await manager._auto_extract_before_stop([ns])
-                finally:
-                    object.__setattr__(
-                        node_lifecycle.settings,
-                        "feature_auto_extract_on_stop",
-                        original,
-                    )
+                await manager._auto_extract_before_stop([ns])
 
         # Extract called on agent
         mock_ac.extract_configs_on_agent.assert_awaited_once_with(host, lab.id)
@@ -2338,40 +2285,6 @@ class TestAutoExtractBeforeStop:
         assert call_kwargs["set_as_active"] is True
         assert call_kwargs["node_name"] == "R1"
         assert call_kwargs["content"] == "hostname R1\n!"
-
-    @pytest.mark.asyncio
-    async def test_feature_flag_disables_extraction(self, test_db, test_user):
-        """feature_auto_extract_on_stop=False skips extraction entirely."""
-        host = make_host(test_db)
-        lab = make_lab(test_db, test_user, agent_id=host.id)
-        job = make_job(test_db, lab, test_user)
-        ns = make_node_state(
-            test_db, lab, "n1", "R1", desired="stopped", actual="running"
-        )
-
-        manager = _make_manager(test_db, lab, job, [ns.node_id], agent=host)
-        manager.node_states = [ns]
-        manager.placements_map = {}
-
-        with patch("app.tasks.node_lifecycle_stop.agent_client") as mock_ac:
-            mock_ac.extract_configs_on_agent = AsyncMock()
-
-            from app.tasks import node_lifecycle
-            original = node_lifecycle.settings.feature_auto_extract_on_stop
-            object.__setattr__(
-                node_lifecycle.settings, "feature_auto_extract_on_stop", False
-            )
-            try:
-                await manager._auto_extract_before_stop([ns])
-            finally:
-                object.__setattr__(
-                    node_lifecycle.settings,
-                    "feature_auto_extract_on_stop",
-                    original,
-                )
-
-        # Should NOT have called extract
-        mock_ac.extract_configs_on_agent.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_extracts_from_stopping_nodes(self, test_db, test_user):
@@ -2406,19 +2319,7 @@ class TestAutoExtractBeforeStop:
                 "app.services.config_service.ConfigService.save_extracted_config",
                 mock_save,
             ):
-                from app.tasks import node_lifecycle
-                original = node_lifecycle.settings.feature_auto_extract_on_stop
-                object.__setattr__(
-                    node_lifecycle.settings, "feature_auto_extract_on_stop", True
-                )
-                try:
-                    await manager._auto_extract_before_stop([ns])
-                finally:
-                    object.__setattr__(
-                        node_lifecycle.settings,
-                        "feature_auto_extract_on_stop",
-                        original,
-                    )
+                await manager._auto_extract_before_stop([ns])
 
         # Extract called even though state is 'stopping'
         mock_ac.extract_configs_on_agent.assert_awaited_once()
@@ -2441,20 +2342,7 @@ class TestAutoExtractBeforeStop:
 
         with patch("app.tasks.node_lifecycle_stop.agent_client") as mock_ac:
             mock_ac.extract_configs_on_agent = AsyncMock()
-
-            from app.tasks import node_lifecycle
-            original = node_lifecycle.settings.feature_auto_extract_on_stop
-            object.__setattr__(
-                node_lifecycle.settings, "feature_auto_extract_on_stop", True
-            )
-            try:
-                await manager._auto_extract_before_stop([ns])
-            finally:
-                object.__setattr__(
-                    node_lifecycle.settings,
-                    "feature_auto_extract_on_stop",
-                    original,
-                )
+            await manager._auto_extract_before_stop([ns])
 
         # No running nodes → no extraction
         mock_ac.extract_configs_on_agent.assert_not_awaited()
@@ -2479,20 +2367,8 @@ class TestAutoExtractBeforeStop:
                 side_effect=Exception("Agent crashed")
             )
 
-            from app.tasks import node_lifecycle
-            original = node_lifecycle.settings.feature_auto_extract_on_stop
-            object.__setattr__(
-                node_lifecycle.settings, "feature_auto_extract_on_stop", True
-            )
-            try:
-                # Should NOT raise — failure-tolerant
-                await manager._auto_extract_before_stop([ns])
-            finally:
-                object.__setattr__(
-                    node_lifecycle.settings,
-                    "feature_auto_extract_on_stop",
-                    original,
-                )
+            # Should NOT raise — failure-tolerant
+            await manager._auto_extract_before_stop([ns])
 
         # Verify it was called (and failed)
         mock_ac.extract_configs_on_agent.assert_awaited_once()

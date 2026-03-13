@@ -173,15 +173,6 @@ class TestJobHealthSettings:
         assert settings.job_timeout_node == 300  # 5 minutes
 
 
-class TestFeatureFlags:
-    """Tests for feature flags."""
-
-    def test_multihost_labs_enabled(self):
-        """Multi-host labs feature is enabled by default."""
-        from app.config import Settings
-        settings = Settings()
-        assert settings.feature_multihost_labs is True
-
 
 class TestLoggingSettings:
     """Tests for logging configuration."""
@@ -207,12 +198,6 @@ class TestLoggingSettings:
 
 class TestImageSyncSettings:
     """Tests for image synchronization settings."""
-
-    def test_image_sync_enabled(self):
-        """Image sync is enabled by default."""
-        from app.config import Settings
-        settings = Settings()
-        assert settings.image_sync_enabled is True
 
     def test_image_sync_timeout(self):
         """Image sync timeout is set."""
@@ -348,5 +333,3 @@ class TestSettingsTypes:
         from app.config import Settings
         settings = Settings()
         assert isinstance(settings.local_auth_enabled, bool)
-        assert isinstance(settings.image_sync_enabled, bool)
-        assert isinstance(settings.feature_multihost_labs, bool)

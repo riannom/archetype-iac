@@ -204,7 +204,6 @@ class TestLinkRecoveryOnRestart:
         agent_auth_headers: dict, monkeypatch,
     ):
         """Agent restart marks cross-host links as error for recovery."""
-        monkeypatch.setattr("app.config.settings.image_sync_enabled", False)
         # Prevent background convergence task from racing with second register call
         monkeypatch.setattr("app.routers.agents.asyncio.create_task", lambda coro: coro.close())
 
@@ -274,7 +273,6 @@ class TestLinkRecoveryOnRestart:
         agent_auth_headers: dict, monkeypatch,
     ):
         """Agent restart with no cross-host links completes without error."""
-        monkeypatch.setattr("app.config.settings.image_sync_enabled", False)
         # Prevent background convergence task from racing with second register call
         monkeypatch.setattr("app.routers.agents.asyncio.create_task", lambda coro: coro.close())
 
@@ -348,7 +346,6 @@ class TestUpdateCompletionDetection:
         agent_auth_headers: dict, monkeypatch,
     ):
         """Re-registration with matching version completes update job."""
-        monkeypatch.setattr("app.config.settings.image_sync_enabled", False)
         # Prevent background convergence task from racing with test session
         monkeypatch.setattr("app.routers.agents.asyncio.create_task", lambda coro: coro.close())
 
@@ -391,7 +388,6 @@ class TestUpdateCompletionDetection:
         agent_auth_headers: dict, monkeypatch,
     ):
         """Re-registration with wrong version expires stale update job."""
-        monkeypatch.setattr("app.config.settings.image_sync_enabled", False)
         # Prevent background convergence task from racing with test session
         monkeypatch.setattr("app.routers.agents.asyncio.create_task", lambda coro: coro.close())
 

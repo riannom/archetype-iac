@@ -56,10 +56,8 @@ class TestAutoExtractMultiHost:
         make_placement(test_db, lab.id, n1.container_name, h1.id, n1.id)
         make_placement(test_db, lab.id, n2.container_name, h2.id, n2.id)
 
-        with patch("app.tasks.jobs.settings") as mock_settings, \
-             patch("app.tasks.jobs.agent_client") as mock_ac, \
+        with patch("app.tasks.jobs.agent_client") as mock_ac, \
              patch("app.services.config_service.ConfigService") as mock_cs_cls:
-            mock_settings.feature_auto_extract_on_destroy = True
             mock_ac.is_agent_online.return_value = True
             mock_ac.extract_configs_on_agent = AsyncMock(side_effect=[
                 {"success": True, "configs": [{"node_name": "archetype-test-r1", "content": "conf1"}]},
@@ -83,10 +81,8 @@ class TestAutoExtractMultiHost:
         make_placement(test_db, lab.id, n1.container_name, h1.id, n1.id)
         make_placement(test_db, lab.id, n2.container_name, h2.id, n2.id)
 
-        with patch("app.tasks.jobs.settings") as mock_settings, \
-             patch("app.tasks.jobs.agent_client") as mock_ac, \
+        with patch("app.tasks.jobs.agent_client") as mock_ac, \
              patch("app.services.config_service.ConfigService") as mock_cs_cls:
-            mock_settings.feature_auto_extract_on_destroy = True
             # h1 online, h2 offline
             mock_ac.is_agent_online.side_effect = lambda h: h.id == "h1"
             mock_ac.extract_configs_on_agent = AsyncMock(return_value={
@@ -110,9 +106,7 @@ class TestAutoExtractMultiHost:
         n1 = make_node(test_db, lab.id, "n1", "R1", "archetype-test-r1")
         make_placement(test_db, lab.id, n1.container_name, h1.id, n1.id)
 
-        with patch("app.tasks.jobs.settings") as mock_settings, \
-             patch("app.tasks.jobs.agent_client") as mock_ac:
-            mock_settings.feature_auto_extract_on_destroy = True
+        with patch("app.tasks.jobs.agent_client") as mock_ac:
             mock_ac.is_agent_online.return_value = False
 
             # Should not raise
@@ -131,10 +125,8 @@ class TestAutoExtractMultiHost:
         make_placement(test_db, lab.id, n1.container_name, h1.id, n1.id)
         make_placement(test_db, lab.id, n2.container_name, h2.id, n2.id)
 
-        with patch("app.tasks.jobs.settings") as mock_settings, \
-             patch("app.tasks.jobs.agent_client") as mock_ac, \
+        with patch("app.tasks.jobs.agent_client") as mock_ac, \
              patch("app.services.config_service.ConfigService") as mock_cs_cls:
-            mock_settings.feature_auto_extract_on_destroy = True
             mock_ac.is_agent_online.return_value = True
             # First agent raises, second succeeds
             mock_ac.extract_configs_on_agent = AsyncMock(side_effect=[
@@ -156,10 +148,8 @@ class TestAutoExtractMultiHost:
         h1 = make_host(test_db, "h1")
         make_node(test_db, lab.id, "n1", "R1", "archetype-test-r1")
 
-        with patch("app.tasks.jobs.settings") as mock_settings, \
-             patch("app.tasks.jobs.agent_client") as mock_ac, \
+        with patch("app.tasks.jobs.agent_client") as mock_ac, \
              patch("app.services.config_service.ConfigService") as mock_cs_cls:
-            mock_settings.feature_auto_extract_on_destroy = True
             mock_ac.is_agent_online.return_value = True
             mock_ac.extract_configs_on_agent = AsyncMock(return_value={
                 "success": True,

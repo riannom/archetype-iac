@@ -48,9 +48,6 @@ class TestLabUp:
         monkeypatch,
     ):
         """Lab up creates queued job and starts background task."""
-        from app.config import settings
-        monkeypatch.setattr(settings, "image_sync_enabled", False)
-
         # Add nodes to the lab in the database (source of truth)
         node = models.Node(
             lab_id=sample_lab.id,
@@ -106,9 +103,6 @@ class TestLabUpRespectsStoppedNodes:
         test_db.commit()
 
     def _do_lab_up(self, test_client, sample_lab, sample_host, auth_headers, monkeypatch):
-        from app.config import settings
-        monkeypatch.setattr(settings, "image_sync_enabled", False)
-
         with patch("app.routers.jobs.has_conflicting_job", return_value=(False, None)):
             with patch("app.routers.jobs.agent_client.get_agent_for_lab", new_callable=AsyncMock) as mock_agent:
                 mock_agent.return_value = sample_host
@@ -987,9 +981,6 @@ class TestLabUpConflict:
         monkeypatch,
     ):
         """Lab up returns 503 when no healthy agent with required provider."""
-        from app.config import settings
-        monkeypatch.setattr(settings, "image_sync_enabled", False)
-
         node = models.Node(
             lab_id=sample_lab.id,
             gui_id="n1",

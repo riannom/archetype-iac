@@ -36,268 +36,6 @@ def _make_manager(session, lab, job, node_ids, agent=None):
 
 
 # ---------------------------------------------------------------------------
-# TestDeployNodes — dispatch routing
-# ---------------------------------------------------------------------------
-
-
-class TestDeployNodes:
-    """Tests for _deploy_nodes() dispatch logic."""
-
-    @pytest.mark.asyncio
-    async def test_dispatches_to_per_node_when_enabled(self, test_db, test_user, monkeypatch):
-        """When per_node_lifecycle_enabled is True, dispatches to _deploy_nodes_per_node."""
-        host = make_host(test_db)
-        lab = make_lab(test_db, test_user, agent_id=host.id)
-        job = make_job(test_db, lab, test_user)
-        ns = make_node_state(test_db, lab, "n1", "R1", desired="running", actual="undeployed")
-
-        manager = _make_manager(test_db, lab, job, ["n1"], agent=host)
-        manager._deploy_nodes_per_node = AsyncMock()
-        manager._deploy_nodes_topology = AsyncMock()
-
-        monkeypatch.setattr("app.tasks.node_lifecycle_deploy.settings.per_node_lifecycle_enabled", True)
-        await manager._deploy_nodes([ns])
-
-        manager._deploy_nodes_per_node.assert_awaited_once_with([ns])
-        manager._deploy_nodes_topology.assert_not_awaited()
-
-    @pytest.mark.asyncio
-    async def test_dispatches_to_topology_when_disabled(self, test_db, test_user, monkeypatch):
-        """When per_node_lifecycle_enabled is False, dispatches to _deploy_nodes_topology."""
-        host = make_host(test_db)
-        lab = make_lab(test_db, test_user, agent_id=host.id)
-        job = make_job(test_db, lab, test_user)
-        ns = make_node_state(test_db, lab, "n1", "R1", desired="running", actual="undeployed")
-
-        manager = _make_manager(test_db, lab, job, ["n1"], agent=host)
-        manager._deploy_nodes_per_node = AsyncMock()
-        manager._deploy_nodes_topology = AsyncMock()
-
-        monkeypatch.setattr("app.tasks.node_lifecycle_deploy.settings.per_node_lifecycle_enabled", False)
-        await manager._deploy_nodes([ns])
-
-        manager._deploy_nodes_topology.assert_awaited_once_with([ns])
-        manager._deploy_nodes_per_node.assert_not_awaited()
-
-
-# ---------------------------------------------------------------------------
-# TestDeployNodesTopology
-# ---------------------------------------------------------------------------
-
-
-class TestDeployNodesTopology:
-    """Tests for _deploy_nodes_topology() path."""
-
-    @pytest.mark.asyncio
-    async def test_success_marks_running(self, test_db, test_user):
-        """Successful topology deploy marks nodes as running."""
-        host = make_host(test_db)
-        lab = make_lab(test_db, test_user, agent_id=host.id)
-        job = make_job(test_db, lab, test_user)
-        ns = make_node_state(test_db, lab, "n1", "R1", desired="running", actual="undeployed")
-
-        manager = _make_manager(test_db, lab, job, ["n1"], agent=host)
-        manager.node_states = [ns]
-        manager.old_agent_ids = set()
-
-        # Mock graph node
-        mock_graph_node = MagicMock()
-        mock_graph_node.container_name = "R1"
-        mock_graph_node.name = "R1"
-        mock_graph_node.id = "n1"
-
-        mock_graph = MagicMock()
-        mock_graph.nodes = [mock_graph_node]
-
-        with (
-            patch.object(manager.topo_service, "has_nodes", return_value=True),
-            patch.object(
-                manager, "_filter_topology_for_agent",
-                return_value=(mock_graph, {"R1"}),
-            ),
-            patch.object(manager, "_validate_topology_placement", return_value=[]),
-            patch("app.tasks.node_lifecycle_deploy.graph_to_deploy_topology", return_value="{}"),
-            patch("app.tasks.node_lifecycle_deploy.agent_client") as mock_ac,
-            patch("app.tasks.node_lifecycle_deploy.acquire_deploy_lock", return_value=(True, [])),
-            patch("app.tasks.node_lifecycle_deploy.release_deploy_lock"),
-            patch("app.tasks.node_lifecycle_deploy._update_node_placements", new_callable=AsyncMock),
-            patch("app.tasks.node_lifecycle_deploy._capture_node_ips", new_callable=AsyncMock),
-            patch("app.tasks.node_lifecycle_deploy._cleanup_orphan_containers", new_callable=AsyncMock),
-        ):
-            mock_ac.deploy_to_agent = AsyncMock(return_value={"status": "completed"})
-            mock_ac.get_lab_status_from_agent = AsyncMock(
-                return_value={
-                    "nodes": [
-                        {
-                            "name": "R1",
-                            "node_definition_id": "n1",
-                            "runtime_id": "runtime-1",
-                        }
-                    ]
-                }
-            )
-            await manager._deploy_nodes_topology([ns])
-
-        assert ns.actual_state == NodeActualState.RUNNING.value
-        assert ns.error_message is None
-
-    @pytest.mark.asyncio
-    async def test_success_missing_runtime_identity_marks_error(self, test_db, test_user):
-        """Topology deploy is not trusted until agent status exposes identity fields."""
-        host = make_host(test_db)
-        lab = make_lab(test_db, test_user, agent_id=host.id)
-        job = make_job(test_db, lab, test_user)
-        ns = make_node_state(test_db, lab, "n1", "R1", desired="running", actual="undeployed")
-
-        manager = _make_manager(test_db, lab, job, ["n1"], agent=host)
-        manager.node_states = [ns]
-        manager.old_agent_ids = set()
-
-        mock_graph_node = MagicMock()
-        mock_graph_node.container_name = "R1"
-        mock_graph_node.name = "R1"
-        mock_graph_node.id = "n1"
-        mock_graph = MagicMock()
-        mock_graph.nodes = [mock_graph_node]
-
-        with (
-            patch.object(manager.topo_service, "has_nodes", return_value=True),
-            patch.object(manager, "_filter_topology_for_agent", return_value=(mock_graph, {"R1"})),
-            patch.object(manager, "_validate_topology_placement", return_value=[]),
-            patch("app.tasks.node_lifecycle_deploy.graph_to_deploy_topology", return_value="{}"),
-            patch("app.tasks.node_lifecycle_deploy.agent_client") as mock_ac,
-            patch("app.tasks.node_lifecycle_deploy.acquire_deploy_lock", return_value=(True, [])),
-            patch("app.tasks.node_lifecycle_deploy.release_deploy_lock"),
-            patch("app.tasks.node_lifecycle_deploy._update_node_placements", new_callable=AsyncMock),
-            patch("app.tasks.node_lifecycle_deploy._capture_node_ips", new_callable=AsyncMock),
-            patch("app.tasks.node_lifecycle_deploy._cleanup_orphan_containers", new_callable=AsyncMock),
-        ):
-            mock_ac.deploy_to_agent = AsyncMock(return_value={"status": "completed"})
-            mock_ac.get_lab_status_from_agent = AsyncMock(
-                return_value={"nodes": [{"name": "R1", "node_definition_id": "n1"}]}
-            )
-            await manager._deploy_nodes_topology([ns])
-
-        assert ns.actual_state == NodeActualState.ERROR.value
-        assert "runtime_id" in (ns.error_message or "")
-
-    @pytest.mark.asyncio
-    async def test_no_topology_sets_error(self, test_db, test_user):
-        """No topology defined causes error state and job failure."""
-        host = make_host(test_db)
-        lab = make_lab(test_db, test_user, agent_id=host.id)
-        job = make_job(test_db, lab, test_user)
-        ns = make_node_state(test_db, lab, "n1", "R1", desired="running", actual="undeployed")
-
-        manager = _make_manager(test_db, lab, job, ["n1"], agent=host)
-
-        with patch.object(manager.topo_service, "has_nodes", return_value=False):
-            await manager._deploy_nodes_topology([ns])
-
-        assert ns.actual_state == NodeActualState.ERROR.value
-        assert "No topology defined" in ns.error_message
-        assert job.status == "failed"
-
-    @pytest.mark.asyncio
-    async def test_no_nodes_for_agent_sets_error(self, test_db, test_user):
-        """When filter returns no nodes for agent, sets error."""
-        host = make_host(test_db)
-        lab = make_lab(test_db, test_user, agent_id=host.id)
-        job = make_job(test_db, lab, test_user)
-        ns = make_node_state(test_db, lab, "n1", "R1", desired="running", actual="undeployed")
-
-        manager = _make_manager(test_db, lab, job, ["n1"], agent=host)
-
-        mock_graph = MagicMock()
-        mock_graph.nodes = []
-
-        with (
-            patch.object(manager.topo_service, "has_nodes", return_value=True),
-            patch.object(
-                manager, "_filter_topology_for_agent",
-                return_value=(mock_graph, set()),
-            ),
-        ):
-            await manager._deploy_nodes_topology([ns])
-
-        assert ns.actual_state == NodeActualState.ERROR.value
-        assert "No nodes to deploy" in ns.error_message
-
-    @pytest.mark.asyncio
-    async def test_agent_unavailable_handles_transient(self, test_db, test_user):
-        """AgentUnavailableError marks nodes as pending (transient)."""
-        host = make_host(test_db)
-        lab = make_lab(test_db, test_user, agent_id=host.id)
-        job = make_job(test_db, lab, test_user)
-        ns = make_node_state(test_db, lab, "n1", "R1", desired="running", actual="undeployed")
-
-        manager = _make_manager(test_db, lab, job, ["n1"], agent=host)
-        manager.old_agent_ids = set()
-
-        mock_graph_node = MagicMock()
-        mock_graph_node.container_name = "R1"
-        mock_graph_node.name = "R1"
-        mock_graph = MagicMock()
-        mock_graph.nodes = [mock_graph_node]
-
-        with (
-            patch.object(manager.topo_service, "has_nodes", return_value=True),
-            patch.object(
-                manager, "_filter_topology_for_agent",
-                return_value=(mock_graph, {"R1"}),
-            ),
-            patch.object(manager, "_validate_topology_placement", return_value=[]),
-            patch("app.tasks.node_lifecycle_deploy.graph_to_deploy_topology", return_value="{}"),
-            patch("app.tasks.node_lifecycle_deploy.agent_client") as mock_ac,
-            patch("app.tasks.node_lifecycle_deploy.acquire_deploy_lock", return_value=(True, [])),
-            patch("app.tasks.node_lifecycle_deploy.release_deploy_lock"),
-        ):
-            mock_ac.deploy_to_agent = AsyncMock(
-                side_effect=AgentUnavailableError("agent-1", "Connection refused"),
-            )
-            await manager._deploy_nodes_topology([ns])
-
-        assert ns.actual_state == NodeActualState.PENDING.value
-
-    @pytest.mark.asyncio
-    async def test_exception_marks_error(self, test_db, test_user):
-        """Unexpected exception marks nodes as error."""
-        host = make_host(test_db)
-        lab = make_lab(test_db, test_user, agent_id=host.id)
-        job = make_job(test_db, lab, test_user)
-        ns = make_node_state(test_db, lab, "n1", "R1", desired="running", actual="undeployed")
-
-        manager = _make_manager(test_db, lab, job, ["n1"], agent=host)
-        manager.old_agent_ids = set()
-
-        mock_graph_node = MagicMock()
-        mock_graph_node.container_name = "R1"
-        mock_graph_node.name = "R1"
-        mock_graph = MagicMock()
-        mock_graph.nodes = [mock_graph_node]
-
-        with (
-            patch.object(manager.topo_service, "has_nodes", return_value=True),
-            patch.object(
-                manager, "_filter_topology_for_agent",
-                return_value=(mock_graph, {"R1"}),
-            ),
-            patch.object(manager, "_validate_topology_placement", return_value=[]),
-            patch("app.tasks.node_lifecycle_deploy.graph_to_deploy_topology", return_value="{}"),
-            patch("app.tasks.node_lifecycle_deploy.agent_client") as mock_ac,
-            patch("app.tasks.node_lifecycle_deploy.acquire_deploy_lock", return_value=(True, [])),
-            patch("app.tasks.node_lifecycle_deploy.release_deploy_lock"),
-        ):
-            mock_ac.deploy_to_agent = AsyncMock(
-                side_effect=RuntimeError("Unexpected failure"),
-            )
-            await manager._deploy_nodes_topology([ns])
-
-        assert ns.actual_state == NodeActualState.ERROR.value
-        assert "Unexpected failure" in ns.error_message
-
-
-# ---------------------------------------------------------------------------
 # TestStartNodesPerNode
 # ---------------------------------------------------------------------------
 
@@ -324,8 +62,6 @@ class TestStartNodesPerNode:
         manager.explicit_snapshots_map = {}
         manager.latest_snapshots_map = {}
         manager._manifest = None
-
-        monkeypatch.setattr("app.tasks.node_lifecycle_deploy.settings.per_node_lifecycle_enabled", True)
 
         with (
             patch.object(manager.topo_service, "get_interface_count_map", return_value={"R1": 4}),
@@ -400,7 +136,6 @@ class TestStartNodesPerNode:
             patch("app.tasks.node_lifecycle_deploy._capture_node_ips", new_callable=AsyncMock),
         ):
             manager._connect_same_host_links = AsyncMock()
-            monkeypatch.setattr("app.tasks.node_lifecycle_deploy.settings.per_node_lifecycle_enabled", True)
             await manager._start_nodes([ns])
 
         assert call_count == 2
@@ -444,7 +179,6 @@ class TestStartNodesPerNode:
         manager._deploy_single_node = _mock_deploy
         manager._connect_same_host_links = AsyncMock()
 
-        monkeypatch.setattr("app.tasks.node_lifecycle_deploy.settings.per_node_lifecycle_enabled", True)
         with (
             patch("app.tasks.node_lifecycle_deploy.asyncio.sleep", mock_sleep),
             patch("app.tasks.node_lifecycle_deploy._update_node_placements", new_callable=AsyncMock),
@@ -484,7 +218,6 @@ class TestStartNodesPerNode:
         manager._deploy_single_node = _mock_deploy
         manager._connect_same_host_links = AsyncMock()
 
-        monkeypatch.setattr("app.tasks.node_lifecycle_deploy.settings.per_node_lifecycle_enabled", True)
         with (
             patch("app.tasks.node_lifecycle_deploy.DEPLOY_RETRY_ATTEMPTS", 1),
             patch("app.tasks.node_lifecycle_deploy._update_node_placements", new_callable=AsyncMock),
@@ -517,11 +250,9 @@ class TestStopNodes:
         manager.node_states = [ns]
         manager.placements_map = {"R1": test_db.query(models.NodePlacement).first()}
 
-        with (
-            patch("app.tasks.node_lifecycle_stop.agent_client") as mock_ac,
-            patch("app.tasks.node_lifecycle_stop.settings") as mock_settings,
-        ):
-            mock_settings.feature_auto_extract_on_stop = False
+        manager._auto_extract_before_stop = AsyncMock()
+
+        with patch("app.tasks.node_lifecycle_stop.agent_client") as mock_ac:
             mock_ac.is_agent_online = MagicMock(return_value=True)
             mock_ac.reconcile_nodes_on_agent = AsyncMock(return_value={
                 "results": [
@@ -535,7 +266,7 @@ class TestStopNodes:
 
     @pytest.mark.asyncio
     async def test_auto_extracts_config_before_stop(self, test_db, test_user):
-        """When feature_auto_extract_on_stop is enabled, configs are extracted first."""
+        """Configs are extracted before stop."""
         host = make_host(test_db)
         lab = make_lab(test_db, test_user, agent_id=host.id)
         job = make_job(test_db, lab, test_user)
@@ -578,11 +309,9 @@ class TestStopNodes:
         manager.node_states = [ns]
         manager.placements_map = {"R1": test_db.query(models.NodePlacement).first()}
 
-        with (
-            patch("app.tasks.node_lifecycle_stop.agent_client") as mock_ac,
-            patch("app.tasks.node_lifecycle_stop.settings") as mock_settings,
-        ):
-            mock_settings.feature_auto_extract_on_stop = False
+        manager._auto_extract_before_stop = AsyncMock()
+
+        with patch("app.tasks.node_lifecycle_stop.agent_client") as mock_ac:
             mock_ac.is_agent_online = MagicMock(return_value=True)
             mock_ac.reconcile_nodes_on_agent = AsyncMock(
                 side_effect=AgentUnavailableError("agent-1", "Connection refused"),
