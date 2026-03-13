@@ -177,7 +177,7 @@ class ISOExtractor:
                     try:
                         chunk = await asyncio.wait_for(
                             proc.stdout.read(chunk_size),
-                            timeout=60,  # 60s per chunk
+                            timeout=min(60, timeout_seconds),
                         )
                     except asyncio.TimeoutError:
                         proc.kill()
@@ -199,7 +199,7 @@ class ISOExtractor:
                         ))
 
             # Wait for process to complete
-            _, stderr = await asyncio.wait_for(proc.communicate(), timeout=30)
+            _, stderr = await asyncio.wait_for(proc.communicate(), timeout=min(30, timeout_seconds))
 
             if proc.returncode != 0:
                 error_msg = stderr.decode() if stderr else "7z extraction failed"

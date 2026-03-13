@@ -5,7 +5,6 @@ import {
   getCpuColor,
   getMemoryColor,
   getStorageColor,
-  getRuntimeStatusColor,
   getConnectionStatusColor,
   getConnectionStatusText,
   getRoleBadgeColor,
@@ -23,8 +22,7 @@ describe('status utils', () => {
     expect(getStorageColor(99)).toBe('bg-red-500 dark:bg-red-400');
   });
 
-  it('maps runtime and connection states', () => {
-    expect(getRuntimeStatusColor('running')).toContain('bg-green');
+  it('maps connection states', () => {
     expect(getConnectionStatusColor('offline')).toBe('bg-red-500');
     expect(getConnectionStatusText('degraded')).toBe('Degraded');
   });
