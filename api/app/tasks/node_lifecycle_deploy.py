@@ -34,7 +34,6 @@ RUNTIME_IDENTITY_STABILIZATION_POLL_SECONDS = 1.0
 # Re-import module-level constants from main module to avoid duplication
 from app.tasks.node_lifecycle import (  # noqa: E402
     _is_ceos_kind,
-    _get_container_name,
     CEOS_STAGGER_SECONDS,
     DEPLOY_RETRY_ATTEMPTS,
     DEPLOY_RETRY_BACKOFF_SECONDS,

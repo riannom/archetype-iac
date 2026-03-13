@@ -29,7 +29,7 @@ from app.services.broadcaster import (  # noqa: F401 -- patched by tests
     broadcast_link_state_change,
     broadcast_node_state_change,
 )
-from app.db import get_redis, get_session
+from app.db import get_redis
 from app.tasks.migration_cleanup import process_pending_migration_cleanups
 from app.utils import locks as lock_utils
 from app.utils.time import utcnow
