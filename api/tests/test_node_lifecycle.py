@@ -1443,6 +1443,8 @@ class TestExecuteOrchestration:
             return_value={"available": True, "classification": "absent"}
         )
         mock_ac.deploy_to_agent = AsyncMock(return_value={"status": "completed"})
+        mock_ac.create_node_on_agent = AsyncMock(return_value={"success": True, "runtime_id": "runtime-r1"})
+        mock_ac.start_node_on_agent = AsyncMock(return_value={"success": True})
         mock_ac.get_lab_status_from_agent = AsyncMock(return_value={
             "nodes": [{"name": "R1", "node_definition_id": node_def.id, "runtime_id": "runtime-r1"}]
         })
@@ -1452,10 +1454,13 @@ class TestExecuteOrchestration:
         mock_settings.image_sync_pre_deploy_check = False
 
         with patch.object(manager.topo_service, "get_nodes", return_value=[node_def]), \
+             patch.object(manager.topo_service, "get_interface_count_map", return_value={"R1": 4}), \
              patch("app.tasks.node_lifecycle.agent_client", mock_ac), \
              patch("app.tasks.node_lifecycle_agents.agent_client", mock_ac), \
              patch("app.tasks.node_lifecycle_deploy.agent_client", mock_ac), \
              patch("app.tasks.node_lifecycle_stop.agent_client", mock_ac), \
+             patch("app.tasks.node_lifecycle_deploy.resolve_node_image", return_value="linux:latest"), \
+             patch("app.tasks.node_lifecycle_deploy.get_image_provider", return_value="docker"), \
              patch("app.tasks.node_lifecycle_deploy._update_node_placements", new_callable=AsyncMock), \
              patch("app.tasks.node_lifecycle_deploy._capture_node_ips", new_callable=AsyncMock), \
              patch("app.tasks.node_lifecycle_deploy._cleanup_orphan_containers", new_callable=AsyncMock), \
@@ -1543,6 +1548,8 @@ class TestExecuteOrchestration:
             return_value={"available": True, "classification": "absent"}
         )
         mock_ac.deploy_to_agent = AsyncMock(return_value={"status": "completed"})
+        mock_ac.create_node_on_agent = AsyncMock(return_value={"success": True, "runtime_id": "runtime-r1"})
+        mock_ac.start_node_on_agent = AsyncMock(return_value={"success": True})
         mock_ac.get_lab_status_from_agent = AsyncMock(return_value={
             "nodes": [{"name": "R1", "node_definition_id": node_def1.id, "runtime_id": "runtime-r1"}]
         })
@@ -1555,10 +1562,13 @@ class TestExecuteOrchestration:
         mock_settings.image_sync_pre_deploy_check = False
 
         with patch.object(manager.topo_service, "get_nodes", return_value=[node_def1, node_def2]), \
+             patch.object(manager.topo_service, "get_interface_count_map", return_value={"R1": 4, "R2": 4}), \
              patch("app.tasks.node_lifecycle.agent_client", mock_ac), \
              patch("app.tasks.node_lifecycle_agents.agent_client", mock_ac), \
              patch("app.tasks.node_lifecycle_deploy.agent_client", mock_ac), \
              patch("app.tasks.node_lifecycle_stop.agent_client", mock_ac), \
+             patch("app.tasks.node_lifecycle_deploy.resolve_node_image", return_value="linux:latest"), \
+             patch("app.tasks.node_lifecycle_deploy.get_image_provider", return_value="docker"), \
              patch("app.tasks.node_lifecycle_deploy._update_node_placements", new_callable=AsyncMock), \
              patch("app.tasks.node_lifecycle_deploy._capture_node_ips", new_callable=AsyncMock), \
              patch("app.tasks.node_lifecycle_deploy._cleanup_orphan_containers", new_callable=AsyncMock), \
@@ -1653,7 +1663,11 @@ class TestExecuteOrchestration:
         mock_ac.probe_runtime_conflict_on_agent = AsyncMock(
             return_value={"available": True, "classification": "absent"}
         )
-        # Deploy fails
+        # Deploy fails (per-node path)
+        mock_ac.create_node_on_agent = AsyncMock(
+            return_value={"success": False, "error": "Deploy error"}
+        )
+        mock_ac.start_node_on_agent = AsyncMock(return_value={"success": True})
         mock_ac.deploy_to_agent = AsyncMock(
             return_value={"status": "failed", "error_message": "Deploy error"}
         )
@@ -1666,11 +1680,15 @@ class TestExecuteOrchestration:
         mock_settings.image_sync_pre_deploy_check = False
 
         with patch.object(manager.topo_service, "get_nodes", return_value=[node_def1, node_def2]), \
+             patch.object(manager.topo_service, "get_interface_count_map", return_value={"R1": 4, "R2": 4}), \
              patch("app.tasks.node_lifecycle.agent_client", mock_ac), \
              patch("app.tasks.node_lifecycle_agents.agent_client", mock_ac), \
              patch("app.tasks.node_lifecycle_deploy.agent_client", mock_ac), \
              patch("app.tasks.node_lifecycle_stop.agent_client", mock_ac), \
+             patch("app.tasks.node_lifecycle_deploy.resolve_node_image", return_value="linux:latest"), \
+             patch("app.tasks.node_lifecycle_deploy.get_image_provider", return_value="docker"), \
              patch("app.tasks.node_lifecycle_deploy._update_node_placements", new_callable=AsyncMock), \
+             patch("app.tasks.node_lifecycle_deploy._capture_node_ips", new_callable=AsyncMock), \
              patch("app.tasks.jobs._create_cross_host_links_if_ready", new_callable=AsyncMock), \
              patch("app.tasks.node_lifecycle.settings", mock_settings), \
              patch("app.tasks.node_lifecycle_agents.settings", mock_settings):

@@ -146,6 +146,7 @@ class NodeLifecycleManager(AgentResolutionMixin, DeploymentMixin, StopMixin):
         self.target_agent_id: str | None = None
 
         self.post_operation_cleanup_failed = False
+        self.graph = None  # Lazy-loaded by _connect_same_host_links
 
     # Known device types for bounded Prometheus labels.
     # Loaded dynamically from agent vendor registry; hardcoded fallback for
