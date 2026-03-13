@@ -81,29 +81,9 @@ export function getStorageColor(percent: number): string {
   return 'bg-violet-500 dark:bg-violet-400';
 }
 
-/** Lab-level aggregate status (distinct from node-level NodeRuntimeStatus in types/nodeState.ts). */
 export type LabStatus = 'running' | 'stopped' | 'pending' | 'error' | 'partial' | 'unknown';
 
-/**
- * Get color classes for runtime status display.
- */
-export function getRuntimeStatusColor(status: LabStatus): string {
-  switch (status) {
-    case 'running':
-      return 'bg-green-100 dark:bg-green-900/30 text-green-600 dark:text-green-400 border-green-200 dark:border-green-700';
-    case 'stopped':
-      return 'bg-stone-100 dark:bg-stone-800 text-stone-500 dark:text-stone-400 border-stone-200 dark:border-stone-700';
-    case 'pending':
-      return 'bg-amber-100 dark:bg-amber-900/30 text-amber-600 dark:text-amber-400 border-amber-200 dark:border-amber-700';
-    case 'error':
-      return 'bg-red-100 dark:bg-red-900/30 text-red-600 dark:text-red-400 border-red-200 dark:border-red-700';
-    case 'partial':
-      return 'bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 border-blue-200 dark:border-blue-700';
-    default:
-      return 'bg-stone-100 dark:bg-stone-800 text-stone-500 dark:text-stone-400 border-stone-200 dark:border-stone-700';
-  }
-}
-
+/** Lab-level aggregate status (distinct from node-level NodeRuntimeStatus in types/nodeState.ts). */
 export type ConnectionStatus = 'online' | 'offline' | 'degraded' | 'connecting';
 
 /**
