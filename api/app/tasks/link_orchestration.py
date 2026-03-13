@@ -28,6 +28,7 @@ from app.services.link_validator import (
 from app.services.topology import TopologyService
 from app.services.interface_naming import normalize_interface
 from app.state import NodeActualState
+from app.utils.link import generate_link_name
 
 
 def _get_endpoint_nodes(
@@ -46,7 +47,6 @@ def _get_endpoint_nodes(
         .all()
     }
     return nodes_by_name.get(link_state.source_node), nodes_by_name.get(link_state.target_node)
-from app.utils.link import generate_link_name
 
 logger = logging.getLogger(__name__)
 
