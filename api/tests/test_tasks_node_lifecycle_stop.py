@@ -5,7 +5,7 @@ Covers:
   fallback logic, partial failures, transient errors
 - _apply_stop_result: success/failure result handling
 - _auto_extract_before_stop: config extraction before stop, timeouts,
-  feature flag, extraction errors
+  extraction errors
 - _converge_stopped_desired_error_states: error-to-stopped normalization
 """
 from __future__ import annotations
@@ -619,25 +619,6 @@ class TestAutoExtractBeforeStop:
     """Tests for config auto-extraction before stop."""
 
     @pytest.mark.asyncio
-    async def test_disabled_by_feature_flag(self, test_db, test_user):
-        """When feature_auto_extract_on_stop is False, extraction is skipped."""
-        host = make_host(test_db)
-        lab = make_lab(test_db, test_user, agent_id=host.id)
-        job = make_job(test_db, lab, test_user)
-        ns = make_node_state(test_db, lab, "n1", "R1", desired="stopped", actual="running")
-
-        manager = _make_manager(test_db, lab, job, [ns.node_id], agent=host)
-        manager.node_states = [ns]
-        manager.placements_map = {}
-
-        with patch("app.tasks.node_lifecycle_stop.settings") as mock_settings:
-            mock_settings.feature_auto_extract_on_stop = False
-            await manager._auto_extract_before_stop([ns])
-
-        # No log entry about extraction added
-        assert not any("extract" in p.lower() for p in manager.log_parts)
-
-    @pytest.mark.asyncio
     async def test_skips_non_running_nodes(self, test_db, test_user):
         """Only running/stopping nodes have configs extracted."""
         host = make_host(test_db)
@@ -649,11 +630,9 @@ class TestAutoExtractBeforeStop:
         manager.node_states = [ns]
         manager.placements_map = {}
 
-        with patch("app.tasks.node_lifecycle_stop.settings") as mock_settings:
-            mock_settings.feature_auto_extract_on_stop = True
-            with patch("app.tasks.node_lifecycle_stop.agent_client") as mock_ac:
-                mock_ac.extract_configs_on_agent = AsyncMock()
-                await manager._auto_extract_before_stop([ns])
+        with patch("app.tasks.node_lifecycle_stop.agent_client") as mock_ac:
+            mock_ac.extract_configs_on_agent = AsyncMock()
+            await manager._auto_extract_before_stop([ns])
 
         # No extraction attempted for already-stopped node
         mock_ac.extract_configs_on_agent.assert_not_called()
@@ -673,9 +652,7 @@ class TestAutoExtractBeforeStop:
         async def slow_extract(*args, **kwargs):
             await asyncio.sleep(60)  # Will be cancelled by timeout
 
-        with patch("app.tasks.node_lifecycle_stop.settings") as mock_settings, \
-             patch("app.tasks.node_lifecycle_stop.agent_client") as mock_ac:
-            mock_settings.feature_auto_extract_on_stop = True
+        with patch("app.tasks.node_lifecycle_stop.agent_client") as mock_ac:
             mock_ac.is_agent_online = MagicMock(return_value=True)
             mock_ac.extract_configs_on_agent = slow_extract
 
@@ -707,9 +684,7 @@ class TestAutoExtractBeforeStop:
         manager.node_states = [ns]
         manager.placements_map = {}
 
-        with patch("app.tasks.node_lifecycle_stop.settings") as mock_settings, \
-             patch("app.tasks.node_lifecycle_stop.agent_client") as mock_ac:
-            mock_settings.feature_auto_extract_on_stop = True
+        with patch("app.tasks.node_lifecycle_stop.agent_client") as mock_ac:
             mock_ac.is_agent_online = MagicMock(return_value=True)
             mock_ac.extract_configs_on_agent = AsyncMock(
                 side_effect=RuntimeError("Agent exploded")
@@ -737,11 +712,9 @@ class TestAutoExtractBeforeStop:
 
         mock_snapshot = MagicMock()
 
-        with patch("app.tasks.node_lifecycle_stop.settings") as mock_settings, \
-             patch("app.tasks.node_lifecycle_stop.agent_client") as mock_ac, \
+        with patch("app.tasks.node_lifecycle_stop.agent_client") as mock_ac, \
              patch("app.services.config_service.ConfigService.save_extracted_config",
                    return_value=mock_snapshot) as mock_save:
-            mock_settings.feature_auto_extract_on_stop = True
             mock_ac.is_agent_online = MagicMock(return_value=True)
             mock_ac.extract_configs_on_agent = AsyncMock(return_value={
                 "success": True,

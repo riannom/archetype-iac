@@ -318,24 +318,9 @@ class TestPushImageOnUpload:
     """Tests for the push_image_on_upload function."""
 
     @pytest.mark.asyncio
-    async def test_skips_when_sync_disabled(self, test_db: Session, monkeypatch):
-        """Should skip when image sync is disabled."""
-        from app.tasks.image_sync import push_image_on_upload
-        from app.config import settings
-
-        monkeypatch.setattr(settings, "image_sync_enabled", False)
-
-        with patch("app.tasks.image_sync.sync_image_to_agent", new_callable=AsyncMock) as mock_sync:
-            await push_image_on_upload("docker:test:1.0", test_db)
-            mock_sync.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_skips_when_no_push_hosts(self, test_db: Session, sample_host: models.Host, monkeypatch):
+    async def test_skips_when_no_push_hosts(self, test_db: Session, sample_host: models.Host):
         """Should skip when no hosts have push strategy."""
         from app.tasks.image_sync import push_image_on_upload
-        from app.config import settings
-
-        monkeypatch.setattr(settings, "image_sync_enabled", True)
 
         # sample_host has default strategy (on_demand), not push
         with patch("app.tasks.image_sync.sync_image_to_agent", new_callable=AsyncMock) as mock_sync:
@@ -347,24 +332,9 @@ class TestPullImagesOnRegistration:
     """Tests for the pull_images_on_registration function."""
 
     @pytest.mark.asyncio
-    async def test_skips_when_sync_disabled(self, test_db: Session, sample_host: models.Host, monkeypatch):
-        """Should skip when image sync is disabled."""
-        from app.tasks.image_sync import pull_images_on_registration
-        from app.config import settings
-
-        monkeypatch.setattr(settings, "image_sync_enabled", False)
-
-        with patch("app.tasks.image_sync.sync_image_to_agent", new_callable=AsyncMock) as mock_sync:
-            await pull_images_on_registration(sample_host.id, test_db)
-            mock_sync.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_skips_nonexistent_host(self, test_db: Session, monkeypatch):
+    async def test_skips_nonexistent_host(self, test_db: Session):
         """Should skip when host doesn't exist."""
         from app.tasks.image_sync import pull_images_on_registration
-        from app.config import settings
-
-        monkeypatch.setattr(settings, "image_sync_enabled", True)
 
         await pull_images_on_registration("nonexistent-host", test_db)
 

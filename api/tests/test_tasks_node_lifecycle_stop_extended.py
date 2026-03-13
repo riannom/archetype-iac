@@ -68,23 +68,21 @@ class TestAutoExtractStoppingState:
 
         manager = _create_manager(test_db, lab, job, host, [ns])
 
-        with patch("app.tasks.node_lifecycle_stop.settings") as mock_settings:
-            mock_settings.feature_auto_extract_on_stop = True
-            with patch("app.tasks.node_lifecycle_stop.agent_client") as mock_ac:
-                mock_ac.is_agent_online.return_value = True
-                mock_ac.extract_configs_on_agent = AsyncMock(return_value={
-                    "success": True,
-                    "configs": [{"node_name": "R1", "content": "hostname R1\n"}],
-                })
-                with patch("app.services.config_service.ConfigService") as mock_cs_cls:
-                    mock_cs = MagicMock()
-                    mock_cs.save_extracted_config.return_value = MagicMock()
-                    mock_cs_cls.return_value = mock_cs
+        with patch("app.tasks.node_lifecycle_stop.agent_client") as mock_ac:
+            mock_ac.is_agent_online.return_value = True
+            mock_ac.extract_configs_on_agent = AsyncMock(return_value={
+                "success": True,
+                "configs": [{"node_name": "R1", "content": "hostname R1\n"}],
+            })
+            with patch("app.services.config_service.ConfigService") as mock_cs_cls:
+                mock_cs = MagicMock()
+                mock_cs.save_extracted_config.return_value = MagicMock()
+                mock_cs_cls.return_value = mock_cs
 
-                    await manager._auto_extract_before_stop([ns])
+                await manager._auto_extract_before_stop([ns])
 
-                    mock_ac.extract_configs_on_agent.assert_awaited_once()
-                    mock_cs.save_extracted_config.assert_called_once()
+                mock_ac.extract_configs_on_agent.assert_awaited_once()
+                mock_cs.save_extracted_config.assert_called_once()
 
 
 class TestAutoExtractAgentFallback:
@@ -112,13 +110,11 @@ class TestAutoExtractAgentFallback:
             extract_agents.append(agent.id)
             return {"success": True, "configs": []}
 
-        with patch("app.tasks.node_lifecycle_stop.settings") as mock_settings:
-            mock_settings.feature_auto_extract_on_stop = True
-            with patch("app.tasks.node_lifecycle_stop.agent_client") as mock_ac:
-                mock_ac.is_agent_online.return_value = False
-                mock_ac.extract_configs_on_agent = AsyncMock(side_effect=capture_extract)
+        with patch("app.tasks.node_lifecycle_stop.agent_client") as mock_ac:
+            mock_ac.is_agent_online.return_value = False
+            mock_ac.extract_configs_on_agent = AsyncMock(side_effect=capture_extract)
 
-                await manager._auto_extract_before_stop([ns])
+            await manager._auto_extract_before_stop([ns])
 
         # Should use default agent since offline agent is not online
         assert extract_agents == [host_default.id]
@@ -154,7 +150,6 @@ class TestAutoExtractAgentFallback:
             }
 
         with patch("app.tasks.node_lifecycle_stop.settings") as mock_settings:
-            mock_settings.feature_auto_extract_on_stop = True
             mock_settings.auto_extract_on_stop_timeout_seconds = 0.01
             with patch("app.tasks.node_lifecycle_stop.agent_client") as mock_ac:
                 mock_ac.is_agent_online.return_value = True
@@ -188,12 +183,10 @@ class TestAutoExtractAgentFallback:
             extract_agents.append(agent.id)
             return {"success": True, "configs": []}
 
-        with patch("app.tasks.node_lifecycle_stop.settings") as mock_settings:
-            mock_settings.feature_auto_extract_on_stop = True
-            with patch("app.tasks.node_lifecycle_stop.agent_client") as mock_ac:
-                mock_ac.extract_configs_on_agent = AsyncMock(side_effect=capture_extract)
+        with patch("app.tasks.node_lifecycle_stop.agent_client") as mock_ac:
+            mock_ac.extract_configs_on_agent = AsyncMock(side_effect=capture_extract)
 
-                await manager._auto_extract_before_stop([ns])
+            await manager._auto_extract_before_stop([ns])
 
         assert extract_agents == [host.id]
 
@@ -215,29 +208,27 @@ class TestAutoExtractConfigFiltering:
 
         manager = _create_manager(test_db, lab, job, host, [ns1])
 
-        with patch("app.tasks.node_lifecycle_stop.settings") as mock_settings:
-            mock_settings.feature_auto_extract_on_stop = True
-            with patch("app.tasks.node_lifecycle_stop.agent_client") as mock_ac:
-                mock_ac.is_agent_online.return_value = True
-                mock_ac.extract_configs_on_agent = AsyncMock(return_value={
-                    "success": True,
-                    "configs": [
-                        {"node_name": "R1", "content": "hostname R1\n"},
-                        {"node_name": "R2", "content": "hostname R2\n"},  # not being stopped
-                    ],
-                })
-                with patch("app.services.config_service.ConfigService") as mock_cs_cls:
-                    mock_cs = MagicMock()
-                    mock_cs.save_extracted_config.return_value = MagicMock()
-                    mock_cs_cls.return_value = mock_cs
+        with patch("app.tasks.node_lifecycle_stop.agent_client") as mock_ac:
+            mock_ac.is_agent_online.return_value = True
+            mock_ac.extract_configs_on_agent = AsyncMock(return_value={
+                "success": True,
+                "configs": [
+                    {"node_name": "R1", "content": "hostname R1\n"},
+                    {"node_name": "R2", "content": "hostname R2\n"},  # not being stopped
+                ],
+            })
+            with patch("app.services.config_service.ConfigService") as mock_cs_cls:
+                mock_cs = MagicMock()
+                mock_cs.save_extracted_config.return_value = MagicMock()
+                mock_cs_cls.return_value = mock_cs
 
-                    # Only pass ns1 (R1) as nodes being stopped
-                    await manager._auto_extract_before_stop([ns1])
+                # Only pass ns1 (R1) as nodes being stopped
+                await manager._auto_extract_before_stop([ns1])
 
-                    # Only R1's config should be saved
-                    assert mock_cs.save_extracted_config.call_count == 1
-                    saved_node = mock_cs.save_extracted_config.call_args.kwargs.get("node_name")
-                    assert saved_node == "R1"
+                # Only R1's config should be saved
+                assert mock_cs.save_extracted_config.call_count == 1
+                saved_node = mock_cs.save_extracted_config.call_args.kwargs.get("node_name")
+                assert saved_node == "R1"
 
     @pytest.mark.asyncio
     async def test_empty_node_name_or_content_skipped(self, test_db, test_user):
@@ -251,26 +242,24 @@ class TestAutoExtractConfigFiltering:
 
         manager = _create_manager(test_db, lab, job, host, [ns])
 
-        with patch("app.tasks.node_lifecycle_stop.settings") as mock_settings:
-            mock_settings.feature_auto_extract_on_stop = True
-            with patch("app.tasks.node_lifecycle_stop.agent_client") as mock_ac:
-                mock_ac.is_agent_online.return_value = True
-                mock_ac.extract_configs_on_agent = AsyncMock(return_value={
-                    "success": True,
-                    "configs": [
-                        {"node_name": "", "content": "some content"},   # empty name
-                        {"node_name": "R1", "content": ""},             # empty content
-                        {"node_name": None, "content": "hostname R1"},  # None name
-                    ],
-                })
-                with patch("app.services.config_service.ConfigService") as mock_cs_cls:
-                    mock_cs = MagicMock()
-                    mock_cs_cls.return_value = mock_cs
+        with patch("app.tasks.node_lifecycle_stop.agent_client") as mock_ac:
+            mock_ac.is_agent_online.return_value = True
+            mock_ac.extract_configs_on_agent = AsyncMock(return_value={
+                "success": True,
+                "configs": [
+                    {"node_name": "", "content": "some content"},   # empty name
+                    {"node_name": "R1", "content": ""},             # empty content
+                    {"node_name": None, "content": "hostname R1"},  # None name
+                ],
+            })
+            with patch("app.services.config_service.ConfigService") as mock_cs_cls:
+                mock_cs = MagicMock()
+                mock_cs_cls.return_value = mock_cs
 
-                    await manager._auto_extract_before_stop([ns])
+                await manager._auto_extract_before_stop([ns])
 
-                    # None of these should trigger save_extracted_config
-                    mock_cs.save_extracted_config.assert_not_called()
+                # None of these should trigger save_extracted_config
+                mock_cs.save_extracted_config.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_dedup_snapshot_not_counted(self, test_db, test_user):
@@ -284,25 +273,23 @@ class TestAutoExtractConfigFiltering:
 
         manager = _create_manager(test_db, lab, job, host, [ns])
 
-        with patch("app.tasks.node_lifecycle_stop.settings") as mock_settings:
-            mock_settings.feature_auto_extract_on_stop = True
-            with patch("app.tasks.node_lifecycle_stop.agent_client") as mock_ac:
-                mock_ac.is_agent_online.return_value = True
-                mock_ac.extract_configs_on_agent = AsyncMock(return_value={
-                    "success": True,
-                    "configs": [{"node_name": "R1", "content": "hostname R1\n"}],
-                })
-                with patch("app.services.config_service.ConfigService") as mock_cs_cls:
-                    mock_cs = MagicMock()
-                    mock_cs.save_extracted_config.return_value = None  # dedup
-                    mock_cs_cls.return_value = mock_cs
+        with patch("app.tasks.node_lifecycle_stop.agent_client") as mock_ac:
+            mock_ac.is_agent_online.return_value = True
+            mock_ac.extract_configs_on_agent = AsyncMock(return_value={
+                "success": True,
+                "configs": [{"node_name": "R1", "content": "hostname R1\n"}],
+            })
+            with patch("app.services.config_service.ConfigService") as mock_cs_cls:
+                mock_cs = MagicMock()
+                mock_cs.save_extracted_config.return_value = None  # dedup
+                mock_cs_cls.return_value = mock_cs
 
-                    await manager._auto_extract_before_stop([ns])
+                await manager._auto_extract_before_stop([ns])
 
-                    mock_cs.save_extracted_config.assert_called_once()
-                    # Log should say 0 snapshots created
-                    log = " ".join(manager.log_parts)
-                    assert "0 autosave" in log
+                mock_cs.save_extracted_config.assert_called_once()
+                # Log should say 0 snapshots created
+                log = " ".join(manager.log_parts)
+                assert "0 autosave" in log
 
 
 class TestAutoExtractExceptionHandling:
@@ -319,15 +306,13 @@ class TestAutoExtractExceptionHandling:
 
         manager = _create_manager(test_db, lab, job, host, [ns])
 
-        with patch("app.tasks.node_lifecycle_stop.settings") as mock_settings:
-            mock_settings.feature_auto_extract_on_stop = True
-            with patch("app.tasks.node_lifecycle_stop.agent_client") as mock_ac:
-                mock_ac.extract_configs_on_agent = AsyncMock(
-                    side_effect=RuntimeError("unexpected")
-                )
+        with patch("app.tasks.node_lifecycle_stop.agent_client") as mock_ac:
+            mock_ac.extract_configs_on_agent = AsyncMock(
+                side_effect=RuntimeError("unexpected")
+            )
 
-                # Should NOT raise
-                await manager._auto_extract_before_stop([ns])
+            # Should NOT raise
+            await manager._auto_extract_before_stop([ns])
 
         log = " ".join(manager.log_parts)
         assert "no configs extracted" in log.lower()
@@ -361,20 +346,18 @@ class TestAutoExtractExceptionHandling:
                 "configs": [{"node_name": "R1", "content": "hostname R1\n"}],
             }
 
-        with patch("app.tasks.node_lifecycle_stop.settings") as mock_settings:
-            mock_settings.feature_auto_extract_on_stop = True
-            with patch("app.tasks.node_lifecycle_stop.agent_client") as mock_ac:
-                mock_ac.is_agent_online.return_value = True
-                mock_ac.extract_configs_on_agent = AsyncMock(side_effect=fake_extract)
-                with patch("app.services.config_service.ConfigService") as mock_cs_cls:
-                    mock_cs = MagicMock()
-                    mock_cs.save_extracted_config.return_value = MagicMock()
-                    mock_cs_cls.return_value = mock_cs
+        with patch("app.tasks.node_lifecycle_stop.agent_client") as mock_ac:
+            mock_ac.is_agent_online.return_value = True
+            mock_ac.extract_configs_on_agent = AsyncMock(side_effect=fake_extract)
+            with patch("app.services.config_service.ConfigService") as mock_cs_cls:
+                mock_cs = MagicMock()
+                mock_cs.save_extracted_config.return_value = MagicMock()
+                mock_cs_cls.return_value = mock_cs
 
-                    await manager._auto_extract_before_stop([ns1, ns2])
+                await manager._auto_extract_before_stop([ns1, ns2])
 
-                    # R1's config from agent A should still be saved
-                    mock_cs.save_extracted_config.assert_called_once()
+                # R1's config from agent A should still be saved
+                mock_cs.save_extracted_config.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_no_configs_extracted_logs_message(self, test_db, test_user):
@@ -387,16 +370,14 @@ class TestAutoExtractExceptionHandling:
 
         manager = _create_manager(test_db, lab, job, host, [ns])
 
-        with patch("app.tasks.node_lifecycle_stop.settings") as mock_settings:
-            mock_settings.feature_auto_extract_on_stop = True
-            with patch("app.tasks.node_lifecycle_stop.agent_client") as mock_ac:
-                mock_ac.is_agent_online.return_value = True
-                mock_ac.extract_configs_on_agent = AsyncMock(return_value={
-                    "success": True,
-                    "configs": [],  # empty
-                })
+        with patch("app.tasks.node_lifecycle_stop.agent_client") as mock_ac:
+            mock_ac.is_agent_online.return_value = True
+            mock_ac.extract_configs_on_agent = AsyncMock(return_value={
+                "success": True,
+                "configs": [],  # empty
+            })
 
-                await manager._auto_extract_before_stop([ns])
+            await manager._auto_extract_before_stop([ns])
 
         log = " ".join(manager.log_parts)
         assert "no configs" in log.lower()
@@ -415,25 +396,23 @@ class TestAutoExtractExceptionHandling:
 
         saved_kwargs = []
 
-        with patch("app.tasks.node_lifecycle_stop.settings") as mock_settings:
-            mock_settings.feature_auto_extract_on_stop = True
-            with patch("app.tasks.node_lifecycle_stop.agent_client") as mock_ac:
-                mock_ac.is_agent_online.return_value = True
-                mock_ac.extract_configs_on_agent = AsyncMock(return_value={
-                    "success": True,
-                    "configs": [{"node_name": "R1", "content": "hostname R1\n"}],
-                })
-                with patch("app.services.config_service.ConfigService") as mock_cs_cls:
-                    mock_cs = MagicMock()
+        with patch("app.tasks.node_lifecycle_stop.agent_client") as mock_ac:
+            mock_ac.is_agent_online.return_value = True
+            mock_ac.extract_configs_on_agent = AsyncMock(return_value={
+                "success": True,
+                "configs": [{"node_name": "R1", "content": "hostname R1\n"}],
+            })
+            with patch("app.services.config_service.ConfigService") as mock_cs_cls:
+                mock_cs = MagicMock()
 
-                    def capture_save(**kwargs):
-                        saved_kwargs.append(kwargs)
-                        return MagicMock()
+                def capture_save(**kwargs):
+                    saved_kwargs.append(kwargs)
+                    return MagicMock()
 
-                    mock_cs.save_extracted_config.side_effect = capture_save
-                    mock_cs_cls.return_value = mock_cs
+                mock_cs.save_extracted_config.side_effect = capture_save
+                mock_cs_cls.return_value = mock_cs
 
-                    await manager._auto_extract_before_stop([ns])
+                await manager._auto_extract_before_stop([ns])
 
         assert len(saved_kwargs) == 1
         assert saved_kwargs[0]["device_kind"] == "ceos"
@@ -479,10 +458,8 @@ class TestStopNodesMultiAgent:
         with patch("app.tasks.node_lifecycle_stop.agent_client") as mock_ac:
             mock_ac.is_agent_online.return_value = True
             mock_ac.reconcile_nodes_on_agent = AsyncMock(side_effect=fake_reconcile)
-            with patch("app.tasks.node_lifecycle_stop.settings") as mock_settings:
-                mock_settings.feature_auto_extract_on_stop = False
 
-                await manager._stop_nodes([ns1, ns2, ns3])
+            await manager._stop_nodes([ns1, ns2, ns3])
 
         assert set(called_agents) == {host_a.id, host_b.id, host_c.id}
         assert ns1.actual_state == NodeActualState.STOPPED.value
@@ -508,10 +485,8 @@ class TestStopNodesMultiAgent:
 
         with patch("app.tasks.node_lifecycle_stop.agent_client") as mock_ac:
             mock_ac.reconcile_nodes_on_agent = AsyncMock(side_effect=fake_reconcile)
-            with patch("app.tasks.node_lifecycle_stop.settings") as mock_settings:
-                mock_settings.feature_auto_extract_on_stop = False
 
-                await manager._stop_nodes([ns])
+            await manager._stop_nodes([ns])
 
         # Should be called only once (no fallback)
         assert mock_ac.reconcile_nodes_on_agent.await_count == 1
@@ -555,10 +530,8 @@ class TestStopNodesMultiAgent:
         with patch("app.tasks.node_lifecycle_stop.agent_client") as mock_ac:
             mock_ac.is_agent_online.return_value = True
             mock_ac.reconcile_nodes_on_agent = AsyncMock(side_effect=fake_reconcile)
-            with patch("app.tasks.node_lifecycle_stop.settings") as mock_settings:
-                mock_settings.feature_auto_extract_on_stop = False
 
-                await manager._stop_nodes([ns1, ns2])
+            await manager._stop_nodes([ns1, ns2])
 
         # Fallback should contain both nodes
         assert len(fallback_batches) == 1
@@ -594,10 +567,8 @@ class TestStopNodesMixedResults:
 
         with patch("app.tasks.node_lifecycle_stop.agent_client") as mock_ac:
             mock_ac.reconcile_nodes_on_agent = AsyncMock(side_effect=fake_reconcile)
-            with patch("app.tasks.node_lifecycle_stop.settings") as mock_settings:
-                mock_settings.feature_auto_extract_on_stop = False
 
-                await manager._stop_nodes([ns1, ns2])
+            await manager._stop_nodes([ns1, ns2])
 
         assert ns1.actual_state == NodeActualState.STOPPED.value
         assert ns2.actual_state == NodeActualState.ERROR.value
@@ -624,10 +595,8 @@ class TestStopNodesMixedResults:
 
         with patch("app.tasks.node_lifecycle_stop.agent_client") as mock_ac:
             mock_ac.reconcile_nodes_on_agent = AsyncMock(side_effect=fake_reconcile)
-            with patch("app.tasks.node_lifecycle_stop.settings") as mock_settings:
-                mock_settings.feature_auto_extract_on_stop = False
 
-                await manager._stop_nodes([ns])
+            await manager._stop_nodes([ns])
 
         assert called_agents == [host.id]
 
@@ -658,10 +627,8 @@ class TestStopNodesMixedResults:
         with patch("app.tasks.node_lifecycle_stop.agent_client") as mock_ac:
             mock_ac.is_agent_online.return_value = True
             mock_ac.reconcile_nodes_on_agent = AsyncMock(side_effect=fake_reconcile)
-            with patch("app.tasks.node_lifecycle_stop.settings") as mock_settings:
-                mock_settings.feature_auto_extract_on_stop = False
 
-                await manager._stop_nodes([ns])
+            await manager._stop_nodes([ns])
 
         assert "transient" in ns.error_message.lower()
 
@@ -692,10 +659,8 @@ class TestStopNodesMixedResults:
         with patch("app.tasks.node_lifecycle_stop.agent_client") as mock_ac:
             mock_ac.is_agent_online.return_value = True
             mock_ac.reconcile_nodes_on_agent = AsyncMock(side_effect=fake_reconcile)
-            with patch("app.tasks.node_lifecycle_stop.settings") as mock_settings:
-                mock_settings.feature_auto_extract_on_stop = False
 
-                await manager._stop_nodes([ns])
+            await manager._stop_nodes([ns])
 
         assert ns.actual_state == NodeActualState.ERROR.value
         assert "socket timeout" in ns.error_message

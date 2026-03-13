@@ -491,7 +491,6 @@ class TestMultihostDeployCapacity:
         with patch(f"{MODULE}.get_session", _mock_get_session(test_db)):
             with patch(f"{MODULE}.settings") as mock_settings:
                 mock_settings.resource_validation_enabled = True
-                mock_settings.image_sync_enabled = False
                 with patch(f"{MODULE}._dispatch_webhook", AsyncMock()):
                     with patch(f"{MODULE}._broadcast_job_progress", AsyncMock()):
                         with patch(f"{MODULE}.agent_client.is_agent_online", return_value=True):
@@ -521,7 +520,6 @@ class TestMultihostDeployCapacity:
         with patch(f"{MODULE}.get_session", patches[f"{MODULE}.get_session"]):
             with patch(f"{MODULE}.settings") as mock_settings:
                 mock_settings.resource_validation_enabled = True
-                mock_settings.image_sync_enabled = False
                 with patch(f"{MODULE}._dispatch_webhook", patches[f"{MODULE}._dispatch_webhook"]):
                     with patch(f"{MODULE}._capture_node_ips", patches[f"{MODULE}._capture_node_ips"]):
                         with patch(f"{MODULE}.emit_deploy_finished", patches[f"{MODULE}.emit_deploy_finished"]):

@@ -372,12 +372,6 @@ def test_has_lab_wide_active_job_uses_preloaded_or_query(test_db, sample_lab) ->
 
 @pytest.mark.asyncio
 async def test_try_extract_configs_branches(test_db, sample_lab, monkeypatch) -> None:
-    # Feature disabled short-circuit
-    monkeypatch.setattr(state_enforcement.settings, "feature_auto_extract_on_enforcement", False)
-    await state_enforcement._try_extract_configs(test_db, sample_lab, [_mk_ns(lab_id=sample_lab.id)])
-
-    monkeypatch.setattr(state_enforcement.settings, "feature_auto_extract_on_enforcement", True)
-
     # No restart candidates
     await state_enforcement._try_extract_configs(
         test_db,
@@ -710,8 +704,6 @@ async def test_try_extract_configs_additional_branches(test_db, sample_lab, monk
     _mk_node(test_db, lab_id=sample_lab.id, name="r-extra", host_id=host.id)
     test_db.add(restart_node)
     test_db.commit()
-
-    monkeypatch.setattr(state_enforcement.settings, "feature_auto_extract_on_enforcement", True)
 
     # host_ids empty -> fallback to lab.agent_id, but offline => no agents branch.
     monkeypatch.setattr(state_enforcement.agent_client, "is_agent_online", lambda _h: False)

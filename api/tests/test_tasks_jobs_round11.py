@@ -50,7 +50,6 @@ class TestPreflightImageSync:
         with patch("app.tasks.jobs.agent_client") as mock_ac, \
              patch("app.tasks.jobs.settings") as mock_settings:
             mock_ac.get_lab_status_from_agent = AsyncMock(return_value={})
-            mock_settings.image_sync_enabled = True
             mock_settings.image_sync_pre_deploy_check = True
             ok, msg = _run(_run_job_preflight_checks(test_db, lab, host, "down"))
         assert ok is True
@@ -63,7 +62,6 @@ class TestPreflightImageSync:
              patch("app.tasks.jobs.TopologyService") as mock_topo_cls, \
              patch("app.tasks.image_sync.ensure_images_for_deployment", new_callable=AsyncMock) as mock_ensure:
             mock_ac.get_lab_status_from_agent = AsyncMock(return_value={})
-            mock_settings.image_sync_enabled = True
             mock_settings.image_sync_pre_deploy_check = True
             mock_settings.image_sync_timeout = 60
             topo = MagicMock()
@@ -84,7 +82,6 @@ class TestPreflightImageSync:
              patch("app.tasks.jobs.TopologyService") as mock_topo_cls, \
              patch("app.tasks.image_sync.ensure_images_for_deployment", new_callable=AsyncMock) as mock_ensure:
             mock_ac.get_lab_status_from_agent = AsyncMock(return_value={})
-            mock_settings.image_sync_enabled = True
             mock_settings.image_sync_pre_deploy_check = True
             mock_settings.image_sync_timeout = 60
             topo = MagicMock()
@@ -106,7 +103,6 @@ class TestPreflightImageSync:
              patch("app.tasks.jobs.TopologyService") as mock_topo_cls, \
              patch("app.tasks.image_sync.ensure_images_for_deployment", new_callable=AsyncMock) as mock_ensure:
             mock_ac.get_lab_status_from_agent = AsyncMock(return_value={})
-            mock_settings.image_sync_enabled = True
             mock_settings.image_sync_pre_deploy_check = True
             mock_settings.image_sync_timeout = 60
             topo = MagicMock()
@@ -127,7 +123,6 @@ class TestPreflightImageSync:
              patch("app.tasks.jobs.TopologyService") as mock_topo_cls, \
              patch("app.tasks.image_sync.ensure_images_for_deployment", new_callable=AsyncMock) as mock_ensure:
             mock_ac.get_lab_status_from_agent = AsyncMock(return_value={})
-            mock_settings.image_sync_enabled = True
             mock_settings.image_sync_pre_deploy_check = True
             mock_settings.image_sync_timeout = 60
             topo = MagicMock()
@@ -147,7 +142,6 @@ class TestPreflightImageSync:
              patch("app.tasks.jobs.settings") as mock_settings, \
              patch("app.tasks.jobs.TopologyService") as mock_topo_cls:
             mock_ac.get_lab_status_from_agent = AsyncMock(return_value={})
-            mock_settings.image_sync_enabled = True
             mock_settings.image_sync_pre_deploy_check = True
             topo = MagicMock()
             topo.get_required_images.return_value = []
@@ -164,14 +158,6 @@ class TestPreflightImageSync:
 
 class TestAutoExtract:
 
-    def test_disabled_feature_returns_early(self, test_db: Session, test_user: models.User):
-        lab = make_lab(test_db, test_user.id)
-        host = make_host(test_db)
-        with patch("app.tasks.jobs.settings") as mock_settings:
-            mock_settings.feature_auto_extract_on_destroy = False
-            _run(_auto_extract_configs_before_destroy(test_db, lab, host))
-        # Should not raise
-
     def test_saves_configs_via_config_service(self, test_db: Session, test_user: models.User):
         lab = make_lab(test_db, test_user.id)
         host = make_host(test_db)
@@ -182,10 +168,8 @@ class TestAutoExtract:
         test_db.add(n)
         test_db.commit()
 
-        with patch("app.tasks.jobs.settings") as mock_settings, \
-             patch("app.tasks.jobs.agent_client") as mock_ac, \
+        with patch("app.tasks.jobs.agent_client") as mock_ac, \
              patch("app.services.config_service.ConfigService") as mock_cs_cls:
-            mock_settings.feature_auto_extract_on_destroy = True
             mock_ac.is_agent_online.return_value = True
             mock_ac.extract_configs_on_agent = AsyncMock(return_value={
                 "success": True,
@@ -201,10 +185,8 @@ class TestAutoExtract:
     def test_skips_missing_node_name(self, test_db: Session, test_user: models.User):
         lab = make_lab(test_db, test_user.id)
         host = make_host(test_db)
-        with patch("app.tasks.jobs.settings") as mock_settings, \
-             patch("app.tasks.jobs.agent_client") as mock_ac, \
+        with patch("app.tasks.jobs.agent_client") as mock_ac, \
              patch("app.services.config_service.ConfigService") as mock_cs_cls:
-            mock_settings.feature_auto_extract_on_destroy = True
             mock_ac.is_agent_online.return_value = True
             mock_ac.extract_configs_on_agent = AsyncMock(return_value={
                 "success": True,

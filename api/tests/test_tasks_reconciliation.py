@@ -182,7 +182,7 @@ class TestRefreshStatesFromAgents:
         def _session_ctx():
             yield test_db
 
-        with patch("app.tasks.reconciliation.get_session", _session_ctx):
+        with patch("app.tasks.reconciliation_refresh.get_session", _session_ctx):
             await refresh_states_from_agents()
 
     @pytest.mark.asyncio
@@ -201,8 +201,8 @@ class TestRefreshStatesFromAgents:
         def _session_ctx():
             yield test_db
 
-        with patch("app.tasks.reconciliation.get_session", _session_ctx):
-            with patch("app.tasks.reconciliation._reconcile_single_lab", new_callable=AsyncMock, return_value=0):
+        with patch("app.tasks.reconciliation_refresh.get_session", _session_ctx):
+            with patch("app.tasks.reconciliation_db._reconcile_single_lab", new_callable=AsyncMock, return_value=0):
                 await refresh_states_from_agents()
                 # Should not call reconcile for this lab
                 # (it has an active job)

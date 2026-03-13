@@ -317,19 +317,6 @@ class TestAutoExtractAdditional:
     """Additional edge-case tests for _auto_extract_configs_before_destroy."""
 
     @pytest.mark.asyncio
-    async def test_disabled_via_settings(
-        self, test_db: Session, test_user: models.User, sample_host: models.Host
-    ):
-        """Feature flag off skips extraction entirely."""
-        lab = make_lab(test_db, test_user, state="running")
-
-        with patch("app.tasks.jobs.settings") as mock_settings:
-            mock_settings.feature_auto_extract_on_destroy = False
-            with patch("app.tasks.jobs.agent_client") as mock_ac:
-                await _auto_extract_configs_before_destroy(test_db, lab, sample_host)
-                mock_ac.extract_configs_on_agent.assert_not_called()
-
-    @pytest.mark.asyncio
     async def test_no_healthy_agents_returns(
         self, test_db: Session, test_user: models.User, sample_host: models.Host
     ):
@@ -344,12 +331,10 @@ class TestAutoExtractAdditional:
         test_db.add(placement)
         test_db.commit()
 
-        with patch("app.tasks.jobs.settings") as mock_settings:
-            mock_settings.feature_auto_extract_on_destroy = True
-            with patch("app.tasks.jobs.agent_client") as mock_ac:
-                mock_ac.is_agent_online.return_value = False
-                await _auto_extract_configs_before_destroy(test_db, lab, sample_host)
-                mock_ac.extract_configs_on_agent.assert_not_called()
+        with patch("app.tasks.jobs.agent_client") as mock_ac:
+            mock_ac.is_agent_online.return_value = False
+            await _auto_extract_configs_before_destroy(test_db, lab, sample_host)
+            mock_ac.extract_configs_on_agent.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_success_single_agent(
@@ -374,16 +359,14 @@ class TestAutoExtractAdditional:
         mock_snapshot = MagicMock()
         mock_snapshot.snapshot_type = "auto_stop"
 
-        with patch("app.tasks.jobs.settings") as mock_settings:
-            mock_settings.feature_auto_extract_on_destroy = True
-            with patch("app.tasks.jobs.agent_client") as mock_ac:
-                mock_ac.is_agent_online.return_value = True
-                mock_ac.extract_configs_on_agent = AsyncMock(return_value=mock_result)
-                with patch("app.services.config_service.ConfigService") as MockConfigSvc:
-                    mock_svc_instance = MagicMock()
-                    mock_svc_instance.save_extracted_config.return_value = mock_snapshot
-                    MockConfigSvc.return_value = mock_svc_instance
-                    await _auto_extract_configs_before_destroy(test_db, lab, sample_host)
+        with patch("app.tasks.jobs.agent_client") as mock_ac:
+            mock_ac.is_agent_online.return_value = True
+            mock_ac.extract_configs_on_agent = AsyncMock(return_value=mock_result)
+            with patch("app.services.config_service.ConfigService") as MockConfigSvc:
+                mock_svc_instance = MagicMock()
+                mock_svc_instance.save_extracted_config.return_value = mock_snapshot
+                MockConfigSvc.return_value = mock_svc_instance
+                await _auto_extract_configs_before_destroy(test_db, lab, sample_host)
 
         mock_svc_instance.save_extracted_config.assert_called_once()
         call_kwargs = mock_svc_instance.save_extracted_config.call_args
@@ -411,16 +394,14 @@ class TestAutoExtractAdditional:
 
         mock_snapshot = MagicMock()
 
-        with patch("app.tasks.jobs.settings") as mock_settings:
-            mock_settings.feature_auto_extract_on_destroy = True
-            with patch("app.tasks.jobs.agent_client") as mock_ac:
-                mock_ac.is_agent_online.return_value = True
-                mock_ac.extract_configs_on_agent = AsyncMock(side_effect=mock_extract)
-                with patch("app.services.config_service.ConfigService") as MockConfigSvc:
-                    mock_svc_instance = MagicMock()
-                    mock_svc_instance.save_extracted_config.return_value = mock_snapshot
-                    MockConfigSvc.return_value = mock_svc_instance
-                    await _auto_extract_configs_before_destroy(test_db, lab, host1)
+        with patch("app.tasks.jobs.agent_client") as mock_ac:
+            mock_ac.is_agent_online.return_value = True
+            mock_ac.extract_configs_on_agent = AsyncMock(side_effect=mock_extract)
+            with patch("app.services.config_service.ConfigService") as MockConfigSvc:
+                mock_svc_instance = MagicMock()
+                mock_svc_instance.save_extracted_config.return_value = mock_snapshot
+                MockConfigSvc.return_value = mock_svc_instance
+                await _auto_extract_configs_before_destroy(test_db, lab, host1)
 
         # Only 1 config saved (host2 raised an error)
         assert mock_svc_instance.save_extracted_config.call_count == 1
@@ -443,14 +424,12 @@ class TestAutoExtractAdditional:
             "configs": [{"node_name": "dummy", "content": "!"}],
         }
 
-        with patch("app.tasks.jobs.settings") as mock_settings:
-            mock_settings.feature_auto_extract_on_destroy = True
-            with patch("app.tasks.jobs.agent_client") as mock_ac:
-                mock_ac.is_agent_online.return_value = True
-                mock_ac.extract_configs_on_agent = AsyncMock(return_value=mock_result)
-                await _auto_extract_configs_before_destroy(test_db, lab, host1)
+        with patch("app.tasks.jobs.agent_client") as mock_ac:
+            mock_ac.is_agent_online.return_value = True
+            mock_ac.extract_configs_on_agent = AsyncMock(return_value=mock_result)
+            await _auto_extract_configs_before_destroy(test_db, lab, host1)
 
-                assert mock_ac.extract_configs_on_agent.call_count == 2
+            assert mock_ac.extract_configs_on_agent.call_count == 2
 
     @pytest.mark.asyncio
     async def test_fallback_to_provided_agent(
@@ -466,16 +445,14 @@ class TestAutoExtractAdditional:
             "configs": [{"node_name": "r1", "content": "!"}],
         }
 
-        with patch("app.tasks.jobs.settings") as mock_settings:
-            mock_settings.feature_auto_extract_on_destroy = True
-            with patch("app.tasks.jobs.agent_client") as mock_ac:
-                mock_ac.is_agent_online.return_value = True
-                mock_ac.extract_configs_on_agent = AsyncMock(return_value=mock_result)
-                await _auto_extract_configs_before_destroy(test_db, lab, sample_host)
+        with patch("app.tasks.jobs.agent_client") as mock_ac:
+            mock_ac.is_agent_online.return_value = True
+            mock_ac.extract_configs_on_agent = AsyncMock(return_value=mock_result)
+            await _auto_extract_configs_before_destroy(test_db, lab, sample_host)
 
-                assert mock_ac.extract_configs_on_agent.call_count == 1
-                call_agent = mock_ac.extract_configs_on_agent.call_args[0][0]
-                assert call_agent.id == sample_host.id
+            assert mock_ac.extract_configs_on_agent.call_count == 1
+            call_agent = mock_ac.extract_configs_on_agent.call_args[0][0]
+            assert call_agent.id == sample_host.id
 
     @pytest.mark.asyncio
     async def test_exception_suppressed(
@@ -484,14 +461,12 @@ class TestAutoExtractAdditional:
         """Top-level exception is caught — destroy must not fail due to extraction."""
         lab = make_lab(test_db, test_user, state="running")
 
-        with patch("app.tasks.jobs.settings") as mock_settings:
-            mock_settings.feature_auto_extract_on_destroy = True
-            with patch(
-                "app.tasks.jobs.agent_client.is_agent_online",
-                side_effect=RuntimeError("boom"),
-            ):
-                # Outer except catches, function returns silently
-                await _auto_extract_configs_before_destroy(test_db, lab, sample_host)
+        with patch(
+            "app.tasks.jobs.agent_client.is_agent_online",
+            side_effect=RuntimeError("boom"),
+        ):
+            # Outer except catches, function returns silently
+            await _auto_extract_configs_before_destroy(test_db, lab, sample_host)
 
 
 # ---------------------------------------------------------------------------
@@ -955,7 +930,6 @@ class TestMultihostDeployAdvanced:
         with patch("app.tasks.jobs_multihost.get_session", _mock_get_session(test_db)):
             with patch("app.tasks.jobs_multihost.settings") as mock_settings:
                 mock_settings.resource_validation_enabled = True
-                mock_settings.image_sync_enabled = False
                 with patch("app.tasks.jobs_multihost._dispatch_webhook", new_callable=AsyncMock):
                     with patch("app.tasks.jobs_multihost.agent_client.is_agent_online", return_value=True):
                         with patch("app.tasks.jobs_multihost.agent_client.get_lab_status_from_agent", new_callable=AsyncMock, return_value={"nodes": []}):
@@ -1132,7 +1106,6 @@ class TestMultihostDeployAdvanced:
         with patch("app.tasks.jobs_multihost.get_session", _mock_get_session(test_db)):
             with patch("app.tasks.jobs_multihost.settings") as mock_settings:
                 mock_settings.resource_validation_enabled = True
-                mock_settings.image_sync_enabled = False
                 with patch("app.tasks.jobs_multihost._dispatch_webhook", new_callable=AsyncMock):
                     with patch("app.tasks.jobs_multihost._capture_node_ips", new_callable=AsyncMock):
                         with patch("app.tasks.jobs_multihost.emit_deploy_finished", new_callable=AsyncMock):

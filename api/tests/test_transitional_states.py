@@ -448,17 +448,14 @@ class TestCategorizationMatchesTransitionalStates:
         })
         mock_settings = MagicMock()
         mock_settings.resource_validation_enabled = False
-        mock_settings.image_sync_enabled = False
         mock_settings.image_sync_pre_deploy_check = False
-        mock_settings.per_node_lifecycle_enabled = False
 
         with patch("app.tasks.jobs.get_session", mock_get_session(test_db)), \
              patch("app.tasks.node_lifecycle.agent_client", mock_ac), \
              patch("app.tasks.node_lifecycle_agents.agent_client", mock_ac), \
              patch("app.tasks.node_lifecycle_deploy.agent_client", mock_ac), \
              patch("app.tasks.node_lifecycle_stop.agent_client", mock_ac), \
-             patch("app.tasks.node_lifecycle.settings", mock_settings), \
-             patch("app.tasks.node_lifecycle_deploy.settings", mock_settings):
+             patch("app.tasks.node_lifecycle.settings", mock_settings):
             await run_node_reconcile(job.id, lab.id, ["node-1"])
 
         test_db.refresh(node_state)
@@ -522,9 +519,7 @@ class TestCategorizationMatchesTransitionalStates:
         mock_ac.get_lab_status_from_agent = AsyncMock(return_value={"nodes": []})
         mock_settings = MagicMock()
         mock_settings.resource_validation_enabled = False
-        mock_settings.image_sync_enabled = False
         mock_settings.image_sync_pre_deploy_check = False
-        mock_settings.per_node_lifecycle_enabled = False
 
         with patch("app.tasks.jobs.get_session", mock_get_session(test_db)), \
              patch("app.tasks.node_lifecycle.agent_client", mock_ac), \
@@ -532,7 +527,6 @@ class TestCategorizationMatchesTransitionalStates:
              patch("app.tasks.node_lifecycle_deploy.agent_client", mock_ac), \
              patch("app.tasks.node_lifecycle_stop.agent_client", mock_ac), \
              patch("app.tasks.node_lifecycle.settings", mock_settings), \
-             patch("app.tasks.node_lifecycle_deploy.settings", mock_settings), \
              patch("app.tasks.node_lifecycle_agents.settings", mock_settings):
             await run_node_reconcile(job.id, lab.id, ["node-1"])
 
@@ -999,9 +993,7 @@ class TestEarlyPlacementUpdate:
         )
         mock_settings = MagicMock()
         mock_settings.resource_validation_enabled = False
-        mock_settings.image_sync_enabled = False
         mock_settings.image_sync_pre_deploy_check = False
-        mock_settings.per_node_lifecycle_enabled = False
         mock_settings.placement_scoring_enabled = False
 
         with patch("app.tasks.jobs.get_session", mock_get_session(test_db)), \
@@ -1011,7 +1003,6 @@ class TestEarlyPlacementUpdate:
              patch("app.tasks.node_lifecycle_stop.agent_client", mock_ac), \
              patch("app.tasks.node_lifecycle.settings", mock_settings), \
              patch("app.tasks.node_lifecycle_agents.settings", mock_settings), \
-             patch("app.tasks.node_lifecycle_deploy.settings", mock_settings), \
              patch.object(test_db, "commit", tracking_commit):
             await run_node_reconcile(job.id, lab.id, ["node-1"])
 

@@ -242,7 +242,6 @@ class TestRunJobPreflightChecks:
         ), patch(
             "app.tasks.jobs.settings"
         ) as mock_settings:
-            mock_settings.image_sync_enabled = False
             mock_settings.image_sync_pre_deploy_check = False
 
             ok, msg = await _run_job_preflight_checks(
