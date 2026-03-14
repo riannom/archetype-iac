@@ -304,6 +304,15 @@ async def set_all_nodes_desired_state(
             already_in_state_count += 1
             continue
 
+        # Respect manually-stopped nodes on bulk start: if user explicitly
+        # set desired_state=stopped, don't override it unless the node is
+        # undeployed (first deploy should start everything).
+        if (command == "start"
+                and state.desired_state == NodeDesiredState.STOPPED
+                and state.actual_state != NodeActualState.UNDEPLOYED):
+            already_in_state_count += 1
+            continue
+
         # This node can be processed (proceed or reset_and_proceed)
         state.desired_state = payload.state
 
