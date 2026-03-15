@@ -388,13 +388,18 @@ class TestSetAllNodesDesiredState:
         sample_host: models.Host,
         auth_headers: dict,
     ):
-        """Start all sets desired=running on all eligible nodes."""
+        """Start all sets desired=running on all eligible nodes.
+
+        Uses actual_state=undeployed (first deploy) because the endpoint
+        respects manually-stopped nodes: nodes with desired=stopped and
+        actual!=undeployed are counted as already_in_state, not affected.
+        """
         make_node(test_db, sample_lab, gui_id="n1", container_name="archetype-test-r1")
         make_node(test_db, sample_lab, gui_id="n2", container_name="archetype-test-r2")
         make_node_state(test_db, sample_lab, "n1", "archetype-test-r1",
-                         desired_state="stopped", actual_state="stopped")
+                         desired_state="stopped", actual_state="undeployed")
         make_node_state(test_db, sample_lab, "n2", "archetype-test-r2",
-                         desired_state="stopped", actual_state="stopped")
+                         desired_state="stopped", actual_state="undeployed")
 
         with patch("app.routers.labs.has_conflicting_job", return_value=(False, None)), \
              patch("app.routers.labs_node_states._has_conflicting_job", return_value=(False, None)), \

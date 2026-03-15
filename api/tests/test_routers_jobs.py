@@ -134,9 +134,11 @@ class TestLabUpRespectsStoppedNodes:
         ns_r1 = test_db.query(models.NodeState).filter_by(node_name="r1").one()
         assert ns_r1.desired_state == NodeDesiredState.STOPPED.value
 
-        # r2 (stopped/running — mismatch) should be set to running
+        # r2 (stopped/running — mismatch, but desired=stopped) should stay stopped
+        # lab_up respects manually-stopped nodes: any node with desired=stopped
+        # and actual != undeployed is skipped.
         ns_r2 = test_db.query(models.NodeState).filter_by(node_name="r2").one()
-        assert ns_r2.desired_state == NodeDesiredState.RUNNING.value
+        assert ns_r2.desired_state == NodeDesiredState.STOPPED.value
 
     def test_first_deploy_undeployed_nodes_set_to_running(
         self,
