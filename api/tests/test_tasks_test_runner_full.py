@@ -222,7 +222,10 @@ class TestPing:
             new_callable=AsyncMock,
             return_value=(sample_host, "R1"),
         ), patch(
-            "app.tasks.test_runner.agent_client.exec_node_on_agent",
+            "app.tasks.test_runner._resolve_node_exec_method",
+            return_value=("docker_exec", None),
+        ), patch(
+            "app.tasks.test_runner._exec_on_node",
             new_callable=AsyncMock,
             return_value={"output": "1 packets received", "exit_code": 0},
         ):
@@ -244,7 +247,10 @@ class TestPing:
             new_callable=AsyncMock,
             return_value=(sample_host, "R1"),
         ), patch(
-            "app.tasks.test_runner.agent_client.exec_node_on_agent",
+            "app.tasks.test_runner._resolve_node_exec_method",
+            return_value=("docker_exec", None),
+        ), patch(
+            "app.tasks.test_runner._exec_on_node",
             new_callable=AsyncMock,
             return_value={"output": "0 packets received", "exit_code": 1},
         ):
@@ -298,7 +304,10 @@ class TestCommand:
             new_callable=AsyncMock,
             return_value=(sample_host, "R1"),
         ), patch(
-            "app.tasks.test_runner.agent_client.exec_node_on_agent",
+            "app.tasks.test_runner._resolve_node_exec_method",
+            return_value=("docker_exec", None),
+        ), patch(
+            "app.tasks.test_runner._exec_on_node",
             new_callable=AsyncMock,
             return_value={"output": "10.0.0.1/24 via eth1", "exit_code": 0},
         ):
@@ -325,7 +334,10 @@ class TestCommand:
             new_callable=AsyncMock,
             return_value=(sample_host, "R1"),
         ), patch(
-            "app.tasks.test_runner.agent_client.exec_node_on_agent",
+            "app.tasks.test_runner._resolve_node_exec_method",
+            return_value=("docker_exec", None),
+        ), patch(
+            "app.tasks.test_runner._exec_on_node",
             new_callable=AsyncMock,
             return_value={"output": "10.0.0.1/24 via eth1", "exit_code": 0},
         ):

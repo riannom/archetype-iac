@@ -112,6 +112,7 @@ from app.agent_client.links import (  # noqa: F401
 from app.agent_client.maintenance import (  # noqa: F401
     cleanup_agent_workspace,
     cleanup_workspaces_on_agent,
+    cli_verify_on_agent,
     delete_image_on_agent,
     exec_node_on_agent,
     extract_configs_on_agent,
@@ -217,6 +218,7 @@ __all__ = [
     # Maintenance
     "cleanup_agent_workspace",
     "cleanup_workspaces_on_agent",
+    "cli_verify_on_agent",
     "delete_image_on_agent",
     "exec_node_on_agent",
     "extract_configs_on_agent",

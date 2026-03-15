@@ -33,7 +33,7 @@ def run_lab_tests(
     If request.specs is provided, run those tests.
     Otherwise, load tests from the lab's topology YAML.
     """
-    lab = get_lab_or_404(database, lab_id)
+    lab = get_lab_or_404(lab_id, database, current_user)
 
     specs = None
     if request and request.specs:
@@ -87,7 +87,7 @@ def get_lab_tests(
     current_user: models.User = Depends(get_current_user),
 ):
     """Get test specs from the lab's topology YAML."""
-    lab = get_lab_or_404(database, lab_id)
+    lab = get_lab_or_404(lab_id, database, current_user)
 
     from app.topology import yaml_to_graph
     workspace = Path(settings.workspace) / lab.id
@@ -111,7 +111,7 @@ def get_test_results(
     current_user: models.User = Depends(get_current_user),
 ):
     """Get structured test results for a completed test run."""
-    lab = get_lab_or_404(database, lab_id)
+    lab = get_lab_or_404(lab_id, database, current_user)
     job = database.get(models.Job, job_id)
 
     if not job or job.lab_id != lab.id:

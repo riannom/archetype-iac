@@ -255,6 +255,11 @@ class VendorConfig:
     # Display-only hint for UI, e.g. "admin / admin"
     default_credentials: str = ""
 
+    # Test runner: ping command template with {target} and {count} placeholders.
+    # Default is Linux shell syntax (works for Docker containers).
+    # Override per-vendor for NOS-specific CLI syntax.
+    ping_command: str = "ping -c {count} -W 2 {target}"
+
     # ==========================================================================
     # Configuration extraction settings (used by console_extractor.py)
     # These settings control how running configs are extracted from devices

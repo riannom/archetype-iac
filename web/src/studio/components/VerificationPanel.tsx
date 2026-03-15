@@ -1,4 +1,4 @@
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useMemo, useState } from 'react';
 import { TestResult, TestSpec, Node, Link } from '../types';
 import { apiRequest } from '../../api';
 import { usePersistedState } from '../hooks/usePersistedState';
@@ -14,12 +14,17 @@ interface VerificationPanelProps {
   links: Link[];
 }
 
-const statusIcon: Record<string, { icon: string; color: string }> = {
-  passed: { icon: 'fa-check-circle', color: 'text-green-500' },
-  failed: { icon: 'fa-times-circle', color: 'text-red-500' },
-  error: { icon: 'fa-exclamation-triangle', color: 'text-amber-500' },
-  skipped: { icon: 'fa-minus-circle', color: 'text-stone-400' },
+const statusIcon: Record<string, { icon: string; color: string; label: string }> = {
+  passed: { icon: 'fa-check-circle', color: 'text-green-500', label: 'PASS' },
+  failed: { icon: 'fa-times-circle', color: 'text-red-500', label: 'FAIL' },
+  error: { icon: 'fa-exclamation-triangle', color: 'text-amber-500', label: 'ERROR' },
+  skipped: { icon: 'fa-minus-circle', color: 'text-stone-400', label: 'SKIP' },
 };
+
+function formatDuration(ms: number): string {
+  if (ms < 1000) return `${ms.toFixed(0)}ms`;
+  return `${(ms / 1000).toFixed(2)}s`;
+}
 
 const VerificationPanel: React.FC<VerificationPanelProps> = ({
   labId,
@@ -32,6 +37,7 @@ const VerificationPanel: React.FC<VerificationPanelProps> = ({
 }) => {
   const [testSpecs, setTestSpecs] = usePersistedState<TestSpec[]>(`testSpecs-${labId}`, []);
   const [importing, setImporting] = useState(false);
+  const [expandedRows, setExpandedRows] = useState<Set<number>>(new Set());
 
   const handleImportFromYaml = useCallback(async () => {
     if (!labId) return;
@@ -49,6 +55,7 @@ const VerificationPanel: React.FC<VerificationPanelProps> = ({
   }, [labId, setTestSpecs]);
 
   const handleRun = useCallback(() => {
+    setExpandedRows(new Set());
     if (testSpecs.length > 0) {
       onStartTests(testSpecs);
     } else {
@@ -56,7 +63,44 @@ const VerificationPanel: React.FC<VerificationPanelProps> = ({
     }
   }, [testSpecs, onStartTests]);
 
+  const toggleRow = useCallback((index: number) => {
+    setExpandedRows(prev => {
+      const next = new Set(prev);
+      if (next.has(index)) {
+        next.delete(index);
+      } else {
+        next.add(index);
+      }
+      return next;
+    });
+  }, []);
+
+  const totalDuration = useMemo(
+    () => testResults.reduce((sum, r) => sum + r.duration_ms, 0),
+    [testResults],
+  );
+
+  const handleDownload = useCallback(() => {
+    if (testResults.length === 0) return;
+    const report = {
+      lab_id: labId,
+      timestamp: new Date().toISOString(),
+      summary: testSummary,
+      total_duration_ms: Math.round(totalDuration),
+      results: testResults,
+    };
+    const blob = new Blob([JSON.stringify(report, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `test-results-${labId.slice(0, 8)}-${new Date().toISOString().slice(0, 19).replace(/[T:]/g, '-')}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }, [labId, testResults, testSummary, totalDuration]);
+
   const specCount = testSpecs.length;
+  const hasResults = testResults.length > 0;
+  const isComplete = hasResults && !isRunning;
 
   return (
     <div className="h-full w-full flex flex-col bg-transparent border-t border-stone-200 dark:border-stone-700">
@@ -113,19 +157,34 @@ const VerificationPanel: React.FC<VerificationPanelProps> = ({
         <div className="w-1/2 flex flex-col min-h-0 glass-surface">
           {/* Summary banner */}
           {testSummary && testSummary.total > 0 && (
-            <div className={`px-4 py-2 text-xs font-medium flex items-center gap-3 flex-shrink-0 ${
+            <div className={`px-4 py-2 text-xs font-medium flex items-center justify-between flex-shrink-0 ${
               testSummary.failed > 0 || testSummary.errors > 0
                 ? 'bg-red-50 dark:bg-red-950/30 text-red-700 dark:text-red-400'
                 : 'bg-green-50 dark:bg-green-950/30 text-green-700 dark:text-green-400'
             }`}>
-              <span>
-                {testSummary.passed}/{testSummary.total} passed
-              </span>
-              {testSummary.failed > 0 && (
-                <span className="text-red-600 dark:text-red-400">{testSummary.failed} failed</span>
-              )}
-              {testSummary.errors > 0 && (
-                <span className="text-amber-600 dark:text-amber-400">{testSummary.errors} errors</span>
+              <div className="flex items-center gap-3">
+                <span>
+                  {testSummary.passed}/{testSummary.total} passed
+                </span>
+                {testSummary.failed > 0 && (
+                  <span className="text-red-600 dark:text-red-400">{testSummary.failed} failed</span>
+                )}
+                {testSummary.errors > 0 && (
+                  <span className="text-amber-600 dark:text-amber-400">{testSummary.errors} errors</span>
+                )}
+                {isComplete && (
+                  <span className="text-stone-400 dark:text-stone-500">{formatDuration(totalDuration)}</span>
+                )}
+              </div>
+              {isComplete && (
+                <button
+                  onClick={handleDownload}
+                  className="flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium text-stone-500 dark:text-stone-400 hover:text-stone-700 dark:hover:text-stone-200 hover:bg-white/50 dark:hover:bg-stone-800/50 transition-colors"
+                  title="Download test results as JSON"
+                >
+                  <i className="fa-solid fa-download" />
+                  <span>Download</span>
+                </button>
               )}
             </div>
           )}
@@ -143,25 +202,47 @@ const VerificationPanel: React.FC<VerificationPanelProps> = ({
             )}
             {testResults.map((result, i) => {
               const si = statusIcon[result.status] || statusIcon.error;
+              const isExpanded = expandedRows.has(i);
+              const hasDetail = !!(result.output || result.error);
               return (
                 <div
                   key={`${result.spec_index}-${i}`}
-                  className="px-4 py-2.5 border-b border-stone-100 dark:border-stone-800 hover:bg-stone-50 dark:hover:bg-stone-800/50 transition-colors"
+                  className="border-b border-stone-100 dark:border-stone-800"
                 >
-                  <div className="flex items-center justify-between">
+                  {/* Row header — clickable when there's detail */}
+                  <div
+                    className={`px-4 py-2.5 flex items-center justify-between transition-colors ${
+                      hasDetail ? 'cursor-pointer hover:bg-stone-50 dark:hover:bg-stone-800/50' : ''
+                    }`}
+                    onClick={hasDetail ? () => toggleRow(i) : undefined}
+                  >
                     <div className="flex items-center gap-2 min-w-0">
+                      {hasDetail && (
+                        <i className={`fa-solid fa-chevron-right text-[10px] text-stone-400 transition-transform ${isExpanded ? 'rotate-90' : ''}`} />
+                      )}
                       <i className={`fa-solid ${si.icon} ${si.color} text-xs`} />
                       <span className="text-sm font-medium text-stone-700 dark:text-stone-200 truncate">
                         {result.spec_name}
                       </span>
                     </div>
                     <span className="text-xs text-stone-400 dark:text-stone-400 tabular-nums flex-shrink-0 ml-2">
-                      {result.duration_ms.toFixed(0)}ms
+                      {formatDuration(result.duration_ms)}
                     </span>
                   </div>
-                  {(result.error || (result.status === 'failed' && result.output)) && (
-                    <div className="mt-1 text-xs text-stone-500 dark:text-stone-400 font-mono bg-stone-50 dark:bg-stone-800/50 rounded px-2 py-1 max-h-20 overflow-y-auto whitespace-pre-wrap">
-                      {result.error || result.output}
+
+                  {/* Expandable detail */}
+                  {isExpanded && hasDetail && (
+                    <div className="px-4 pb-3">
+                      {result.error && (
+                        <div className="text-xs font-mono bg-red-50 dark:bg-red-950/20 text-red-700 dark:text-red-400 rounded px-3 py-2 mb-1.5 whitespace-pre-wrap break-words">
+                          <span className="font-semibold">Error: </span>{result.error}
+                        </div>
+                      )}
+                      {result.output && (
+                        <div className="text-xs font-mono bg-stone-50 dark:bg-stone-800/50 text-stone-600 dark:text-stone-300 rounded px-3 py-2 max-h-48 overflow-y-auto whitespace-pre-wrap break-words">
+                          {result.output}
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>

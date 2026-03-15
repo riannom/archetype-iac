@@ -18,6 +18,115 @@ from app.state import JobStatus
 logger = logging.getLogger(__name__)
 
 
+# ---------------------------------------------------------------------------
+# Vendor-aware exec routing helpers
+# ---------------------------------------------------------------------------
+
+
+def _resolve_node_vendor_config(database, lab: models.Lab, node_name: str):
+    """Return the ``VendorConfig`` for a node, or ``None`` if unresolvable."""
+    from app.models.topology import Node
+    from app.services.device_service import get_resolver
+
+    node = (
+        database.query(Node)
+        .filter(Node.lab_id == lab.id, Node.container_name == node_name)
+        .first()
+    )
+    if not node or not node.device:
+        return None
+    return get_resolver().resolve_config(node.device)
+
+
+def _resolve_node_exec_method(database, lab: models.Lab, node_name: str) -> tuple[str, str | None]:
+    """Return ``(console_method, kind)`` for a node.
+
+    Falls back to ``("docker_exec", None)`` when unresolvable.
+    """
+    cfg = _resolve_node_vendor_config(database, lab, node_name)
+    if cfg:
+        return (cfg.console_method, cfg.kind)
+    return ("docker_exec", None)
+
+
+def _build_ping_command(database, lab: models.Lab, node_name: str, target: str, count: int) -> str:
+    """Build a vendor-appropriate ping command from VendorConfig.ping_command."""
+    cfg = _resolve_node_vendor_config(database, lab, node_name)
+    if cfg:
+        return cfg.ping_command.format(target=target, count=count)
+    # Fallback: Linux shell
+    return f"ping -c {count} -W 2 {target}"
+
+
+async def _exec_on_node(
+    agent: models.Host,
+    lab_id: str,
+    node_name: str,
+    cmd: str,
+    console_method: str,
+    kind: str | None,
+) -> dict:
+    """Route command execution to the correct agent endpoint.
+
+    Returns dict with keys ``exit_code`` (int) and ``output`` (str).
+    """
+    if console_method == "docker_exec":
+        return await agent_client.exec_node_on_agent(agent, lab_id, node_name, cmd)
+    # virsh / ssh — use cli-verify
+    return await agent_client.cli_verify_on_agent(
+        agent, lab_id, node_name, commands=[cmd], kind=kind,
+    )
+
+
+def _ping_succeeded(output: str, exit_code: int, console_method: str) -> bool:
+    """Determine whether a ping test passed.
+
+    For docker_exec the exit code is authoritative.  For CLI-based devices
+    the command always "succeeds" (exit_code 0 means the CLI ran), so we
+    parse the output for packet-loss indicators that work across NX-OS,
+    IOS-XE, IOS-XR, and Junos.
+    """
+    if console_method == "docker_exec":
+        return exit_code == 0
+
+    # CLI output parsing — look for positive indicators
+    if re.search(r"(\d+)\s+packets?\s+received", output) and not re.search(r"\b0\s+packets?\s+received", output):
+        return True
+    if re.search(r"0(\.0+)?%\s+packet\s+loss", output):
+        return True
+    return False
+
+
+def _resolve_node_name(database, lab_id: str, name: str) -> str:
+    """Resolve a node name that may be a display_name to its container_name.
+
+    The frontend sends display names (e.g. ``CEOS-1``) but NodeState and
+    placement use container names (e.g. ``ceos_1``).  Returns *name*
+    unchanged when it already matches a container_name.
+    """
+    from app.models.topology import Node
+
+    # Fast path: already a container_name?
+    exists = (
+        database.query(Node.container_name)
+        .filter(Node.lab_id == lab_id, Node.container_name == name)
+        .first()
+    )
+    if exists:
+        return name
+
+    # Try display_name lookup
+    row = (
+        database.query(Node.container_name)
+        .filter(Node.lab_id == lab_id, Node.display_name == name)
+        .first()
+    )
+    if row:
+        return row[0]
+
+    return name  # Return as-is; caller will handle "not found"
+
+
 async def _run_single_test(
     spec: dict,
     index: int,
@@ -31,7 +140,7 @@ async def _run_single_test(
 
     try:
         if spec_type == "node_state":
-            node_name = spec.get("node_name") or spec.get("node")
+            node_name = _resolve_node_name(database, lab.id, spec.get("node_name") or spec.get("node") or "")
             expected = spec.get("expected_state", "running")
             ns = (
                 database.query(models.NodeState)
@@ -67,28 +176,30 @@ async def _run_single_test(
             return _result(index, spec_name, "failed", start, output=f"expected={expected}, actual={actual}")
 
         elif spec_type == "ping":
-            source = spec.get("source")
+            source = _resolve_node_name(database, lab.id, spec.get("source") or "")
             target = spec.get("target")
             count = spec.get("count", 3)
             agent, node_name = await _resolve_agent_for_node(database, lab, source)
             if not agent:
                 return _result(index, spec_name, "error", start, error=f"Cannot resolve agent for node '{source}'")
-            cmd = f"ping -c {count} -W 2 {target}"
-            resp = await agent_client.exec_node_on_agent(agent, lab.id, node_name, cmd)
+            console_method, kind = _resolve_node_exec_method(database, lab, node_name)
+            cmd = _build_ping_command(database, lab, node_name, target, count)
+            resp = await _exec_on_node(agent, lab.id, node_name, cmd, console_method, kind)
             output = resp.get("output", "")
             exit_code = resp.get("exit_code", -1)
-            if exit_code == 0:
+            if _ping_succeeded(output, exit_code, console_method):
                 return _result(index, spec_name, "passed", start, output=output)
             return _result(index, spec_name, "failed", start, output=output)
 
         elif spec_type == "command":
-            node = spec.get("node")
+            node = _resolve_node_name(database, lab.id, spec.get("node") or "")
             cmd = spec.get("cmd", "")
             expect_pattern = spec.get("expect")
             agent, node_name = await _resolve_agent_for_node(database, lab, node)
             if not agent:
                 return _result(index, spec_name, "error", start, error=f"Cannot resolve agent for node '{node}'")
-            resp = await agent_client.exec_node_on_agent(agent, lab.id, node_name, cmd)
+            console_method, kind = _resolve_node_exec_method(database, lab, node_name)
+            resp = await _exec_on_node(agent, lab.id, node_name, cmd, console_method, kind)
             output = resp.get("output", "")
             exit_code = resp.get("exit_code", -1)
             if expect_pattern:

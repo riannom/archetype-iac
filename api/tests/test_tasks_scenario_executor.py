@@ -161,7 +161,7 @@ class TestStepExec:
         self, scenario_lab: models.Lab, test_db: Session, sample_host: models.Host,
     ):
         """Exec step with exit_code 0 should pass."""
-        from app.tasks.scenario_executor import _step_exec
+        from app.tasks.scenario_executor import _step_run_command
 
         step = {"type": "exec", "node": "R1", "cmd": "echo hello"}
 
@@ -170,11 +170,14 @@ class TestStepExec:
             new_callable=AsyncMock,
             return_value=(sample_host, "R1"),
         ), patch(
-            "app.tasks.scenario_executor.agent_client.exec_node_on_agent",
+            "app.tasks.test_runner._resolve_node_exec_method",
+            return_value=("docker_exec", None),
+        ), patch(
+            "app.tasks.test_runner._exec_on_node",
             new_callable=AsyncMock,
             return_value={"output": "hello", "exit_code": 0},
         ):
-            result = await _step_exec(step, scenario_lab, test_db)
+            result = await _step_run_command(step, scenario_lab, test_db)
 
         assert result["status"] == "passed"
         assert result["output"] == "hello"
@@ -184,7 +187,7 @@ class TestStepExec:
         self, scenario_lab: models.Lab, test_db: Session, sample_host: models.Host,
     ):
         """Exec step with nonzero exit_code should fail."""
-        from app.tasks.scenario_executor import _step_exec
+        from app.tasks.scenario_executor import _step_run_command
 
         step = {"type": "exec", "node": "R1", "cmd": "false"}
 
@@ -193,11 +196,14 @@ class TestStepExec:
             new_callable=AsyncMock,
             return_value=(sample_host, "R1"),
         ), patch(
-            "app.tasks.scenario_executor.agent_client.exec_node_on_agent",
+            "app.tasks.test_runner._resolve_node_exec_method",
+            return_value=("docker_exec", None),
+        ), patch(
+            "app.tasks.test_runner._exec_on_node",
             new_callable=AsyncMock,
             return_value={"output": "", "exit_code": 1},
         ):
-            result = await _step_exec(step, scenario_lab, test_db)
+            result = await _step_run_command(step, scenario_lab, test_db)
 
         assert result["status"] == "failed"
         assert "exit_code=1" in result["error"]
@@ -207,7 +213,7 @@ class TestStepExec:
         self, scenario_lab: models.Lab, test_db: Session, sample_host: models.Host,
     ):
         """Exec step with expect pattern that matches output should pass."""
-        from app.tasks.scenario_executor import _step_exec
+        from app.tasks.scenario_executor import _step_run_command
 
         step = {"type": "exec", "node": "R1", "cmd": "show ver", "expect": r"version\s+\d+"}
 
@@ -216,11 +222,14 @@ class TestStepExec:
             new_callable=AsyncMock,
             return_value=(sample_host, "R1"),
         ), patch(
-            "app.tasks.scenario_executor.agent_client.exec_node_on_agent",
+            "app.tasks.test_runner._resolve_node_exec_method",
+            return_value=("docker_exec", None),
+        ), patch(
+            "app.tasks.test_runner._exec_on_node",
             new_callable=AsyncMock,
             return_value={"output": "version 42", "exit_code": 0},
         ):
-            result = await _step_exec(step, scenario_lab, test_db)
+            result = await _step_run_command(step, scenario_lab, test_db)
 
         assert result["status"] == "passed"
 
@@ -229,7 +238,7 @@ class TestStepExec:
         self, scenario_lab: models.Lab, test_db: Session, sample_host: models.Host,
     ):
         """Exec step with expect pattern that does not match should fail."""
-        from app.tasks.scenario_executor import _step_exec
+        from app.tasks.scenario_executor import _step_run_command
 
         step = {"type": "exec", "node": "R1", "cmd": "show ver", "expect": r"MISSING"}
 
@@ -238,11 +247,14 @@ class TestStepExec:
             new_callable=AsyncMock,
             return_value=(sample_host, "R1"),
         ), patch(
-            "app.tasks.scenario_executor.agent_client.exec_node_on_agent",
+            "app.tasks.test_runner._resolve_node_exec_method",
+            return_value=("docker_exec", None),
+        ), patch(
+            "app.tasks.test_runner._exec_on_node",
             new_callable=AsyncMock,
             return_value={"output": "version 42", "exit_code": 0},
         ):
-            result = await _step_exec(step, scenario_lab, test_db)
+            result = await _step_run_command(step, scenario_lab, test_db)
 
         assert result["status"] == "failed"
         assert "MISSING" in result["error"]
@@ -252,7 +264,7 @@ class TestStepExec:
         self, scenario_lab: models.Lab, test_db: Session,
     ):
         """Exec step should error when agent cannot be resolved for the node."""
-        from app.tasks.scenario_executor import _step_exec
+        from app.tasks.scenario_executor import _step_run_command
 
         step = {"type": "exec", "node": "GHOST", "cmd": "echo x"}
 
@@ -261,7 +273,7 @@ class TestStepExec:
             new_callable=AsyncMock,
             return_value=(None, "GHOST"),
         ):
-            result = await _step_exec(step, scenario_lab, test_db)
+            result = await _step_run_command(step, scenario_lab, test_db)
 
         assert result["status"] == "error"
         assert "Cannot resolve agent" in result["error"]
@@ -445,7 +457,7 @@ class TestRunScenario:
             new_callable=AsyncMock,
             return_value=(sample_host, "R1"),
         ), patch(
-            "app.tasks.scenario_executor.agent_client.exec_node_on_agent",
+            "app.tasks.test_runner._exec_on_node",
             new_callable=AsyncMock,
             return_value={"output": "", "exit_code": 1},
         ):
