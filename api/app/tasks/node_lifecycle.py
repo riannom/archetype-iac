@@ -1795,6 +1795,14 @@ class NodeLifecycleManager(AgentResolutionMixin, DeploymentMixin, StopMixin):
 
         self.job.completed_at = utcnow()
         self.job.log_path = "\n".join(self.log_parts)
+
+        # Ensure lab.agent_id is set as a fallback for the Infra tab.
+        # The "up" deploy path sets this, but per-node sync (NLM) does not.
+        # Without it, undeployed nodes with no NodePlacement show as
+        # "Unassigned" in the frontend.
+        if self.agent and not self.lab.agent_id:
+            self.lab.agent_id = self.agent.id
+
         recompute_lab_state(self.session, self.lab.id, commit=False)
         self.session.commit()
         duration = (
