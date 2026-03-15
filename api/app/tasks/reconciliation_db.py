@@ -33,6 +33,7 @@ from app.state import (
     NodeDesiredState,
 )
 from app.services.state_machine import LabStateMachine
+from app.utils.db import release_db_transaction_for_io as _release_db_transaction_for_io
 from app.utils.time import utcnow
 
 logger = logging.getLogger(__name__)
@@ -694,6 +695,12 @@ async def _do_reconcile_lab(session, lab, lab_id: str) -> int:
 
         # Query all agents in parallel
         if agents_to_query:
+            _release_db_transaction_for_io(
+                session,
+                context="reconciliation agent status query",
+                table="nodes",
+                lab_id=lab_id,
+            )
             query_results = await asyncio.gather(
                 *[_query_agent(aid, ag) for aid, ag in agents_to_query],
                 return_exceptions=True,
@@ -1006,6 +1013,12 @@ async def _do_reconcile_lab(session, lab, lab_id: str) -> int:
                 ):
                     stale_agent = host_to_agent.get(container_agent_id) if container_agent_id else None
                     if stale_agent:
+                        _release_db_transaction_for_io(
+                            session,
+                            context="reconciliation stale libvirt destroy",
+                            table="node_states",
+                            lab_id=lab_id,
+                        )
                         destroy_result = await agent_client.destroy_container_on_agent(
                             stale_agent,
                             lab_id,
@@ -1091,6 +1104,12 @@ async def _do_reconcile_lab(session, lab, lab_id: str) -> int:
                                 else:
                                     provider_type = "docker"
 
+                            _release_db_transaction_for_io(
+                                session,
+                                context="reconciliation readiness check",
+                                table="node_states",
+                                lab_id=lab_id,
+                            )
                             readiness = await agent_client.check_node_readiness(
                                 readiness_agent,
                                 lab_id,
@@ -1326,6 +1345,12 @@ async def _do_reconcile_lab(session, lab, lab_id: str) -> int:
                 agent = host_to_agent.get(wrong_agent_id)
                 if agent:
                     try:
+                        _release_db_transaction_for_io(
+                            session,
+                            context="reconciliation misplaced container destroy",
+                            table="node_states",
+                            lab_id=lab_id,
+                        )
                         await agent_client.destroy_container_on_agent(agent, lab_id, node_name)
                         logger.info(f"Removed misplaced container {node_name} from agent {agent.name}")
                     except Exception as e:
