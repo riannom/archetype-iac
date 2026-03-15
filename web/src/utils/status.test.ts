@@ -1,11 +1,9 @@
 import {
   defaultThresholds,
   getResourceLevel,
-  getResourceBgColor,
   getCpuColor,
   getMemoryColor,
   getStorageColor,
-  getRuntimeStatusColor,
   getConnectionStatusColor,
   getConnectionStatusText,
   getRoleBadgeColor,
@@ -17,14 +15,12 @@ describe('status utils', () => {
     expect(getResourceLevel(10, defaultThresholds.cpu)).toBe('normal');
     expect(getResourceLevel(70, defaultThresholds.cpu)).toBe('warning');
     expect(getResourceLevel(90, defaultThresholds.cpu)).toBe('danger');
-    expect(getResourceBgColor('danger')).toBe('bg-red-500');
     expect(getCpuColor(20)).toBe('bg-sage-500 dark:bg-sage-400');
     expect(getMemoryColor(80)).toBe('bg-amber-500 dark:bg-amber-400');
     expect(getStorageColor(99)).toBe('bg-red-500 dark:bg-red-400');
   });
 
-  it('maps runtime and connection states', () => {
-    expect(getRuntimeStatusColor('running')).toContain('bg-green');
+  it('maps connection states', () => {
     expect(getConnectionStatusColor('offline')).toBe('bg-red-500');
     expect(getConnectionStatusText('degraded')).toBe('Degraded');
   });

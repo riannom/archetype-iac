@@ -123,7 +123,7 @@ def _reset_tcp_chardev_sync(
 # serial port with IAC negotiation.  Spawned via pexpect.spawn() with a PTY
 # so the existing console interaction code works unchanged.
 _TCP_TELNET_CONSOLE_SCRIPT = r'''
-import sys, os, socket, select, struct, tty, termios, time
+import sys, os, socket, select, tty, termios, time
 
 port = int(sys.argv[1])
 sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)

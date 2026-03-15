@@ -630,10 +630,14 @@ async def _build_host_to_agent_map(
     if lab and lab.agent_id:
         host_ids.add(lab.agent_id)
 
-    # Load all agents
-    for host_id in host_ids:
-        agent = session.get(models.Host, host_id)
-        if agent and agent_client.is_agent_online(agent):
-            host_to_agent[host_id] = agent
+    # Batch-load all agents to avoid N+1 queries
+    agents = (
+        session.query(models.Host)
+        .filter(models.Host.id.in_(host_ids))
+        .all()
+    )
+    for agent in agents:
+        if agent_client.is_agent_online(agent):
+            host_to_agent[agent.id] = agent
 
     return host_to_agent
