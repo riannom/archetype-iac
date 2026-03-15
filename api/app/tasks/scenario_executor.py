@@ -300,18 +300,19 @@ async def _step_wait(step: dict, lab: models.Lab, database) -> dict:
     return {"status": "passed", "output": f"Waited {seconds}s", "error": None}
 
 
-async def _step_exec(step: dict, lab: models.Lab, database) -> dict:
+async def _step_run_command(step: dict, lab: models.Lab, database) -> dict:
     """Run a command on a node and optionally match expected output."""
     node_name = step.get("node", "")
     cmd = step.get("cmd", "")
     expect = step.get("expect")
 
-    from app.tasks.test_runner import _resolve_agent_for_node
+    from app.tasks.test_runner import _exec_on_node, _resolve_agent_for_node, _resolve_node_exec_method
     agent, resolved_name = await _resolve_agent_for_node(database, lab, node_name)
     if not agent:
         return {"status": "error", "output": None, "error": f"Cannot resolve agent for node '{node_name}'"}
 
-    resp = await agent_client.exec_node_on_agent(agent, lab.id, resolved_name, cmd)
+    console_method, kind = _resolve_node_exec_method(database, lab, resolved_name)
+    resp = await _exec_on_node(agent, lab.id, resolved_name, cmd, console_method, kind)
     output = resp.get("output", "")
     exit_code = resp.get("exit_code", -1)
 
@@ -333,5 +334,5 @@ _STEP_HANDLERS = {
     "node_stop": _step_node_stop,
     "node_start": _step_node_start,
     "wait": _step_wait,
-    "exec": _step_exec,
+    "exec": _step_run_command,
 }

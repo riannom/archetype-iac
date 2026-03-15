@@ -66,6 +66,7 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
             "net.ipv6.conf.all.forwarding": "1",
         },
         default_credentials="vyos / vyos",
+        ping_command="ping {target} count {count}",
     ),
     "cisco_iosxr": VendorConfig(
         kind="cisco_iosxr",
@@ -172,6 +173,7 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         filename_keywords=["ios-xrd", "xrd"],
         vrnetlab_subdir="cisco/xrd",
         default_credentials="cisco / cisco",
+        ping_command="ping {target} count {count}",
     ),
     "cisco_iosv": VendorConfig(
         kind="cisco_iosv",
@@ -271,6 +273,7 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         readiness_probe="log_pattern",
         readiness_pattern=r"Would you like to enter the initial configuration dialog?",
         readiness_timeout=300,
+        ping_command="ping {target} repeat {count} timeout 2",
     ),
     "iol-xe": VendorConfig(
         kind="iol-xe",
@@ -311,6 +314,7 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         # Config extraction via NVRAM binary
         config_extract_method="nvram",
         config_extract_timeout=5,
+        ping_command="ping {target} repeat {count} timeout 2",
     ),
     "iol-l2": VendorConfig(
         kind="iol-l2",
@@ -351,6 +355,7 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         # Config extraction via NVRAM binary
         config_extract_method="nvram",
         config_extract_timeout=5,
+        ping_command="ping {target} repeat {count} timeout 2",
     ),
     "cisco_csr1000v": VendorConfig(
         kind="cisco_csr1000v",
@@ -396,6 +401,7 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
             "terminal length 0",  # Disable paging for CLI sessions
             "no ip domain-lookup",  # Disable DNS lookups that slow down CLI
         ],
+        ping_command="ping {target} repeat {count} timeout 2",
     ),
     "juniper_crpd": VendorConfig(
         kind="juniper_crpd",
@@ -420,6 +426,7 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         tags=["routing", "bgp", "mpls", "container", "kubernetes"],
         filename_keywords=["crpd"],
         default_credentials="root / (no password)",
+        ping_command="ping {target} count {count}",
     ),
     "juniper_vsrx3": VendorConfig(
         kind="juniper_vsrx3",
@@ -451,6 +458,7 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         readiness_pattern=r"login:",
         readiness_timeout=300,
         default_credentials="root / (no password)",
+        ping_command="ping {target} count {count}",
     ),
     "juniper_vjunosrouter": VendorConfig(
         kind="juniper_vjunosrouter",
@@ -493,6 +501,7 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         config_extract_prompt_pattern=r"[\w@.\-]+[>%#]\s*$",
         config_extract_paging_disable="set cli screen-length 0",
         config_inject_method="config_disk",
+        ping_command="ping {target} count {count}",
     ),
     "juniper_vjunosevolved": VendorConfig(
         kind="juniper_vjunosevolved",
@@ -536,6 +545,7 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         config_extract_prompt_pattern=r"[\w@.\-]+[>%#]\s*$",
         config_extract_paging_disable="set cli screen-length 0",
         config_inject_method="config_disk",
+        ping_command="ping {target} count {count}",
     ),
     "juniper_cjunos": VendorConfig(
         kind="juniper_cjunos",
@@ -587,6 +597,7 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
             "net.ipv6.conf.all.disable_ipv6": "0",
         },
         default_credentials="root / (no password)",
+        ping_command="ping {target} count {count}",
     ),
 
     # =========================================================================
@@ -857,6 +868,7 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         config_extract_prompt_pattern=r"[\w@.\-]+[>%#]\s*$",
         config_extract_paging_disable="set cli screen-length 0",
         config_inject_method="config_disk",
+        ping_command="ping {target} count {count}",
     ),
     "cisco_n9kv": VendorConfig(
         kind="cisco_n9kv",
@@ -1048,6 +1060,7 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         post_boot_commands=[
             "terminal pager 0",  # Disable paging for CLI sessions
         ],
+        ping_command="ping {target}",
     ),
     "fortinet_fortigate": VendorConfig(
         kind="fortinet_fortigate",
@@ -1076,6 +1089,7 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         readiness_probe="log_pattern",
         readiness_pattern=r"login:",
         readiness_timeout=180,
+        ping_command="execute ping {target}",
     ),
     "paloalto_vmseries": VendorConfig(
         kind="paloalto_vmseries",
@@ -1106,6 +1120,7 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         readiness_probe="log_pattern",
         readiness_pattern=r"login:",
         readiness_timeout=600,  # PA VMs take a long time to boot
+        ping_command="ping count {count} host {target}",
     ),
 
     # =========================================================================
@@ -1300,6 +1315,7 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
             "terminal length 0",  # Disable paging for CLI sessions
             "no ip domain-lookup",  # Disable DNS lookups that slow down CLI
         ],
+        ping_command="ping {target} repeat {count} timeout 2",
     ),
     "cat-sdwan-controller": VendorConfig(
         kind="cat-sdwan-controller",
@@ -1330,6 +1346,7 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         readiness_probe="log_pattern",
         readiness_pattern=r"login:",
         readiness_timeout=180,
+        ping_command="ping {target} count {count}",
     ),
     "cat-sdwan-manager": VendorConfig(
         kind="cat-sdwan-manager",
@@ -1361,6 +1378,7 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         readiness_probe="log_pattern",
         readiness_pattern=r"login:",
         readiness_timeout=600,  # vManage takes longer to boot
+        ping_command="ping {target} count {count}",
     ),
     "cat-sdwan-validator": VendorConfig(
         kind="cat-sdwan-validator",
@@ -1391,6 +1409,7 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         readiness_probe="log_pattern",
         readiness_pattern=r"login:",
         readiness_timeout=180,
+        ping_command="ping {target} count {count}",
     ),
     "cat-sdwan-vedge": VendorConfig(
         kind="cat-sdwan-vedge",
@@ -1421,6 +1440,7 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         readiness_probe="log_pattern",
         readiness_pattern=r"login:",
         readiness_timeout=180,
+        ping_command="ping {target} repeat {count} timeout 2",
     ),
 
     # =========================================================================
@@ -1459,6 +1479,7 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         console_method="ssh",
         console_user="admin",
         console_password="admin",
+        ping_command="ping {target}",
     ),
     "fmcv": VendorConfig(
         kind="fmcv",
@@ -1530,6 +1551,7 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         # Config injection via ISO (IOS-XE CVAC)
         config_inject_method="iso",
         config_inject_iso_filename="iosxe_config.txt",
+        ping_command="ping {target} repeat {count} timeout 2",
     ),
     "cat9000v-q200": VendorConfig(
         kind="cisco_cat9000v_q200",
@@ -1578,6 +1600,7 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         # Config injection via ISO (IOS-XE CVAC)
         config_inject_method="iso",
         config_inject_iso_filename="iosxe_config.txt",
+        ping_command="ping {target} repeat {count} timeout 2",
     ),
     "cat9000v-uadp": VendorConfig(
         kind="cisco_cat9000v_uadp",
@@ -1625,5 +1648,6 @@ VENDOR_CONFIGS: dict[str, VendorConfig] = {
         # Config injection via ISO (IOS-XE CVAC)
         config_inject_method="iso",
         config_inject_iso_filename="iosxe_config.txt",
+        ping_command="ping {target} repeat {count} timeout 2",
     ),
 }

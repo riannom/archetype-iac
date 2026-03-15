@@ -174,24 +174,28 @@ describe('VerificationPanel', () => {
       expect(screen.getByText('42ms')).toBeInTheDocument();
     });
 
-    it('renders failed result with error details', () => {
+    it('renders failed result with error details', async () => {
       const results = [
         makeResult({ spec_name: 'Ping fail', status: 'failed', duration_ms: 500, output: 'timeout reached' }),
       ];
       render(<VerificationPanel {...defaultProps} testResults={results} />);
 
       expect(screen.getByText('Ping fail')).toBeInTheDocument();
+      // Details are collapsed by default — click to expand
+      await userEvent.click(screen.getByText('Ping fail'));
       expect(screen.getByText('timeout reached')).toBeInTheDocument();
     });
 
-    it('renders error result', () => {
+    it('renders error result', async () => {
       const results = [
         makeResult({ spec_name: 'Bad test', status: 'error', duration_ms: 10, error: 'connection refused' }),
       ];
       render(<VerificationPanel {...defaultProps} testResults={results} />);
 
       expect(screen.getByText('Bad test')).toBeInTheDocument();
-      expect(screen.getByText('connection refused')).toBeInTheDocument();
+      // Details are collapsed by default — click to expand
+      await userEvent.click(screen.getByText('Bad test'));
+      expect(screen.getByText(/connection refused/)).toBeInTheDocument();
     });
 
     it('shows running progress indicator while tests in progress', () => {

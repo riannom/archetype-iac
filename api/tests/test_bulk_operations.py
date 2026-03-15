@@ -19,8 +19,6 @@ NEW BEHAVIOR (Phase 1.3 target):
 """
 from __future__ import annotations
 
-import pytest
-
 from app import models
 
 
@@ -56,17 +54,25 @@ def _create_nodes(test_db, lab, node_specs: list[tuple[str, str, str]]):
 # ---------------------------------------------------------------------------
 
 class TestBulkStartAllStopped:
-    """When all nodes are stopped, start-all should affect all of them."""
+    """When all nodes are undeployed (first deploy), start-all should affect all of them.
+
+    Note: Nodes with desired=stopped and actual=stopped are treated as
+    manually-stopped and skipped by bulk start. First-deploy (actual=undeployed)
+    nodes are always started.
+    """
 
     def test_all_stopped_become_desired_running(
         self, test_client, auth_headers, sample_lab, test_db, monkeypatch,
     ) -> None:
         _create_nodes(test_db, sample_lab, [
-            ("r1", "stopped", "stopped"),
-            ("r2", "stopped", "stopped"),
-            ("r3", "stopped", "stopped"),
+            ("r1", "stopped", "undeployed"),
+            ("r2", "stopped", "undeployed"),
+            ("r3", "stopped", "undeployed"),
         ])
         monkeypatch.setattr("app.routers.labs.safe_create_task", lambda *a, **kw: None)
+        monkeypatch.setattr("app.routers.labs_node_states.safe_create_task", lambda *a, **kw: None)
+        monkeypatch.setattr("app.routers.labs_node_states._has_conflicting_job", lambda *a, **kw: (False, None))
+        monkeypatch.setattr("app.utils.lab.get_lab_provider", lambda *a, **kw: "docker")
 
         resp = test_client.put(
             f"/labs/{sample_lab.id}/nodes/desired-state",
@@ -102,6 +108,9 @@ class TestBulkStartMixedStates:
             ("r6", "stopped", "undeployed"),   # Undeployed — should start
         ])
         monkeypatch.setattr("app.routers.labs.safe_create_task", lambda *a, **kw: None)
+        monkeypatch.setattr("app.routers.labs_node_states.safe_create_task", lambda *a, **kw: None)
+        monkeypatch.setattr("app.routers.labs_node_states._has_conflicting_job", lambda *a, **kw: (False, None))
+        monkeypatch.setattr("app.utils.lab.get_lab_provider", lambda *a, **kw: "docker")
 
         resp = test_client.put(
             f"/labs/{sample_lab.id}/nodes/desired-state",
@@ -111,11 +120,16 @@ class TestBulkStartMixedStates:
         assert resp.status_code == 200
 
         data = resp.json()
-        assert data["affected"] == 3         # r1, r5, r6
+        # r1 (stopped/stopped) → manually stopped (desired=stopped, actual!=undeployed) → already_in_state
+        # r2 (running/running) → already_in_state
+        # r3 (running/starting) → skip_transitional
+        # r4 (stopped/stopping) → skip_transitional
+        # r5 (running/error) → reset_and_proceed → affected
+        # r6 (stopped/undeployed) → first deploy (actual=undeployed) → affected
+        assert data["affected"] == 2         # r5, r6
         assert data["skipped_transitional"] == 2  # r3, r4
-        assert data["already_in_state"] == 1      # r2
+        assert data["already_in_state"] == 2      # r1, r2
 
-    @pytest.mark.xfail(reason="Phase 1.3 not yet implemented")
     def test_stop_all_skips_transitional(
         self, test_client, auth_headers, sample_lab, test_db, monkeypatch,
     ) -> None:
@@ -127,6 +141,9 @@ class TestBulkStartMixedStates:
             ("r4", "stopped", "stopping"),     # Transitional — skip
         ])
         monkeypatch.setattr("app.routers.labs.safe_create_task", lambda *a, **kw: None)
+        monkeypatch.setattr("app.routers.labs_node_states.safe_create_task", lambda *a, **kw: None)
+        monkeypatch.setattr("app.routers.labs_node_states._has_conflicting_job", lambda *a, **kw: (False, None))
+        monkeypatch.setattr("app.utils.lab.get_lab_provider", lambda *a, **kw: "docker")
 
         resp = test_client.put(
             f"/labs/{sample_lab.id}/nodes/desired-state",
@@ -136,8 +153,12 @@ class TestBulkStartMixedStates:
         assert resp.status_code == 200
 
         data = resp.json()
-        assert data["affected"] == 1              # r1
-        assert data["skipped_transitional"] == 2  # r3, r4
+        # r1 (running/running) → proceed → affected
+        # r2 (stopped/stopped) → already_in_state
+        # r3 (running/starting) → proceed (stop allows aborting starting nodes) → affected
+        # r4 (stopped/stopping) → skip_transitional
+        assert data["affected"] == 2              # r1, r3
+        assert data["skipped_transitional"] == 1  # r4
         assert data["already_in_state"] == 1      # r2
 
     def test_noop_when_all_already_in_desired_state(
@@ -149,6 +170,9 @@ class TestBulkStartMixedStates:
             ("r2", "running", "running"),
         ])
         monkeypatch.setattr("app.routers.labs.safe_create_task", lambda *a, **kw: None)
+        monkeypatch.setattr("app.routers.labs_node_states.safe_create_task", lambda *a, **kw: None)
+        monkeypatch.setattr("app.routers.labs_node_states._has_conflicting_job", lambda *a, **kw: (False, None))
+        monkeypatch.setattr("app.utils.lab.get_lab_provider", lambda *a, **kw: "docker")
 
         resp = test_client.put(
             f"/labs/{sample_lab.id}/nodes/desired-state",
@@ -177,6 +201,9 @@ class TestBulkStopAllRunning:
             ("r2", "running", "running"),
         ])
         monkeypatch.setattr("app.routers.labs.safe_create_task", lambda *a, **kw: None)
+        monkeypatch.setattr("app.routers.labs_node_states.safe_create_task", lambda *a, **kw: None)
+        monkeypatch.setattr("app.routers.labs_node_states._has_conflicting_job", lambda *a, **kw: (False, None))
+        monkeypatch.setattr("app.utils.lab.get_lab_provider", lambda *a, **kw: "docker")
 
         resp = test_client.put(
             f"/labs/{sample_lab.id}/nodes/desired-state",
@@ -203,10 +230,13 @@ class TestBulkSyncJobCreation:
     ) -> None:
         """A sync job is created when nodes need state changes."""
         _create_nodes(test_db, sample_lab, [
-            ("r1", "stopped", "stopped"),
-            ("r2", "stopped", "stopped"),
+            ("r1", "stopped", "undeployed"),
+            ("r2", "stopped", "undeployed"),
         ])
         monkeypatch.setattr("app.routers.labs.safe_create_task", lambda *a, **kw: None)
+        monkeypatch.setattr("app.routers.labs_node_states.safe_create_task", lambda *a, **kw: None)
+        monkeypatch.setattr("app.routers.labs_node_states._has_conflicting_job", lambda *a, **kw: (False, None))
+        monkeypatch.setattr("app.utils.lab.get_lab_provider", lambda *a, **kw: "docker")
 
         resp = test_client.put(
             f"/labs/{sample_lab.id}/nodes/desired-state",
@@ -232,6 +262,9 @@ class TestBulkSyncJobCreation:
             ("r2", "running", "running"),
         ])
         monkeypatch.setattr("app.routers.labs.safe_create_task", lambda *a, **kw: None)
+        monkeypatch.setattr("app.routers.labs_node_states.safe_create_task", lambda *a, **kw: None)
+        monkeypatch.setattr("app.routers.labs_node_states._has_conflicting_job", lambda *a, **kw: (False, None))
+        monkeypatch.setattr("app.utils.lab.get_lab_provider", lambda *a, **kw: "docker")
 
         resp = test_client.put(
             f"/labs/{sample_lab.id}/nodes/desired-state",
@@ -261,6 +294,9 @@ class TestBulkErrorNodeHandling:
             ("r1", "running", "error"),
         ])
         monkeypatch.setattr("app.routers.labs.safe_create_task", lambda *a, **kw: None)
+        monkeypatch.setattr("app.routers.labs_node_states.safe_create_task", lambda *a, **kw: None)
+        monkeypatch.setattr("app.routers.labs_node_states._has_conflicting_job", lambda *a, **kw: (False, None))
+        monkeypatch.setattr("app.utils.lab.get_lab_provider", lambda *a, **kw: "docker")
 
         resp = test_client.put(
             f"/labs/{sample_lab.id}/nodes/desired-state",
@@ -290,6 +326,9 @@ class TestBulkEmptyLab:
         self, test_client, auth_headers, sample_lab, test_db, monkeypatch,
     ) -> None:
         monkeypatch.setattr("app.routers.labs.safe_create_task", lambda *a, **kw: None)
+        monkeypatch.setattr("app.routers.labs_node_states.safe_create_task", lambda *a, **kw: None)
+        monkeypatch.setattr("app.routers.labs_node_states._has_conflicting_job", lambda *a, **kw: (False, None))
+        monkeypatch.setattr("app.utils.lab.get_lab_provider", lambda *a, **kw: "docker")
 
         resp = test_client.put(
             f"/labs/{sample_lab.id}/nodes/desired-state",

@@ -404,3 +404,39 @@ async def exec_node_on_agent(
     return await _agent_request(
         "POST", url, json_body={"cmd": cmd}, timeout=timeout
     )
+
+
+async def cli_verify_on_agent(
+    agent: models.Host,
+    lab_id: str,
+    node_name: str,
+    commands: list[str],
+    kind: str | None = None,
+    timeout: float = 60.0,
+) -> dict:
+    """Run CLI commands on a libvirt VM via the agent's cli-verify endpoint.
+
+    Wraps POST /labs/{lab_id}/nodes/{node_name}/cli-verify and normalises
+    the response to the same ``{exit_code, output}`` shape returned by
+    ``exec_node_on_agent`` so callers can treat both paths identically.
+
+    Returns:
+        dict with keys: exit_code (int), output (str)
+    """
+    url = f"{get_agent_url(agent)}/labs/{lab_id}/nodes/{node_name}/cli-verify"
+    payload: dict = {"commands": commands}
+    if kind:
+        payload["kind"] = kind
+    try:
+        resp = await _agent_request(
+            "POST", url, json_body=payload, timeout=timeout
+        )
+    except Exception as e:
+        logger.error(f"cli-verify failed for {node_name} in lab {lab_id}: {e}")
+        return {"exit_code": 1, "output": str(e)}
+
+    # Normalise: concatenate all command outputs into a single string.
+    outputs = resp.get("outputs", [])
+    combined = "\n".join(o.get("output", "") for o in outputs)
+    success = resp.get("success", False)
+    return {"exit_code": 0 if success else 1, "output": combined}
