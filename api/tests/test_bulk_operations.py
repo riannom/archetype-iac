@@ -19,8 +19,6 @@ NEW BEHAVIOR (Phase 1.3 target):
 """
 from __future__ import annotations
 
-import pytest
-
 from app import models
 
 
