@@ -281,7 +281,7 @@ describe("Canvas", () => {
       const statusDot = document.querySelector('[title^="image syncing"]') as HTMLElement | null;
       expect(statusDot).toBeInTheDocument();
       expect(statusDot).toHaveClass("animate-pulse");
-      expect(statusDot?.getAttribute("style") || "").toContain("background-color: rgb(59, 130, 246)");
+      expect(statusDot).toHaveClass("bg-blue-500");
     });
 
     it("shows blue sync indicator even before runtime status is set", () => {
@@ -308,7 +308,7 @@ describe("Canvas", () => {
       const statusDot = document.querySelector('[title^="image syncing"]') as HTMLElement | null;
       expect(statusDot).toBeInTheDocument();
       expect(statusDot).toHaveClass("animate-pulse");
-      expect(statusDot?.getAttribute("style") || "").toContain("background-color: rgb(59, 130, 246)");
+      expect(statusDot).toHaveClass("bg-blue-500");
     });
 
     it("shows status dot for error nodes", () => {

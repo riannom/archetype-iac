@@ -233,7 +233,7 @@ const InfrastructurePage: React.FC = () => {
   return (
     <>
       <div className="min-h-screen bg-stone-50/72 dark:bg-stone-900/72 backdrop-blur-[1px] flex flex-col overflow-hidden">
-        <header className="h-20 border-b border-stone-200 dark:border-stone-800 bg-white/30 dark:bg-stone-900/30 flex items-center justify-between px-10">
+        <header className="h-20 border-b border-stone-200 dark:border-stone-800 bg-white/30 dark:bg-stone-900/30 flex items-center justify-between px-4 sm:px-10">
           <div className="flex items-center gap-4">
             <ArchetypeIcon size={40} className="text-sage-600 dark:text-sage-400" />
             <div>
@@ -273,7 +273,7 @@ const InfrastructurePage: React.FC = () => {
         </header>
 
         {/* Tab Bar */}
-        <div className="border-b border-stone-200 dark:border-stone-800 glass-surface px-10">
+        <div className="border-b border-stone-200 dark:border-stone-800 glass-surface px-4 sm:px-10">
           <div className="flex gap-1">
             <button
               onClick={() => setActiveTab('hosts')}
@@ -303,7 +303,7 @@ const InfrastructurePage: React.FC = () => {
           </div>
         </div>
 
-        <main className="flex-1 overflow-y-auto p-10 custom-scrollbar">
+        <main className="flex-1 overflow-y-auto p-4 sm:p-10 custom-scrollbar">
           {activeTab === 'hosts' ? (
             <HostsTab
               hosts={data.hosts}
@@ -400,7 +400,7 @@ const InfrastructurePage: React.FC = () => {
           )}
         </main>
 
-        <footer className="h-10 border-t border-stone-200 dark:border-stone-900 glass-surface flex items-center px-10 justify-between text-[11px] text-stone-500 dark:text-stone-600 font-medium">
+        <footer className="h-10 border-t border-stone-200 dark:border-stone-900 glass-surface flex items-center px-4 sm:px-10 justify-between text-[11px] text-stone-500 dark:text-stone-600 font-medium">
           <span>Archetype Infrastructure Management</span>
           <span>Auto-refresh: {activeTab === 'hosts' ? '10s' : '30s'}{activeTab === 'network' ? ' (network)' : ''}</span>
         </footer>

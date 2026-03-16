@@ -1,5 +1,6 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import SnapshotList from './SnapshotList';
 
 const snapshot = {
@@ -32,11 +33,12 @@ const baseProps = {
 
 describe('SnapshotList', () => {
   beforeEach(() => {
-    vi.stubGlobal('confirm', vi.fn(() => true));
-  });
-
-  afterEach(() => {
-    vi.unstubAllGlobals();
+    vi.clearAllMocks();
+    baseProps.onSnapshotClick = vi.fn();
+    baseProps.onDeleteSnapshot = vi.fn();
+    baseProps.onSetActiveConfig = vi.fn().mockResolvedValue({});
+    baseProps.onSetViewMode = vi.fn();
+    baseProps.onDownloadNode = vi.fn();
   });
 
   it('shows empty state when no node selected', () => {
@@ -61,7 +63,8 @@ describe('SnapshotList', () => {
     expect(screen.getByText('No snapshots')).toBeInTheDocument();
   });
 
-  it('handles snapshot click and delete', () => {
+  it('handles snapshot click and delete', async () => {
+    const user = userEvent.setup();
     render(<SnapshotList {...baseProps} />);
 
     fireEvent.click(screen.getByText('hash1234'));
@@ -69,14 +72,28 @@ describe('SnapshotList', () => {
 
     fireEvent.mouseEnter(screen.getByText('hash1234').closest('div')!);
     fireEvent.click(screen.getByTitle('Delete snapshot'));
+
+    // ConfirmDialog should appear
+    expect(screen.getByText('Delete snapshot?')).toBeInTheDocument();
+
+    // Click the confirm button in the dialog
+    await user.click(screen.getByRole('button', { name: 'Delete' }));
+
     expect(baseProps.onDeleteSnapshot).toHaveBeenCalledWith('s1');
   });
 
   it('sets active config on hover action', async () => {
+    const user = userEvent.setup();
     render(<SnapshotList {...baseProps} />);
 
     fireEvent.mouseEnter(screen.getByText('hash1234').closest('div')!);
     fireEvent.click(screen.getByTitle('Set as startup config'));
+
+    // ConfirmDialog should appear
+    expect(screen.getByText('Set as startup config?')).toBeInTheDocument();
+
+    // Click the confirm button in the dialog
+    await user.click(screen.getByRole('button', { name: 'Set Active' }));
 
     expect(baseProps.onSetActiveConfig).toHaveBeenCalledWith('r1', 's1');
   });

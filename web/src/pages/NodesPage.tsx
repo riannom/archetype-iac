@@ -198,8 +198,10 @@ const NodesPage: React.FC = () => {
         <main className="flex-1 overflow-hidden">
           {catalogLoading ? (
             <div className="flex items-center justify-center h-full">
-              <i className="fa-solid fa-spinner fa-spin text-stone-400 text-2xl"></i>
-              <span className="ml-3 text-stone-500">Loading...</span>
+              <div className="flex flex-col items-center gap-3">
+                <i className="fa-solid fa-spinner fa-spin text-sage-500 text-xl" aria-hidden="true"></i>
+                <span className="text-sm text-stone-500 dark:text-stone-400">Loading catalog...</span>
+              </div>
             </div>
           ) : activeTab === 'devices' ? (
             <DeviceConfigManager

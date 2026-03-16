@@ -17,6 +17,7 @@ export interface StatusIndicatorProps {
   size?: StatusIndicatorSize;
   pulse?: boolean;
   className?: string;
+  'aria-label'?: string;
 }
 
 const statusColors: Record<StatusIndicatorStatus, string> = {
@@ -52,11 +53,14 @@ export const StatusIndicator: React.FC<StatusIndicatorProps> = ({
   size = 'md',
   pulse,
   className = '',
+  'aria-label': ariaLabel,
 }) => {
   const shouldPulse = pulse ?? shouldPulseByDefault[status];
 
   return (
     <div
+      role="status"
+      aria-label={ariaLabel || status}
       className={`
         rounded-full
         ${statusColors[status]}

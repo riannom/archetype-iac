@@ -351,7 +351,7 @@ const Sidebar: React.FC<SidebarProps> = ({
           if (!canInstantiate) return;
           onAddDevice(model);
         }}
-        className={`group flex items-center p-2 border rounded-lg transition-all ${
+        className={`list-item-enter group flex items-center p-2 border rounded-lg transition-all ${
           canInstantiate
             ? 'bg-transparent hover:bg-stone-100 dark:hover:bg-stone-800 border-transparent hover:border-stone-200 dark:hover:border-stone-700 cursor-grab active:cursor-grabbing'
             : 'bg-stone-100/60 dark:bg-stone-900/40 border-stone-200 dark:border-stone-800 opacity-60 cursor-not-allowed'

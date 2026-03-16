@@ -612,15 +612,15 @@ const Canvas: React.FC<CanvasProps> = ({
             const imageSyncActive =
               ns?.image_sync_status === 'syncing' || ns?.image_sync_status === 'checking';
             if (!status && !imageSyncActive) return null; // No runtime state and no sync = undeployed
-            let dotColor = '#a8a29e'; // stone-400 (stopped)
+            let dotClass = 'bg-stone-400'; // stopped
             let animate = false;
-            if (status === 'running') dotColor = '#22c55e'; // green-500
-            else if (status === 'booting') { dotColor = '#eab308'; animate = true; } // yellow-500
-            else if (status === 'stopping') { dotColor = '#f97316'; animate = true; } // orange-500
-            else if (status === 'error') dotColor = '#ef4444'; // red-500
+            if (status === 'running') dotClass = 'bg-green-500';
+            else if (status === 'booting') { dotClass = 'bg-yellow-500'; animate = true; }
+            else if (status === 'stopping') { dotClass = 'bg-orange-500'; animate = true; }
+            else if (status === 'error') dotClass = 'bg-red-500';
             // Make image sync visually distinct from normal booting.
             if (imageSyncActive) {
-              dotColor = '#3b82f6'; // blue-500
+              dotClass = 'bg-blue-500';
               animate = true;
             }
 
@@ -652,8 +652,7 @@ const Canvas: React.FC<CanvasProps> = ({
 
             return (
               <div
-                className={`absolute -top-1 -right-1 w-3 h-3 rounded-full border-2 border-white dark:border-stone-800 shadow-sm ${animate ? 'animate-pulse' : ''}`}
-                style={{ backgroundColor: dotColor, transition: 'background-color 300ms ease-in-out' }}
+                className={`absolute -top-1 -right-1 w-3 h-3 rounded-full border-2 border-white dark:border-stone-800 shadow-sm transition-colors duration-300 ${dotClass} ${animate ? 'animate-pulse' : ''}`}
                 title={tooltip}
               />
             );
@@ -707,11 +706,11 @@ const Canvas: React.FC<CanvasProps> = ({
               onMouseUp={(e) => interaction.handleNodeMouseUp(e, node.id)}
               onContextMenu={(e) => handleNodeContextMenu(e, node.id)}
               className={`absolute w-12 h-12 flex items-center justify-center cursor-pointer shadow-sm transition-[box-shadow,background-color,border-color,transform] duration-150
-                ${(selectedId === node.id || selectedIds?.has(node.id)) ? 'ring-2 ring-sage-500 bg-sage-500/10 dark:bg-sage-900/40 shadow-lg shadow-sage-500/20' : 'bg-white dark:bg-stone-800 border border-stone-200 dark:border-stone-600'}
+                ${(selectedId === node.id || selectedIds?.has(node.id)) ? 'ring-2 ring-sage-500 bg-sage-500/10 dark:bg-sage-900/40 shadow-lg shadow-sage-500/20 node-selection-glow' : 'bg-white dark:bg-stone-800 border border-stone-200 dark:border-stone-600'}
                 ${status === 'running' ? 'border-green-500/50 shadow-md shadow-green-500/10' : ''}
                 ${interaction.linkingNode === node.id ? 'ring-2 ring-sage-400 scale-110' : ''}
                 ${errorBorderClass}
-                hover:border-sage-400 z-10 select-none group`}
+                hover:border-sage-400 hover:shadow-md hover:-translate-y-px z-10 select-none group`}
             >
               <div
                 className={`flex items-center justify-center ${isRouter ? 'w-8 h-8 rounded-full' : 'w-8 h-8 rounded-md'} border ${

@@ -24,10 +24,6 @@ const mockClipboard = {
 };
 Object.assign(navigator, { clipboard: mockClipboard });
 
-// Mock window.confirm
-const mockConfirm = vi.fn();
-window.confirm = mockConfirm;
-
 // Mock window.alert
 const mockAlert = vi.fn();
 window.alert = mockAlert;
@@ -99,7 +95,6 @@ describe("ConfigsView", () => {
     vi.clearAllMocks();
     mockStudioRequest.mockResolvedValue({ snapshots: [] });
     mockOnExtractConfigs.mockResolvedValue(undefined);
-    mockConfirm.mockReturnValue(true);
   });
 
   describe("Rendering", () => {
@@ -634,7 +629,6 @@ describe("ConfigsView", () => {
       ];
 
       mockStudioRequest.mockResolvedValue({ snapshots });
-      mockConfirm.mockReturnValue(true);
       const user = userEvent.setup();
 
       render(<ConfigsView {...defaultProps} />);
@@ -656,7 +650,8 @@ describe("ConfigsView", () => {
         await user.click(deleteButton);
       }
 
-      expect(mockConfirm).toHaveBeenCalledWith("Delete this snapshot? This action cannot be undone.");
+      expect(screen.getByText("Delete snapshot?")).toBeInTheDocument();
+      expect(screen.getByText("This action cannot be undone.")).toBeInTheDocument();
     });
 
     it("calls delete API when confirmed", async () => {
@@ -665,7 +660,6 @@ describe("ConfigsView", () => {
       ];
 
       mockStudioRequest.mockResolvedValue({ snapshots });
-      mockConfirm.mockReturnValue(true);
       const user = userEvent.setup();
 
       render(<ConfigsView {...defaultProps} />);
@@ -682,15 +676,15 @@ describe("ConfigsView", () => {
         expect(document.querySelector(".fa-trash")).toBeInTheDocument();
       });
 
-      // Clear the initial load calls
-      mockStudioRequest.mockClear();
-      mockStudioRequest.mockResolvedValue({});
-
       const deleteButton = document.querySelector(".fa-trash")!.closest("button");
       if (deleteButton) {
         await user.click(deleteButton);
       }
 
+      // Click the confirm button in the ConfirmDialog
+      await user.click(screen.getByRole("button", { name: "Delete" }));
+
+      // Clear the initial load calls tracking
       await waitFor(() => {
         expect(mockStudioRequest).toHaveBeenCalledWith(
           "/labs/test-lab-123/config-snapshots/snap-1",
@@ -705,7 +699,6 @@ describe("ConfigsView", () => {
       ];
 
       mockStudioRequest.mockResolvedValue({ snapshots });
-      mockConfirm.mockReturnValue(false);
       const user = userEvent.setup();
 
       render(<ConfigsView {...defaultProps} />);
@@ -729,6 +722,9 @@ describe("ConfigsView", () => {
       if (deleteButton) {
         await user.click(deleteButton);
       }
+
+      // Click Cancel in the ConfirmDialog
+      await user.click(screen.getByRole("button", { name: /cancel/i }));
 
       // After cancellation, no delete API call should be made
       expect(mockStudioRequest).not.toHaveBeenCalledWith(

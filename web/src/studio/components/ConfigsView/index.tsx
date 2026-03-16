@@ -163,7 +163,7 @@ const ConfigsView: React.FC<ConfigsViewProps> = ({
           />
         </div>
       ) : (
-        <div className="flex-1 overflow-auto">
+        <div className="flex-1 overflow-auto custom-scrollbar">
           <ConfigMapping
             labId={labId}
             orphanedByDeviceKind={mgr.orphanedByDeviceKind}

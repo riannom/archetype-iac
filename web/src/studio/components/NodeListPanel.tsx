@@ -164,7 +164,7 @@ const NodeListPanel: React.FC<NodeListPanelProps> = ({
                 <button
                   key={node.id}
                   onClick={() => { onSelectNode(node.id); onFocusNode(node.id); }}
-                  className={`w-full text-left px-3 py-2.5 flex items-center gap-2.5 transition-colors group ${
+                  className={`list-item-enter w-full text-left px-3 py-2.5 flex items-center gap-2.5 transition-colors group ${
                     isSelected
                       ? 'bg-sage-600/15 border-r-2 border-sage-500'
                       : 'hover:bg-stone-100 dark:hover:bg-stone-800/60'

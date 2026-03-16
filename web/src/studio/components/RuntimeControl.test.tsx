@@ -12,9 +12,6 @@ vi.mock("../../contexts/NotificationContext", () => ({
   useNotifications: () => ({ addNotification: mockAddNotification }),
 }));
 
-// Mock window.confirm
-const mockConfirm = vi.fn();
-window.confirm = mockConfirm;
 
 const mockDeviceModels: DeviceModel[] = [
   {
@@ -81,7 +78,6 @@ describe("RuntimeControl", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockStudioRequest.mockResolvedValue({});
-    mockConfirm.mockReturnValue(true);
   });
 
   it("renders the runtime control header", () => {
@@ -293,12 +289,12 @@ describe("RuntimeControl", () => {
 
       await user.click(screen.getByRole("button", { name: /stop all/i }));
 
-      expect(mockConfirm).toHaveBeenCalled();
+      expect(screen.getByText("Stop all nodes?")).toBeInTheDocument();
+      expect(screen.getByText(/Stopping all nodes will first extract configs/)).toBeInTheDocument();
     });
 
     it("does not stop nodes if confirmation is cancelled", async () => {
       const user = userEvent.setup();
-      mockConfirm.mockReturnValue(false);
 
       const runtimeStates: Record<string, RuntimeStatus> = {
         "node-1": "running",
@@ -308,6 +304,9 @@ describe("RuntimeControl", () => {
       render(<RuntimeControl {...defaultProps} runtimeStates={runtimeStates} />);
 
       await user.click(screen.getByRole("button", { name: /stop all/i }));
+
+      // Click Cancel in the confirmation dialog
+      await user.click(screen.getByRole("button", { name: /cancel/i }));
 
       // After cancelling confirmation, no stop-related requests should be made
       expect(mockStudioRequest).not.toHaveBeenCalled();
@@ -326,7 +325,8 @@ describe("RuntimeControl", () => {
 
       await user.click(screen.getByRole("button", { name: /extract configs/i }));
 
-      expect(mockConfirm).toHaveBeenCalled();
+      expect(screen.getByText("Extract configs?")).toBeInTheDocument();
+      expect(screen.getByText(/make sure you've run/)).toBeInTheDocument();
     });
 
     it("calls extract-configs endpoint", async () => {
@@ -339,6 +339,9 @@ describe("RuntimeControl", () => {
       render(<RuntimeControl {...defaultProps} runtimeStates={runtimeStates} />);
 
       await user.click(screen.getByRole("button", { name: /extract configs/i }));
+
+      // Click the confirm button in the dialog
+      await user.click(screen.getByRole("button", { name: "Extract" }));
 
       await waitFor(() => {
         expect(mockStudioRequest).toHaveBeenCalledWith(
@@ -358,6 +361,9 @@ describe("RuntimeControl", () => {
       render(<RuntimeControl {...defaultProps} runtimeStates={runtimeStates} />);
 
       await user.click(screen.getByRole("button", { name: /extract configs/i }));
+
+      // Click the confirm button in the dialog
+      await user.click(screen.getByRole("button", { name: "Extract" }));
 
       await waitFor(() => {
         expect(mockAddNotification).toHaveBeenCalledWith(

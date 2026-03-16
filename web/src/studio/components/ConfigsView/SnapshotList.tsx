@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import type { ConfigSnapshot } from './types';
+import { ConfirmDialog } from '../../../components/ui/ConfirmDialog';
 
 interface SnapshotListProps {
   selectedNodeName: string | null;
@@ -44,16 +45,16 @@ const SnapshotList: React.FC<SnapshotListProps> = ({
 }) => {
   const [hoveredSnapshot, setHoveredSnapshot] = useState<string | null>(null);
   const [settingActive, setSettingActive] = useState<string | null>(null);
+  const [showSetActiveConfirm, setShowSetActiveConfirm] = useState<string | null>(null);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState<string | null>(null);
 
-  const handleSetActive = async (snapshotId: string) => {
+  const handleSetActive = (snapshotId: string) => {
     if (!selectedNodeName) return;
+    setShowSetActiveConfirm(snapshotId);
+  };
 
-    const confirmed = window.confirm(
-      'Set this as the startup config? The node will use this config on next reload.'
-    );
-
-    if (!confirmed) return;
-
+  const doSetActive = async (snapshotId: string) => {
+    if (!selectedNodeName) return;
     try {
       setSettingActive(snapshotId);
       await onSetActiveConfig(selectedNodeName, snapshotId);
@@ -63,10 +64,7 @@ const SnapshotList: React.FC<SnapshotListProps> = ({
   };
 
   const handleDelete = (snapshotId: string) => {
-    const confirmed = window.confirm('Delete this snapshot? This action cannot be undone.');
-    if (confirmed) {
-      onDeleteSnapshot(snapshotId);
-    }
+    setShowDeleteConfirm(snapshotId);
   };
 
   const getTypeBadgeClass = (type: string) => {
@@ -294,6 +292,24 @@ const SnapshotList: React.FC<SnapshotListProps> = ({
           </div>
         )}
       </div>
+      <ConfirmDialog
+        isOpen={showSetActiveConfirm !== null}
+        onConfirm={() => { if (showSetActiveConfirm) doSetActive(showSetActiveConfirm); setShowSetActiveConfirm(null); }}
+        onCancel={() => setShowSetActiveConfirm(null)}
+        title="Set as startup config?"
+        message="The node will use this config on next reload."
+        confirmLabel="Set Active"
+        variant="warning"
+      />
+      <ConfirmDialog
+        isOpen={showDeleteConfirm !== null}
+        onConfirm={() => { if (showDeleteConfirm) onDeleteSnapshot(showDeleteConfirm); setShowDeleteConfirm(null); }}
+        onCancel={() => setShowDeleteConfirm(null)}
+        title="Delete snapshot?"
+        message="This action cannot be undone."
+        confirmLabel="Delete"
+        variant="danger"
+      />
     </div>
   );
 };

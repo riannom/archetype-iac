@@ -124,7 +124,7 @@ export const TabPanel: React.FC<TabPanelProps> = ({
   if (activeTab !== id) return null;
 
   return (
-    <div className={className}>
+    <div className={`animate-in fade-in duration-150 ${className}`}>
       {children}
     </div>
   );
