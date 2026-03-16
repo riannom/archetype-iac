@@ -10,6 +10,7 @@ import SystemLogsModal from './SystemLogsModal';
 import { ArchetypeIcon } from '../../components/icons';
 import { VersionBadge } from '../../components/VersionBadge';
 import AdminMenuButton from '../../components/AdminMenuButton';
+import { EmptyState } from '../../components/ui/EmptyState';
 import type { SystemMetrics } from '../types';
 
 interface LabSummary {
@@ -381,24 +382,25 @@ const Dashboard: React.FC<DashboardProps> = ({
                 <option value="nodes_asc" className="bg-white text-stone-700 dark:bg-stone-900 dark:text-stone-200">Least Nodes</option>
               </select>
             </div>
-            <div className="lg:col-span-2 flex items-center justify-between gap-2">
+            <div className="lg:col-span-2 flex items-center justify-between gap-1.5">
               <button
                 onClick={() => updateDashboardParams({ page: Math.max(1, currentPage - 1) })}
                 disabled={currentPage <= 1}
-                className="flex-1 py-2.5 rounded-xl glass-control border text-xs font-bold text-stone-700 dark:text-stone-200 disabled:opacity-40 disabled:cursor-not-allowed"
-                title="Back"
+                className="w-9 h-9 rounded-lg glass-control border text-xs font-bold text-stone-700 dark:text-stone-200 disabled:opacity-40 disabled:cursor-not-allowed transition-all duration-150 flex items-center justify-center"
+                title="Previous page"
               >
-                <i className="fa-solid fa-chevron-left mr-1"></i>
-                Back
+                <i className="fa-solid fa-chevron-left"></i>
               </button>
+              <span className="text-xs font-semibold text-stone-600 dark:text-stone-400 tabular-nums">
+                {currentPage}/{totalPages}
+              </span>
               <button
                 onClick={() => updateDashboardParams({ page: Math.min(totalPages, currentPage + 1) })}
                 disabled={currentPage >= totalPages}
-                className="flex-1 py-2.5 rounded-xl glass-control border text-xs font-bold text-stone-700 dark:text-stone-200 disabled:opacity-40 disabled:cursor-not-allowed"
-                title="Forward"
+                className="w-9 h-9 rounded-lg glass-control border text-xs font-bold text-stone-700 dark:text-stone-200 disabled:opacity-40 disabled:cursor-not-allowed transition-all duration-150 flex items-center justify-center"
+                title="Next page"
               >
-                Forward
-                <i className="fa-solid fa-chevron-right ml-1"></i>
+                <i className="fa-solid fa-chevron-right"></i>
               </button>
             </div>
           </div>
@@ -415,10 +417,17 @@ const Dashboard: React.FC<DashboardProps> = ({
 
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
             {labs.length === 0 ? (
-              <div className="col-span-full py-20 bg-stone-100/50 dark:bg-stone-900/30 border-2 border-dashed border-stone-300 dark:border-stone-800 rounded-3xl flex flex-col items-center justify-center text-stone-500 dark:text-stone-500">
-                 <i className="fa-solid fa-folder-open text-5xl mb-4 opacity-10"></i>
-                 <h3 className="text-lg font-bold text-stone-500 dark:text-stone-400">Empty Workspace</h3>
-                 <p className="text-sm max-w-xs text-center mt-1">Start your first journey by clicking 'Create New Lab' above.</p>
+              <div className="col-span-full">
+                <EmptyState
+                  icon="fa-solid fa-diagram-project"
+                  title="Empty Workspace"
+                  description="Start your first journey by creating a new network lab."
+                  action={{
+                    label: 'Create New Lab',
+                    onClick: onCreate,
+                    icon: 'fa-solid fa-plus',
+                  }}
+                />
               </div>
             ) : filteredAndSortedLabs.length > 0 ? pagedLabs.map((lab) => {
               const agentStatus = labStatuses?.[lab.id];
@@ -433,7 +442,7 @@ const Dashboard: React.FC<DashboardProps> = ({
               return (
               <div
                 key={lab.id}
-                className="group relative glass-surface border rounded-2xl p-6 hover:border-sage-500/50 hover:shadow-2xl hover:shadow-sage-900/10 transition-all cursor-default overflow-hidden"
+                className="group relative glass-surface border rounded-2xl p-6 hover:border-sage-500/50 hover:shadow-2xl hover:shadow-sage-900/10 transition-all duration-200 cursor-default overflow-hidden hover:-translate-y-0.5"
               >
                 <div className="absolute top-0 right-0 p-4 opacity-0 group-hover:opacity-100 transition-opacity">
                   {pendingDeleteId === lab.id ? (
@@ -525,13 +534,13 @@ const Dashboard: React.FC<DashboardProps> = ({
                 <div className="flex gap-2">
                   <button
                     onClick={() => onSelect(lab)}
-                    className="flex-1 py-2 glass-control text-stone-700 dark:text-stone-200 text-xs font-bold rounded-lg border transition-all"
+                    className="flex-1 py-2 glass-control text-stone-700 dark:text-stone-200 text-xs font-bold rounded-lg border transition-all duration-150 hover:border-sage-500/50 hover:text-sage-700 dark:hover:text-sage-400 active:scale-[0.97]"
                   >
                     Open Designer
                   </button>
                   <button
                     onClick={() => onDownload?.(lab)}
-                    className="w-10 py-2 glass-control text-stone-700 dark:text-stone-200 text-xs font-bold rounded-lg border transition-all flex items-center justify-center"
+                    className="w-10 py-2 glass-control text-stone-700 dark:text-stone-200 text-xs font-bold rounded-lg border transition-all duration-150 hover:border-sage-500/50 hover:text-sage-700 dark:hover:text-sage-400 active:scale-[0.97] flex items-center justify-center"
                     title="Download lab bundle"
                   >
                     <i className="fa-solid fa-download"></i>
@@ -540,10 +549,12 @@ const Dashboard: React.FC<DashboardProps> = ({
               </div>
               );
             }) : (
-              <div className="col-span-full py-20 bg-stone-100/50 dark:bg-stone-900/30 border-2 border-dashed border-stone-300 dark:border-stone-800 rounded-3xl flex flex-col items-center justify-center text-stone-500 dark:text-stone-500">
-                 <i className="fa-solid fa-magnifying-glass text-5xl mb-4 opacity-10"></i>
-                 <h3 className="text-lg font-bold text-stone-500 dark:text-stone-400">No Matching Labs</h3>
-                 <p className="text-sm max-w-xs text-center mt-1">Adjust your search, filter, or sort options.</p>
+              <div className="col-span-full">
+                <EmptyState
+                  icon="fa-solid fa-magnifying-glass"
+                  title="No Matching Labs"
+                  description="Adjust your search, filter, or sort options."
+                />
               </div>
             )}
           </div>

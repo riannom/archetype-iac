@@ -119,7 +119,7 @@ const ImageFilterBar: React.FC<ImageFilterBarProps> = ({
       <div className="flex flex-wrap items-center gap-3">
         {/* Assignment status */}
         <div className="flex items-center gap-1.5">
-          <span className="text-[10px] font-bold text-stone-400 uppercase mr-1">Status:</span>
+          <span className="text-[11px] font-bold text-stone-400 uppercase mr-1">Status:</span>
           <FilterChip
             label="All"
             isActive={assignmentFilter === 'all'}
@@ -149,7 +149,7 @@ const ImageFilterBar: React.FC<ImageFilterBarProps> = ({
 
         {/* Image type */}
         <div className="flex items-center gap-1.5">
-          <span className="text-[10px] font-bold text-stone-400 uppercase mr-1">Type:</span>
+          <span className="text-[11px] font-bold text-stone-400 uppercase mr-1">Type:</span>
           {kinds.map((kind) => (
             <FilterChip
               key={kind}
@@ -166,7 +166,7 @@ const ImageFilterBar: React.FC<ImageFilterBarProps> = ({
         {/* Vendors (if any detected) */}
         {vendors.length > 0 && (
           <div className="flex items-center gap-1.5 flex-wrap">
-            <span className="text-[10px] font-bold text-stone-400 uppercase mr-1">Vendor:</span>
+            <span className="text-[11px] font-bold text-stone-400 uppercase mr-1">Vendor:</span>
             {vendors.map((vendor) => (
               <FilterChip
                 key={vendor}
@@ -184,7 +184,7 @@ const ImageFilterBar: React.FC<ImageFilterBarProps> = ({
             <div className="flex-1" />
             <button
               onClick={onClearAll}
-              className="text-[10px] font-bold text-red-500 hover:text-red-600 dark:text-red-400 dark:hover:text-red-300 uppercase tracking-wide"
+              className="text-[11px] font-bold text-red-500 hover:text-red-600 dark:text-red-400 dark:hover:text-red-300 uppercase tracking-wide"
             >
               <i className="fa-solid fa-xmark mr-1" />
               Clear filters

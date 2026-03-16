@@ -136,7 +136,7 @@ const UserCreateModal: React.FC<UserCreateModalProps> = ({ isOpen, onClose, onCr
                   <div className="h-1.5 bg-stone-200 dark:bg-stone-700 rounded-full overflow-hidden">
                     <div className={`h-full ${passwordStrength.color} ${passwordStrength.width} rounded-full transition-all duration-300`}></div>
                   </div>
-                  <span className={`text-[10px] font-medium mt-1 block ${
+                  <span className={`text-[11px] font-medium mt-1 block ${
                     passwordStrength.label === 'Weak' ? 'text-red-500' :
                     passwordStrength.label === 'Moderate' ? 'text-amber-500' :
                     'text-green-500'

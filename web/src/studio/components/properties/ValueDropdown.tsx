@@ -22,7 +22,7 @@ const ValueDropdown: React.FC<{
 
   return (
     <div className="space-y-2">
-      <label className="text-[10px] font-bold text-stone-500 uppercase tracking-widest">{label}</label>
+      <label className="text-[11px] font-bold text-stone-500 uppercase tracking-widest">{label}</label>
       <div ref={dropdownRef} className="relative">
         <button
           type="button"
@@ -33,7 +33,7 @@ const ValueDropdown: React.FC<{
           } ${isOpen ? 'border-sage-500 dark:border-sage-500' : ''}`}
         >
           <span className="text-stone-900 dark:text-stone-100">{value}</span>
-          <i className={`fa-solid fa-chevron-down text-[10px] text-stone-400 transition-transform ${isOpen ? 'rotate-180' : ''}`} />
+          <i className={`fa-solid fa-chevron-down text-[11px] text-stone-400 transition-transform ${isOpen ? 'rotate-180' : ''}`} />
         </button>
         {isOpen && (
           <div className="absolute z-50 w-full mt-1 bg-stone-50 dark:bg-stone-900 border border-stone-200 dark:border-stone-700 rounded-lg shadow-lg overflow-hidden">

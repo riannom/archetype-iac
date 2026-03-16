@@ -26,7 +26,7 @@ const StudioConsolePage: React.FC = () => {
         <div className="text-sm font-bold text-stone-900 dark:text-stone-100">
           Console: <span className="text-sage-400">{nodeId}</span>
         </div>
-        <div className="text-[10px] text-stone-500 uppercase tracking-widest">Lab {labId}</div>
+        <div className="text-[11px] text-stone-500 uppercase tracking-widest">Lab {labId}</div>
       </header>
       <div className="flex-1 p-4">
         <div className="h-full glass-surface border border-stone-200 dark:border-stone-800 rounded-xl overflow-hidden">

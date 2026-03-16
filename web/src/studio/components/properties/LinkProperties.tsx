@@ -31,7 +31,7 @@ const LinkProperties: React.FC<LinkPropertiesProps> = ({
       </div>
       <div className="p-6 space-y-6">
         <div className="p-3 bg-stone-100 dark:bg-stone-800 rounded border border-stone-200 dark:border-stone-700">
-          <div className="text-[10px] text-stone-500 font-bold uppercase mb-2">Topology Context</div>
+          <div className="text-[11px] text-stone-500 font-bold uppercase mb-2">Topology Context</div>
           <div className="flex items-center justify-between text-xs">
             <span className="text-stone-700 dark:text-stone-300">{sourceNode?.name}</span>
             <i className="fa-solid fa-link text-stone-400 dark:text-stone-600 mx-2"></i>

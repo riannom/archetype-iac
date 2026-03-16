@@ -64,6 +64,13 @@ body {
   backdrop-filter: blur(2px);
 }
 
+/* Dark mode border minimum visibility */
+.dark .glass-surface,
+.dark .glass-surface-elevated,
+.dark .glass-control {
+  border-color: rgb(var(--ui-glass-border-rgb) / 0.85);
+}
+
 /* Global scrollbar styling - uses theme CSS variable */
 * {
   scrollbar-width: thin;

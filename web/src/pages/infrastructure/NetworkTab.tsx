@@ -266,12 +266,12 @@ const NetworkTab: React.FC<NetworkTabProps> = ({
                               {config?.transport_mode === 'subinterface' ? 'Subinterface' : config?.transport_mode === 'dedicated' ? 'Dedicated' : 'Management'}
                             </span>
                             {config?.transport_mode && config.transport_mode !== 'management' && !hasDataPlaneMtuTest && (
-                              <span className="text-[10px] text-amber-600 dark:text-amber-400">
+                              <span className="text-[11px] text-amber-600 dark:text-amber-400">
                                 Run MTU test to enable transport
                               </span>
                             )}
                             {config?.transport_mode && config.transport_mode !== 'management' && hasDataPlaneMtuTest && (
-                              <span className="text-[10px] text-emerald-600 dark:text-emerald-400">
+                              <span className="text-[11px] text-emerald-600 dark:text-emerald-400">
                                 Transport enabled
                               </span>
                             )}
@@ -288,7 +288,7 @@ const NetworkTab: React.FC<NetworkTabProps> = ({
                           <div className="flex flex-col">
                             <span>{effectiveDataPlaneIp || '-'}</span>
                             {config?.transport_mode === 'management' && effectiveDataPlaneIp && (
-                              <span className="text-[10px] text-amber-600 dark:text-amber-400">
+                              <span className="text-[11px] text-amber-600 dark:text-amber-400">
                                 Auto-selected transport IP
                               </span>
                             )}
@@ -315,7 +315,7 @@ const NetworkTab: React.FC<NetworkTabProps> = ({
                         </td>
                         <td className="py-2 px-3">
                           <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium ${statusBadge.color}`}>
-                            <i className={`fa-solid ${statusBadge.icon} text-[10px]`}></i>
+                            <i className={`fa-solid ${statusBadge.icon} text-[11px]`}></i>
                             {statusBadge.text}
                           </span>
                           {config?.sync_error && (
@@ -440,7 +440,7 @@ const NetworkTab: React.FC<NetworkTabProps> = ({
                             </td>
                             <td className="py-2 px-3">
                               <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium ${syncBadge.color}`}>
-                                <i className={`fa-solid ${syncBadge.icon} text-[10px]`}></i>
+                                <i className={`fa-solid ${syncBadge.icon} text-[11px]`}></i>
                                 {syncBadge.text}
                               </span>
                               {iface.sync_error && (
@@ -526,7 +526,7 @@ const NetworkTab: React.FC<NetworkTabProps> = ({
                             <div className="flex flex-col">
                               <span className="font-medium text-stone-700 dark:text-stone-300">{group.name}</span>
                               {group.description && (
-                                <span className="text-[10px] text-stone-500 dark:text-stone-400">{group.description}</span>
+                                <span className="text-[11px] text-stone-500 dark:text-stone-400">{group.description}</span>
                               )}
                             </div>
                           </td>
@@ -538,7 +538,7 @@ const NetworkTab: React.FC<NetworkTabProps> = ({
                                 {group.members.map(member => (
                                   <span
                                     key={member.id}
-                                    className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-stone-100 dark:bg-stone-800 text-stone-600 dark:text-stone-400"
+                                    className="inline-flex items-center px-1.5 py-0.5 rounded text-[11px] font-medium bg-stone-100 dark:bg-stone-800 text-stone-600 dark:text-stone-400"
                                   >
                                     {member.interface_name || member.managed_interface_id.slice(0, 8)}
                                     {member.role ? ` (${member.role})` : ''}

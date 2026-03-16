@@ -170,7 +170,7 @@ export const ImageSyncProgress: React.FC<ImageSyncProgressProps> = ({
           <div className="flex items-center justify-between mb-2">
             <div className="flex items-center gap-2">
               <span
-                className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold uppercase ${
+                className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-bold uppercase ${
                   statusColors[job.status] || statusColors.pending
                 }`}
               >
@@ -199,7 +199,7 @@ export const ImageSyncProgress: React.FC<ImageSyncProgressProps> = ({
           {/* Progress bar */}
           {['transferring', 'loading'].includes(job.status) && (
             <div className="mb-2">
-              <div className="flex justify-between text-[10px] text-stone-500 mb-1">
+              <div className="flex justify-between text-[11px] text-stone-500 mb-1">
                 <span>{job.progress_percent}%</span>
                 <span>
                   {formatBytes(job.bytes_transferred)} / {formatBytes(job.total_bytes || job.bytes_transferred)}
@@ -225,7 +225,7 @@ export const ImageSyncProgress: React.FC<ImageSyncProgressProps> = ({
           )}
 
           {/* Footer stats */}
-          <div className="flex items-center justify-between text-[10px] text-stone-400 mt-2">
+          <div className="flex items-center justify-between text-[11px] text-stone-400 mt-2">
             <span>
               <i className="fa-solid fa-clock mr-1" />
               {formatDuration(job.started_at, job.completed_at)}

@@ -106,7 +106,7 @@ const ImageLibraryView: React.FC<ImageLibraryViewProps> = ({
               <h3 className="text-xs font-bold text-stone-500 dark:text-stone-400 uppercase tracking-widest">
                 Unassigned Images
               </h3>
-              <span className="text-[10px] text-stone-400">
+              <span className="text-[11px] text-stone-400">
                 ({unassignedImages.length + filteredPendingQcow2Uploads.length})
               </span>
             </div>
@@ -157,7 +157,7 @@ const ImageLibraryView: React.FC<ImageLibraryViewProps> = ({
                 <h3 className="text-xs font-bold text-stone-700 dark:text-stone-300">
                   {device?.name || deviceId}
                 </h3>
-                <span className="text-[10px] text-stone-400">({images.length})</span>
+                <span className="text-[11px] text-stone-400">({images.length})</span>
               </div>
               <div className="grid grid-cols-2 gap-3">
                 {images.map((img) => (

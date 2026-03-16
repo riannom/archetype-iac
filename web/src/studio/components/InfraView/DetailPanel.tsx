@@ -52,7 +52,7 @@ const DetailPanel: React.FC<DetailPanelProps> = ({
                     style={{ backgroundColor: agent.color }}
                   />
                   {agent.agentName}
-                  <span className="text-stone-500 font-mono text-[10px]">
+                  <span className="text-stone-500 font-mono text-[11px]">
                     {agent.stats.nodeCount} nodes ({agent.stats.runningCount} running)
                   </span>
                 </span>

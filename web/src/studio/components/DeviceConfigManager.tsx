@@ -232,7 +232,7 @@ const DeviceConfigManager: React.FC<DeviceConfigManagerProps> = ({
                 {hasFilters && (
                   <button
                     onClick={clearFilters}
-                    className="text-[10px] text-red-500 hover:text-red-600 font-bold uppercase"
+                    className="text-[11px] text-red-500 hover:text-red-600 font-bold uppercase"
                   >
                     Clear
                   </button>
@@ -247,10 +247,10 @@ const DeviceConfigManager: React.FC<DeviceConfigManagerProps> = ({
                 <div className="mb-4">
                   <div className="flex items-center gap-2 mb-2 px-1">
                     <span className="w-2 h-2 rounded-full bg-stone-500"></span>
-                    <span className="text-[10px] font-bold text-stone-600 dark:text-stone-400 uppercase tracking-widest">
+                    <span className="text-[11px] font-bold text-stone-600 dark:text-stone-400 uppercase tracking-widest">
                       Custom Devices
                     </span>
-                    <span className="text-[10px] text-stone-400 dark:text-stone-500">
+                    <span className="text-[11px] text-stone-400 dark:text-stone-500">
                       ({filteredCustomDevices.length})
                     </span>
                   </div>
@@ -293,10 +293,10 @@ const DeviceConfigManager: React.FC<DeviceConfigManagerProps> = ({
                   {filteredCustomDevices.length > 0 && (
                     <div className="flex items-center gap-2 mb-2 px-1">
                       <span className="w-2 h-2 rounded-full bg-stone-400"></span>
-                      <span className="text-[10px] font-bold text-stone-500 dark:text-stone-400 uppercase tracking-widest">
+                      <span className="text-[11px] font-bold text-stone-500 dark:text-stone-400 uppercase tracking-widest">
                         Vendor Devices
                       </span>
-                      <span className="text-[10px] text-stone-400 dark:text-stone-500">
+                      <span className="text-[11px] text-stone-400 dark:text-stone-500">
                         ({filteredRegularDevices.length})
                       </span>
                     </div>
@@ -324,7 +324,7 @@ const DeviceConfigManager: React.FC<DeviceConfigManagerProps> = ({
 
             {/* Device count */}
             <div className="p-3 border-t border-stone-200 dark:border-stone-800 glass-surface">
-              <p className="text-[10px] text-stone-500 uppercase tracking-wider font-bold">
+              <p className="text-[11px] text-stone-500 uppercase tracking-wider font-bold">
                 {filteredDevices.length} of {deviceModels.length} devices
               </p>
             </div>
@@ -377,7 +377,7 @@ const DeviceConfigManager: React.FC<DeviceConfigManagerProps> = ({
 
             <div className="space-y-3">
               <div>
-                <label className="block text-[10px] font-bold text-stone-500 dark:text-stone-400 uppercase tracking-wider mb-1">
+                <label className="block text-[11px] font-bold text-stone-500 dark:text-stone-400 uppercase tracking-wider mb-1">
                   Device ID
                 </label>
                 <input
@@ -391,7 +391,7 @@ const DeviceConfigManager: React.FC<DeviceConfigManagerProps> = ({
               </div>
 
               <div>
-                <label className="block text-[10px] font-bold text-stone-500 dark:text-stone-400 uppercase tracking-wider mb-1">
+                <label className="block text-[11px] font-bold text-stone-500 dark:text-stone-400 uppercase tracking-wider mb-1">
                   Display Name (Optional)
                 </label>
                 <input
@@ -403,7 +403,7 @@ const DeviceConfigManager: React.FC<DeviceConfigManagerProps> = ({
                 />
               </div>
 
-              <p className="text-[10px] text-stone-500 dark:text-stone-400">
+              <p className="text-[11px] text-stone-500 dark:text-stone-400">
                 Custom devices appear at the top of the list and can be used in Image Management.
               </p>
             </div>

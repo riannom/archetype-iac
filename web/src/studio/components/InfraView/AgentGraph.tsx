@@ -594,7 +594,7 @@ const AgentGraph: React.FC<AgentGraphProps> = ({
           >
             <i className="fa-solid fa-plus text-xs" />
           </button>
-          <div className="px-2.5 py-1 text-center text-[10px] font-mono text-stone-500 border-b border-stone-700/50 select-none">
+          <div className="px-2.5 py-1 text-center text-[11px] font-mono text-stone-500 border-b border-stone-700/50 select-none">
             {zoomPercent}%
           </div>
           <button

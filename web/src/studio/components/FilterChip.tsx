@@ -35,7 +35,7 @@ const FilterChip: React.FC<FilterChipProps> = ({
     <button
       onClick={onClick}
       className={`
-        inline-flex items-center px-2.5 py-1 rounded-md text-[10px] font-bold uppercase tracking-wide
+        inline-flex items-center px-2.5 py-1 rounded-md text-[11px] font-bold uppercase tracking-wide
         transition-all duration-150 ease-out
         ${isActive
           ? 'bg-sage-600 text-white shadow-sm'
@@ -46,7 +46,7 @@ const FilterChip: React.FC<FilterChipProps> = ({
       {getStatusDot()}
       <span>{label}</span>
       {count !== undefined && (
-        <span className={`ml-1.5 px-1.5 py-0.5 rounded text-[9px] ${
+        <span className={`ml-1.5 px-1.5 py-0.5 rounded text-[11px] ${
           isActive
             ? 'bg-sage-700 text-sage-100'
             : 'bg-stone-200 dark:bg-stone-700 text-stone-500 dark:text-stone-400'

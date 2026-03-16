@@ -55,7 +55,7 @@ export function NotificationCenter() {
       >
         <i className="fa-solid fa-bell" />
         {unreadCount > 0 && (
-          <span className="absolute -top-1 -right-1 w-5 h-5 bg-red-500 text-white text-[10px] font-bold rounded-full flex items-center justify-center">
+          <span className="absolute -top-1 -right-1 w-5 h-5 bg-red-500 text-white text-[11px] font-bold rounded-full flex items-center justify-center">
             {unreadCount > 9 ? '9+' : unreadCount}
           </span>
         )}
@@ -121,7 +121,7 @@ export function NotificationCenter() {
                             {notif.message}
                           </p>
                         )}
-                        <p className="text-[10px] text-stone-400 dark:text-stone-500 mt-1">
+                        <p className="text-[11px] text-stone-400 dark:text-stone-500 mt-1">
                           {formatTime(notif.timestamp)}
                         </p>
                       </div>

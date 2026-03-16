@@ -43,7 +43,7 @@ function EndpointCard({ endpoint, label }: { endpoint: LinkEndpointDetail; label
 
   return (
     <div className="flex-1 min-w-0">
-      <div className="text-[10px] text-stone-500 uppercase font-bold tracking-wider mb-1.5">
+      <div className="text-[11px] text-stone-500 uppercase font-bold tracking-wider mb-1.5">
         {label}
       </div>
       <div className="bg-stone-800/50 rounded-lg p-3 border border-stone-700/30">
@@ -51,7 +51,7 @@ function EndpointCard({ endpoint, label }: { endpoint: LinkEndpointDetail; label
         <div className="flex items-center gap-2 mb-2">
           <span className="text-sm font-medium text-stone-200">{endpoint.node_name}</span>
           {endpoint.host_name && (
-            <span className="text-[10px] font-mono text-stone-500">
+            <span className="text-[11px] font-mono text-stone-500">
               ({endpoint.host_name})
             </span>
           )}
@@ -74,14 +74,14 @@ function EndpointCard({ endpoint, label }: { endpoint: LinkEndpointDetail; label
           {endpoint.ovs_port && (
             <div className="flex items-center gap-2">
               <span className="text-stone-500 w-16 flex-shrink-0">OVS port</span>
-              <span className="font-mono text-stone-400 text-[10px]">{endpoint.ovs_port}</span>
+              <span className="font-mono text-stone-400 text-[11px]">{endpoint.ovs_port}</span>
             </div>
           )}
 
           {endpoint.vlan_tag != null && (
             <div className="flex items-center gap-2">
               <span className="text-stone-500 w-16 flex-shrink-0">VLAN</span>
-              <span className="font-mono text-[10px] px-1.5 py-0.5 bg-stone-700/60 text-stone-300 rounded">
+              <span className="font-mono text-[11px] px-1.5 py-0.5 bg-stone-700/60 text-stone-300 rounded">
                 {endpoint.vlan_tag}
               </span>
             </div>
@@ -106,7 +106,7 @@ function EndpointCard({ endpoint, label }: { endpoint: LinkEndpointDetail; label
               </span>
             </div>
             {endpoint.oper_reason && (
-              <span className="text-stone-600 text-[10px]">({endpoint.oper_reason})</span>
+              <span className="text-stone-600 text-[11px]">({endpoint.oper_reason})</span>
             )}
           </div>
 
@@ -171,7 +171,7 @@ const VniLinkDetailPanel: React.FC<VniLinkDetailPanelProps> = ({
               <span className={`text-xs font-medium ${stateColor}`}>{linkState.actual_state}</span>
             </div>
             {linkState.vni != null && (
-              <span className="font-mono text-[10px] px-1.5 py-0.5 bg-violet-950/40 text-violet-400 rounded">
+              <span className="font-mono text-[11px] px-1.5 py-0.5 bg-violet-950/40 text-violet-400 rounded">
                 VNI {linkState.vni}
               </span>
             )}
@@ -213,7 +213,7 @@ const VniLinkDetailPanel: React.FC<VniLinkDetailPanelProps> = ({
               {/* Tunnel section (only for cross-host) */}
               {detail.tunnel && (
                 <div>
-                  <div className="text-[10px] text-stone-500 uppercase font-bold tracking-wider mb-1.5">
+                  <div className="text-[11px] text-stone-500 uppercase font-bold tracking-wider mb-1.5">
                     VXLAN Tunnel
                   </div>
                   <div className="bg-stone-800/50 rounded-lg p-3 border border-stone-700/30">
@@ -235,7 +235,7 @@ const VniLinkDetailPanel: React.FC<VniLinkDetailPanelProps> = ({
                       {detail.tunnel.port_name && (
                         <div className="flex items-center gap-2">
                           <span className="text-stone-500 w-16 flex-shrink-0">Port</span>
-                          <span className="font-mono text-stone-400 text-[10px]">{detail.tunnel.port_name}</span>
+                          <span className="font-mono text-stone-400 text-[11px]">{detail.tunnel.port_name}</span>
                         </div>
                       )}
                       <div className="col-span-2 flex items-center gap-2 mt-1">
@@ -248,7 +248,7 @@ const VniLinkDetailPanel: React.FC<VniLinkDetailPanelProps> = ({
                       </div>
                       {detail.tunnel.error_message && (
                         <div className="col-span-2 mt-1">
-                          <span className="text-red-400 text-[10px]">{detail.tunnel.error_message}</span>
+                          <span className="text-red-400 text-[11px]">{detail.tunnel.error_message}</span>
                         </div>
                       )}
                     </div>

@@ -195,13 +195,13 @@ const RuntimeControl: React.FC<RuntimeControlProps> = ({ labId, nodes, runtimeSt
           <table className="w-full text-left border-collapse">
             <thead className="sticky top-0 z-10">
               <tr className="glass-control border-b border-stone-200 dark:border-stone-800">
-                <th className="px-6 py-4 text-[10px] font-bold text-stone-500 uppercase tracking-widest">Device Name</th>
-                <th className="px-6 py-4 text-[10px] font-bold text-stone-500 uppercase tracking-widest">Model</th>
-                <th className="px-6 py-4 text-[10px] font-bold text-stone-500 uppercase tracking-widest">Version</th>
-                <th className="px-6 py-4 text-[10px] font-bold text-stone-500 uppercase tracking-widest">Status</th>
-                <th className="px-6 py-4 text-[10px] font-bold text-stone-500 uppercase tracking-widest">Assigned</th>
-                <th className="px-6 py-4 text-[10px] font-bold text-stone-500 uppercase tracking-widest">Running On</th>
-                <th className="px-6 py-4 text-[10px] font-bold text-stone-500 uppercase tracking-widest text-right">Actions</th>
+                <th className="px-6 py-4 text-[11px] font-bold text-stone-500 uppercase tracking-widest">Device Name</th>
+                <th className="px-6 py-4 text-[11px] font-bold text-stone-500 uppercase tracking-widest">Model</th>
+                <th className="px-6 py-4 text-[11px] font-bold text-stone-500 uppercase tracking-widest">Version</th>
+                <th className="px-6 py-4 text-[11px] font-bold text-stone-500 uppercase tracking-widest">Status</th>
+                <th className="px-6 py-4 text-[11px] font-bold text-stone-500 uppercase tracking-widest">Assigned</th>
+                <th className="px-6 py-4 text-[11px] font-bold text-stone-500 uppercase tracking-widest">Running On</th>
+                <th className="px-6 py-4 text-[11px] font-bold text-stone-500 uppercase tracking-widest text-right">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-stone-200/50 dark:divide-stone-800/50">
@@ -219,7 +219,7 @@ const RuntimeControl: React.FC<RuntimeControlProps> = ({ labId, nodes, runtimeSt
                         </div>
                         <div>
                           <div className="text-sm font-bold text-stone-900 dark:text-white">{node.name}</div>
-                          <div className="text-[10px] text-stone-500 font-mono uppercase tracking-tighter">{node.id}</div>
+                          <div className="text-[11px] text-stone-500 font-mono uppercase tracking-tighter">{node.id}</div>
                         </div>
                       </div>
                     </td>
@@ -231,7 +231,7 @@ const RuntimeControl: React.FC<RuntimeControlProps> = ({ labId, nodes, runtimeSt
                     </td>
                     <td className="px-6 py-4">
                       <div className="flex items-center gap-2">
-                        <span className={`px-2.5 py-1 rounded-full text-[10px] font-black uppercase tracking-wider border transition-all ${getStatusColor(status)}`}>
+                        <span className={`px-2.5 py-1 rounded-full text-[11px] font-black uppercase tracking-wider border transition-all ${getStatusColor(status)}`}>
                           {status}
                         </span>
                         {/* Enforcement failure warning indicator */}

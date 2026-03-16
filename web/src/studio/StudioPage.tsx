@@ -365,7 +365,7 @@ const StudioPage: React.FC = () => {
                 className="absolute left-2 top-2 z-20 w-8 h-8 rounded-lg bg-white/80 dark:bg-stone-800/80 backdrop-blur border border-stone-200 dark:border-stone-700 flex items-center justify-center text-stone-500 hover:text-stone-700 dark:hover:text-stone-200 shadow-sm transition-colors"
                 title="Expand sidebar"
               >
-                <i className="fa-solid fa-chevron-right text-[10px]" />
+                <i className="fa-solid fa-chevron-right text-[11px]" />
               </button>
             )}
             <Canvas

@@ -91,7 +91,7 @@ const UploadControls: React.FC<UploadControlsProps> = ({
               >
                 <i className="fa-solid fa-file-lines mr-2"></i> Logs
                 {uploadErrorCount > 0 && (
-                  <span className="ml-2 inline-flex items-center justify-center min-w-[1.1rem] h-[1.1rem] px-1 rounded-full bg-red-100 dark:bg-red-900/40 text-red-700 dark:text-red-300 text-[9px] font-black">
+                  <span className="ml-2 inline-flex items-center justify-center min-w-[1.1rem] h-[1.1rem] px-1 rounded-full bg-red-100 dark:bg-red-900/40 text-red-700 dark:text-red-300 text-[11px] font-black">
                     {uploadErrorCount}
                   </span>
                 )}
@@ -120,7 +120,7 @@ const UploadControls: React.FC<UploadControlsProps> = ({
         )}
         {uploadProgress !== null && (
           <div className="mt-3">
-            <div className="text-[10px] font-bold text-stone-500 uppercase mb-1">
+            <div className="text-[11px] font-bold text-stone-500 uppercase mb-1">
               Image upload {uploadProgress}%
             </div>
             <div className="h-1.5 bg-stone-200 dark:bg-stone-800 rounded-full overflow-hidden">
@@ -130,7 +130,7 @@ const UploadControls: React.FC<UploadControlsProps> = ({
         )}
         {qcow2Progress !== null && (
           <div className="mt-3">
-            <div className="flex items-center gap-2 text-[10px] font-bold text-stone-500 uppercase mb-1">
+            <div className="flex items-center gap-2 text-[11px] font-bold text-stone-500 uppercase mb-1">
               <span>
                 {isQcow2PostProcessing
                   ? 'QCOW2 upload complete. Processing image...'

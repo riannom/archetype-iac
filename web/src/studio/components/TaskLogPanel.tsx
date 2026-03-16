@@ -343,7 +343,7 @@ const TaskLogPanel: React.FC<TaskLogPanelProps> = ({
         <div className="flex items-center gap-2">
           {wsConnected !== undefined && (
             <div
-              className={`flex items-center gap-1.5 px-2 py-0.5 rounded border text-[10px] font-bold ${
+              className={`flex items-center gap-1.5 px-2 py-0.5 rounded border text-[11px] font-bold ${
                 reconnectAttempts > 0
                   ? 'bg-amber-50 dark:bg-amber-900/30 border-amber-200 dark:border-amber-800 text-amber-600 dark:text-amber-400'
                   : 'bg-sage-100 dark:bg-sage-900 border-sage-300 dark:border-sage-700 text-sage-700 dark:text-sage-300'
@@ -368,11 +368,11 @@ const TaskLogPanel: React.FC<TaskLogPanelProps> = ({
               </span>
             </div>
           )}
-          <span className={`text-[10px] font-black uppercase tracking-widest ${headerTitleClass}`}>
+          <span className={`text-[11px] font-black uppercase tracking-widest ${headerTitleClass}`}>
             {hasConsoleTabs ? 'Panel' : 'Task Log'}
           </span>
           {errorCount > 0 && logTabActive && (
-            <span className="px-1.5 py-0.5 bg-red-600 text-white text-[9px] font-bold rounded-full">
+            <span className="px-1.5 py-0.5 bg-red-600 text-white text-[11px] font-bold rounded-full">
               {errorCount}
             </span>
           )}
@@ -383,7 +383,7 @@ const TaskLogPanel: React.FC<TaskLogPanelProps> = ({
             <label
               onMouseDown={(e) => e.stopPropagation()}
               onClick={(e) => e.stopPropagation()}
-              className={`flex items-center gap-1.5 cursor-pointer text-[10px] font-bold uppercase tracking-widest ${headerActionClass}`}
+              className={`flex items-center gap-1.5 cursor-pointer text-[11px] font-bold uppercase tracking-widest ${headerActionClass}`}
             >
               <input
                 type="checkbox"
@@ -401,7 +401,7 @@ const TaskLogPanel: React.FC<TaskLogPanelProps> = ({
                 e.stopPropagation();
                 onClear();
               }}
-              className={`text-[10px] font-bold uppercase tracking-widest ${headerActionClass}`}
+              className={`text-[11px] font-bold uppercase tracking-widest ${headerActionClass}`}
             >
               Clear
             </button>
@@ -410,7 +410,7 @@ const TaskLogPanel: React.FC<TaskLogPanelProps> = ({
           <div
             onMouseDown={(e) => e.stopPropagation()}
             onClick={(e) => e.stopPropagation()}
-            className={`flex items-center gap-2 text-[10px] font-bold transition-colors ${uptimeClass}`}
+            className={`flex items-center gap-2 text-[11px] font-bold transition-colors ${uptimeClass}`}
           >
             <i className="fa-solid fa-clock-rotate-left"></i>
             <span className="uppercase">UPTIME: {uptime}</span>
@@ -443,13 +443,13 @@ const TaskLogPanel: React.FC<TaskLogPanelProps> = ({
               {/* Log tab */}
               <button
                 onClick={() => onSelectTab?.('log')}
-                className={`h-8 px-4 flex items-center gap-2 text-[10px] font-bold border-b-2 transition-all ${
+                className={`h-8 px-4 flex items-center gap-2 text-[11px] font-bold border-b-2 transition-all ${
                   logTabActive
                     ? 'text-sage-600 dark:text-sage-400 border-sage-500'
                     : 'text-stone-500 dark:text-stone-500 border-transparent hover:text-stone-700 dark:hover:text-stone-300'
                 }`}
               >
-                <i className="fa-solid fa-list-check text-[9px]"></i>
+                <i className="fa-solid fa-list-check text-[11px]"></i>
                 <span>Log</span>
                 {errorCount > 0 && (
                   <span className="px-1.5 py-0.5 bg-red-600 text-white text-[8px] font-bold rounded-full">
@@ -488,13 +488,13 @@ const TaskLogPanel: React.FC<TaskLogPanelProps> = ({
                           onSelectTab?.(tab.nodeId);
                         }
                       }}
-                      className={`h-8 px-4 flex items-center gap-2 text-[10px] font-bold border-b-2 transition-all cursor-pointer shrink-0 ${
+                      className={`h-8 px-4 flex items-center gap-2 text-[11px] font-bold border-b-2 transition-all cursor-pointer shrink-0 ${
                         isActive
                           ? 'text-sage-600 dark:text-sage-400 border-sage-500'
                           : 'text-stone-500 dark:text-stone-500 border-transparent hover:text-stone-700 dark:hover:text-stone-300'
                       } ${isBeingDragged ? 'opacity-50' : ''} ${isBeingReordered ? 'opacity-50 bg-sage-500/10' : ''} ${onUndockConsole || onReorderTab ? 'cursor-grab active:cursor-grabbing' : ''}`}
                     >
-                      <i className="fa-solid fa-terminal text-[9px]"></i>
+                      <i className="fa-solid fa-terminal text-[11px]"></i>
                       <span className="truncate max-w-[100px]">{tab.nodeName}</span>
                       {onCloseConsoleTab && (
                         <button
@@ -549,7 +549,7 @@ const TaskLogPanel: React.FC<TaskLogPanelProps> = ({
                         </span>
                         <span className="text-stone-700 dark:text-stone-300 flex-1">{entry.message}</span>
                         {isClickable && (
-                          <span className="text-stone-400 dark:text-stone-600 text-[10px] self-center">
+                          <span className="text-stone-400 dark:text-stone-600 text-[11px] self-center">
                             <i className="fa-solid fa-chevron-right" />
                           </span>
                         )}
@@ -593,7 +593,7 @@ const TaskLogPanel: React.FC<TaskLogPanelProps> = ({
       {/* Tab drag ghost */}
       {tabDragState?.isDragging && (
         <div
-          className="fixed z-[200] bg-stone-800 border border-stone-600 rounded px-3 py-1.5 text-[10px] font-bold text-sage-400 shadow-xl pointer-events-none"
+          className="fixed z-[200] bg-stone-800 border border-stone-600 rounded px-3 py-1.5 text-[11px] font-bold text-sage-400 shadow-xl pointer-events-none"
           style={{
             left: tabDragState.startX + 10,
             top: tabDragState.currentY + 10,

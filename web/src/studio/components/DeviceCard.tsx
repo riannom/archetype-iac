@@ -98,22 +98,22 @@ const DeviceCard: React.FC<DeviceCardProps> = ({
               </h3>
             </div>
             {breadcrumb && (
-              <p className="text-[10px] text-stone-400 dark:text-stone-500 truncate mt-0.5">
+              <p className="text-[11px] text-stone-400 dark:text-stone-500 truncate mt-0.5">
                 {breadcrumb}
               </p>
             )}
             <div className="flex flex-col gap-0.5 mt-1">
               <div className="flex items-center gap-2">
-                <span className="text-[10px] font-bold text-stone-500 dark:text-stone-400 uppercase">
+                <span className="text-[11px] font-bold text-stone-500 dark:text-stone-400 uppercase">
                   {device.vendor}
                 </span>
                 {device.licenseRequired && (
-                  <span className="text-[9px] px-1.5 py-0.5 bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400 rounded font-bold">
+                  <span className="text-[11px] px-1.5 py-0.5 bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400 rounded font-bold">
                     License
                   </span>
                 )}
               </div>
-              <span className="text-[10px] text-stone-400 dark:text-stone-500 font-mono">
+              <span className="text-[11px] text-stone-400 dark:text-stone-500 font-mono">
                 {device.id}
               </span>
             </div>
@@ -122,7 +122,7 @@ const DeviceCard: React.FC<DeviceCardProps> = ({
           {/* Image count badge */}
           <div
             className={`
-              px-2 py-1 rounded-md text-[10px] font-bold
+              px-2 py-1 rounded-md text-[11px] font-bold
               ${hasImages
                 ? 'bg-sage-100 dark:bg-sage-800 text-sage-700 dark:text-sage-400'
                 : 'bg-stone-100 dark:bg-stone-800 text-stone-500'
@@ -146,7 +146,7 @@ const DeviceCard: React.FC<DeviceCardProps> = ({
           `}
         >
           <i className={`fa-solid fa-arrow-down text-sm ${isDropTarget ? 'text-sage-500' : 'text-stone-400'}`} />
-          <p className={`text-[10px] font-bold mt-1 ${isDropTarget ? 'text-sage-600 dark:text-sage-400' : 'text-stone-400'}`}>
+          <p className={`text-[11px] font-bold mt-1 ${isDropTarget ? 'text-sage-600 dark:text-sage-400' : 'text-stone-400'}`}>
             Drop image here
           </p>
         </div>
@@ -173,13 +173,13 @@ const DeviceCard: React.FC<DeviceCardProps> = ({
                 <span className="font-medium text-stone-700 dark:text-stone-200 truncate block">
                   {img.filename || img.reference}
                 </span>
-                <span className="text-[9px] text-stone-400">
+                <span className="text-[11px] text-stone-400">
                   {img.version && <span>{img.version}</span>}
                   {img.size_bytes && <span className="ml-2">{formatSize(img.size_bytes)}</span>}
                 </span>
               </div>
               {img.is_default && (
-                <span className="px-1.5 py-0.5 bg-emerald-500 text-white text-[9px] font-bold rounded">
+                <span className="px-1.5 py-0.5 bg-emerald-500 text-white text-[11px] font-bold rounded">
                   DEFAULT
                 </span>
               )}
@@ -193,7 +193,7 @@ const DeviceCard: React.FC<DeviceCardProps> = ({
                     className="p-1 hover:bg-stone-200 dark:hover:bg-stone-700 rounded text-stone-400 hover:text-sage-600"
                     title="Set as default"
                   >
-                    <i className="fa-solid fa-star text-[10px]" />
+                    <i className="fa-solid fa-star text-[11px]" />
                   </button>
                 )}
                 <button
@@ -204,13 +204,13 @@ const DeviceCard: React.FC<DeviceCardProps> = ({
                   className="p-1 hover:bg-red-100 dark:hover:bg-red-900/30 rounded text-stone-400 hover:text-red-500"
                   title="Unassign image"
                 >
-                  <i className="fa-solid fa-xmark text-[10px]" />
+                  <i className="fa-solid fa-xmark text-[11px]" />
                 </button>
               </div>
             </div>
           ))}
           {assignedImages.length > 3 && (
-            <p className="text-[10px] text-stone-400 text-center">
+            <p className="text-[11px] text-stone-400 text-center">
               +{assignedImages.length - 3} more
             </p>
           )}
@@ -223,13 +223,13 @@ const DeviceCard: React.FC<DeviceCardProps> = ({
           {device.tags.slice(0, 4).map((tag) => (
             <span
               key={tag}
-              className="px-1.5 py-0.5 bg-stone-100 dark:bg-stone-800 text-stone-500 dark:text-stone-400 text-[9px] rounded"
+              className="px-1.5 py-0.5 bg-stone-100 dark:bg-stone-800 text-stone-500 dark:text-stone-400 text-[11px] rounded"
             >
               {tag}
             </span>
           ))}
           {device.tags.length > 4 && (
-            <span className="text-[9px] text-stone-400">+{device.tags.length - 4}</span>
+            <span className="text-[11px] text-stone-400">+{device.tags.length - 4}</span>
           )}
         </div>
       )}

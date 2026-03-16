@@ -218,7 +218,7 @@ const VerificationPanel: React.FC<VerificationPanelProps> = ({
                   >
                     <div className="flex items-center gap-2 min-w-0">
                       {hasDetail && (
-                        <i className={`fa-solid fa-chevron-right text-[10px] text-stone-400 transition-transform ${isExpanded ? 'rotate-90' : ''}`} />
+                        <i className={`fa-solid fa-chevron-right text-[11px] text-stone-400 transition-transform ${isExpanded ? 'rotate-90' : ''}`} />
                       )}
                       <i className={`fa-solid ${si.icon} ${si.color} text-xs`} />
                       <span className="text-sm font-medium text-stone-700 dark:text-stone-200 truncate">

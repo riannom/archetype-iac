@@ -171,7 +171,7 @@ const ScenarioPanel: React.FC<ScenarioPanelProps> = ({
       {/* Left sidebar: scenario list */}
       <div className="w-56 border-r border-stone-200 dark:border-stone-700 flex flex-col bg-white dark:bg-stone-900">
         <div className="p-3 border-b border-stone-200 dark:border-stone-700 flex items-center justify-between">
-          <span className="text-[10px] font-black uppercase tracking-widest text-stone-500 dark:text-stone-400">Scenarios</span>
+          <span className="text-[11px] font-black uppercase tracking-widest text-stone-500 dark:text-stone-400">Scenarios</span>
           <button
             onClick={handleCreate}
             className="text-stone-400 hover:text-sage-600 dark:hover:text-sage-400 transition-colors"
@@ -203,10 +203,10 @@ const ScenarioPanel: React.FC<ScenarioPanelProps> = ({
                   className="opacity-0 group-hover:opacity-100 text-stone-400 hover:text-red-500 transition-all"
                   title="Delete"
                 >
-                  <i className="fa-solid fa-trash-can text-[10px]" />
+                  <i className="fa-solid fa-trash-can text-[11px]" />
                 </button>
               </div>
-              <div className="text-[10px] text-stone-400 dark:text-stone-500 mt-0.5">
+              <div className="text-[11px] text-stone-400 dark:text-stone-500 mt-0.5">
                 {s.step_count} step{s.step_count !== 1 ? 's' : ''}
                 {s.description && ` \u2014 ${s.description}`}
               </div>
@@ -225,10 +225,10 @@ const ScenarioPanel: React.FC<ScenarioPanelProps> = ({
                 {scenarios.find(s => s.filename === selectedFile)?.name || selectedFile}
               </span>
               {editorDirty && (
-                <span className="text-[10px] text-amber-500 font-bold">UNSAVED</span>
+                <span className="text-[11px] text-amber-500 font-bold">UNSAVED</span>
               )}
               {showTimeline && overallStatus && (
-                <span className={`text-[10px] font-black uppercase px-2 py-0.5 rounded ${
+                <span className={`text-[11px] font-black uppercase px-2 py-0.5 rounded ${
                   overallStatus === 'passed' ? 'bg-green-500/10 text-green-600 dark:text-green-400' :
                   overallStatus === 'failed' ? 'bg-red-500/10 text-red-600 dark:text-red-400' :
                   'bg-stone-500/10 text-stone-600 dark:text-stone-400'
@@ -242,7 +242,7 @@ const ScenarioPanel: React.FC<ScenarioPanelProps> = ({
                 <button
                   onClick={handleSave}
                   disabled={saving}
-                  className="px-3 py-1 text-[10px] font-bold bg-sage-600 text-white rounded hover:bg-sage-700 transition-colors disabled:opacity-50"
+                  className="px-3 py-1 text-[11px] font-bold bg-sage-600 text-white rounded hover:bg-sage-700 transition-colors disabled:opacity-50"
                 >
                   {saving ? 'Saving...' : 'Save'}
                 </button>
@@ -250,10 +250,10 @@ const ScenarioPanel: React.FC<ScenarioPanelProps> = ({
               <button
                 onClick={() => onStartScenario(selectedFile)}
                 disabled={isRunning || editorDirty}
-                className="px-3 py-1 text-[10px] font-bold bg-blue-600 text-white rounded hover:bg-blue-700 transition-colors disabled:opacity-50 flex items-center gap-1.5"
+                className="px-3 py-1 text-[11px] font-bold bg-blue-600 text-white rounded hover:bg-blue-700 transition-colors disabled:opacity-50 flex items-center gap-1.5"
                 title={editorDirty ? 'Save before running' : isRunning ? 'Scenario in progress' : 'Execute scenario'}
               >
-                <i className={`fa-solid ${isRunning ? 'fa-spinner fa-spin' : 'fa-play'} text-[9px]`} />
+                <i className={`fa-solid ${isRunning ? 'fa-spinner fa-spin' : 'fa-play'} text-[11px]`} />
                 {isRunning ? 'Running...' : 'Run'}
               </button>
             </div>
@@ -308,17 +308,17 @@ const ScenarioPanel: React.FC<ScenarioPanelProps> = ({
                           {step.step_name}
                         </span>
                         {badge && (
-                          <span className={`text-[9px] font-black uppercase px-1.5 py-0.5 rounded ${badge.color}`}>
+                          <span className={`text-[11px] font-black uppercase px-1.5 py-0.5 rounded ${badge.color}`}>
                             {badge.label}
                           </span>
                         )}
                         {step.duration_ms != null && (
-                          <span className="text-[10px] text-stone-400 dark:text-stone-500 font-mono tabular-nums">
+                          <span className="text-[11px] text-stone-400 dark:text-stone-500 font-mono tabular-nums">
                             {step.duration_ms > 1000 ? `${(step.duration_ms / 1000).toFixed(1)}s` : `${Math.round(step.duration_ms)}ms`}
                           </span>
                         )}
                         {hasDetail && (
-                          <i className={`fa-solid fa-chevron-${isExpanded ? 'up' : 'down'} text-[9px] text-stone-400`} />
+                          <i className={`fa-solid fa-chevron-${isExpanded ? 'up' : 'down'} text-[11px] text-stone-400`} />
                         )}
                       </div>
                       {isExpanded && hasDetail && (
@@ -344,7 +344,7 @@ const ScenarioPanel: React.FC<ScenarioPanelProps> = ({
             {!isRunning && (
               <button
                 onClick={() => setForceEditor(true)}
-                className="mt-4 text-[10px] text-stone-400 hover:text-stone-600 dark:hover:text-stone-300 transition-colors"
+                className="mt-4 text-[11px] text-stone-400 hover:text-stone-600 dark:hover:text-stone-300 transition-colors"
               >
                 <i className="fa-solid fa-pen-to-square mr-1" />
                 Edit scenario YAML

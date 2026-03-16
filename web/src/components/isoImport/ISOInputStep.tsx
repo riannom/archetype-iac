@@ -92,7 +92,7 @@ export const ISOInputStep: React.FC<ISOInputStepProps> = ({
             </label>
             <button
               onClick={fetchAvailableISOs}
-              className="text-[10px] text-sage-600 dark:text-sage-400 hover:underline font-bold"
+              className="text-[11px] text-sage-600 dark:text-sage-400 hover:underline font-bold"
             >
               <i className="fa-solid fa-rotate mr-1" />
               Refresh
@@ -122,7 +122,7 @@ export const ISOInputStep: React.FC<ISOInputStepProps> = ({
                       <div className="text-xs font-bold text-stone-700 dark:text-stone-300 truncate">
                         {iso.name}
                       </div>
-                      <div className="text-[10px] text-stone-400">
+                      <div className="text-[11px] text-stone-400">
                         {formatBytes(iso.size_bytes)} | {new Date(iso.modified_at).toLocaleDateString()}
                       </div>
                     </div>
@@ -137,7 +137,7 @@ export const ISOInputStep: React.FC<ISOInputStepProps> = ({
             <div className="text-center py-8 bg-stone-50 dark:bg-stone-800/50 rounded-lg border border-dashed border-stone-300 dark:border-stone-700">
               <i className="fa-solid fa-folder-open text-2xl text-stone-300 dark:text-stone-600 mb-2" />
               <p className="text-xs text-stone-500 dark:text-stone-400">No ISOs found in upload directory</p>
-              <p className="text-[10px] text-stone-400 mt-1">
+              <p className="text-[11px] text-stone-400 mt-1">
                 Copy ISOs to: <code className="bg-stone-200 dark:bg-stone-700 px-1 rounded">{uploadDir}</code>
               </p>
             </div>
@@ -215,7 +215,7 @@ export const ISOInputStep: React.FC<ISOInputStepProps> = ({
             placeholder="/path/to/image.iso"
             className="w-full px-4 py-3 bg-stone-100 dark:bg-stone-800 border border-stone-200 dark:border-stone-700 rounded-lg text-sm text-stone-900 dark:text-white placeholder:text-stone-400 focus:outline-none focus:ring-2 focus:ring-sage-500/50"
           />
-          <p className="text-[10px] text-stone-400 mt-2">
+          <p className="text-[11px] text-stone-400 mt-2">
             Enter the full path to an ISO file already on the server.
           </p>
         </div>

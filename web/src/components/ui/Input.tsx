@@ -39,7 +39,7 @@ export const Input = React.forwardRef<HTMLInputElement, InputProps>(
     const inputId = id || (label ? `input-${label.toLowerCase().replace(/\s+/g, '-')}` : undefined);
 
     const inputStyles = `
-      w-full rounded-lg border transition-all
+      w-full rounded-lg border transition-all duration-150
       bg-white dark:bg-stone-800
       text-stone-900 dark:text-stone-100
       placeholder:text-stone-400 dark:placeholder:text-stone-500
@@ -112,7 +112,7 @@ export const Textarea = React.forwardRef<HTMLTextAreaElement, TextareaProps>(
     const textareaId = id || (label ? `textarea-${label.toLowerCase().replace(/\s+/g, '-')}` : undefined);
 
     const textareaStyles = `
-      w-full px-3 py-2 text-sm rounded-lg border transition-all
+      w-full px-3 py-2 text-sm rounded-lg border transition-all duration-150
       bg-white dark:bg-stone-800
       text-stone-900 dark:text-stone-100
       placeholder:text-stone-400 dark:placeholder:text-stone-500

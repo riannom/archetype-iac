@@ -106,7 +106,7 @@ const ConfigsView: React.FC<ConfigsViewProps> = ({
                 <i className="fa-solid fa-link mr-1.5" />
                 Mapping
                 {mgr.orphanedSnapshots.length > 0 && (
-                  <span className="ml-1.5 px-1.5 py-0.5 text-[9px] bg-amber-500 text-white rounded-full">
+                  <span className="ml-1.5 px-1.5 py-0.5 text-[11px] bg-amber-500 text-white rounded-full">
                     {mgr.orphanedNodeNames.length}
                   </span>
                 )}

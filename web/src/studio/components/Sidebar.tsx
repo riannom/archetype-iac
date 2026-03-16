@@ -374,7 +374,7 @@ const Sidebar: React.FC<SidebarProps> = ({
               ? 'text-stone-700 dark:text-stone-200 group-hover:text-stone-900 dark:group-hover:text-white'
               : 'text-stone-500 dark:text-stone-500'
           }`}>{model.name}</div>
-          <div className="text-[9px] text-stone-400 dark:text-stone-400 font-medium truncate italic">{model.versions[0]}</div>
+          <div className="text-[11px] text-stone-400 dark:text-stone-400 font-medium truncate italic">{model.versions[0]}</div>
         </div>
         <div className={`transition-opacity ${canInstantiate ? 'opacity-0 group-hover:opacity-100' : 'opacity-30'}`}>
           <i className={`fa-solid fa-plus-circle text-xs ${canInstantiate ? 'text-sage-500' : 'text-stone-400 dark:text-stone-600'}`}></i>
@@ -406,7 +406,7 @@ const Sidebar: React.FC<SidebarProps> = ({
       <div className="flex items-center border-b border-stone-200 dark:border-stone-800 bg-stone-50/80 dark:bg-stone-800/60">
         <button
           onClick={() => onTabChange?.('library')}
-          className={`flex-1 h-10 text-[10px] font-black uppercase tracking-wider border-b-2 transition-all ${
+          className={`flex-1 h-10 text-[11px] font-black uppercase tracking-wider border-b-2 transition-all ${
             activeTab === 'library'
               ? 'text-sage-700 dark:text-sage-400 border-sage-600 dark:border-sage-500'
               : 'text-stone-500 dark:text-stone-400 border-transparent hover:text-stone-700 dark:hover:text-stone-200'
@@ -416,7 +416,7 @@ const Sidebar: React.FC<SidebarProps> = ({
         </button>
         <button
           onClick={() => onTabChange?.('nodes')}
-          className={`flex-1 h-10 text-[10px] font-black uppercase tracking-wider border-b-2 transition-all flex items-center justify-center gap-1.5 ${
+          className={`flex-1 h-10 text-[11px] font-black uppercase tracking-wider border-b-2 transition-all flex items-center justify-center gap-1.5 ${
             activeTab === 'nodes'
               ? 'text-sage-700 dark:text-sage-400 border-sage-600 dark:border-sage-500'
               : 'text-stone-500 dark:text-stone-400 border-transparent hover:text-stone-700 dark:hover:text-stone-200'
@@ -424,7 +424,7 @@ const Sidebar: React.FC<SidebarProps> = ({
         >
           Nodes
           {deviceNodeCount > 0 && (
-            <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold ${
+            <span className={`px-1.5 py-0.5 rounded text-[11px] font-bold ${
               activeTab === 'nodes'
                 ? 'bg-sage-600/20 text-sage-700 dark:text-sage-400'
                 : 'bg-stone-200 dark:bg-stone-700 text-stone-500 dark:text-stone-400'
@@ -438,7 +438,7 @@ const Sidebar: React.FC<SidebarProps> = ({
           className="px-3 h-10 text-stone-400 hover:text-stone-600 dark:hover:text-stone-200 transition-colors border-b-2 border-transparent"
           title="Collapse sidebar"
         >
-          <i className="fa-solid fa-chevron-left text-[10px]" />
+          <i className="fa-solid fa-chevron-left text-[11px]" />
         </button>
       </div>
 
@@ -473,7 +473,7 @@ const Sidebar: React.FC<SidebarProps> = ({
         {/* External Networks Section */}
         {onAddExternalNetwork && (
           <div className="mb-4">
-            <div className="px-4 py-2 flex items-center justify-between text-[10px] font-bold text-stone-700 dark:text-stone-300 uppercase tracking-widest bg-stone-400/45 dark:bg-stone-800 border-y border-stone-400/60 dark:border-stone-800 sticky top-0 z-10">
+            <div className="px-4 py-2 flex items-center justify-between text-[11px] font-bold text-stone-700 dark:text-stone-300 uppercase tracking-widest bg-stone-400/45 dark:bg-stone-800 border-y border-stone-400/60 dark:border-stone-800 sticky top-0 z-10">
               <span>Connectivity</span>
             </div>
             <div className="p-2">
@@ -491,7 +491,7 @@ const Sidebar: React.FC<SidebarProps> = ({
                 </div>
                 <div className="flex-1 text-left">
                   <div className="text-[11px] font-bold text-stone-700 dark:text-stone-100">{externalNetworkTool.label}</div>
-                  <div className="text-[9px] text-stone-700 dark:text-stone-300">Connect to VLAN or bridge</div>
+                  <div className="text-[11px] text-stone-700 dark:text-stone-300">Connect to VLAN or bridge</div>
                 </div>
                 <div className="opacity-0 group-hover:opacity-100 transition-opacity">
                   <i className="fa-solid fa-plus-circle text-blue-500 dark:text-blue-400"></i>
@@ -503,7 +503,7 @@ const Sidebar: React.FC<SidebarProps> = ({
 
         {/* Tools Section */}
         <div className="mb-4">
-          <div className="px-4 py-2 flex items-center justify-between text-[10px] font-bold text-stone-700 dark:text-stone-300 uppercase tracking-widest bg-stone-400/45 dark:bg-stone-800 border-y border-stone-400/60 dark:border-stone-800 sticky top-0 z-10">
+          <div className="px-4 py-2 flex items-center justify-between text-[11px] font-bold text-stone-700 dark:text-stone-300 uppercase tracking-widest bg-stone-400/45 dark:bg-stone-800 border-y border-stone-400/60 dark:border-stone-800 sticky top-0 z-10">
             <span>Tools</span>
           </div>
           <div className="p-2 grid grid-cols-2 gap-2">
@@ -524,7 +524,7 @@ const Sidebar: React.FC<SidebarProps> = ({
                       ? 'text-sage-700 dark:text-sage-400'
                       : 'text-stone-600 dark:text-stone-400 group-hover:text-sage-700 dark:group-hover:text-sage-500'
                   }`}></i>
-                  <span className={`text-[9px] font-bold ${
+                  <span className={`text-[11px] font-bold ${
                     isActive
                       ? 'text-sage-700 dark:text-sage-400'
                       : 'text-stone-700 dark:text-stone-400 group-hover:text-stone-900 dark:group-hover:text-stone-200'
@@ -539,11 +539,11 @@ const Sidebar: React.FC<SidebarProps> = ({
           <div key={category.name} className="mb-2">
             <button
               onClick={() => toggleCategory(category.name)}
-              className="w-full px-4 py-2 flex items-center justify-between text-[10px] font-bold text-stone-700 dark:text-stone-300 uppercase tracking-widest bg-stone-400/45 dark:bg-stone-800 border-y border-stone-400/60 dark:border-stone-800 sticky top-0 z-10 hover:bg-stone-500/50 dark:hover:bg-stone-700 transition-colors"
+              className="w-full px-4 py-2 flex items-center justify-between text-[11px] font-bold text-stone-700 dark:text-stone-300 uppercase tracking-widest bg-stone-400/45 dark:bg-stone-800 border-y border-stone-400/60 dark:border-stone-800 sticky top-0 z-10 hover:bg-stone-500/50 dark:hover:bg-stone-700 transition-colors"
             >
               <span className="flex items-center gap-2">
                 {category.name}
-                <span className="text-[9px] font-normal text-stone-400 dark:text-stone-500">
+                <span className="text-[11px] font-normal text-stone-400 dark:text-stone-500">
                   ({getCategoryCount(category)})
                 </span>
               </span>
@@ -563,7 +563,7 @@ const Sidebar: React.FC<SidebarProps> = ({
                     <div key={sub.name} className="mt-2">
                       <button
                         onClick={() => toggleSubCategory(category.name, sub.name)}
-                        className="w-full px-3 py-1 text-[9px] font-bold text-stone-600 dark:text-stone-500 uppercase flex items-center gap-2 hover:text-stone-800 dark:hover:text-stone-300 transition-colors"
+                        className="w-full px-3 py-1 text-[11px] font-bold text-stone-600 dark:text-stone-500 uppercase flex items-center gap-2 hover:text-stone-800 dark:hover:text-stone-300 transition-colors"
                       >
                         <div className="h-px flex-1 bg-stone-200 dark:bg-stone-800"></div>
                         <span className="flex items-center gap-1">
@@ -606,7 +606,7 @@ const Sidebar: React.FC<SidebarProps> = ({
             </p>
             <button
               onClick={handleClearAll}
-              className="mt-2 text-[10px] font-bold text-sage-600 hover:text-sage-500"
+              className="mt-2 text-[11px] font-bold text-sage-600 hover:text-sage-500"
             >
               Clear filters
             </button>
@@ -616,11 +616,11 @@ const Sidebar: React.FC<SidebarProps> = ({
 
       <div className="p-4 border-t border-stone-300/40 dark:border-stone-700/45 bg-stone-200/30 dark:bg-stone-900/40 backdrop-blur-sm">
         <div className="flex flex-col gap-2 p-3 rounded-lg border border-stone-600/40 dark:border-stone-600/50 bg-stone-500/38 dark:bg-stone-800/60 backdrop-blur-md">
-          <div className="flex items-center gap-2 text-[10px] font-bold text-sage-600 dark:text-sage-400 uppercase tracking-tight">
+          <div className="flex items-center gap-2 text-[11px] font-bold text-sage-600 dark:text-sage-400 uppercase tracking-tight">
             <i className="fa-solid fa-lightbulb"></i>
             <span>Network Canvas</span>
           </div>
-          <p className="text-[9px] text-stone-700 dark:text-stone-300 leading-relaxed">
+          <p className="text-[11px] text-stone-700 dark:text-stone-300 leading-relaxed">
             Click or drag devices onto the grid to build your topology.
           </p>
         </div>

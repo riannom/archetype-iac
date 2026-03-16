@@ -44,11 +44,11 @@ const LogEntryDetail: React.FC<LogEntryDetailProps> = ({
       <div className="flex flex-col gap-2 pr-8">
         {/* Full message */}
         <div>
-          <span className="text-[9px] font-bold text-stone-500 uppercase">Message</span>
+          <span className="text-[11px] font-bold text-stone-500 uppercase">Message</span>
           <p className="text-stone-700 dark:text-stone-300 whitespace-pre-wrap mt-1">{entry.message}</p>
         </div>
         {/* Metadata grid */}
-        <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-[10px]">
+        <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-[11px]">
           <div>
             <span className="text-stone-500">Timestamp:</span>{' '}
             <span className="text-stone-600 dark:text-stone-400">{new Date(entry.timestamp).toLocaleString()}</span>
@@ -71,8 +71,8 @@ const LogEntryDetail: React.FC<LogEntryDetailProps> = ({
         {/* Job details */}
         {job && (
           <div className="mt-2 p-2 bg-stone-200/50 dark:bg-stone-700/50 rounded">
-            <span className="text-[9px] font-bold text-stone-500 uppercase">Job Details</span>
-            <div className="mt-1 grid grid-cols-2 gap-x-4 gap-y-1 text-[10px]">
+            <span className="text-[11px] font-bold text-stone-500 uppercase">Job Details</span>
+            <div className="mt-1 grid grid-cols-2 gap-x-4 gap-y-1 text-[11px]">
               <div>
                 <span className="text-stone-500">Action:</span>{' '}
                 <span className="text-stone-700 dark:text-stone-300">{formatJobAction(job.action)}</span>
@@ -98,7 +98,7 @@ const LogEntryDetail: React.FC<LogEntryDetailProps> = ({
                 e.stopPropagation();
                 onFilterToJob(job.id);
               }}
-              className="mt-2 px-2 py-1 text-[10px] bg-sage-600 hover:bg-sage-500 text-white rounded transition-all"
+              className="mt-2 px-2 py-1 text-[11px] bg-sage-600 hover:bg-sage-500 text-white rounded transition-all"
             >
               <i className="fa-solid fa-filter mr-1" />
               Filter to this job
@@ -106,14 +106,14 @@ const LogEntryDetail: React.FC<LogEntryDetailProps> = ({
 
             {/* Full job log */}
             <div className="mt-3 pt-3 border-t border-stone-300 dark:border-stone-600">
-              <span className="text-[9px] font-bold text-stone-500 uppercase">Full Job Log</span>
+              <span className="text-[11px] font-bold text-stone-500 uppercase">Full Job Log</span>
               {loadingJobLog ? (
                 <div className="mt-2 text-stone-500 dark:text-stone-400">
                   <i className="fa-solid fa-spinner fa-spin mr-2" />
                   Loading job log...
                 </div>
               ) : expandedJobLog ? (
-                <pre className="mt-2 p-2 bg-stone-900 dark:bg-black text-stone-100 text-[10px] rounded overflow-x-auto whitespace-pre-wrap max-h-60 overflow-y-auto custom-scrollbar">
+                <pre className="mt-2 p-2 bg-stone-900 dark:bg-black text-stone-100 text-[11px] rounded overflow-x-auto whitespace-pre-wrap max-h-60 overflow-y-auto custom-scrollbar">
                   {expandedJobLog}
                 </pre>
               ) : null}
@@ -126,7 +126,7 @@ const LogEntryDetail: React.FC<LogEntryDetailProps> = ({
             e.stopPropagation();
             onCopyEntry(entry, idx);
           }}
-          className={`self-start px-2 py-1 text-[10px] rounded transition-all ${
+          className={`self-start px-2 py-1 text-[11px] rounded transition-all ${
             copiedEntryIdx === idx
               ? 'bg-green-200 dark:bg-green-800 text-green-700 dark:text-green-300'
               : 'bg-stone-200 dark:bg-stone-700 hover:bg-stone-300 dark:hover:bg-stone-600 text-stone-700 dark:text-stone-300'

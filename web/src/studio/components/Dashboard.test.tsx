@@ -147,8 +147,8 @@ describe("Dashboard", () => {
     expect(screen.getByLabelText("Search labs")).toBeInTheDocument();
     expect(screen.getByLabelText("Filter labs")).toBeInTheDocument();
     expect(screen.getByLabelText("Sort labs")).toBeInTheDocument();
-    expect(screen.getByTitle("Back")).toBeInTheDocument();
-    expect(screen.getByTitle("Forward")).toBeInTheDocument();
+    expect(screen.getByTitle("Previous page")).toBeInTheDocument();
+    expect(screen.getByTitle("Next page")).toBeInTheDocument();
   });
 
   it("renders lab cards for each lab", () => {
@@ -211,7 +211,7 @@ describe("Dashboard", () => {
     expect(screen.getByText((content) => content.includes("(1/2)"))).toBeInTheDocument();
     expect(screen.queryByText(/^Lab 1$/)).not.toBeInTheDocument();
 
-    await user.click(screen.getByTitle("Forward"));
+    await user.click(screen.getByTitle("Next page"));
 
     expect(screen.getByText((content) => content.includes("(2/2)"))).toBeInTheDocument();
     expect(screen.getByText(/^Lab 1$/)).toBeInTheDocument();
@@ -251,7 +251,7 @@ describe("Dashboard", () => {
       </TestWrapper>
     );
 
-    await user.click(screen.getByTitle("Forward"));
+    await user.click(screen.getByTitle("Next page"));
     expect(window.location.search).toContain("page=2");
   });
 

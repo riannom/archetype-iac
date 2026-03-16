@@ -11,7 +11,7 @@ export interface CardProps {
 
 const variantStyles: Record<CardVariant, string> = {
   default: 'glass-surface',
-  interactive: 'glass-surface hover:border-stone-300 dark:hover:border-stone-700 hover:shadow-sm cursor-pointer',
+  interactive: 'glass-surface hover:border-stone-300 dark:hover:border-stone-700 hover:shadow-md cursor-pointer active:scale-[0.99]',
   selected: 'bg-sage-50 dark:bg-sage-900/20 border-sage-300 dark:border-sage-700 ring-1 ring-sage-200 dark:ring-sage-800',
 };
 
@@ -27,7 +27,7 @@ export const Card: React.FC<CardProps> = ({
     <Component
       onClick={onClick}
       className={`
-        rounded-xl border transition-all
+        rounded-xl border transition-all duration-200
         ${variantStyles[variant]}
         ${className}
       `.trim().replace(/\s+/g, ' ')}

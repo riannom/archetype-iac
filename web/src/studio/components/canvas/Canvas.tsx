@@ -586,7 +586,7 @@ const Canvas: React.FC<CanvasProps> = ({
                   hover:border-blue-400 z-10 select-none group`}
               >
                 <i className="fa-solid fa-cloud text-blue-500 dark:text-blue-400 text-lg"></i>
-                <div className="absolute top-full mt-1 text-[10px] font-bold text-blue-700 dark:text-blue-300 bg-white/90 dark:bg-stone-900/80 px-1.5 rounded shadow-sm border border-blue-200 dark:border-blue-800 whitespace-nowrap pointer-events-none">
+                <div className="absolute top-full mt-1 text-[11px] font-bold text-blue-700 dark:text-blue-300 bg-white/90 dark:bg-stone-900/80 px-1.5 rounded shadow-sm border border-blue-200 dark:border-blue-800 whitespace-nowrap pointer-events-none">
                   {node.name}
                 </div>
                 <div className="absolute -bottom-1 left-1/2 -translate-x-1/2 text-[8px] font-bold text-blue-500 dark:text-blue-400 bg-white/80 dark:bg-stone-900/80 px-1 rounded whitespace-nowrap pointer-events-none">
@@ -689,7 +689,7 @@ const Canvas: React.FC<CanvasProps> = ({
                 className="absolute -top-2 -right-2 w-5 h-5 bg-red-500 rounded-full flex items-center justify-center shadow-md cursor-pointer z-20"
                 title={errorMessage}
               >
-                <i className="fa-solid fa-exclamation text-white text-[10px]" />
+                <i className="fa-solid fa-exclamation text-white text-[11px]" />
               </div>
             );
           };
@@ -731,7 +731,7 @@ const Canvas: React.FC<CanvasProps> = ({
                   style={{ borderRadius }}
                 />
               )}
-              <div className="absolute top-full mt-1 text-[10px] font-bold text-stone-700 dark:text-stone-300 bg-white/90 dark:bg-stone-900/80 px-1 rounded shadow-sm border border-stone-200 dark:border-stone-700 whitespace-nowrap pointer-events-none">
+              <div className="absolute top-full mt-1 text-[11px] font-bold text-stone-700 dark:text-stone-300 bg-white/90 dark:bg-stone-900/80 px-1 rounded shadow-sm border border-stone-200 dark:border-stone-700 whitespace-nowrap pointer-events-none">
                 {node.name}
               </div>
             </div>

@@ -497,7 +497,7 @@ describe("Dashboard - widgets", () => {
       render(<Wrapper><Dashboard {...props} /></Wrapper>);
 
       expect(screen.getByText("Empty Workspace")).toBeInTheDocument();
-      expect(screen.getByText(/Start your first journey/)).toBeInTheDocument();
+      expect(screen.getByText(/Start your first journey|creating a new network lab/)).toBeInTheDocument();
     });
 
     it("still shows Create New Lab button when workspace is empty", () => {
@@ -506,7 +506,8 @@ describe("Dashboard - widgets", () => {
 
       render(<Wrapper><Dashboard {...props} /></Wrapper>);
 
-      expect(screen.getByRole("button", { name: /create new lab/i })).toBeInTheDocument();
+      const buttons = screen.getAllByRole("button", { name: /create new lab/i });
+      expect(buttons.length).toBeGreaterThanOrEqual(1);
     });
 
     it("shows total labs count as 0 when empty", () => {

@@ -341,7 +341,7 @@ const LogsView: React.FC<LogsViewProps> = ({
       <div className="px-6 py-3 border-b border-stone-200 dark:border-stone-800 glass-surface flex flex-wrap items-center gap-3">
         {/* Job filter */}
         <div className="flex items-center gap-2">
-          <label className="text-[10px] font-bold text-stone-500 uppercase">Job</label>
+          <label className="text-[11px] font-bold text-stone-500 uppercase">Job</label>
           <select
             value={selectedJobId}
             onChange={(e) => setSelectedJobId(e.target.value)}
@@ -358,7 +358,7 @@ const LogsView: React.FC<LogsViewProps> = ({
 
         {/* Host filter */}
         <div className="flex items-center gap-2">
-          <label className="text-[10px] font-bold text-stone-500 uppercase">Host</label>
+          <label className="text-[11px] font-bold text-stone-500 uppercase">Host</label>
           <select
             value={selectedHostId}
             onChange={(e) => setSelectedHostId(e.target.value)}
@@ -375,7 +375,7 @@ const LogsView: React.FC<LogsViewProps> = ({
 
         {/* Level filter */}
         <div className="flex items-center gap-2">
-          <label className="text-[10px] font-bold text-stone-500 uppercase">Level</label>
+          <label className="text-[11px] font-bold text-stone-500 uppercase">Level</label>
           <select
             value={selectedLevel}
             onChange={(e) => setSelectedLevel(e.target.value)}
@@ -390,7 +390,7 @@ const LogsView: React.FC<LogsViewProps> = ({
 
         {/* Time filter */}
         <div className="flex items-center gap-2">
-          <label className="text-[10px] font-bold text-stone-500 uppercase">Time</label>
+          <label className="text-[11px] font-bold text-stone-500 uppercase">Time</label>
           <select
             value={selectedSince}
             onChange={(e) => setSelectedSince(e.target.value)}
@@ -436,7 +436,7 @@ const LogsView: React.FC<LogsViewProps> = ({
         >
           <div className="p-2 border-b border-stone-200 dark:border-stone-800 flex items-center justify-between">
             {!hostSidebarCollapsed && (
-              <span className="text-[10px] font-bold text-stone-500 uppercase tracking-widest">
+              <span className="text-[11px] font-bold text-stone-500 uppercase tracking-widest">
                 Hosts
               </span>
             )}
@@ -553,7 +553,7 @@ const LogsView: React.FC<LogsViewProps> = ({
                         {entry.level}
                       </span>
                       {entry.host_name && (
-                        <span className="px-1.5 py-0.5 bg-stone-200 dark:bg-stone-700 text-stone-600 dark:text-stone-400 rounded text-[9px] font-medium shrink-0">
+                        <span className="px-1.5 py-0.5 bg-stone-200 dark:bg-stone-700 text-stone-600 dark:text-stone-400 rounded text-[11px] font-medium shrink-0">
                           {entry.host_name}
                         </span>
                       )}
@@ -561,7 +561,7 @@ const LogsView: React.FC<LogsViewProps> = ({
                         {entry.message}
                       </span>
                       {isRealtime && (
-                        <span className="text-blue-500 dark:text-blue-400 text-[9px] shrink-0">
+                        <span className="text-blue-500 dark:text-blue-400 text-[11px] shrink-0">
                           LIVE
                         </span>
                       )}

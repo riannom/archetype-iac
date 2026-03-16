@@ -98,7 +98,7 @@ const AgentsPopup: React.FC<AgentsPopupProps> = ({ isOpen, onClose }) => {
                   </p>
                   {agent.started_at && (
                     <p className="text-xs text-stone-400">
-                      <i className="fa-solid fa-clock text-[10px] mr-1" />
+                      <i className="fa-solid fa-clock text-[11px] mr-1" />
                       Uptime: {formatUptimeFromBoot(agent.started_at)}
                     </p>
                   )}
@@ -155,7 +155,7 @@ const AgentsPopup: React.FC<AgentsPopupProps> = ({ isOpen, onClose }) => {
                     />
                   </div>
                   {memoryUsage.hasTotals && (
-                    <span className="text-[10px] text-stone-400 dark:text-stone-500">
+                    <span className="text-[11px] text-stone-400 dark:text-stone-500">
                       {formatMemorySize(memoryUsage.usedGb)}/{formatMemorySize(memoryUsage.totalGb)}
                     </span>
                   )}
@@ -174,7 +174,7 @@ const AgentsPopup: React.FC<AgentsPopupProps> = ({ isOpen, onClose }) => {
                     />
                   </div>
                   {agent.resource_usage.storage_total_gb > 0 && (
-                    <span className="text-[10px] text-stone-400 dark:text-stone-500">
+                    <span className="text-[11px] text-stone-400 dark:text-stone-500">
                       {formatMemorySize(agent.resource_usage.storage_used_gb)}/{formatMemorySize(agent.resource_usage.storage_total_gb)}
                     </span>
                   )}
