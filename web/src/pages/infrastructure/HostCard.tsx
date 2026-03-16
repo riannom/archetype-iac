@@ -14,6 +14,7 @@ import {
 } from '../../utils/status';
 import type { AgentImagesDetailResponse, ContainerDetail, HostDetailed, SyncStrategy, UpdateStatus, VmDetail } from './infrastructureTypes';
 import { SYNC_STRATEGY_OPTIONS } from './infrastructureTypes';
+import { Select } from '../../components/ui/Select';
 
 interface HostCardProps {
   host: HostDetailed;
@@ -391,18 +392,13 @@ const HostCard: React.FC<HostCardProps> = ({
             <i className="fa-solid fa-sync mr-1.5"></i>
             Image Sync
           </span>
-          <select
+          <Select
             value={host.image_sync_strategy || 'on_demand'}
             onChange={(e) => onUpdateSyncStrategy(host.id, e.target.value as SyncStrategy)}
             disabled={host.status !== 'online'}
-            className="text-xs bg-stone-100 dark:bg-stone-800 border border-stone-200 dark:border-stone-700 rounded px-2 py-1 text-stone-700 dark:text-stone-300 disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus:ring-1 focus:ring-sage-500"
-          >
-            {SYNC_STRATEGY_OPTIONS.map(opt => (
-              <option key={opt.value} value={opt.value}>
-                {opt.label}
-              </option>
-            ))}
-          </select>
+            size="sm"
+            options={SYNC_STRATEGY_OPTIONS.map(opt => ({ value: opt.value, label: opt.label }))}
+          />
         </div>
         <p className="text-[11px] text-stone-400 mt-1">
           {SYNC_STRATEGY_OPTIONS.find(o => o.value === (host.image_sync_strategy || 'on_demand'))?.description}

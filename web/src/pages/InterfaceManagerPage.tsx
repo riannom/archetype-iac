@@ -5,6 +5,7 @@ import { canViewInfrastructure } from '../utils/permissions';
 import { apiRequest } from '../api';
 import AdminMenuButton from '../components/AdminMenuButton';
 import { getManagedIfaceSyncBadge, getInterfaceTypeBadge } from './infrastructure/badgeHelpers';
+import { Select } from '../components/ui/Select';
 
 interface AgentManagedInterface {
   id: string;
@@ -286,28 +287,31 @@ export default function InterfaceManagerPage() {
       {/* Filters + Actions */}
       <div className="px-10 py-4 border-b border-stone-200 dark:border-stone-800 glass-surface">
         <div className="max-w-7xl mx-auto flex items-center gap-4 flex-wrap">
-          <select
+          <Select
             aria-label="Host filter"
             value={filterHost}
             onChange={e => setFilterHost(e.target.value)}
-            className="px-3 py-1.5 text-sm rounded-lg glass-control border text-stone-700 dark:text-stone-300"
+            size="sm"
+            className="glass-control"
           >
             <option value="">All Hosts</option>
             {agents.map(a => (
               <option key={a.id} value={a.id}>{a.name}</option>
             ))}
-          </select>
-          <select
+          </Select>
+          <Select
             aria-label="Type filter"
             value={filterType}
             onChange={e => setFilterType(e.target.value)}
-            className="px-3 py-1.5 text-sm rounded-lg glass-control border text-stone-700 dark:text-stone-300"
-          >
-            <option value="">All Types</option>
-            <option value="transport">Transport</option>
-            <option value="external">External</option>
-            <option value="custom">Custom</option>
-          </select>
+            size="sm"
+            className="glass-control"
+            options={[
+              { value: '', label: 'All Types' },
+              { value: 'transport', label: 'Transport' },
+              { value: 'external', label: 'External' },
+              { value: 'custom', label: 'Custom' },
+            ]}
+          />
           <div className="relative flex-1 min-w-[200px]">
             <i className="fa-solid fa-search absolute left-3 top-1/2 -translate-y-1/2 text-stone-400 text-xs"></i>
             <input
@@ -567,53 +571,51 @@ export default function InterfaceManagerPage() {
               {/* Host */}
               <div>
                 <label htmlFor="create-host" className="block text-sm font-medium text-stone-700 dark:text-stone-300 mb-1">Host</label>
-                <select
+                <Select
                   id="create-host"
                   value={createForm.host_id}
                   onChange={e => handleCreateHostChange(e.target.value)}
-                  className="w-full px-3 py-2 text-sm rounded-lg glass-control border border-stone-300 dark:border-stone-700 text-stone-700 dark:text-stone-300"
                 >
                   <option value="">Select host...</option>
                   {agents.filter(a => a.status === 'online').map(a => (
                     <option key={a.id} value={a.id}>{a.name}</option>
                   ))}
-                </select>
+                </Select>
               </div>
 
               {/* Type */}
               <div>
                 <label htmlFor="create-type" className="block text-sm font-medium text-stone-700 dark:text-stone-300 mb-1">Type</label>
-                <select
+                <Select
                   id="create-type"
                   value={createForm.interface_type}
                   onChange={e => {
                     const type = e.target.value;
                     setCreateForm(f => ({ ...f, interface_type: type, ...(type === 'external' ? { ip_address: '' } : {}) }));
                   }}
-                  className="w-full px-3 py-2 text-sm rounded-lg glass-control border border-stone-300 dark:border-stone-700 text-stone-700 dark:text-stone-300"
-                >
-                  <option value="transport">Transport (data plane)</option>
-                  <option value="external">External (connectivity)</option>
-                  <option value="custom">Custom</option>
-                </select>
+                  options={[
+                    { value: 'transport', label: 'Transport (data plane)' },
+                    { value: 'external', label: 'External (connectivity)' },
+                    { value: 'custom', label: 'Custom' },
+                  ]}
+                />
                 <p className="text-xs text-stone-400 dark:text-stone-500 mt-1">{TYPE_DESCRIPTIONS[createForm.interface_type]}</p>
               </div>
 
               {/* Parent Interface */}
               <div>
                 <label htmlFor="create-parent-interface" className="block text-sm font-medium text-stone-700 dark:text-stone-300 mb-1">Parent Interface</label>
-                <select
+                <Select
                   id="create-parent-interface"
                   value={createForm.parent_interface}
                   onChange={e => setCreateForm(f => ({ ...f, parent_interface: e.target.value }))}
                   disabled={!createForm.host_id || loadingAgentInterfaces}
-                  className="w-full px-3 py-2 text-sm rounded-lg glass-control border border-stone-300 dark:border-stone-700 text-stone-700 dark:text-stone-300 disabled:opacity-50"
                 >
                   <option value="">{loadingAgentInterfaces ? 'Loading...' : 'Select interface...'}</option>
                   {agentInterfaces.map(i => (
                     <option key={i.name} value={i.name}>{i.name} (MTU: {i.mtu}, {i.state})</option>
                   ))}
-                </select>
+                </Select>
               </div>
 
               {/* VLAN ID + IP side by side */}

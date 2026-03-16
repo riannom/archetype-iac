@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { ExternalNetworkNode } from '../types';
 import { apiRequest } from '../../api';
+import { Select } from '../../components/ui/Select';
 
 interface ExternalNetworkConfigProps {
   node: ExternalNetworkNode;
@@ -194,10 +195,9 @@ const ExternalNetworkConfig: React.FC<ExternalNetworkConfigProps> = ({
               </div>
             </div>
           ) : (
-            <select
+            <Select
               value={node.managedInterfaceId || ''}
               onChange={(e) => handleInterfaceSelect(e.target.value)}
-              className="w-full bg-stone-100 dark:bg-stone-800 border border-stone-300 dark:border-stone-700 rounded-lg px-3 py-2 text-sm text-stone-900 dark:text-stone-100 focus:outline-none focus:border-blue-500 appearance-none"
             >
               <option value="">Select interface...</option>
               {Object.entries(groupedInterfaces).map(([hostLabel, ifaces]) => (
@@ -211,7 +211,7 @@ const ExternalNetworkConfig: React.FC<ExternalNetworkConfigProps> = ({
                   ))}
                 </optgroup>
               ))}
-            </select>
+            </Select>
           )}
           <p className="text-[11px] text-stone-400 dark:text-stone-500">
             Managed interfaces are created in the Infrastructure page

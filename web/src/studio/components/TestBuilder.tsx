@@ -1,5 +1,6 @@
 import React, { useCallback, useMemo } from 'react';
 import { TestSpec, TestSpecType, Node, Link, isDeviceNode } from '../types';
+import { Select } from '../../components/ui/Select';
 
 interface TestBuilderProps {
   specs: TestSpec[];
@@ -210,7 +211,7 @@ const FieldRow: React.FC<{ label: string; children: React.ReactNode }> = ({ labe
   </div>
 );
 
-const selectClass = "flex-1 text-xs rounded border border-stone-300 dark:border-stone-600 bg-white dark:bg-stone-900 text-stone-700 dark:text-stone-200 px-2 py-1 disabled:opacity-50";
+const selectClass = "flex-1";
 const inputClass = selectClass;
 
 // ── Per-type field components ──
@@ -226,10 +227,10 @@ interface FieldProps {
 const PingFields: React.FC<FieldProps> = ({ spec, deviceNodes, disabled, onUpdate }) => (
   <>
     <FieldRow label="Source">
-      <select value={spec.source || ''} onChange={e => onUpdate({ source: e.target.value })} disabled={disabled} className={selectClass}>
+      <Select value={spec.source || ''} onChange={e => onUpdate({ source: e.target.value })} disabled={disabled} size="sm" className={selectClass}>
         <option value="">Select node...</option>
         {deviceNodes.map(n => <option key={n.id} value={n.name}>{n.name}</option>)}
-      </select>
+      </Select>
     </FieldRow>
     <FieldRow label="Target">
       <input
@@ -259,10 +260,10 @@ const PingFields: React.FC<FieldProps> = ({ spec, deviceNodes, disabled, onUpdat
 const CommandFields: React.FC<FieldProps> = ({ spec, deviceNodes, disabled, onUpdate }) => (
   <>
     <FieldRow label="Node">
-      <select value={spec.node || ''} onChange={e => onUpdate({ node: e.target.value })} disabled={disabled} className={selectClass}>
+      <Select value={spec.node || ''} onChange={e => onUpdate({ node: e.target.value })} disabled={disabled} size="sm" className={selectClass}>
         <option value="">Select node...</option>
         {deviceNodes.map(n => <option key={n.id} value={n.name}>{n.name}</option>)}
-      </select>
+      </Select>
     </FieldRow>
     <FieldRow label="Command">
       <input
@@ -290,16 +291,15 @@ const CommandFields: React.FC<FieldProps> = ({ spec, deviceNodes, disabled, onUp
 const LinkStateFields: React.FC<Omit<FieldProps, 'deviceNodes'> & { linkOptions: string[] }> = ({ spec, linkOptions, disabled, onUpdate }) => (
   <>
     <FieldRow label="Link">
-      <select value={spec.link_name || ''} onChange={e => onUpdate({ link_name: e.target.value })} disabled={disabled} className={selectClass}>
+      <Select value={spec.link_name || ''} onChange={e => onUpdate({ link_name: e.target.value })} disabled={disabled} size="sm" className={selectClass}>
         <option value="">Select link...</option>
         {linkOptions.map(l => <option key={l} value={l}>{l}</option>)}
-      </select>
+      </Select>
     </FieldRow>
     <FieldRow label="State">
-      <select value={spec.expected_state || 'up'} onChange={e => onUpdate({ expected_state: e.target.value })} disabled={disabled} className={selectClass}>
-        <option value="up">up</option>
-        <option value="down">down</option>
-      </select>
+      <Select value={spec.expected_state || 'up'} onChange={e => onUpdate({ expected_state: e.target.value })} disabled={disabled} size="sm" className={selectClass}
+        options={[{ value: 'up', label: 'up' }, { value: 'down', label: 'down' }]}
+      />
     </FieldRow>
   </>
 );
@@ -307,16 +307,15 @@ const LinkStateFields: React.FC<Omit<FieldProps, 'deviceNodes'> & { linkOptions:
 const NodeStateFields: React.FC<FieldProps> = ({ spec, deviceNodes, disabled, onUpdate }) => (
   <>
     <FieldRow label="Node">
-      <select value={spec.node_name || ''} onChange={e => onUpdate({ node_name: e.target.value })} disabled={disabled} className={selectClass}>
+      <Select value={spec.node_name || ''} onChange={e => onUpdate({ node_name: e.target.value })} disabled={disabled} size="sm" className={selectClass}>
         <option value="">Select node...</option>
         {deviceNodes.map(n => <option key={n.id} value={n.name}>{n.name}</option>)}
-      </select>
+      </Select>
     </FieldRow>
     <FieldRow label="State">
-      <select value={spec.expected_state || 'running'} onChange={e => onUpdate({ expected_state: e.target.value })} disabled={disabled} className={selectClass}>
-        <option value="running">running</option>
-        <option value="stopped">stopped</option>
-      </select>
+      <Select value={spec.expected_state || 'running'} onChange={e => onUpdate({ expected_state: e.target.value })} disabled={disabled} size="sm" className={selectClass}
+        options={[{ value: 'running', label: 'running' }, { value: 'stopped', label: 'stopped' }]}
+      />
     </FieldRow>
   </>
 );

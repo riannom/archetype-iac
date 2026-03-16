@@ -1,5 +1,6 @@
 import React from 'react';
 import type { HostDetailed, ManagedInterface, NicGroup } from './infrastructureTypes';
+import { Select } from '../../components/ui/Select';
 
 interface NicGroupCreateModalProps {
   hosts: HostDetailed[];
@@ -49,10 +50,9 @@ export const NicGroupCreateModal: React.FC<NicGroupCreateModalProps> = ({
             <label className="block text-sm font-medium text-stone-700 dark:text-stone-300 mb-2">
               Host
             </label>
-            <select
+            <Select
               value={newNicGroupHostId}
               onChange={(e) => setNewNicGroupHostId(e.target.value)}
-              className="w-full px-3 py-2 bg-stone-100 dark:bg-stone-800 border border-stone-300 dark:border-stone-700 rounded-lg text-stone-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-sage-500"
             >
               <option value="">Select a host...</option>
               {hosts.map(host => (
@@ -60,7 +60,7 @@ export const NicGroupCreateModal: React.FC<NicGroupCreateModalProps> = ({
                   {host.name}
                 </option>
               ))}
-            </select>
+            </Select>
           </div>
 
           <div>
@@ -174,10 +174,9 @@ export const NicGroupMemberModal: React.FC<NicGroupMemberModalProps> = ({
             <label className="block text-sm font-medium text-stone-700 dark:text-stone-300 mb-2">
               Managed Interface
             </label>
-            <select
+            <Select
               value={memberInterfaceId}
               onChange={(e) => setMemberInterfaceId(e.target.value)}
-              className="w-full px-3 py-2 bg-stone-100 dark:bg-stone-800 border border-stone-300 dark:border-stone-700 rounded-lg text-stone-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-sage-500"
             >
               <option value="">Select an interface...</option>
               {managedInterfaces
@@ -187,23 +186,23 @@ export const NicGroupMemberModal: React.FC<NicGroupMemberModalProps> = ({
                     {iface.name} ({iface.interface_type}{iface.ip_address ? `, ${iface.ip_address}` : ''})
                   </option>
                 ))}
-            </select>
+            </Select>
           </div>
 
           <div>
             <label className="block text-sm font-medium text-stone-700 dark:text-stone-300 mb-2">
               Role
             </label>
-            <select
+            <Select
               value={memberRole}
               onChange={(e) => setMemberRole(e.target.value)}
-              className="w-full px-3 py-2 bg-stone-100 dark:bg-stone-800 border border-stone-300 dark:border-stone-700 rounded-lg text-stone-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-sage-500"
-            >
-              <option value="transport">transport</option>
-              <option value="external">external</option>
-              <option value="custom">custom</option>
-              <option value="other">other</option>
-            </select>
+              options={[
+                { value: 'transport', label: 'transport' },
+                { value: 'external', label: 'external' },
+                { value: 'custom', label: 'custom' },
+                { value: 'other', label: 'other' },
+              ]}
+            />
           </div>
         </div>
 

@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { Modal } from '../../components/ui/Modal';
 import { getSystemLogs, LogEntry, LogQueryParams } from '../../api';
 import { usePolling } from '../hooks/usePolling';
+import { Select } from '../../components/ui/Select';
 
 interface SystemLogsModalProps {
   isOpen: boolean;
@@ -112,43 +113,34 @@ const SystemLogsModal: React.FC<SystemLogsModalProps> = ({ isOpen, onClose }) =>
           {/* Service filter */}
           <div className="flex items-center gap-2">
             <label className="text-xs font-medium text-stone-500 dark:text-stone-400">Service:</label>
-            <select
+            <Select
               value={service}
               onChange={(e) => setService(e.target.value)}
-              className="px-2 py-1 text-sm bg-stone-100 dark:bg-stone-800 border border-stone-300 dark:border-stone-600 rounded-md text-stone-700 dark:text-stone-200"
-            >
-              {SERVICES.map((s) => (
-                <option key={s} value={s}>{s}</option>
-              ))}
-            </select>
+              size="sm"
+              options={SERVICES.map((s) => ({ value: s, label: s }))}
+            />
           </div>
 
           {/* Level filter */}
           <div className="flex items-center gap-2">
             <label className="text-xs font-medium text-stone-500 dark:text-stone-400">Level:</label>
-            <select
+            <Select
               value={level}
               onChange={(e) => setLevel(e.target.value)}
-              className="px-2 py-1 text-sm bg-stone-100 dark:bg-stone-800 border border-stone-300 dark:border-stone-600 rounded-md text-stone-700 dark:text-stone-200"
-            >
-              {LOG_LEVELS.map((l) => (
-                <option key={l} value={l}>{l}</option>
-              ))}
-            </select>
+              size="sm"
+              options={LOG_LEVELS.map((l) => ({ value: l, label: l }))}
+            />
           </div>
 
           {/* Time range filter */}
           <div className="flex items-center gap-2">
             <label className="text-xs font-medium text-stone-500 dark:text-stone-400">Time:</label>
-            <select
+            <Select
               value={timeRange}
               onChange={(e) => setTimeRange(e.target.value)}
-              className="px-2 py-1 text-sm bg-stone-100 dark:bg-stone-800 border border-stone-300 dark:border-stone-600 rounded-md text-stone-700 dark:text-stone-200"
-            >
-              {TIME_RANGES.map((t) => (
-                <option key={t.value} value={t.value}>{t.label}</option>
-              ))}
-            </select>
+              size="sm"
+              options={TIME_RANGES.map((t) => ({ value: t.value, label: t.label }))}
+            />
           </div>
 
           {/* Search */}

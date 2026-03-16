@@ -165,10 +165,11 @@ describe('NetworkTab', () => {
 
   // ── Loading & Error ──
 
-  it('shows loading spinner when meshLoading is true and mesh is null', () => {
+  it('shows loading skeleton when meshLoading is true and mesh is null', () => {
     const props = defaultProps();
     renderWithRouter(<NetworkTab {...props} meshLoading={true} mesh={null} />);
-    expect(screen.getByText('Loading infrastructure data...')).toBeInTheDocument();
+    const skeleton = document.querySelector('.skeleton-shimmer');
+    expect(skeleton).toBeInTheDocument();
   });
 
   it('shows error message when meshError is set', () => {

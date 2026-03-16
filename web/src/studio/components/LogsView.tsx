@@ -5,6 +5,7 @@ import { usePolling } from '../hooks/usePolling';
 import { downloadBlob } from '../../utils/download';
 import { useLogFilters } from './useLogFilters';
 import LogEntryDetail from './LogEntryDetail';
+import { Select } from '../../components/ui/Select';
 
 interface LogsViewProps {
   labId: string;
@@ -342,10 +343,11 @@ const LogsView: React.FC<LogsViewProps> = ({
         {/* Job filter */}
         <div className="flex items-center gap-2">
           <label className="text-[11px] font-bold text-stone-500 uppercase">Job</label>
-          <select
+          <Select
             value={selectedJobId}
             onChange={(e) => setSelectedJobId(e.target.value)}
-            className="px-2 py-1.5 text-xs glass-control border rounded-lg text-stone-700 dark:text-stone-300 focus:outline-none focus:ring-1 focus:ring-sage-500"
+            size="sm"
+            className="glass-control"
           >
             <option value="all">All Jobs</option>
             {logs?.jobs.map((job) => (
@@ -353,16 +355,17 @@ const LogsView: React.FC<LogsViewProps> = ({
                 {formatJobAction(job.action)} ({job.status})
               </option>
             ))}
-          </select>
+          </Select>
         </div>
 
         {/* Host filter */}
         <div className="flex items-center gap-2">
           <label className="text-[11px] font-bold text-stone-500 uppercase">Host</label>
-          <select
+          <Select
             value={selectedHostId}
             onChange={(e) => setSelectedHostId(e.target.value)}
-            className="px-2 py-1.5 text-xs glass-control border rounded-lg text-stone-700 dark:text-stone-300 focus:outline-none focus:ring-1 focus:ring-sage-500"
+            size="sm"
+            className="glass-control"
           >
             <option value="all">All Hosts</option>
             {allHosts.map((host) => (
@@ -370,37 +373,41 @@ const LogsView: React.FC<LogsViewProps> = ({
                 {host}
               </option>
             ))}
-          </select>
+          </Select>
         </div>
 
         {/* Level filter */}
         <div className="flex items-center gap-2">
           <label className="text-[11px] font-bold text-stone-500 uppercase">Level</label>
-          <select
+          <Select
             value={selectedLevel}
             onChange={(e) => setSelectedLevel(e.target.value)}
-            className="px-2 py-1.5 text-xs glass-control border rounded-lg text-stone-700 dark:text-stone-300 focus:outline-none focus:ring-1 focus:ring-sage-500"
-          >
-            <option value="all">All Levels</option>
-            <option value="info">Info+</option>
-            <option value="warning">Warning+</option>
-            <option value="error">Errors Only</option>
-          </select>
+            size="sm"
+            className="glass-control"
+            options={[
+              { value: 'all', label: 'All Levels' },
+              { value: 'info', label: 'Info+' },
+              { value: 'warning', label: 'Warning+' },
+              { value: 'error', label: 'Errors Only' },
+            ]}
+          />
         </div>
 
         {/* Time filter */}
         <div className="flex items-center gap-2">
           <label className="text-[11px] font-bold text-stone-500 uppercase">Time</label>
-          <select
+          <Select
             value={selectedSince}
             onChange={(e) => setSelectedSince(e.target.value)}
-            className="px-2 py-1.5 text-xs glass-control border rounded-lg text-stone-700 dark:text-stone-300 focus:outline-none focus:ring-1 focus:ring-sage-500"
-          >
-            <option value="all">All Time</option>
-            <option value="15m">Last 15 min</option>
-            <option value="1h">Last 1 hour</option>
-            <option value="24h">Last 24 hours</option>
-          </select>
+            size="sm"
+            className="glass-control"
+            options={[
+              { value: 'all', label: 'All Time' },
+              { value: '15m', label: 'Last 15 min' },
+              { value: '1h', label: 'Last 1 hour' },
+              { value: '24h', label: 'Last 24 hours' },
+            ]}
+          />
         </div>
 
         {/* Search */}

@@ -11,6 +11,8 @@ import { ArchetypeIcon } from '../../components/icons';
 import { VersionBadge } from '../../components/VersionBadge';
 import AdminMenuButton from '../../components/AdminMenuButton';
 import { EmptyState } from '../../components/ui/EmptyState';
+import { Select } from '../../components/ui/Select';
+import { Tooltip } from '../../components/ui/Tooltip';
 import type { SystemMetrics } from '../types';
 
 interface LabSummary {
@@ -286,41 +288,49 @@ const Dashboard: React.FC<DashboardProps> = ({
 
           {showInfra && (
             <>
-              <button
-                onClick={() => systemLogsModal.open()}
-                className="flex items-center gap-2 px-3 py-2 glass-control text-stone-600 dark:text-stone-300 rounded-lg transition-all"
-                title="View System Logs"
-              >
-                <i className="fa-solid fa-file-lines text-xs"></i>
-                <span className="text-[10px] font-bold uppercase">Logs</span>
-              </button>
+              <Tooltip content="View System Logs">
+                <button
+                  onClick={() => systemLogsModal.open()}
+                  className="flex items-center gap-2 px-3 py-2 glass-control text-stone-600 dark:text-stone-300 rounded-lg transition-all"
+                  title="View System Logs"
+                >
+                  <i className="fa-solid fa-file-lines text-xs"></i>
+                  <span className="text-[10px] font-bold uppercase">Logs</span>
+                </button>
+              </Tooltip>
             </>
           )}
 
-          <button
-            onClick={() => setShowThemeSelector(true)}
-            className="w-9 h-9 flex items-center justify-center glass-control text-stone-600 dark:text-stone-400 hover:text-sage-600 dark:hover:text-sage-400 rounded-lg transition-all"
-            title="Theme Settings"
-          >
-            <i className="fa-solid fa-palette text-sm"></i>
-          </button>
+          <Tooltip content="Theme Settings">
+            <button
+              onClick={() => setShowThemeSelector(true)}
+              className="w-9 h-9 flex items-center justify-center glass-control text-stone-600 dark:text-stone-400 hover:text-sage-600 dark:hover:text-sage-400 rounded-lg transition-all"
+              title="Theme Settings"
+            >
+              <i className="fa-solid fa-palette text-sm"></i>
+            </button>
+          </Tooltip>
 
-          <button
-            onClick={toggleMode}
-            className="w-9 h-9 flex items-center justify-center glass-control text-stone-600 dark:text-stone-400 hover:text-sage-600 dark:hover:text-sage-400 rounded-lg transition-all"
-            title={`Switch to ${effectiveMode === 'dark' ? 'light' : 'dark'} mode`}
-          >
-            <i className={`fa-solid ${effectiveMode === 'dark' ? 'fa-sun' : 'fa-moon'} text-sm`}></i>
-          </button>
+          <Tooltip content={`Switch to ${effectiveMode === 'dark' ? 'light' : 'dark'} mode`}>
+            <button
+              onClick={toggleMode}
+              className="w-9 h-9 flex items-center justify-center glass-control text-stone-600 dark:text-stone-400 hover:text-sage-600 dark:hover:text-sage-400 rounded-lg transition-all"
+              title={`Switch to ${effectiveMode === 'dark' ? 'light' : 'dark'} mode`}
+            >
+              <i className={`fa-solid ${effectiveMode === 'dark' ? 'fa-sun' : 'fa-moon'} text-sm`}></i>
+            </button>
+          </Tooltip>
 
-          <button
-            onClick={onLogout}
-            className="flex items-center gap-2 px-3 py-2 text-stone-500 hover:text-red-500 dark:text-stone-400 dark:hover:text-red-400 text-xs font-bold transition-all"
-            title="Logout"
-          >
-            <i className="fa-solid fa-right-from-bracket text-xs"></i>
-            <span className="text-[10px] font-bold uppercase">Logout</span>
-          </button>
+          <Tooltip content="Logout">
+            <button
+              onClick={onLogout}
+              className="flex items-center gap-2 px-3 py-2 text-stone-500 hover:text-red-500 dark:text-stone-400 dark:hover:text-red-400 text-xs font-bold transition-all"
+              title="Logout"
+            >
+              <i className="fa-solid fa-right-from-bracket text-xs"></i>
+              <span className="text-[10px] font-bold uppercase">Logout</span>
+            </button>
+          </Tooltip>
 
         </div>
       </header>
@@ -356,23 +366,23 @@ const Dashboard: React.FC<DashboardProps> = ({
               />
             </div>
             <div className="lg:col-span-2">
-              <select
+              <Select
                 aria-label="Filter labs"
                 value={listFilter}
                 onChange={(e) => updateDashboardParams({ status: e.target.value as LabListFilter, page: 1 })}
-                className="w-full py-2.5 px-3 rounded-xl glass-control border text-sm text-stone-700 dark:text-stone-200 bg-white/80 dark:bg-stone-900/85 dark:border-stone-700 dark:[color-scheme:dark]"
+                className="glass-control rounded-xl"
               >
                 <option value="all" className="bg-white text-stone-700 dark:bg-stone-900 dark:text-stone-200">All Labs</option>
                 <option value="running" className="bg-white text-stone-700 dark:bg-stone-900 dark:text-stone-200">Running</option>
                 <option value="stopped" className="bg-white text-stone-700 dark:bg-stone-900 dark:text-stone-200">Stopped</option>
-              </select>
+              </Select>
             </div>
             <div className="lg:col-span-3">
-              <select
+              <Select
                 aria-label="Sort labs"
                 value={sortOption}
                 onChange={(e) => updateDashboardParams({ sort: e.target.value as LabSortOption, page: 1 })}
-                className="w-full py-2.5 px-3 rounded-xl glass-control border text-sm text-stone-700 dark:text-stone-200 bg-white/80 dark:bg-stone-900/85 dark:border-stone-700 dark:[color-scheme:dark]"
+                className="glass-control rounded-xl"
               >
                 <option value="created_desc" className="bg-white text-stone-700 dark:bg-stone-900 dark:text-stone-200">Newest First</option>
                 <option value="created_asc" className="bg-white text-stone-700 dark:bg-stone-900 dark:text-stone-200">Oldest First</option>
@@ -380,28 +390,32 @@ const Dashboard: React.FC<DashboardProps> = ({
                 <option value="name_desc" className="bg-white text-stone-700 dark:bg-stone-900 dark:text-stone-200">Name Z-A</option>
                 <option value="nodes_desc" className="bg-white text-stone-700 dark:bg-stone-900 dark:text-stone-200">Most Nodes</option>
                 <option value="nodes_asc" className="bg-white text-stone-700 dark:bg-stone-900 dark:text-stone-200">Least Nodes</option>
-              </select>
+              </Select>
             </div>
             <div className="lg:col-span-2 flex items-center justify-between gap-1.5">
-              <button
-                onClick={() => updateDashboardParams({ page: Math.max(1, currentPage - 1) })}
-                disabled={currentPage <= 1}
-                className="w-9 h-9 rounded-lg glass-control border text-xs font-bold text-stone-700 dark:text-stone-200 disabled:opacity-40 disabled:cursor-not-allowed transition-all duration-150 flex items-center justify-center"
-                title="Previous page"
-              >
-                <i className="fa-solid fa-chevron-left"></i>
-              </button>
+              <Tooltip content="Previous page">
+                <button
+                  onClick={() => updateDashboardParams({ page: Math.max(1, currentPage - 1) })}
+                  disabled={currentPage <= 1}
+                  className="w-9 h-9 rounded-lg glass-control border text-xs font-bold text-stone-700 dark:text-stone-200 disabled:opacity-40 disabled:cursor-not-allowed transition-all duration-150 flex items-center justify-center"
+                  title="Previous page"
+                >
+                  <i className="fa-solid fa-chevron-left"></i>
+                </button>
+              </Tooltip>
               <span className="text-xs font-semibold text-stone-600 dark:text-stone-400 tabular-nums">
                 {currentPage}/{totalPages}
               </span>
-              <button
-                onClick={() => updateDashboardParams({ page: Math.min(totalPages, currentPage + 1) })}
-                disabled={currentPage >= totalPages}
-                className="w-9 h-9 rounded-lg glass-control border text-xs font-bold text-stone-700 dark:text-stone-200 disabled:opacity-40 disabled:cursor-not-allowed transition-all duration-150 flex items-center justify-center"
-                title="Next page"
-              >
-                <i className="fa-solid fa-chevron-right"></i>
-              </button>
+              <Tooltip content="Next page">
+                <button
+                  onClick={() => updateDashboardParams({ page: Math.min(totalPages, currentPage + 1) })}
+                  disabled={currentPage >= totalPages}
+                  className="w-9 h-9 rounded-lg glass-control border text-xs font-bold text-stone-700 dark:text-stone-200 disabled:opacity-40 disabled:cursor-not-allowed transition-all duration-150 flex items-center justify-center"
+                  title="Next page"
+                >
+                  <i className="fa-solid fa-chevron-right"></i>
+                </button>
+              </Tooltip>
             </div>
           </div>
 
@@ -447,29 +461,35 @@ const Dashboard: React.FC<DashboardProps> = ({
                 <div className="absolute top-0 right-0 p-4 opacity-0 group-hover:opacity-100 transition-opacity">
                   {pendingDeleteId === lab.id ? (
                     <div className="flex items-center gap-1">
-                      <button
-                        onClick={(e) => { e.stopPropagation(); handleDeleteRequest(lab.id); }}
-                        className="w-8 h-8 rounded-lg bg-red-500 text-white hover:bg-red-600 transition-all border border-red-500/20"
-                        title="Confirm delete"
-                      >
-                        <i className="fa-solid fa-check text-xs"></i>
-                      </button>
-                      <button
-                        onClick={(e) => { e.stopPropagation(); handleDeleteCancel(); }}
-                        className="w-8 h-8 rounded-lg glass-control text-stone-500 transition-all"
-                        title="Cancel"
-                      >
-                        <i className="fa-solid fa-xmark text-xs"></i>
-                      </button>
+                      <Tooltip content="Confirm delete">
+                        <button
+                          onClick={(e) => { e.stopPropagation(); handleDeleteRequest(lab.id); }}
+                          className="w-8 h-8 rounded-lg bg-red-500 text-white hover:bg-red-600 transition-all border border-red-500/20"
+                          title="Confirm delete"
+                        >
+                          <i className="fa-solid fa-check text-xs"></i>
+                        </button>
+                      </Tooltip>
+                      <Tooltip content="Cancel">
+                        <button
+                          onClick={(e) => { e.stopPropagation(); handleDeleteCancel(); }}
+                          className="w-8 h-8 rounded-lg glass-control text-stone-500 transition-all"
+                          title="Cancel"
+                        >
+                          <i className="fa-solid fa-xmark text-xs"></i>
+                        </button>
+                      </Tooltip>
                     </div>
                   ) : (
-                    <button
-                      onClick={(e) => { e.stopPropagation(); handleDeleteRequest(lab.id); }}
-                      className="w-8 h-8 rounded-lg bg-red-500/10 text-red-500 hover:bg-red-500 hover:text-white transition-all border border-red-500/20"
-                      title="Delete lab"
-                    >
-                      <i className="fa-solid fa-trash-can text-xs"></i>
-                    </button>
+                    <Tooltip content="Delete lab">
+                      <button
+                        onClick={(e) => { e.stopPropagation(); handleDeleteRequest(lab.id); }}
+                        className="w-8 h-8 rounded-lg bg-red-500/10 text-red-500 hover:bg-red-500 hover:text-white transition-all border border-red-500/20"
+                        title="Delete lab"
+                      >
+                        <i className="fa-solid fa-trash-can text-xs"></i>
+                      </button>
+                    </Tooltip>
                   )}
                 </div>
 
@@ -538,13 +558,15 @@ const Dashboard: React.FC<DashboardProps> = ({
                   >
                     Open Designer
                   </button>
-                  <button
-                    onClick={() => onDownload?.(lab)}
-                    className="w-10 py-2 glass-control text-stone-700 dark:text-stone-200 text-xs font-bold rounded-lg border transition-all duration-150 hover:border-sage-500/50 hover:text-sage-700 dark:hover:text-sage-400 active:scale-[0.97] flex items-center justify-center"
-                    title="Download lab bundle"
-                  >
-                    <i className="fa-solid fa-download"></i>
-                  </button>
+                  <Tooltip content="Download lab bundle">
+                    <button
+                      onClick={() => onDownload?.(lab)}
+                      className="w-10 py-2 glass-control text-stone-700 dark:text-stone-200 text-xs font-bold rounded-lg border transition-all duration-150 hover:border-sage-500/50 hover:text-sage-700 dark:hover:text-sage-400 active:scale-[0.97] flex items-center justify-center"
+                      title="Download lab bundle"
+                    >
+                      <i className="fa-solid fa-download"></i>
+                    </button>
+                  </Tooltip>
                 </div>
               </div>
               );

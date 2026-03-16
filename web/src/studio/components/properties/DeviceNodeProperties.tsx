@@ -8,6 +8,7 @@ import { NodeStateEntry } from '../../../types/nodeState';
 import ConfigSnapshotSelector from '../ConfigSnapshotSelector';
 import AgentDropdown from './AgentDropdown';
 import ValueDropdown from './ValueDropdown';
+import { Tooltip } from '../../../components/ui/Tooltip';
 
 interface DeviceNodePropertiesProps {
   node: DeviceNode;
@@ -120,21 +121,23 @@ const DeviceNodeProperties: React.FC<DeviceNodePropertiesProps> = ({
                )}
                <div className="grid grid-cols-2 gap-2 mt-4">
                   {status === 'stopping' ? (
-                    <button
-                      disabled
-                      className="flex items-center justify-center gap-2 py-2 bg-orange-600/50 text-white text-[11px] font-bold rounded-lg cursor-not-allowed col-span-2"
-                      title="Stopping..."
-                    >
-                      <i className="fa-solid fa-spinner fa-spin"></i> STOPPING...
-                    </button>
+                    <Tooltip content="Stopping...">
+                      <button
+                        disabled
+                        className="flex items-center justify-center gap-2 py-2 bg-orange-600/50 text-white text-[11px] font-bold rounded-lg cursor-not-allowed col-span-2"
+                      >
+                        <i className="fa-solid fa-spinner fa-spin"></i> STOPPING...
+                      </button>
+                    </Tooltip>
                   ) : status === 'stopped' ? (
-                    <button
-                      onClick={() => onUpdateStatus(node.id, 'booting')}
-                      className="flex items-center justify-center gap-2 py-2 bg-green-600 hover:bg-green-500 text-white text-[11px] font-bold rounded-lg transition-all"
-                      title="Start this node"
-                    >
-                      <i className="fa-solid fa-play"></i> START
-                    </button>
+                    <Tooltip content="Start this node">
+                      <button
+                        onClick={() => onUpdateStatus(node.id, 'booting')}
+                        className="flex items-center justify-center gap-2 py-2 bg-green-600 hover:bg-green-500 text-white text-[11px] font-bold rounded-lg transition-all"
+                      >
+                        <i className="fa-solid fa-play"></i> START
+                      </button>
+                    </Tooltip>
                   ) : (
                     <button onClick={() => onUpdateStatus(node.id, 'stopped')} className="flex items-center justify-center gap-2 py-2 bg-red-600 hover:bg-red-500 text-white text-[11px] font-bold rounded-lg transition-all"><i className="fa-solid fa-power-off"></i> STOP</button>
                   )}
@@ -200,25 +203,27 @@ const DeviceNodeProperties: React.FC<DeviceNodePropertiesProps> = ({
                     <div className="flex items-center gap-1 flex-1 min-w-0">
                       <span className="text-[11px] text-stone-500 dark:text-stone-500 shrink-0">user</span>
                       <code className="text-[11px] text-stone-700 dark:text-stone-300 font-mono truncate">{username}</code>
-                      <button
-                        onClick={() => navigator.clipboard.writeText(username)}
-                        className="shrink-0 p-0.5 text-stone-400 hover:text-sage-500 transition-colors"
-                        title="Copy username"
-                      >
-                        <i className="fa-regular fa-copy text-[11px]"></i>
-                      </button>
+                      <Tooltip content="Copy username">
+                        <button
+                          onClick={() => navigator.clipboard.writeText(username)}
+                          className="shrink-0 p-0.5 text-stone-400 hover:text-sage-500 transition-colors"
+                        >
+                          <i className="fa-regular fa-copy text-[11px]"></i>
+                        </button>
+                      </Tooltip>
                     </div>
                     {password && (
                       <div className="flex items-center gap-1 flex-1 min-w-0">
                         <span className="text-[11px] text-stone-500 dark:text-stone-500 shrink-0">pass</span>
                         <code className="text-[11px] text-stone-700 dark:text-stone-300 font-mono truncate">{password}</code>
-                        <button
-                          onClick={() => navigator.clipboard.writeText(password)}
-                          className="shrink-0 p-0.5 text-stone-400 hover:text-sage-500 transition-colors"
-                          title="Copy password"
-                        >
-                          <i className="fa-regular fa-copy text-[11px]"></i>
-                        </button>
+                        <Tooltip content="Copy password">
+                          <button
+                            onClick={() => navigator.clipboard.writeText(password)}
+                            className="shrink-0 p-0.5 text-stone-400 hover:text-sage-500 transition-colors"
+                          >
+                            <i className="fa-regular fa-copy text-[11px]"></i>
+                          </button>
+                        </Tooltip>
                       </div>
                     )}
                   </div>
@@ -233,32 +238,34 @@ const DeviceNodeProperties: React.FC<DeviceNodePropertiesProps> = ({
             <div className="flex items-center justify-between">
               <div className="text-[11px] font-bold text-stone-500 uppercase tracking-widest">Hardware Defaults</div>
               <div className="flex items-center gap-2">
-                <button
-                  onClick={() => setIsHardwareLocked((prev) => !prev)}
-                  className="flex items-center gap-1.5 px-2 py-1 text-[11px] font-bold uppercase text-stone-600 dark:text-stone-300 glass-control rounded-lg transition-colors"
-                  title={isHardwareLocked ? 'Unlock hardware settings' : 'Lock hardware settings'}
-                >
-                  <i className={`fa-solid ${isHardwareLocked ? 'fa-lock' : 'fa-lock-open'}`} />
-                  {isHardwareLocked ? 'Locked' : 'Unlocked'}
-                </button>
-                <button
-                  onClick={() => onUpdateNode(node.id, {
-                    cpu: defaultCpu,
-                    memory: defaultMemory,
-                    disk_driver: model?.diskDriver,
-                    nic_driver: model?.nicDriver,
-                    machine_type: model?.machineType,
-                  })}
-                  disabled={isHardwareLocked}
-                  className={`px-3 py-1 text-[11px] font-bold uppercase rounded-lg transition-colors ${
-                    isHardwareLocked
-                      ? 'text-stone-400 dark:text-stone-600 bg-stone-100 dark:bg-stone-800 cursor-not-allowed'
-                      : 'text-stone-600 dark:text-stone-300 glass-control'
-                  }`}
-                  title="Reset CPU, RAM, and hardware defaults for this device type"
-                >
-                  Reset
-                </button>
+                <Tooltip content={isHardwareLocked ? 'Unlock hardware settings' : 'Lock hardware settings'}>
+                  <button
+                    onClick={() => setIsHardwareLocked((prev) => !prev)}
+                    className="flex items-center gap-1.5 px-2 py-1 text-[11px] font-bold uppercase text-stone-600 dark:text-stone-300 glass-control rounded-lg transition-colors"
+                  >
+                    <i className={`fa-solid ${isHardwareLocked ? 'fa-lock' : 'fa-lock-open'}`} />
+                    {isHardwareLocked ? 'Locked' : 'Unlocked'}
+                  </button>
+                </Tooltip>
+                <Tooltip content="Reset CPU, RAM, and hardware defaults for this device type">
+                  <button
+                    onClick={() => onUpdateNode(node.id, {
+                      cpu: defaultCpu,
+                      memory: defaultMemory,
+                      disk_driver: model?.diskDriver,
+                      nic_driver: model?.nicDriver,
+                      machine_type: model?.machineType,
+                    })}
+                    disabled={isHardwareLocked}
+                    className={`px-3 py-1 text-[11px] font-bold uppercase rounded-lg transition-colors ${
+                      isHardwareLocked
+                        ? 'text-stone-400 dark:text-stone-600 bg-stone-100 dark:bg-stone-800 cursor-not-allowed'
+                        : 'text-stone-600 dark:text-stone-300 glass-control'
+                    }`}
+                  >
+                    Reset
+                  </button>
+                </Tooltip>
               </div>
             </div>
             <div className="space-y-4">
@@ -359,14 +366,15 @@ const DeviceNodeProperties: React.FC<DeviceNodePropertiesProps> = ({
                 <div className="flex items-center justify-between mb-3">
                   <label className="text-[11px] font-bold text-stone-500 uppercase tracking-widest">Startup Configuration</label>
                   {onOpenConfigViewer && (
-                    <button
-                      onClick={() => onOpenConfigViewer(node.id, node.container_name || node.name)}
-                      className="flex items-center gap-1.5 px-2 py-1 text-[11px] font-bold uppercase text-sage-600 dark:text-sage-400 hover:bg-sage-500/10 rounded transition-colors"
-                      title="View saved config in larger window"
-                    >
-                      <i className="fa-solid fa-expand" />
-                      Expand
-                    </button>
+                    <Tooltip content="View saved config in larger window">
+                      <button
+                        onClick={() => onOpenConfigViewer(node.id, node.container_name || node.name)}
+                        className="flex items-center gap-1.5 px-2 py-1 text-[11px] font-bold uppercase text-sage-600 dark:text-sage-400 hover:bg-sage-500/10 rounded transition-colors"
+                      >
+                        <i className="fa-solid fa-expand" />
+                        Expand
+                      </button>
+                    </Tooltip>
                   )}
                 </div>
                 <textarea value={node.config || ''} onChange={(e) => onUpdateNode(node.id, { config: e.target.value })} spellCheck={false} className="flex-1 min-h-[300px] bg-stone-50 dark:bg-black text-sage-700 dark:text-sage-400 font-mono text-[11px] p-4 rounded-xl border border-stone-200 dark:border-stone-800 focus:outline-none focus:border-sage-500/50 resize-none" />

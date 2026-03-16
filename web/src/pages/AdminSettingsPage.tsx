@@ -12,6 +12,7 @@ import {
   updateInfrastructureSettings,
   type InfrastructureSettingsUpdate,
 } from "../api";
+import { Select } from "../components/ui/Select";
 
 type LoginModeSettings = {
   themeId: string;
@@ -138,30 +139,22 @@ export default function AdminSettingsPage() {
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               <div className="space-y-4">
                 <h3 className="text-sm font-bold uppercase tracking-wider text-stone-700 dark:text-stone-200">Dark Mode</h3>
-                <label className="block text-xs font-semibold uppercase tracking-wider text-stone-500 dark:text-stone-400">
-                  Theme
-                  <select
-                    className="mt-2 w-full rounded-lg border border-stone-300 dark:border-stone-700 bg-white dark:bg-stone-800 px-3 py-2 text-sm"
+                <div>
+                  <Select
+                    label="Theme"
                     value={darkDefaults.themeId}
                     onChange={(e) => setDarkDefaults((prev) => ({ ...prev, themeId: e.target.value }))}
-                  >
-                    {themeOptions.map((opt) => (
-                      <option key={opt.id} value={opt.id}>{opt.name}</option>
-                    ))}
-                  </select>
-                </label>
-                <label className="block text-xs font-semibold uppercase tracking-wider text-stone-500 dark:text-stone-400">
-                  Background
-                  <select
-                    className="mt-2 w-full rounded-lg border border-stone-300 dark:border-stone-700 bg-white dark:bg-stone-800 px-3 py-2 text-sm"
+                    options={themeOptions.map((opt) => ({ value: opt.id, label: opt.name }))}
+                  />
+                </div>
+                <div>
+                  <Select
+                    label="Background"
                     value={darkDefaults.backgroundId}
                     onChange={(e) => setDarkDefaults((prev) => ({ ...prev, backgroundId: e.target.value }))}
-                  >
-                    {backgroundPatterns.map((bg) => (
-                      <option key={bg.id} value={bg.id}>{bg.name}</option>
-                    ))}
-                  </select>
-                </label>
+                    options={backgroundPatterns.map((bg) => ({ value: bg.id, label: bg.name }))}
+                  />
+                </div>
                 <label className="block text-xs font-semibold uppercase tracking-wider text-stone-500 dark:text-stone-400">
                   Background Opacity ({darkDefaults.opacity}%)
                   <input
@@ -177,30 +170,22 @@ export default function AdminSettingsPage() {
 
               <div className="space-y-4">
                 <h3 className="text-sm font-bold uppercase tracking-wider text-stone-700 dark:text-stone-200">Light Mode</h3>
-                <label className="block text-xs font-semibold uppercase tracking-wider text-stone-500 dark:text-stone-400">
-                  Theme
-                  <select
-                    className="mt-2 w-full rounded-lg border border-stone-300 dark:border-stone-700 bg-white dark:bg-stone-800 px-3 py-2 text-sm"
+                <div>
+                  <Select
+                    label="Theme"
                     value={lightDefaults.themeId}
                     onChange={(e) => setLightDefaults((prev) => ({ ...prev, themeId: e.target.value }))}
-                  >
-                    {themeOptions.map((opt) => (
-                      <option key={opt.id} value={opt.id}>{opt.name}</option>
-                    ))}
-                  </select>
-                </label>
-                <label className="block text-xs font-semibold uppercase tracking-wider text-stone-500 dark:text-stone-400">
-                  Background
-                  <select
-                    className="mt-2 w-full rounded-lg border border-stone-300 dark:border-stone-700 bg-white dark:bg-stone-800 px-3 py-2 text-sm"
+                    options={themeOptions.map((opt) => ({ value: opt.id, label: opt.name }))}
+                  />
+                </div>
+                <div>
+                  <Select
+                    label="Background"
                     value={lightDefaults.backgroundId}
                     onChange={(e) => setLightDefaults((prev) => ({ ...prev, backgroundId: e.target.value }))}
-                  >
-                    {backgroundPatterns.map((bg) => (
-                      <option key={bg.id} value={bg.id}>{bg.name}</option>
-                    ))}
-                  </select>
-                </label>
+                    options={backgroundPatterns.map((bg) => ({ value: bg.id, label: bg.name }))}
+                  />
+                </div>
                 <label className="block text-xs font-semibold uppercase tracking-wider text-stone-500 dark:text-stone-400">
                   Background Opacity ({lightDefaults.opacity}%)
                   <input

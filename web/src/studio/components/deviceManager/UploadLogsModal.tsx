@@ -7,6 +7,7 @@ import {
   IMAGE_LOG_CATEGORY_COLORS,
 } from './deviceManagerTypes';
 import { formatImageLogTime, formatImageLogDate } from './deviceManagerUtils';
+import { Select } from '../../../components/ui/Select';
 
 interface UploadLogsModalProps {
   isOpen: boolean;
@@ -56,18 +57,18 @@ const UploadLogsModal: React.FC<UploadLogsModalProps> = ({
         <div className="flex flex-wrap items-center gap-3 pb-4 border-b border-stone-200 dark:border-stone-700">
           <div className="flex items-center gap-2">
             <label className="text-xs font-medium text-stone-500 dark:text-stone-400">Filter:</label>
-            <select
+            <Select
               aria-label="Image log filter"
               value={imageLogFilter}
               onChange={(e) => setImageLogFilter(e.target.value as ImageManagementLogFilter)}
-              className="px-2 py-1 text-sm bg-stone-100 dark:bg-stone-800 border border-stone-300 dark:border-stone-600 rounded-md text-stone-700 dark:text-stone-200"
+              size="sm"
             >
               <option value="all">All ({imageLogCounts.all})</option>
               <option value="errors">Errors ({imageLogCounts.errors})</option>
               <option value="iso">ISO ({imageLogCounts.iso})</option>
               <option value="docker">Docker ({imageLogCounts.docker})</option>
               <option value="qcow2">QCOW2 ({imageLogCounts.qcow2})</option>
-            </select>
+            </Select>
           </div>
 
           <div className="flex-1 min-w-[220px]">

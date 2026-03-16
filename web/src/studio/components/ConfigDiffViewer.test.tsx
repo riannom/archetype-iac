@@ -75,7 +75,7 @@ describe("ConfigDiffViewer", () => {
   });
 
   describe("Loading state", () => {
-    it("shows loading spinner while loading diff", async () => {
+    it("shows loading skeleton while loading diff", async () => {
       mockStudioRequest.mockImplementation(
         () =>
           new Promise((resolve) =>
@@ -85,7 +85,8 @@ describe("ConfigDiffViewer", () => {
 
       render(<ConfigDiffViewer {...defaultProps} />);
 
-      expect(document.querySelector(".fa-spinner")).toBeInTheDocument();
+      const skeleton = document.querySelector('.skeleton-shimmer');
+      expect(skeleton).toBeInTheDocument();
     });
 
     it("calls studioRequest with correct parameters", async () => {
@@ -512,13 +513,14 @@ describe("ConfigDiffViewer", () => {
   describe("Null state", () => {
     it("returns null when diff is not loaded yet and not loading", async () => {
       // This test verifies the component returns null before data is loaded
-      // but after loading spinner phase
+      // but after loading skeleton phase
       mockStudioRequest.mockImplementation(() => new Promise(() => {})); // Never resolves
 
       const { container } = render(<ConfigDiffViewer {...defaultProps} />);
 
-      // Initially shows loading spinner
-      expect(document.querySelector(".fa-spinner")).toBeInTheDocument();
+      // Initially shows loading skeleton
+      const skeleton = document.querySelector('.skeleton-shimmer');
+      expect(skeleton).toBeInTheDocument();
 
       // Container should have content during loading
       expect(container.firstChild).not.toBeNull();

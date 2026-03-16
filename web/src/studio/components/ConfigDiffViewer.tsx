@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { Skeleton } from '../../components/ui/Skeleton';
 
 interface ConfigSnapshot {
   id: string;
@@ -76,8 +77,12 @@ const ConfigDiffViewer: React.FC<ConfigDiffViewerProps> = ({
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center py-12">
-        <i className="fa-solid fa-spinner fa-spin text-2xl text-stone-400" />
+      <div className="px-4 py-6 space-y-3">
+        <div className="flex items-center gap-6">
+          <Skeleton variant="text" width="120px" />
+          <Skeleton variant="text" width="120px" />
+        </div>
+        <Skeleton variant="text" count={8} />
       </div>
     );
   }

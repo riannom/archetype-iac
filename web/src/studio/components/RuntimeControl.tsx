@@ -5,6 +5,8 @@ import { getAgentColor } from '../../utils/agentColors';
 import { NodeRuntimeStatus, NodeStateEntry } from '../../types/nodeState';
 import { useNotifications } from '../../contexts/NotificationContext';
 import { ConfirmDialog } from '../../components/ui/ConfirmDialog';
+import { Select } from '../../components/ui/Select';
+import { Tooltip } from '../../components/ui/Tooltip';
 
 /** @deprecated Use NodeRuntimeStatus from types/nodeState instead */
 export type RuntimeStatus = NodeRuntimeStatus;
@@ -153,37 +155,43 @@ const RuntimeControl: React.FC<RuntimeControlProps> = ({ labId, nodes, runtimeSt
           </div>
           <div className="flex gap-3">
             {!allNodesRunning && (
-              <button
-                onClick={() => handleBulkAction('running')}
-                disabled={isOperationPending()}
-                className="px-4 py-2 bg-green-600 hover:bg-green-500 disabled:bg-green-600/50 disabled:cursor-not-allowed text-white rounded-lg text-xs font-bold transition-all shadow-lg shadow-green-900/20"
-                title="Start all nodes"
-              >
-                <i className={`fa-solid ${pendingOps.has('bulk') ? 'fa-spinner fa-spin' : 'fa-play'} mr-2`}></i>
-                {pendingOps.has('bulk') ? 'Starting...' : 'Start All'}
-              </button>
+              <Tooltip content="Start all nodes">
+                <button
+                  onClick={() => handleBulkAction('running')}
+                  disabled={isOperationPending()}
+                  className="px-4 py-2 bg-green-600 hover:bg-green-500 disabled:bg-green-600/50 disabled:cursor-not-allowed text-white rounded-lg text-xs font-bold transition-all shadow-lg shadow-green-900/20"
+                  title="Start all nodes"
+                >
+                  <i className={`fa-solid ${pendingOps.has('bulk') ? 'fa-spinner fa-spin' : 'fa-play'} mr-2`}></i>
+                  {pendingOps.has('bulk') ? 'Starting...' : 'Start All'}
+                </button>
+              </Tooltip>
             )}
             {hasRunningNodes && (
-              <button
-                onClick={handleStopAll}
-                disabled={isOperationPending()}
-                className="px-4 py-2 glass-control disabled:opacity-50 disabled:cursor-not-allowed text-stone-700 dark:text-white rounded-lg border text-xs font-bold transition-all"
-                title="Stop all running nodes"
-              >
-                <i className={`fa-solid ${pendingOps.has('bulk') ? 'fa-spinner fa-spin' : 'fa-stop'} mr-2`}></i>
-                {pendingOps.has('bulk') ? 'Stopping...' : 'Stop All'}
-              </button>
+              <Tooltip content="Stop all running nodes">
+                <button
+                  onClick={handleStopAll}
+                  disabled={isOperationPending()}
+                  className="px-4 py-2 glass-control disabled:opacity-50 disabled:cursor-not-allowed text-stone-700 dark:text-white rounded-lg border text-xs font-bold transition-all"
+                  title="Stop all running nodes"
+                >
+                  <i className={`fa-solid ${pendingOps.has('bulk') ? 'fa-spinner fa-spin' : 'fa-stop'} mr-2`}></i>
+                  {pendingOps.has('bulk') ? 'Stopping...' : 'Stop All'}
+                </button>
+              </Tooltip>
             )}
             {hasRunningNodes && (
-              <button
-                onClick={handleExtractConfigs}
-                disabled={isExtracting}
-                className="px-4 py-2 bg-blue-600 hover:bg-blue-500 disabled:bg-blue-600/50 disabled:cursor-not-allowed text-white rounded-lg text-xs font-bold transition-all shadow-lg shadow-blue-900/20"
-                title="Extract configs from all running nodes"
-              >
-                <i className={`fa-solid ${isExtracting ? 'fa-spinner fa-spin' : 'fa-download'} mr-2`}></i>
-                {isExtracting ? 'Extracting...' : 'Extract Configs'}
-              </button>
+              <Tooltip content="Extract configs from all running nodes">
+                <button
+                  onClick={handleExtractConfigs}
+                  disabled={isExtracting}
+                  className="px-4 py-2 bg-blue-600 hover:bg-blue-500 disabled:bg-blue-600/50 disabled:cursor-not-allowed text-white rounded-lg text-xs font-bold transition-all shadow-lg shadow-blue-900/20"
+                  title="Extract configs from all running nodes"
+                >
+                  <i className={`fa-solid ${isExtracting ? 'fa-spinner fa-spin' : 'fa-download'} mr-2`}></i>
+                  {isExtracting ? 'Extracting...' : 'Extract Configs'}
+                </button>
+              </Tooltip>
             )}
           </div>
         </header>
@@ -247,11 +255,11 @@ const RuntimeControl: React.FC<RuntimeControlProps> = ({ labId, nodes, runtimeSt
                     </td>
                     <td className="px-6 py-4">
                       {agents.length > 1 ? (
-                        <select
+                        <Select
                           value={node.host || ''}
                           onChange={(e) => onUpdateNode?.(node.id, { host: e.target.value || undefined })}
                           disabled={status === 'running' || status === 'booting' || status === 'stopping'}
-                          className="bg-stone-100 dark:bg-stone-800 border border-stone-300 dark:border-stone-700 rounded px-2 py-1 text-xs text-stone-700 dark:text-stone-300 focus:outline-none focus:border-sage-500 disabled:opacity-50 disabled:cursor-not-allowed"
+                          size="sm"
                         >
                           <option value="">Auto</option>
                           {agents.map((agent) => (
@@ -259,7 +267,7 @@ const RuntimeControl: React.FC<RuntimeControlProps> = ({ labId, nodes, runtimeSt
                               {agent.name}
                             </option>
                           ))}
-                        </select>
+                        </Select>
                       ) : (
                         <span className="text-stone-400 dark:text-stone-600 text-xs">Auto</span>
                       )}
@@ -283,40 +291,48 @@ const RuntimeControl: React.FC<RuntimeControlProps> = ({ labId, nodes, runtimeSt
                       <div className="flex justify-end gap-1 opacity-60 group-hover:opacity-100 transition-opacity">
                         <>
                             {status === 'stopping' ? (
-                              <button
-                                disabled
-                                className="p-2 text-orange-500 rounded-lg"
-                                title="Stopping..."
-                              >
-                                <i className="fa-solid fa-spinner fa-spin"></i>
-                              </button>
-                            ) : status === 'stopped' ? (
-                              <button
-                                onClick={() => onUpdateStatus(node.id, 'booting')}
-                                disabled={isOperationPending(node.id)}
-                                className="p-2 text-green-500 hover:bg-green-500/10 disabled:opacity-50 disabled:cursor-not-allowed rounded-lg transition-all"
-                                title="Start this node"
-                              >
-                                <i className={`fa-solid ${(pendingOps.has(node.id) || pendingNodeOps.has(node.id)) ? 'fa-spinner fa-spin' : 'fa-play'}`}></i>
-                              </button>
-                            ) : (
-                              <>
+                              <Tooltip content="Stopping...">
                                 <button
-                                  onClick={() => onUpdateStatus(node.id, 'stopped')}
-                                  disabled={isOperationPending(node.id)}
-                                  className="p-2 text-red-500 hover:bg-red-500/10 disabled:opacity-50 disabled:cursor-not-allowed rounded-lg transition-all"
-                                  title="Stop this node"
+                                  disabled
+                                  className="p-2 text-orange-500 rounded-lg"
+                                  title="Stopping..."
                                 >
-                                  <i className={`fa-solid ${(pendingOps.has(node.id) || pendingNodeOps.has(node.id)) ? 'fa-spinner fa-spin' : 'fa-power-off'}`}></i>
+                                  <i className="fa-solid fa-spinner fa-spin"></i>
                                 </button>
+                              </Tooltip>
+                            ) : status === 'stopped' ? (
+                              <Tooltip content="Start this node">
                                 <button
                                   onClick={() => onUpdateStatus(node.id, 'booting')}
                                   disabled={isOperationPending(node.id)}
-                                  className="p-2 text-stone-400 hover:bg-stone-400/10 disabled:opacity-50 disabled:cursor-not-allowed rounded-lg transition-all"
-                                  title="Restart this node"
+                                  className="p-2 text-green-500 hover:bg-green-500/10 disabled:opacity-50 disabled:cursor-not-allowed rounded-lg transition-all"
+                                  title="Start this node"
                                 >
-                                  <i className={`fa-solid ${(pendingOps.has(node.id) || pendingNodeOps.has(node.id)) ? 'fa-spinner fa-spin' : 'fa-rotate'}`}></i>
+                                  <i className={`fa-solid ${(pendingOps.has(node.id) || pendingNodeOps.has(node.id)) ? 'fa-spinner fa-spin' : 'fa-play'}`}></i>
                                 </button>
+                              </Tooltip>
+                            ) : (
+                              <>
+                                <Tooltip content="Stop this node">
+                                  <button
+                                    onClick={() => onUpdateStatus(node.id, 'stopped')}
+                                    disabled={isOperationPending(node.id)}
+                                    className="p-2 text-red-500 hover:bg-red-500/10 disabled:opacity-50 disabled:cursor-not-allowed rounded-lg transition-all"
+                                    title="Stop this node"
+                                  >
+                                    <i className={`fa-solid ${(pendingOps.has(node.id) || pendingNodeOps.has(node.id)) ? 'fa-spinner fa-spin' : 'fa-power-off'}`}></i>
+                                  </button>
+                                </Tooltip>
+                                <Tooltip content="Restart this node">
+                                  <button
+                                    onClick={() => onUpdateStatus(node.id, 'booting')}
+                                    disabled={isOperationPending(node.id)}
+                                    className="p-2 text-stone-400 hover:bg-stone-400/10 disabled:opacity-50 disabled:cursor-not-allowed rounded-lg transition-all"
+                                    title="Restart this node"
+                                  >
+                                    <i className={`fa-solid ${(pendingOps.has(node.id) || pendingNodeOps.has(node.id)) ? 'fa-spinner fa-spin' : 'fa-rotate'}`}></i>
+                                  </button>
+                                </Tooltip>
                               </>
                             )}
                         </>

@@ -1,4 +1,5 @@
 import { useNotifications } from '../contexts/NotificationContext';
+import { Select } from './ui/Select';
 
 interface NotificationSettingsPanelProps {
   isOpen: boolean;
@@ -129,20 +130,22 @@ export function NotificationSettingsPanel({ isOpen, onClose }: NotificationSetti
                     <label className="text-xs font-medium text-stone-500 dark:text-stone-400">
                       Position
                     </label>
-                    <select
+                    <Select
                       value={toasts.position}
                       onChange={(e) =>
                         updateNotificationSettings({
                           toasts: { ...toasts, position: e.target.value as any },
                         })
                       }
-                      className="mt-1 block w-full rounded-lg border-stone-300 dark:border-stone-600 dark:bg-stone-800 text-sm text-stone-700 dark:text-stone-300 focus:border-sage-500 focus:ring-sage-500"
-                    >
-                      <option value="bottom-right">Bottom Right</option>
-                      <option value="bottom-left">Bottom Left</option>
-                      <option value="top-right">Top Right</option>
-                      <option value="top-left">Top Left</option>
-                    </select>
+                      size="sm"
+                      className="mt-1"
+                      options={[
+                        { value: 'bottom-right', label: 'Bottom Right' },
+                        { value: 'bottom-left', label: 'Bottom Left' },
+                        { value: 'top-right', label: 'Top Right' },
+                        { value: 'top-left', label: 'Top Left' },
+                      ]}
+                    />
                   </div>
 
                   <div>

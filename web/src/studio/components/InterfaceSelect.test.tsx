@@ -166,7 +166,7 @@ describe("InterfaceSelect", () => {
       render(<InterfaceSelect {...defaultProps} />);
       const select = screen.getByRole("combobox");
       expect(select).toHaveClass("w-full");
-      expect(select).toHaveClass("rounded");
+      expect(select).toHaveClass("rounded-lg");
       expect(select).toHaveClass("cursor-pointer");
     });
 
