@@ -57,6 +57,8 @@ const defaultProps = {
   scenarioSteps: [] as ScenarioStepData[],
   activeScenarioJobId: null as string | null,
   onStartScenario: vi.fn(),
+  nodes: [] as never[],
+  links: [] as never[],
 };
 
 /**
@@ -66,7 +68,7 @@ const defaultProps = {
 async function selectScenario(
   props: Partial<typeof defaultProps> = {},
   summary: ScenarioSummary = makeSummary(),
-  rawYaml = 'name: Failover Test\nsteps: []',
+  rawYaml = '# raw yaml content without parseable steps',
 ) {
   const user = userEvent.setup();
   // First call: list, second call: detail
@@ -394,7 +396,7 @@ describe('ScenarioPanel - execution flows', () => {
       });
     });
 
-    it('shows "Edit scenario YAML" button when not running and timeline is visible', async () => {
+    it('shows "Edit scenario" button when not running and timeline is visible', async () => {
       const steps: ScenarioStepData[] = [
         makeStep({ step_index: 0, step_name: 'Done step', status: 'passed' }),
       ];
@@ -402,11 +404,11 @@ describe('ScenarioPanel - execution flows', () => {
       await selectScenario({ scenarioSteps: steps, activeScenarioJobId: null });
 
       await waitFor(() => {
-        expect(screen.getByText(/Edit scenario YAML/)).toBeInTheDocument();
+        expect(screen.getByText(/Edit scenario/)).toBeInTheDocument();
       });
     });
 
-    it('hides "Edit scenario YAML" button while running', async () => {
+    it('hides "Edit scenario" button while running', async () => {
       const steps: ScenarioStepData[] = [
         makeStep({ step_index: 0, step_name: 'Running step', status: 'running' }),
       ];
@@ -417,7 +419,7 @@ describe('ScenarioPanel - execution flows', () => {
         expect(screen.getByText('Running step')).toBeInTheDocument();
       });
 
-      expect(screen.queryByText(/Edit scenario YAML/)).not.toBeInTheDocument();
+      expect(screen.queryByText(/Edit scenario/)).not.toBeInTheDocument();
     });
   });
 

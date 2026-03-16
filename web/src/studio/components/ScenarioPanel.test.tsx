@@ -57,6 +57,8 @@ const defaultProps = {
   scenarioSteps: [] as ScenarioStepData[],
   activeScenarioJobId: null as string | null,
   onStartScenario: vi.fn(),
+  nodes: [] as never[],
+  links: [] as never[],
 };
 
 // ---------------------------------------------------------------------------
