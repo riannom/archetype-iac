@@ -322,6 +322,8 @@ const StudioPage: React.FC = () => {
             scenarioSteps={scenarioSteps}
             activeScenarioJobId={activeScenarioJobId}
             onStartScenario={handleStartScenario}
+            nodes={nodes}
+            links={links}
           />
         );
       case 'infra':
