@@ -112,15 +112,15 @@ describe("DeviceConfigPanel", () => {
   });
 
   describe("Loading state", () => {
-    it("shows loading spinner while loading config", async () => {
+    it("shows loading skeleton while loading config", async () => {
       mockApiRequest.mockImplementation(
         () => new Promise((resolve) => setTimeout(() => resolve(mockConfig), 100))
       );
 
       render(<DeviceConfigPanel {...defaultProps} />);
 
-      expect(screen.getByText("Loading configuration...")).toBeInTheDocument();
-      expect(document.querySelector(".fa-spinner")).toBeInTheDocument();
+      const skeleton = document.querySelector('.skeleton-shimmer');
+      expect(skeleton).toBeInTheDocument();
     });
 
     it("fetches device config on mount", async () => {

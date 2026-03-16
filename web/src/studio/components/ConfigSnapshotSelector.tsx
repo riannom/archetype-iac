@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { Skeleton } from '../../components/ui/Skeleton';
 import ConfigRebootConfirmModal from './ConfigRebootConfirmModal';
 import { RuntimeStatus } from './RuntimeControl';
 import { NodeStateEntry } from '../../types/nodeState';
@@ -157,8 +158,11 @@ const ConfigSnapshotSelector: React.FC<ConfigSnapshotSelectorProps> = ({
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center py-12">
-        <i className="fa-solid fa-spinner fa-spin text-stone-400" />
+      <div className="py-6 space-y-3">
+        <Skeleton variant="text" width="40%" />
+        <Skeleton variant="rectangular" height={48} />
+        <Skeleton variant="rectangular" height={48} />
+        <Skeleton variant="rectangular" height={48} />
       </div>
     );
   }

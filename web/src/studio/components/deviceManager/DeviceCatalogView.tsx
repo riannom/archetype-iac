@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { DeviceModel, ImageLibraryEntry } from '../../types';
 import DeviceCard from '../DeviceCard';
 import FilterChip from '../FilterChip';
+import { Select } from '../../../components/ui/Select';
 
 interface DeviceCatalogViewProps {
   filteredDevices: DeviceModel[];
@@ -64,15 +65,17 @@ const DeviceCatalogView: React.FC<DeviceCatalogViewProps> = ({
               </button>
             )}
           </div>
-          <select
+          <Select
             value={deviceSort}
             onChange={(e) => setDeviceSort(e.target.value as 'name' | 'vendor' | 'type')}
-            className="px-3 py-2 glass-control rounded-lg text-xs text-stone-700 dark:text-stone-300 focus:outline-none focus:ring-2 focus:ring-sage-500/50"
-          >
-            <option value="vendor">Sort: Vendor</option>
-            <option value="name">Sort: Name</option>
-            <option value="type">Sort: Type</option>
-          </select>
+            size="sm"
+            className="glass-control"
+            options={[
+              { value: 'vendor', label: 'Sort: Vendor' },
+              { value: 'name', label: 'Sort: Name' },
+              { value: 'type', label: 'Sort: Type' },
+            ]}
+          />
         </div>
 
         {/* Filter chips */}

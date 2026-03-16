@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { Skeleton } from '../../components/ui/Skeleton';
 import DetailPopup from './DetailPopup';
 import { formatTimestamp, formatUptimeFromBoot, formatMemorySize } from '../../utils/format';
 import { getCpuColor, getMemoryColor, getStorageColor } from '../../utils/status';
@@ -61,9 +62,27 @@ const AgentsPopup: React.FC<AgentsPopupProps> = ({ isOpen, onClose }) => {
   return (
     <DetailPopup isOpen={isOpen} onClose={onClose} title="Agents" width="max-w-2xl">
       {loading ? (
-        <div className="flex items-center justify-center py-8">
-          <i className="fa-solid fa-spinner fa-spin text-stone-400" />
-          <span className="ml-2 text-sm text-stone-500">Loading...</span>
+        <div className="space-y-4 py-4">
+          {[1, 2].map((i) => (
+            <div key={i} className="border border-stone-200 dark:border-stone-700 rounded-lg p-4 space-y-3">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <Skeleton variant="circular" width={10} height={10} />
+                  <Skeleton variant="text" width="140px" />
+                </div>
+                <Skeleton variant="text" width="80px" />
+              </div>
+              <div className="flex gap-2">
+                <Skeleton variant="text" width="60px" />
+                <Skeleton variant="text" width="60px" />
+              </div>
+              <div className="grid grid-cols-3 gap-4">
+                <Skeleton variant="rectangular" height={24} />
+                <Skeleton variant="rectangular" height={24} />
+                <Skeleton variant="rectangular" height={24} />
+              </div>
+            </div>
+          ))}
         </div>
       ) : agents.length > 0 ? (
         <div className="space-y-4">

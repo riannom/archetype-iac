@@ -2,6 +2,7 @@ import React, { useMemo } from 'react';
 import FilterChip from './FilterChip';
 import { DeviceModel, ImageLibraryEntry } from '../types';
 import { getImageDeviceIds } from '../../utils/deviceModels';
+import { Select } from '../../components/ui/Select';
 
 export type ImageAssignmentFilter = 'all' | 'unassigned' | 'assigned';
 export type ImageSortOption = 'name' | 'vendor' | 'kind' | 'date';
@@ -103,16 +104,17 @@ const ImageFilterBar: React.FC<ImageFilterBarProps> = ({
             </button>
           )}
         </div>
-        <select
+        <Select
           value={sortOption}
           onChange={(e) => onSortChange(e.target.value as ImageSortOption)}
-          className="px-3 py-2.5 glass-control rounded-lg text-sm text-stone-700 dark:text-stone-300 focus:outline-none focus:ring-2 focus:ring-sage-500/50"
-        >
-          <option value="vendor">Sort: Vendor</option>
-          <option value="name">Sort: Name</option>
-          <option value="kind">Sort: Type</option>
-          <option value="date">Sort: Date</option>
-        </select>
+          className="glass-control"
+          options={[
+            { value: 'vendor', label: 'Sort: Vendor' },
+            { value: 'name', label: 'Sort: Name' },
+            { value: 'kind', label: 'Sort: Type' },
+            { value: 'date', label: 'Sort: Date' },
+          ]}
+        />
       </div>
 
       {/* Filter chips row */}

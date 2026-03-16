@@ -1,5 +1,6 @@
 import React from 'react';
 import { Modal } from '../../../components/ui/Modal';
+import { Skeleton } from '../../../components/ui/Skeleton';
 import { IolBuildRow } from './deviceManagerTypes';
 import { formatBuildTimestamp } from './deviceManagerUtils';
 import type { useIolBuildManager } from './useIolBuildManager';
@@ -266,8 +267,14 @@ const BuildJobsView: React.FC<BuildJobsViewProps> = ({
         size="lg"
       >
         {iolDiagnosticsLoading && (
-          <div className="py-8 text-center">
-            <i className="fa-solid fa-spinner fa-spin text-xl text-stone-400" />
+          <div className="py-4 space-y-4">
+            <div className="grid grid-cols-2 gap-3">
+              <Skeleton variant="text" width="80%" />
+              <Skeleton variant="text" width="60%" />
+              <Skeleton variant="text" width="70%" />
+              <Skeleton variant="text" width="50%" />
+            </div>
+            <Skeleton variant="rectangular" height={80} />
           </div>
         )}
 

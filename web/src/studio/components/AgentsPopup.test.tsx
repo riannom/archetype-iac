@@ -103,7 +103,8 @@ describe("AgentsPopup", () => {
   it("shows loading state when opened", () => {
     render(<AgentsPopup isOpen={true} onClose={mockOnClose} />);
 
-    expect(screen.getByText("Loading...")).toBeInTheDocument();
+    const skeleton = document.querySelector('.skeleton-shimmer');
+    expect(skeleton).toBeInTheDocument();
   });
 
   it("fetches agent data when opened", async () => {

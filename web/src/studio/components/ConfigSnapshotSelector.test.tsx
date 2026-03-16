@@ -89,13 +89,12 @@ describe('ConfigSnapshotSelector', () => {
   // Loading / empty states
   // -----------------------------------------------------------------------
   describe('Loading and empty states', () => {
-    it('shows loading spinner initially', () => {
+    it('shows loading skeleton initially', () => {
       mockStudioRequest.mockReturnValue(new Promise(() => {})); // never resolves
       render(<ConfigSnapshotSelector {...defaultProps} />);
 
-      // The spinner is an <i> element with fa-spinner class
-      const spinner = document.querySelector('.fa-spinner');
-      expect(spinner).toBeInTheDocument();
+      const skeleton = document.querySelector('.skeleton-shimmer');
+      expect(skeleton).toBeInTheDocument();
     });
 
     it('shows empty state when no snapshots exist', async () => {

@@ -1,4 +1,5 @@
 import React from 'react';
+import { Select } from '../../components/ui/Select';
 
 interface InterfaceSelectProps {
   /** Currently selected interface value */
@@ -49,36 +50,24 @@ const InterfaceSelect: React.FC<InterfaceSelectProps> = ({
   }, [value, availableInterfaces]);
 
   return (
-    <select
+    <Select
       value={value}
       onChange={(e) => onChange(e.target.value)}
       disabled={disabled}
-      className={`w-full bg-stone-50 dark:bg-stone-900 border border-stone-300 dark:border-stone-700 rounded px-2 py-1 text-[11px] text-sage-700 dark:text-sage-300 focus:outline-none focus:border-sage-500 appearance-none cursor-pointer dark:[color-scheme:dark] ${
-        disabled ? 'opacity-50 cursor-not-allowed' : ''
-      } ${className}`}
-      style={{
-        backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke='%2378716c'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M19 9l-7 7-7-7'/%3E%3C/svg%3E")`,
-        backgroundRepeat: 'no-repeat',
-        backgroundPosition: 'right 6px center',
-        backgroundSize: '14px',
-        paddingRight: '24px',
-      }}
+      size="sm"
+      className={className}
     >
       {!value && (
-        <option value="" disabled className="bg-stone-50 text-stone-500 dark:bg-stone-900 dark:text-stone-400">
+        <option value="" disabled>
           {placeholder}
         </option>
       )}
       {options.map((iface) => (
-        <option
-          key={iface}
-          value={iface}
-          className="bg-stone-50 text-sage-700 dark:bg-stone-900 dark:text-sage-300"
-        >
+        <option key={iface} value={iface}>
           {iface}
         </option>
       ))}
-    </select>
+    </Select>
   );
 };
 

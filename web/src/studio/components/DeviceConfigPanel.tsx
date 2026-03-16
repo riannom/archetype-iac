@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { Skeleton } from '../../components/ui/Skeleton';
 import { apiRequest } from '../../api';
 import { DeviceModel, DeviceConfig, ImageLibraryEntry } from '../types';
 import VendorOptionsPanel from './VendorOptionsPanel';
@@ -224,9 +225,17 @@ const DeviceConfigPanel: React.FC<DeviceConfigPanelProps> = ({
 
   if (loading) {
     return (
-      <div className="flex-1 flex items-center justify-center">
-        <i className="fa-solid fa-spinner fa-spin text-stone-400 text-xl"></i>
-        <span className="ml-2 text-stone-500 text-sm">Loading configuration...</span>
+      <div className="flex-1 p-4 space-y-4">
+        <div className="flex items-center gap-3">
+          <Skeleton variant="rectangular" width={48} height={48} />
+          <div className="space-y-2 flex-1">
+            <Skeleton variant="text" width="50%" />
+            <Skeleton variant="text" width="30%" />
+          </div>
+        </div>
+        <Skeleton variant="rectangular" height={120} />
+        <Skeleton variant="rectangular" height={120} />
+        <Skeleton variant="rectangular" height={80} />
       </div>
     );
   }

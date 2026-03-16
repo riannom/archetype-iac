@@ -1,5 +1,6 @@
 import React from 'react';
 import { useNavigate } from 'react-router-dom';
+import { Skeleton } from '../../components/ui/Skeleton';
 import { formatTimestamp } from '../../utils/format';
 import AgentMeshSection from './AgentMeshSection';
 import { getMtuSyncStatusBadge, getInterfaceTypeBadge, getManagedIfaceSyncBadge } from './badgeHelpers';
@@ -72,10 +73,15 @@ const NetworkTab: React.FC<NetworkTabProps> = ({
 
   if (meshLoading && !mesh) {
     return (
-      <div className="max-w-6xl mx-auto">
-        <div className="flex items-center justify-center py-20">
-          <i className="fa-solid fa-spinner fa-spin text-stone-400 text-2xl"></i>
-          <span className="ml-3 text-stone-500">Loading infrastructure data...</span>
+      <div className="max-w-6xl mx-auto space-y-8">
+        <div className="glass-surface rounded-2xl p-6 space-y-4">
+          <Skeleton variant="text" width="200px" />
+          <Skeleton variant="rectangular" height={40} />
+          <Skeleton variant="text" width="60%" />
+        </div>
+        <div className="glass-surface rounded-2xl p-6 space-y-4">
+          <Skeleton variant="text" width="180px" />
+          <Skeleton variant="rectangular" height={200} />
         </div>
       </div>
     );

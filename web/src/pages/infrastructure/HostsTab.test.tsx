@@ -135,12 +135,13 @@ describe('HostsTab', () => {
 
   // ── Loading state ──
 
-  it('shows loading spinner when hostsLoading and no hosts', () => {
+  it('shows loading skeleton when hostsLoading and no hosts', () => {
     const props = defaultProps();
     props.hostsLoading = true;
     render(<HostsTab {...props} />);
 
-    expect(screen.getByText('Loading hosts...')).toBeInTheDocument();
+    const skeleton = document.querySelector('.skeleton-shimmer');
+    expect(skeleton).toBeInTheDocument();
   });
 
   it('does not show loading spinner when hostsLoading but hosts already loaded', () => {

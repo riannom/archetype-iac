@@ -5,6 +5,7 @@ import type {
   InterfaceDetail,
   ManagedInterface,
 } from './infrastructureTypes';
+import { Select } from '../../components/ui/Select';
 
 interface MtuConfigModalProps {
   configModalData: {
@@ -108,7 +109,7 @@ const MtuConfigModal: React.FC<MtuConfigModalProps> = ({
             <label className="block text-sm font-medium text-stone-700 dark:text-stone-300 mb-2">
               Transport Mode
             </label>
-            <select
+            <Select
               value={selectedTransportMode}
               onChange={(e) => {
                 const next = e.target.value;
@@ -123,7 +124,6 @@ const MtuConfigModal: React.FC<MtuConfigModalProps> = ({
                   setSelectedInterface(dedicatedIfaces[0].name);
                 }
               }}
-              className="w-full px-3 py-2 bg-stone-100 dark:bg-stone-800 border border-stone-300 dark:border-stone-700 rounded-lg text-stone-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-sage-500"
             >
               <option value="management">Management</option>
               <option value="subinterface" disabled={!canSubinterface}>
@@ -132,7 +132,7 @@ const MtuConfigModal: React.FC<MtuConfigModalProps> = ({
               <option value="dedicated" disabled={!canDedicated}>
                 Dedicated
               </option>
-            </select>
+            </Select>
             {!canSubinterface && (
               <p className="text-xs text-stone-400 mt-2">
                 Subinterface disabled: create a transport subinterface in Managed Interfaces.
@@ -154,7 +154,7 @@ const MtuConfigModal: React.FC<MtuConfigModalProps> = ({
                 <label className="block text-xs font-medium text-stone-600 dark:text-stone-400 mb-1">
                   Transport Subinterface
                 </label>
-                <select
+                <Select
                   value={selectedTransportInterface}
                   onChange={(e) => {
                     setSelectedTransportInterface(e.target.value);
@@ -162,7 +162,6 @@ const MtuConfigModal: React.FC<MtuConfigModalProps> = ({
                       setSelectedInterface(e.target.value);
                     }
                   }}
-                  className="w-full px-3 py-2 bg-stone-100 dark:bg-stone-800 border border-stone-300 dark:border-stone-700 rounded-lg text-stone-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-sage-500"
                 >
                   {Object.entries(
                     subifaces.reduce((groups, iface) => {
@@ -179,7 +178,7 @@ const MtuConfigModal: React.FC<MtuConfigModalProps> = ({
                       ))}
                     </optgroup>
                   ))}
-                </select>
+                </Select>
               </div>
             )}
 
@@ -188,7 +187,7 @@ const MtuConfigModal: React.FC<MtuConfigModalProps> = ({
                 <label className="block text-xs font-medium text-stone-600 dark:text-stone-400 mb-1">
                   Transport Interface
                 </label>
-                <select
+                <Select
                   value={selectedTransportInterface}
                   onChange={(e) => {
                     setSelectedTransportInterface(e.target.value);
@@ -196,7 +195,6 @@ const MtuConfigModal: React.FC<MtuConfigModalProps> = ({
                       setSelectedInterface(e.target.value);
                     }
                   }}
-                  className="w-full px-3 py-2 bg-stone-100 dark:bg-stone-800 border border-stone-300 dark:border-stone-700 rounded-lg text-stone-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-sage-500"
                 >
                   {Object.entries(
                     dedicatedIfaces.reduce((groups, iface) => {
@@ -213,7 +211,7 @@ const MtuConfigModal: React.FC<MtuConfigModalProps> = ({
                       ))}
                     </optgroup>
                   ))}
-                </select>
+                </Select>
               </div>
             )}
           </div>
@@ -242,11 +240,10 @@ const MtuConfigModal: React.FC<MtuConfigModalProps> = ({
             {configModalData.interfaces.length === 0 ? (
               <p className="text-sm text-stone-500">No physical interfaces found on this agent.</p>
             ) : (
-              <select
+              <Select
                 value={selectedInterface}
                 onChange={(e) => setSelectedInterface(e.target.value)}
                 disabled={selectedTransportMode !== 'management' && useTransportInterface}
-                className="w-full px-3 py-2 bg-stone-100 dark:bg-stone-800 border border-stone-300 dark:border-stone-700 rounded-lg text-stone-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-sage-500"
               >
                 <option value="">Select an interface...</option>
                 {configModalData.interfaces.map((iface) => (
@@ -257,7 +254,7 @@ const MtuConfigModal: React.FC<MtuConfigModalProps> = ({
                     {iface.ipv4_addresses.length > 0 ? ` - ${iface.ipv4_addresses[0]}` : ''}
                   </option>
                 ))}
-              </select>
+              </Select>
             )}
 
             {/* Selected Interface Details */}

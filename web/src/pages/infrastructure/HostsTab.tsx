@@ -1,5 +1,6 @@
 import React from 'react';
 import HostCard from './HostCard';
+import { SkeletonCard } from '../../components/ui/Skeleton';
 import type { AgentImagesDetailResponse, HostDetailed, SyncStrategy, UpdateStatus } from './infrastructureTypes';
 
 interface HostsTabProps {
@@ -103,9 +104,10 @@ const HostsTab: React.FC<HostsTabProps> = ({
       </div>
 
       {hostsLoading && hosts.length === 0 ? (
-        <div className="flex items-center justify-center py-20">
-          <i className="fa-solid fa-spinner fa-spin text-stone-400 text-2xl"></i>
-          <span className="ml-3 text-stone-500">Loading hosts...</span>
+        <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-6">
+          <SkeletonCard />
+          <SkeletonCard />
+          <SkeletonCard />
         </div>
       ) : hostsError ? (
         <div className="text-center py-20 text-red-500">

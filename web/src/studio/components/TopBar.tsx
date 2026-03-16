@@ -3,6 +3,7 @@ import { useTheme, ThemeSelector } from '../../theme/index';
 import { ArchetypeIcon } from '../../components/icons';
 import { NotificationCenter } from '../../components/NotificationCenter';
 import { NotificationSettingsPanel } from '../../components/NotificationSettingsPanel';
+import { Tooltip } from '../../components/ui/Tooltip';
 
 interface TopBarProps {
   labName: string;
@@ -112,49 +113,59 @@ const TopBar: React.FC<TopBarProps> = ({ labName, onExport, onExportFull, onExit
         </div>
 
         <div className="flex items-center gap-4">
-          <button
-            onClick={onExit}
-            className="flex items-center gap-2 px-3 py-2 glass-control text-stone-800 dark:text-stone-300 rounded-lg transition-all"
-            title="Back to Dashboard"
-          >
-            <i className="fa-solid fa-arrow-left text-xs"></i>
-            <span className="text-[10px] font-bold uppercase">Back</span>
-          </button>
+          <Tooltip content="Back to Dashboard">
+            <button
+              onClick={onExit}
+              className="flex items-center gap-2 px-3 py-2 glass-control text-stone-800 dark:text-stone-300 rounded-lg transition-all"
+              title="Back to Dashboard"
+            >
+              <i className="fa-solid fa-arrow-left text-xs"></i>
+              <span className="text-[10px] font-bold uppercase">Back</span>
+            </button>
+          </Tooltip>
 
           <NotificationCenter />
 
-          <button
-            onClick={() => setShowNotificationSettings(true)}
-            className="w-9 h-9 flex items-center justify-center glass-control text-stone-800 dark:text-stone-300 hover:text-sage-700 dark:hover:text-sage-400 rounded-xl transition-all"
-            title="Notification Settings"
-          >
-            <i className="fa-solid fa-gear"></i>
-          </button>
+          <Tooltip content="Notification Settings">
+            <button
+              onClick={() => setShowNotificationSettings(true)}
+              className="w-9 h-9 flex items-center justify-center glass-control text-stone-800 dark:text-stone-300 hover:text-sage-700 dark:hover:text-sage-400 rounded-xl transition-all"
+              title="Notification Settings"
+            >
+              <i className="fa-solid fa-gear"></i>
+            </button>
+          </Tooltip>
 
-          <button
-            onClick={() => setShowThemeSelector(true)}
-            className="w-9 h-9 flex items-center justify-center glass-control text-stone-800 dark:text-stone-300 hover:text-sage-700 dark:hover:text-sage-400 rounded-xl transition-all"
-            title="Theme Settings"
-          >
-            <i className="fa-solid fa-palette"></i>
-          </button>
+          <Tooltip content="Theme Settings">
+            <button
+              onClick={() => setShowThemeSelector(true)}
+              className="w-9 h-9 flex items-center justify-center glass-control text-stone-800 dark:text-stone-300 hover:text-sage-700 dark:hover:text-sage-400 rounded-xl transition-all"
+              title="Theme Settings"
+            >
+              <i className="fa-solid fa-palette"></i>
+            </button>
+          </Tooltip>
 
-          <button
-            onClick={toggleMode}
-            className="w-9 h-9 flex items-center justify-center glass-control text-stone-800 dark:text-stone-300 hover:text-sage-700 dark:hover:text-sage-400 rounded-xl transition-all"
-            title={`Switch to ${effectiveMode === 'dark' ? 'light' : 'dark'} mode`}
-          >
-            <i className={`fa-solid ${effectiveMode === 'dark' ? 'fa-sun' : 'fa-moon'}`}></i>
-          </button>
+          <Tooltip content={`Switch to ${effectiveMode === 'dark' ? 'light' : 'dark'} mode`}>
+            <button
+              onClick={toggleMode}
+              className="w-9 h-9 flex items-center justify-center glass-control text-stone-800 dark:text-stone-300 hover:text-sage-700 dark:hover:text-sage-400 rounded-xl transition-all"
+              title={`Switch to ${effectiveMode === 'dark' ? 'light' : 'dark'} mode`}
+            >
+              <i className={`fa-solid ${effectiveMode === 'dark' ? 'fa-sun' : 'fa-moon'}`}></i>
+            </button>
+          </Tooltip>
 
           <div className="relative" ref={exportDropdownRef}>
-            <button
-              onClick={() => setShowExportDropdown(!showExportDropdown)}
-              className="w-9 h-9 flex items-center justify-center glass-control text-stone-700 dark:text-stone-100 rounded-lg transition-all active:scale-95 shadow-sm"
-              title="Export / Download"
-            >
-              <i className="fa-solid fa-download text-sage-600 dark:text-sage-400"></i>
-            </button>
+            <Tooltip content="Export / Download">
+              <button
+                onClick={() => setShowExportDropdown(!showExportDropdown)}
+                className="w-9 h-9 flex items-center justify-center glass-control text-stone-700 dark:text-stone-100 rounded-lg transition-all active:scale-95 shadow-sm"
+                title="Export / Download"
+              >
+                <i className="fa-solid fa-download text-sage-600 dark:text-sage-400"></i>
+              </button>
+            </Tooltip>
             {showExportDropdown && (
               <div className="absolute right-0 mt-1 w-48 glass-surface-elevated border border-stone-200 dark:border-black/80 rounded-lg shadow-lg overflow-hidden z-50">
                 <button
