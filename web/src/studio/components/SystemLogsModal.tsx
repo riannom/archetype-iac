@@ -213,7 +213,7 @@ const SystemLogsModal: React.FC<SystemLogsModalProps> = ({ isOpen, onClose }) =>
                   >
                     <td className="px-3 py-2 text-stone-500 dark:text-stone-400 whitespace-nowrap font-mono text-xs">
                       <div>{formatTime(log.timestamp)}</div>
-                      <div className="text-[10px] text-stone-400 dark:text-stone-500">{formatDate(log.timestamp)}</div>
+                      <div className="text-[11px] text-stone-400 dark:text-stone-500">{formatDate(log.timestamp)}</div>
                     </td>
                     <td className="px-3 py-2">
                       <span className={`inline-block px-2 py-0.5 rounded text-xs font-medium ${levelColors[log.level] || 'text-stone-600 dark:text-stone-400 bg-stone-100 dark:bg-stone-800'}`}>
@@ -226,7 +226,7 @@ const SystemLogsModal: React.FC<SystemLogsModalProps> = ({ isOpen, onClose }) =>
                     <td className="px-3 py-2 text-stone-700 dark:text-stone-200 font-mono text-xs break-all">
                       <div>{log.message}</div>
                       {log.correlation_id && (
-                        <div className="text-[10px] text-stone-400 dark:text-stone-500 mt-1">
+                        <div className="text-[11px] text-stone-400 dark:text-stone-500 mt-1">
                           <i className="fa-solid fa-link mr-1"></i>
                           {log.correlation_id.slice(0, 8)}
                         </div>

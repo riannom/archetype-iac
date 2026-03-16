@@ -43,7 +43,7 @@ export const ISOImportProgress: React.FC<ISOImportProgressProps> = ({
                 {imageId}
               </span>
               <span
-                className={`text-[10px] font-bold uppercase ${
+                className={`text-[11px] font-bold uppercase ${
                   progress.status === 'completed'
                     ? 'text-emerald-500'
                     : progress.status === 'failed'
@@ -70,7 +70,7 @@ export const ISOImportProgress: React.FC<ISOImportProgressProps> = ({
               />
             </div>
             {progress.error_message && (
-              <p className="text-[10px] text-red-500 mt-1">{progress.error_message}</p>
+              <p className="text-[11px] text-red-500 mt-1">{progress.error_message}</p>
             )}
           </div>
         ))}
@@ -115,7 +115,7 @@ export const UploadProgressStep: React.FC<UploadProgressStepProps> = ({
           />
         </div>
         {selectedFile && (
-          <p className="text-[10px] text-stone-400 mt-2 text-center">
+          <p className="text-[11px] text-stone-400 mt-2 text-center">
             {formatBytes((uploadProgress / 100) * selectedFile.size)} / {formatBytes(selectedFile.size)}
           </p>
         )}

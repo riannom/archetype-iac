@@ -308,7 +308,7 @@ const InfraView: React.FC<InfraViewProps> = ({
           <div className="flex items-center gap-0 border-b border-stone-800/50 flex-shrink-0">
             <button
               onClick={() => setBottomTab('links')}
-              className={`px-4 py-2 text-[10px] font-bold uppercase tracking-wider border-b-2 transition-colors ${
+              className={`px-4 py-2 text-[11px] font-bold uppercase tracking-wider border-b-2 transition-colors ${
                 bottomTab === 'links'
                   ? 'text-stone-200 border-stone-400'
                   : 'text-stone-500 border-transparent hover:text-stone-300'
@@ -318,7 +318,7 @@ const InfraView: React.FC<InfraViewProps> = ({
             </button>
             <button
               onClick={() => setBottomTab('notifications')}
-              className={`px-4 py-2 text-[10px] font-bold uppercase tracking-wider border-b-2 transition-colors ${
+              className={`px-4 py-2 text-[11px] font-bold uppercase tracking-wider border-b-2 transition-colors ${
                 bottomTab === 'notifications'
                   ? 'text-stone-200 border-stone-400'
                   : 'text-stone-500 border-transparent hover:text-stone-300'

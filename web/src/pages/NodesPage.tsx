@@ -103,7 +103,7 @@ const NodesPage: React.FC = () => {
             <ArchetypeIcon size={40} className="text-sage-600 dark:text-sage-400" />
             <div>
               <h1 className="text-xl font-black text-stone-900 dark:text-white tracking-tight">ARCHETYPE</h1>
-              <p className="text-[10px] text-sage-600 dark:text-sage-500 font-bold uppercase tracking-widest">Node Management</p>
+              <p className="text-[11px] text-sage-600 dark:text-sage-500 font-bold uppercase tracking-widest">Node Management</p>
             </div>
           </div>
 
@@ -113,7 +113,7 @@ const NodesPage: React.FC = () => {
               className="flex items-center gap-2 px-3 py-2 glass-control text-stone-600 dark:text-stone-300 rounded-lg transition-all"
             >
               <i className="fa-solid fa-arrow-left text-xs"></i>
-              <span className="text-[10px] font-bold uppercase">Back</span>
+              <span className="text-[11px] font-bold uppercase">Back</span>
             </button>
 
             <AdminMenuButton />
@@ -174,7 +174,7 @@ const NodesPage: React.FC = () => {
               Build Jobs
               {pendingIolBuildCount > 0 && (
                 <span
-                  className="ml-2 inline-flex min-w-[18px] h-[18px] items-center justify-center rounded-full bg-amber-500 text-white text-[10px] px-1"
+                  className="ml-2 inline-flex min-w-[18px] h-[18px] items-center justify-center rounded-full bg-amber-500 text-white text-[11px] px-1"
                   aria-label={`${pendingIolBuildCount} pending IOL builds`}
                 >
                   {pendingIolBuildCount}

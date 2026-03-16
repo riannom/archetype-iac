@@ -62,7 +62,7 @@ const TunnelDetailView: React.FC<TunnelDetailViewProps> = ({
     <div className="flex flex-col min-h-0">
       {/* Selected agents chips */}
       <div className="flex items-center gap-2 mb-3">
-        <span className="text-[10px] text-stone-500 uppercase font-bold tracking-wider">
+        <span className="text-[11px] text-stone-500 uppercase font-bold tracking-wider">
           Tunnels between
         </span>
         {selectedAgentNodes.map((agent) => (
@@ -83,7 +83,7 @@ const TunnelDetailView: React.FC<TunnelDetailViewProps> = ({
       <div className="flex-1 overflow-auto">
         <table className="w-full text-xs">
           <thead>
-            <tr className="text-[10px] text-stone-500 uppercase border-b border-stone-700/50">
+            <tr className="text-[11px] text-stone-500 uppercase border-b border-stone-700/50">
               <th className="px-2 py-1.5 text-left font-semibold">Source</th>
               <th className="px-2 py-1.5 text-center font-semibold">Src VLAN</th>
               <th className="px-2 py-1.5 text-center font-semibold">State</th>
@@ -113,7 +113,7 @@ const TunnelDetailView: React.FC<TunnelDetailViewProps> = ({
                   </td>
                   <td className="px-2 py-1.5 text-center">
                     {ls.source_vlan_tag != null ? (
-                      <span className="font-mono text-[10px] px-1 py-0.5 bg-stone-800 text-stone-400 rounded">
+                      <span className="font-mono text-[11px] px-1 py-0.5 bg-stone-800 text-stone-400 rounded">
                         {ls.source_vlan_tag}
                       </span>
                     ) : (
@@ -128,7 +128,7 @@ const TunnelDetailView: React.FC<TunnelDetailViewProps> = ({
                   </td>
                   <td className="px-2 py-1.5 text-center">
                     {ls.vni != null ? (
-                      <span className="font-mono text-[10px] px-1 py-0.5 bg-violet-950/40 text-violet-400 rounded">
+                      <span className="font-mono text-[11px] px-1 py-0.5 bg-violet-950/40 text-violet-400 rounded">
                         {ls.vni}
                       </span>
                     ) : (
@@ -137,7 +137,7 @@ const TunnelDetailView: React.FC<TunnelDetailViewProps> = ({
                   </td>
                   <td className="px-2 py-1.5 text-center">
                     {ls.target_vlan_tag != null ? (
-                      <span className="font-mono text-[10px] px-1 py-0.5 bg-stone-800 text-stone-400 rounded">
+                      <span className="font-mono text-[11px] px-1 py-0.5 bg-stone-800 text-stone-400 rounded">
                         {ls.target_vlan_tag}
                       </span>
                     ) : (

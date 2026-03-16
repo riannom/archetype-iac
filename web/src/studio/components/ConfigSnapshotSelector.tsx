@@ -167,14 +167,14 @@ const ConfigSnapshotSelector: React.FC<ConfigSnapshotSelectorProps> = ({
     <div className="h-full flex flex-col gap-3">
       {/* Header */}
       <div className="flex items-center justify-between">
-        <label className="text-[10px] font-bold text-stone-500 uppercase tracking-widest">
+        <label className="text-[11px] font-bold text-stone-500 uppercase tracking-widest">
           Config Snapshots
         </label>
         <div className="flex items-center gap-1">
           {activeSnapshot && (
             <button
               onClick={handleResetToDefault}
-              className="flex items-center gap-1 px-2 py-1 text-[9px] font-bold uppercase text-stone-500 dark:text-stone-400 hover:text-amber-500 dark:hover:text-amber-400 hover:bg-amber-500/10 rounded transition-colors"
+              className="flex items-center gap-1 px-2 py-1 text-[11px] font-bold uppercase text-stone-500 dark:text-stone-400 hover:text-amber-500 dark:hover:text-amber-400 hover:bg-amber-500/10 rounded transition-colors"
               title="Reset to vendor default"
             >
               <i className="fa-solid fa-rotate-left" />
@@ -192,7 +192,7 @@ const ConfigSnapshotSelector: React.FC<ConfigSnapshotSelectorProps> = ({
                   onOpenConfigViewer(nodeId, nodeName);
                 }
               }}
-              className="flex items-center gap-1.5 px-2 py-1 text-[9px] font-bold uppercase text-sage-600 dark:text-sage-400 hover:bg-sage-500/10 rounded transition-colors"
+              className="flex items-center gap-1.5 px-2 py-1 text-[11px] font-bold uppercase text-sage-600 dark:text-sage-400 hover:bg-sage-500/10 rounded transition-colors"
               title={selectedSnapshot ? `View selected snapshot` : 'View saved config in larger window'}
             >
               <i className="fa-solid fa-expand" />
@@ -205,8 +205,8 @@ const ConfigSnapshotSelector: React.FC<ConfigSnapshotSelectorProps> = ({
       {/* Pending config change badge */}
       {pendingConfigChange && (
         <div className="flex items-center gap-2 px-3 py-2 bg-amber-500/10 border border-amber-500/20 rounded-lg">
-          <i className="fa-solid fa-clock text-amber-500 text-[10px]" />
-          <span className="text-[10px] font-bold text-amber-600 dark:text-amber-400">
+          <i className="fa-solid fa-clock text-amber-500 text-[11px]" />
+          <span className="text-[11px] font-bold text-amber-600 dark:text-amber-400">
             Config change pending — will apply on next boot
           </span>
         </div>
@@ -215,10 +215,10 @@ const ConfigSnapshotSelector: React.FC<ConfigSnapshotSelectorProps> = ({
       {/* Error */}
       {error && (
         <div className="flex items-center gap-2 px-3 py-2 bg-red-500/10 border border-red-500/20 rounded-lg">
-          <i className="fa-solid fa-circle-exclamation text-red-500 text-[10px]" />
-          <span className="text-[10px] text-red-600 dark:text-red-400">{error}</span>
+          <i className="fa-solid fa-circle-exclamation text-red-500 text-[11px]" />
+          <span className="text-[11px] text-red-600 dark:text-red-400">{error}</span>
           <button onClick={() => setError(null)} className="ml-auto text-red-400 hover:text-red-300">
-            <i className="fa-solid fa-xmark text-[10px]" />
+            <i className="fa-solid fa-xmark text-[11px]" />
           </button>
         </div>
       )}
@@ -227,8 +227,8 @@ const ConfigSnapshotSelector: React.FC<ConfigSnapshotSelectorProps> = ({
       {snapshots.length === 0 ? (
         <div className="flex flex-col items-center justify-center py-12 text-stone-400 dark:text-stone-600">
           <i className="fa-solid fa-inbox text-2xl opacity-30 mb-2" />
-          <p className="text-[10px] font-bold uppercase tracking-tight">No snapshots</p>
-          <p className="text-[9px] mt-1">Extract configs to create snapshots</p>
+          <p className="text-[11px] font-bold uppercase tracking-tight">No snapshots</p>
+          <p className="text-[11px] mt-1">Extract configs to create snapshots</p>
         </div>
       ) : (
         <div className="flex-1 overflow-y-auto space-y-1.5 custom-scrollbar">
@@ -247,12 +247,12 @@ const ConfigSnapshotSelector: React.FC<ConfigSnapshotSelectorProps> = ({
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2 min-w-0">
                   {snap.is_active && (
-                    <i className="fa-solid fa-star text-amber-500 text-[9px] shrink-0" title="Active" />
+                    <i className="fa-solid fa-star text-amber-500 text-[11px] shrink-0" title="Active" />
                   )}
-                  <span className="text-[10px] text-stone-600 dark:text-stone-400 truncate">
+                  <span className="text-[11px] text-stone-600 dark:text-stone-400 truncate">
                     {relativeTime(snap.created_at)}
                   </span>
-                  <span className={`text-[9px] px-1.5 py-0.5 rounded border shrink-0 ${typeBadgeClass(snap.snapshot_type)}`}>
+                  <span className={`text-[11px] px-1.5 py-0.5 rounded border shrink-0 ${typeBadgeClass(snap.snapshot_type)}`}>
                     {typeLabel(snap.snapshot_type)}
                   </span>
                 </div>
@@ -264,7 +264,7 @@ const ConfigSnapshotSelector: React.FC<ConfigSnapshotSelectorProps> = ({
                       className="p-1 text-stone-400 hover:text-amber-500 transition-colors"
                       title="Set as active config"
                     >
-                      <i className="fa-regular fa-star text-[10px]" />
+                      <i className="fa-regular fa-star text-[11px]" />
                     </button>
                   )}
                   <button
@@ -272,7 +272,7 @@ const ConfigSnapshotSelector: React.FC<ConfigSnapshotSelectorProps> = ({
                     className="p-1 text-stone-400 hover:text-red-500 transition-colors"
                     title="Delete snapshot"
                   >
-                    <i className="fa-solid fa-trash-can text-[10px]" />
+                    <i className="fa-solid fa-trash-can text-[11px]" />
                   </button>
                 </div>
               </div>
@@ -284,7 +284,7 @@ const ConfigSnapshotSelector: React.FC<ConfigSnapshotSelectorProps> = ({
       {/* Config preview */}
       <div className="mt-auto">
         <div className="flex items-center justify-between mb-1.5">
-          <span className="text-[9px] font-bold text-stone-500 uppercase tracking-widest">
+          <span className="text-[11px] font-bold text-stone-500 uppercase tracking-widest">
             {activeSnapshot ? 'Active Config' : 'Startup Config'}
           </span>
           {activeSnapshot && (
@@ -293,7 +293,7 @@ const ConfigSnapshotSelector: React.FC<ConfigSnapshotSelectorProps> = ({
             </span>
           )}
         </div>
-        <pre className="bg-stone-50 dark:bg-black text-sage-700 dark:text-sage-400 font-mono text-[10px] p-3 rounded-xl border border-stone-200 dark:border-stone-800 max-h-[200px] overflow-y-auto custom-scrollbar whitespace-pre-wrap break-all">
+        <pre className="bg-stone-50 dark:bg-black text-sage-700 dark:text-sage-400 font-mono text-[11px] p-3 rounded-xl border border-stone-200 dark:border-stone-800 max-h-[200px] overflow-y-auto custom-scrollbar whitespace-pre-wrap break-all">
           {activeSnapshot
             ? activeSnapshot.content
             : <span className="text-stone-400 dark:text-stone-600 italic">Vendor default (no active config)</span>

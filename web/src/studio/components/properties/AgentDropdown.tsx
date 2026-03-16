@@ -25,7 +25,7 @@ const AgentDropdown: React.FC<{
 
   return (
     <div className="space-y-2">
-      <label className="text-[10px] font-bold text-stone-500 uppercase tracking-widest">Agent Placement</label>
+      <label className="text-[11px] font-bold text-stone-500 uppercase tracking-widest">Agent Placement</label>
       <div ref={dropdownRef} className="relative">
         <button
           type="button"
@@ -38,7 +38,7 @@ const AgentDropdown: React.FC<{
           <span className={value ? 'text-stone-900 dark:text-stone-100' : 'text-stone-500 dark:text-stone-400'}>
             {displayText}
           </span>
-          <i className={`fa-solid fa-chevron-down text-[10px] text-stone-400 transition-transform ${isOpen ? 'rotate-180' : ''}`} />
+          <i className={`fa-solid fa-chevron-down text-[11px] text-stone-400 transition-transform ${isOpen ? 'rotate-180' : ''}`} />
         </button>
         {isOpen && (
           <div className="absolute z-50 w-full mt-1 bg-stone-50 dark:bg-stone-900 border border-stone-200 dark:border-stone-700 rounded-lg shadow-lg overflow-hidden">
@@ -70,7 +70,7 @@ const AgentDropdown: React.FC<{
           </div>
         )}
       </div>
-      <p className="text-[9px] text-stone-400 dark:text-stone-500">
+      <p className="text-[11px] text-stone-400 dark:text-stone-500">
         {disabled ? 'Stop node to change agent placement' : 'Select which agent runs this node'}
       </p>
     </div>

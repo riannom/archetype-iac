@@ -276,7 +276,7 @@ export default function InterfaceManagerPage() {
             title="Back to infrastructure"
           >
             <i className="fa-solid fa-arrow-left text-xs"></i>
-            <span className="text-[10px] font-bold uppercase">Back</span>
+            <span className="text-[11px] font-bold uppercase">Back</span>
           </button>
 
           <AdminMenuButton />
@@ -423,7 +423,7 @@ export default function InterfaceManagerPage() {
                               <td className="py-2 px-3">
                                 <div className="flex flex-col gap-0.5">
                                   <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-xs font-medium w-fit ${syncBadge.color}`}>
-                                    <i className={`fa-solid ${syncBadge.icon} text-[9px]`}></i>
+                                    <i className={`fa-solid ${syncBadge.icon} text-[11px]`}></i>
                                     {syncBadge.text}
                                   </span>
                                   {iface.sync_error && (

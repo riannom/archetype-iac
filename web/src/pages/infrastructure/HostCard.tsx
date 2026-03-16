@@ -85,7 +85,7 @@ const HostCard: React.FC<HostCardProps> = ({
             <p className="text-xs text-stone-500">{host.address}</p>
           </div>
         </div>
-        <span className={`px-2 py-0.5 rounded-md text-[10px] font-bold uppercase border ${getRoleBadgeColor(host.role as RoleBadgeType)}`}>
+        <span className={`px-2 py-0.5 rounded-md text-[11px] font-bold uppercase border ${getRoleBadgeColor(host.role as RoleBadgeType)}`}>
           {getRoleLabel(host.role as RoleBadgeType)}
         </span>
       </div>
@@ -100,13 +100,13 @@ const HostCard: React.FC<HostCardProps> = ({
           <span title={host.git_sha ? `Commit: ${host.git_sha}` : ''}>
             v{host.version}
             {host.git_sha && (
-              <span className="ml-1 text-stone-400 dark:text-stone-500 font-mono text-[10px]">
+              <span className="ml-1 text-stone-400 dark:text-stone-500 font-mono text-[11px]">
                 ({host.git_sha.substring(0, 7)})
               </span>
             )}
           </span>
           {isUpdateAvailable && (
-            <i className="fa-solid fa-arrow-up ml-1 text-[10px]" title={`Update available: v${latestVersion}`}></i>
+            <i className="fa-solid fa-arrow-up ml-1 text-[11px]" title={`Update available: v${latestVersion}`}></i>
           )}
         </span>
         {host.started_at && (
@@ -288,19 +288,19 @@ const HostCard: React.FC<HostCardProps> = ({
                 <i className="fa-solid fa-cube text-stone-400"></i>
                 <strong>{host.resource_usage.containers_running}</strong>/{host.resource_usage.containers_total} containers
                 {host.capabilities.providers && host.capabilities.providers.length > 0 && (
-                  <span className="flex items-center gap-1 text-[10px] px-1.5 py-0.5 bg-stone-100 dark:bg-stone-800 rounded ml-1">
+                  <span className="flex items-center gap-1 text-[11px] px-1.5 py-0.5 bg-stone-100 dark:bg-stone-800 rounded ml-1">
                     {host.capabilities.providers.join(', ')}
                   </span>
                 )}
               </span>
-              <i className={`fa-solid fa-chevron-${isContainersOpen ? 'up' : 'down'} text-[10px] text-stone-400`}></i>
+              <i className={`fa-solid fa-chevron-${isContainersOpen ? 'up' : 'down'} text-[11px] text-stone-400`}></i>
             </button>
             {isContainersOpen && (
               <div className="mt-2 space-y-2">
                 {Array.from(byLab.entries()).map(([labId, group]) => (
                   <div key={labId}>
                     {byLab.size > 1 && (
-                      <div className="text-[10px] font-medium text-stone-400 dark:text-stone-500 mb-1 truncate">{group.name}</div>
+                      <div className="text-[11px] font-medium text-stone-400 dark:text-stone-500 mb-1 truncate">{group.name}</div>
                     )}
                     <div className="space-y-0.5">
                       {group.items.map((c, i) => (
@@ -311,7 +311,7 @@ const HostCard: React.FC<HostCardProps> = ({
                           <span className="text-stone-700 dark:text-stone-300 truncate max-w-[160px]">{c.node_name || c.name}</span>
                           <span className="flex items-center gap-1.5">
                             {c.node_kind && (
-                              <span className="text-[10px] text-stone-400">{c.node_kind}</span>
+                              <span className="text-[11px] text-stone-400">{c.node_kind}</span>
                             )}
                             <span className={`w-1.5 h-1.5 rounded-full ${c.status === 'running' ? 'bg-green-500' : 'bg-stone-300 dark:bg-stone-600'}`}></span>
                           </span>
@@ -321,7 +321,7 @@ const HostCard: React.FC<HostCardProps> = ({
                   </div>
                 ))}
                 {systemCount > 0 && (
-                  <div className="text-[10px] text-stone-400 dark:text-stone-500 px-2">
+                  <div className="text-[11px] text-stone-400 dark:text-stone-500 px-2">
                     {systemCount} system container{systemCount !== 1 ? 's' : ''}
                   </div>
                 )}
@@ -351,14 +351,14 @@ const HostCard: React.FC<HostCardProps> = ({
                 <i className="fa-solid fa-desktop text-stone-400"></i>
                 <strong>{host.resource_usage.vms_running}</strong>/{host.resource_usage.vms_total} VMs
               </span>
-              <i className={`fa-solid fa-chevron-${isVMsOpen ? 'up' : 'down'} text-[10px] text-stone-400`}></i>
+              <i className={`fa-solid fa-chevron-${isVMsOpen ? 'up' : 'down'} text-[11px] text-stone-400`}></i>
             </button>
             {isVMsOpen && (
               <div className="mt-2 space-y-2">
                 {Array.from(byLab.entries()).map(([labId, group]) => (
                   <div key={labId}>
                     {byLab.size > 1 && (
-                      <div className="text-[10px] font-medium text-stone-400 dark:text-stone-500 mb-1 truncate">{group.name}</div>
+                      <div className="text-[11px] font-medium text-stone-400 dark:text-stone-500 mb-1 truncate">{group.name}</div>
                     )}
                     <div className="space-y-0.5">
                       {group.items.map((v, i) => (
@@ -369,7 +369,7 @@ const HostCard: React.FC<HostCardProps> = ({
                           <span className="text-stone-700 dark:text-stone-300 truncate max-w-[160px]">{v.node_name || v.name}</span>
                           <span className="flex items-center gap-1.5">
                             {v.node_kind && (
-                              <span className="text-[10px] text-stone-400">{v.node_kind}</span>
+                              <span className="text-[11px] text-stone-400">{v.node_kind}</span>
                             )}
                             <span className={`w-1.5 h-1.5 rounded-full ${v.status === 'running' ? 'bg-green-500' : 'bg-stone-300 dark:bg-stone-600'}`}></span>
                           </span>
@@ -404,7 +404,7 @@ const HostCard: React.FC<HostCardProps> = ({
             ))}
           </select>
         </div>
-        <p className="text-[10px] text-stone-400 mt-1">
+        <p className="text-[11px] text-stone-400 mt-1">
           {SYNC_STRATEGY_OPTIONS.find(o => o.value === (host.image_sync_strategy || 'on_demand'))?.description}
         </p>
       </div>
@@ -434,7 +434,7 @@ const HostCard: React.FC<HostCardProps> = ({
                   <span className="text-amber-600 dark:text-amber-400 ml-1">{staleArtifactImages.length} stale</span>
                 )}
               </span>
-              <i className={`fa-solid fa-chevron-${isImagesOpen ? 'up' : 'down'} text-[10px] text-stone-400`}></i>
+              <i className={`fa-solid fa-chevron-${isImagesOpen ? 'up' : 'down'} text-[11px] text-stone-400`}></i>
             </button>
             {isImagesOpen && (
               <div className="mt-2 space-y-0.5">
@@ -452,9 +452,9 @@ const HostCard: React.FC<HostCardProps> = ({
                     <span className="font-mono text-stone-700 dark:text-stone-300 truncate max-w-[140px]" title={img.reference}>{img.reference.includes('/') ? img.reference.split('/').pop() : img.reference}</span>
                     <span className="flex items-center gap-1.5">
                       {img.size_bytes != null && (
-                        <span className="text-[10px] text-stone-400">{formatSize(img.size_bytes)}</span>
+                        <span className="text-[11px] text-stone-400">{formatSize(img.size_bytes)}</span>
                       )}
-                      <span className={`px-1.5 py-0.5 rounded text-[9px] font-medium uppercase ${
+                      <span className={`px-1.5 py-0.5 rounded text-[11px] font-medium uppercase ${
                         img.status === 'synced' ? 'bg-green-100 dark:bg-green-900/30 text-green-600 dark:text-green-400' :
                         img.status === 'syncing' ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400' :
                         'bg-red-100 dark:bg-red-900/30 text-red-600 dark:text-red-400'
@@ -467,14 +467,14 @@ const HostCard: React.FC<HostCardProps> = ({
                 {staleImages.length > 0 && (
                   <div className="mt-2 pt-2 border-t border-amber-200/60 dark:border-amber-800/60">
                     <div className="flex items-center justify-between gap-2 px-2 py-1">
-                      <div className="text-[10px] font-semibold uppercase tracking-wide text-amber-700 dark:text-amber-400">
+                      <div className="text-[11px] font-semibold uppercase tracking-wide text-amber-700 dark:text-amber-400">
                         Stale On Agent
                       </div>
                       {staleArtifactImages.length > 0 && (
                         <button
                           onClick={() => onCleanupStaleImages(host.id)}
                           disabled={agentImagesCleaning.has(host.id) || agentImagesLoading.has(host.id)}
-                          className="inline-flex items-center gap-1 rounded border border-amber-300/80 px-2 py-1 text-[10px] font-semibold text-amber-700 transition-colors hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-amber-700/80 dark:text-amber-300 dark:hover:bg-amber-900/30"
+                          className="inline-flex items-center gap-1 rounded border border-amber-300/80 px-2 py-1 text-[11px] font-semibold text-amber-700 transition-colors hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-amber-700/80 dark:text-amber-300 dark:hover:bg-amber-900/30"
                         >
                           <i className={`fa-solid ${agentImagesCleaning.has(host.id) ? 'fa-spinner fa-spin' : 'fa-broom'}`}></i>
                           Clean stale
@@ -482,7 +482,7 @@ const HostCard: React.FC<HostCardProps> = ({
                       )}
                     </div>
                     {inventoryRefreshedAt && (
-                      <div className="px-2 pb-1 text-[10px] text-amber-700/80 dark:text-amber-400/80">
+                      <div className="px-2 pb-1 text-[11px] text-amber-700/80 dark:text-amber-400/80">
                         Inventory refreshed {formatTimestamp(inventoryRefreshedAt)}
                       </div>
                     )}
@@ -495,19 +495,19 @@ const HostCard: React.FC<HostCardProps> = ({
                           {img.display_reference.includes('/') ? img.display_reference.split('/').pop() : img.display_reference}
                         </span>
                         <span className="flex items-center gap-1.5">
-                          <span className="text-[10px] text-amber-600 dark:text-amber-400 uppercase">{img.kind}</span>
+                          <span className="text-[11px] text-amber-600 dark:text-amber-400 uppercase">{img.kind}</span>
                           {img.size_bytes != null && (
-                            <span className="text-[10px] text-stone-400">{formatSize(img.size_bytes)}</span>
+                            <span className="text-[11px] text-stone-400">{formatSize(img.size_bytes)}</span>
                           )}
                         </span>
                       </div>
                     ))}
                     {staleImages.some((img) => !img.is_stale && img.reason) && (
-                      <div className="text-[10px] text-amber-700/80 dark:text-amber-400/80 px-2 py-1">
+                      <div className="text-[11px] text-amber-700/80 dark:text-amber-400/80 px-2 py-1">
                         {staleImages.find((img) => !img.is_stale && img.reason)?.reason}
                       </div>
                     )}
-                    <div className="text-[10px] text-amber-700/80 dark:text-amber-400/80 px-2 py-1">
+                    <div className="text-[11px] text-amber-700/80 dark:text-amber-400/80 px-2 py-1">
                       These artifacts are present on the host but not referenced by the catalog or active nodes.
                     </div>
                   </div>
@@ -529,7 +529,7 @@ const HostCard: React.FC<HostCardProps> = ({
             {hasMultipleLabs && (
               <button
                 onClick={() => onToggleLabs(host.id)}
-                className="text-[10px] text-sage-600 dark:text-sage-400 hover:underline"
+                className="text-[11px] text-sage-600 dark:text-sage-400 hover:underline"
               >
                 {isExpanded ? 'Show less' : `Show all ${host.labs.length}`}
               </button>
@@ -542,7 +542,7 @@ const HostCard: React.FC<HostCardProps> = ({
                 className="flex items-center justify-between text-xs py-1 px-2 bg-stone-50 dark:bg-stone-800/50 rounded"
               >
                 <span className="text-stone-700 dark:text-stone-300 truncate max-w-[150px]">{lab.name}</span>
-                <span className={`px-1.5 py-0.5 rounded text-[9px] font-medium uppercase ${
+                <span className={`px-1.5 py-0.5 rounded text-[11px] font-medium uppercase ${
                   lab.state === 'running' ? 'bg-green-100 dark:bg-green-900/30 text-green-600 dark:text-green-400' :
                   lab.state === 'starting' ? 'bg-amber-100 dark:bg-amber-900/30 text-amber-600 dark:text-amber-400' :
                   'bg-stone-200 dark:bg-stone-700 text-stone-500 dark:text-stone-400'

@@ -88,8 +88,8 @@ export const Tab: React.FC<TabProps> = ({
     : 'text-stone-600 dark:text-stone-400 hover:text-stone-900 dark:hover:text-stone-200';
 
   const baseStyles = variant === 'underline'
-    ? `px-4 py-2 text-sm font-semibold transition-all ${underlineStyles}`
-    : `px-3 py-1.5 text-sm font-medium rounded-md transition-all ${pillStyles}`;
+    ? `px-4 py-2 text-sm font-semibold transition-all duration-200 ${underlineStyles}`
+    : `px-3 py-1.5 text-sm font-medium rounded-md transition-all duration-200 ${pillStyles}`;
 
   return (
     <button

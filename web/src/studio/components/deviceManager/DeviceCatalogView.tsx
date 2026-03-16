@@ -78,7 +78,7 @@ const DeviceCatalogView: React.FC<DeviceCatalogViewProps> = ({
         {/* Filter chips */}
         <div className="flex flex-wrap items-center gap-3">
           <div className="flex items-center gap-1.5">
-            <span className="text-[10px] font-bold text-stone-400 uppercase mr-1">Status:</span>
+            <span className="text-[11px] font-bold text-stone-400 uppercase mr-1">Status:</span>
             <FilterChip
               label="Has Image"
               isActive={deviceImageStatus === 'has_image'}
@@ -101,7 +101,7 @@ const DeviceCatalogView: React.FC<DeviceCatalogViewProps> = ({
           {deviceVendors.length > 0 && <div className="h-6 w-px bg-stone-200 dark:bg-stone-700" />}
           {deviceVendors.length > 0 && (
             <div className="flex items-center gap-1.5 flex-wrap">
-              <span className="text-[10px] font-bold text-stone-400 uppercase mr-1">Vendor:</span>
+              <span className="text-[11px] font-bold text-stone-400 uppercase mr-1">Vendor:</span>
               {deviceVendors.map((vendor) => (
                 <FilterChip
                   key={vendor}
@@ -115,7 +115,7 @@ const DeviceCatalogView: React.FC<DeviceCatalogViewProps> = ({
           {hasDeviceFilters && (
             <button
               onClick={clearDeviceFilters}
-              className="text-[10px] text-red-500 hover:text-red-600 font-bold uppercase"
+              className="text-[11px] text-red-500 hover:text-red-600 font-bold uppercase"
             >
               Clear
             </button>

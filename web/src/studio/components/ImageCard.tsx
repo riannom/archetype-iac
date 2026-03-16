@@ -114,9 +114,9 @@ const ImageCard: React.FC<ImageCardProps> = ({
           {image.filename || image.reference}
         </span>
         {image.version && (
-          <span className="text-[10px] text-stone-400">{image.version}</span>
+          <span className="text-[11px] text-stone-400">{image.version}</span>
         )}
-        <i className="fa-solid fa-grip-vertical text-[10px] text-stone-300 dark:text-stone-600 opacity-0 group-hover:opacity-100 transition-opacity" />
+        <i className="fa-solid fa-grip-vertical text-[11px] text-stone-300 dark:text-stone-600 opacity-0 group-hover:opacity-100 transition-opacity" />
       </div>
     );
   }
@@ -184,7 +184,7 @@ const ImageCard: React.FC<ImageCardProps> = ({
                 </span>
               )}
             </div>
-            <div className="flex items-center gap-1.5 text-[10px] text-stone-500">
+            <div className="flex items-center gap-1.5 text-[11px] text-stone-500">
               <span className="uppercase font-bold">{image.kind}</span>
               {image.sha256 && (
                 <>
@@ -242,7 +242,7 @@ const ImageCard: React.FC<ImageCardProps> = ({
                   className="p-1 rounded text-stone-400 hover:text-blue-600 dark:hover:text-blue-400 hover:bg-blue-100/50 dark:hover:bg-blue-800/50 disabled:opacity-50"
                   title="Sync to all agents"
                 >
-                  <i className={`fa-solid fa-sync text-[10px] ${syncing ? 'fa-spin' : ''}`} />
+                  <i className={`fa-solid fa-sync text-[11px] ${syncing ? 'fa-spin' : ''}`} />
                 </button>
               )}
               {image.device_id && !image.is_default && onSetDefault && (
@@ -251,7 +251,7 @@ const ImageCard: React.FC<ImageCardProps> = ({
                   className="p-1 rounded text-stone-400 hover:text-sage-600 dark:hover:text-sage-400 hover:bg-sage-100/50 dark:hover:bg-sage-800/50"
                   title="Set as default"
                 >
-                  <i className="fa-solid fa-star text-[10px]" />
+                  <i className="fa-solid fa-star text-[11px]" />
                 </button>
               )}
               {onUnassign && (
@@ -260,7 +260,7 @@ const ImageCard: React.FC<ImageCardProps> = ({
                   className="p-1 rounded text-stone-400 hover:text-amber-600 hover:bg-amber-100/50 dark:hover:bg-amber-800/50"
                   title="Unassign from device"
                 >
-                  <i className="fa-solid fa-link-slash text-[10px]" />
+                  <i className="fa-solid fa-link-slash text-[11px]" />
                 </button>
               )}
               {onDelete && (
@@ -274,10 +274,10 @@ const ImageCard: React.FC<ImageCardProps> = ({
                   className="p-1 rounded text-stone-400 hover:text-red-500 hover:bg-red-100/50 dark:hover:bg-red-800/50"
                   title="Delete image"
                 >
-                  <i className="fa-solid fa-trash text-[10px]" />
+                  <i className="fa-solid fa-trash text-[11px]" />
                 </button>
               )}
-              <i className="fa-solid fa-grip-vertical text-[10px] text-stone-300 dark:text-stone-600 ml-1" />
+              <i className="fa-solid fa-grip-vertical text-[11px] text-stone-300 dark:text-stone-600 ml-1" />
             </div>
           )}
         </div>

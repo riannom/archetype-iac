@@ -99,11 +99,11 @@ const NotificationsPanel: React.FC<NotificationsPanelProps> = ({ labId, refreshK
                     <span className={`text-xs font-medium ${colors.text}`}>
                       {n.title}
                     </span>
-                    <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-stone-800/50 text-stone-500 font-mono uppercase">
+                    <span className="text-[11px] px-1.5 py-0.5 rounded-full bg-stone-800/50 text-stone-500 font-mono uppercase">
                       {categoryLabel}
                     </span>
                     {n.timestamp && (
-                      <span className="text-[10px] text-stone-600 ml-auto flex-shrink-0">
+                      <span className="text-[11px] text-stone-600 ml-auto flex-shrink-0">
                         {relativeTime(n.timestamp)}
                       </span>
                     )}

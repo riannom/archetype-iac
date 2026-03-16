@@ -88,8 +88,8 @@ export default function AdminMenuButton() {
         title="Admin menu"
       >
         <i className="fa-solid fa-shield-halved text-xs"></i>
-        <span className="text-[10px] font-bold uppercase">Admin</span>
-        <i className={`fa-solid fa-chevron-${open ? 'up' : 'down'} text-[9px]`}></i>
+        <span className="text-[11px] font-bold uppercase">Admin</span>
+        <i className={`fa-solid fa-chevron-${open ? 'up' : 'down'} text-[11px]`}></i>
       </button>
 
       {open && (

@@ -43,7 +43,7 @@ const AgentDetailView: React.FC<AgentDetailViewProps> = ({ agent }) => {
     <div className="flex gap-6 min-h-0 overflow-hidden">
       {/* Nodes column */}
       <div className="flex-1 min-w-0 flex flex-col">
-        <h4 className="text-[10px] font-bold uppercase text-stone-500 mb-2 tracking-wider">
+        <h4 className="text-[11px] font-bold uppercase text-stone-500 mb-2 tracking-wider">
           Nodes
         </h4>
         <div className="flex-1 overflow-y-auto space-y-0.5">
@@ -63,7 +63,7 @@ const AgentDetailView: React.FC<AgentDetailViewProps> = ({ agent }) => {
                   <span className="font-mono text-xs text-stone-300 truncate">
                     {nws.node.name}
                   </span>
-                  <span className="ml-auto text-[10px] text-stone-500 font-mono">
+                  <span className="ml-auto text-[11px] text-stone-500 font-mono">
                     {state}
                   </span>
                 </div>
@@ -78,7 +78,7 @@ const AgentDetailView: React.FC<AgentDetailViewProps> = ({ agent }) => {
 
       {/* Local links column */}
       <div className="flex-1 min-w-0 flex flex-col">
-        <h4 className="text-[10px] font-bold uppercase text-stone-500 mb-2 tracking-wider">
+        <h4 className="text-[11px] font-bold uppercase text-stone-500 mb-2 tracking-wider">
           Local Links
         </h4>
         <div className="flex-1 overflow-y-auto space-y-0.5">
@@ -127,7 +127,7 @@ const AgentDetailView: React.FC<AgentDetailViewProps> = ({ agent }) => {
 };
 
 const VlanBadge: React.FC<{ tag: number }> = ({ tag }) => (
-  <span className="font-mono text-[9px] px-1 py-0.5 bg-stone-800 text-stone-400 rounded flex-shrink-0">
+  <span className="font-mono text-[11px] px-1 py-0.5 bg-stone-800 text-stone-400 rounded flex-shrink-0">
     v{tag}
   </span>
 );

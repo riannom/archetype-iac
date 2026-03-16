@@ -238,7 +238,7 @@ const InfrastructurePage: React.FC = () => {
             <ArchetypeIcon size={40} className="text-sage-600 dark:text-sage-400" />
             <div>
               <h1 className="text-xl font-black text-stone-900 dark:text-white tracking-tight">ARCHETYPE</h1>
-              <p className="text-[10px] text-sage-600 dark:text-sage-500 font-bold uppercase tracking-widest">Infrastructure</p>
+              <p className="text-[11px] text-sage-600 dark:text-sage-500 font-bold uppercase tracking-widest">Infrastructure</p>
             </div>
           </div>
 
@@ -248,7 +248,7 @@ const InfrastructurePage: React.FC = () => {
               className="flex items-center gap-2 px-3 py-2 glass-control text-stone-600 dark:text-stone-300 rounded-lg transition-all"
             >
               <i className="fa-solid fa-arrow-left text-xs"></i>
-              <span className="text-[10px] font-bold uppercase">Back</span>
+              <span className="text-[11px] font-bold uppercase">Back</span>
             </button>
 
             <AdminMenuButton />
@@ -400,7 +400,7 @@ const InfrastructurePage: React.FC = () => {
           )}
         </main>
 
-        <footer className="h-10 border-t border-stone-200 dark:border-stone-900 glass-surface flex items-center px-10 justify-between text-[10px] text-stone-500 dark:text-stone-600 font-medium">
+        <footer className="h-10 border-t border-stone-200 dark:border-stone-900 glass-surface flex items-center px-10 justify-between text-[11px] text-stone-500 dark:text-stone-600 font-medium">
           <span>Archetype Infrastructure Management</span>
           <span>Auto-refresh: {activeTab === 'hosts' ? '10s' : '30s'}{activeTab === 'network' ? ' (network)' : ''}</span>
         </footer>
@@ -506,7 +506,7 @@ const InfrastructurePage: React.FC = () => {
                   }
                 }}
               />
-              <p className="text-[10px] text-stone-400 dark:text-stone-500 mt-2">
+              <p className="text-[11px] text-stone-400 dark:text-stone-500 mt-2">
                 Accepts version tags (0.3.7), commit SHAs (abc1234), or branch names (main)
               </p>
             </div>

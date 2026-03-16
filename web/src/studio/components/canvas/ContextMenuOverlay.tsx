@@ -19,7 +19,7 @@ export const ContextMenuOverlay: React.FC<ContextMenuOverlayProps> = ({
   return (
     <div className="fixed z-[100] w-52 bg-white dark:bg-stone-900 border border-stone-200 dark:border-stone-700 rounded-xl shadow-2xl py-2 animate-in fade-in zoom-in duration-100" style={{ left: contextMenu.x, top: contextMenu.y }} onMouseDown={(e) => e.stopPropagation()}>
       <div className="px-4 py-2 border-b border-stone-100 dark:border-stone-800 mb-1 flex items-center justify-between">
-        <span className="text-[10px] font-black text-stone-400 dark:text-stone-500 uppercase tracking-widest">
+        <span className="text-[11px] font-black text-stone-400 dark:text-stone-500 uppercase tracking-widest">
           {contextMenu.type === 'node'
             ? (isExternalNetworkNode(nodeMap.get(contextMenu.id)!) ? 'External Network' : 'Node Actions')
             : 'Link Actions'}

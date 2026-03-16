@@ -108,7 +108,7 @@ const AgentMeshSection: React.FC<AgentMeshSectionProps> = ({
                   {hasTransport && (
                     <div className="mt-2 pt-2 border-t border-blue-200/50 dark:border-blue-800/30">
                       <div className="flex items-center gap-1.5">
-                        <span className={`px-1 py-0.5 rounded text-[9px] font-bold uppercase ${
+                        <span className={`px-1 py-0.5 rounded text-[11px] font-bold uppercase ${
                           netConfig?.transport_mode === 'subinterface'
                             ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400'
                             : 'bg-purple-100 dark:bg-purple-900/30 text-purple-600 dark:text-purple-400'
@@ -116,18 +116,18 @@ const AgentMeshSection: React.FC<AgentMeshSectionProps> = ({
                           {netConfig?.transport_mode === 'subinterface' ? 'VLAN' : 'NIC'}
                         </span>
                         {transportIfaces.length > 0 ? (
-                          <span className="text-[10px] font-mono text-stone-500 dark:text-stone-400 truncate">
+                          <span className="text-[11px] font-mono text-stone-500 dark:text-stone-400 truncate">
                             {transportIfaces[0].name}
                           </span>
                         ) : netConfig?.data_plane_interface && (
-                          <span className="text-[10px] font-mono text-stone-500 dark:text-stone-400 truncate">
+                          <span className="text-[11px] font-mono text-stone-500 dark:text-stone-400 truncate">
                             {netConfig.data_plane_interface}
                           </span>
                         )}
                       </div>
                       <div className="flex items-center gap-1 mt-1">
-                        <span className="text-[10px] text-stone-400">MTU:</span>
-                        <span className={`text-[10px] font-mono ${
+                        <span className="text-[11px] text-stone-400">MTU:</span>
+                        <span className={`text-[11px] font-mono ${
                           netConfig?.current_mtu && netConfig.current_mtu >= netConfig.desired_mtu
                             ? 'text-green-600 dark:text-green-400'
                             : 'text-stone-500 dark:text-stone-400'

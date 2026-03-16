@@ -49,7 +49,7 @@ export const Modal: React.FC<ModalProps> = ({
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-[120] flex items-center justify-center">
+    <div className="fixed inset-0 z-[120] flex items-center justify-center animate-in fade-in duration-150">
       {/* Backdrop */}
       <div
         className="absolute inset-0 bg-black/50 backdrop-blur-sm"
@@ -61,6 +61,7 @@ export const Modal: React.FC<ModalProps> = ({
         className={`
           relative glass-surface-elevated rounded-xl shadow-2xl
           w-full ${sizeStyles[size]} mx-4 max-h-[85vh] overflow-hidden
+          animate-in zoom-in-95 slide-in-from-bottom-2 fade-in duration-200
           ${className}
         `.trim().replace(/\s+/g, ' ')}
       >

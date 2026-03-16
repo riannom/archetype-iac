@@ -188,7 +188,7 @@ const SystemStatusStrip: React.FC<SystemStatusStripProps> = ({ metrics }) => {
             {(aggregateMemoryUsage?.percent ?? metrics.memory_percent).toFixed(0)}%
           </span>
           {aggregateMemoryUsage && (
-            <span className={`text-[10px] ${mutedTextClass}`}>
+            <span className={`text-[11px] ${mutedTextClass}`}>
               {formatMemorySize(aggregateMemoryUsage.usedGb)}/{formatMemorySize(aggregateMemoryUsage.totalGb)}
             </span>
           )}
@@ -211,7 +211,7 @@ const SystemStatusStrip: React.FC<SystemStatusStripProps> = ({ metrics }) => {
             <span className={`text-xs font-bold ${strongTextClass} w-10 text-right`}>
               {metrics.storage.percent.toFixed(0)}%
             </span>
-            <span className={`text-[10px] ${mutedTextClass}`}>
+            <span className={`text-[11px] ${mutedTextClass}`}>
               {formatMemorySize(metrics.storage.used_gb)}/{formatMemorySize(metrics.storage.total_gb)}
             </span>
           </button>
@@ -231,11 +231,11 @@ const SystemStatusStrip: React.FC<SystemStatusStripProps> = ({ metrics }) => {
             <i className={`fa-solid fa-chevron-down ${isLightStrip ? 'text-white' : 'text-blue-200'} text-[8px] transition-transform duration-200 ${
               isExpanded ? '' : '-rotate-90'
             }`}></i>
-            <i className={`fa-solid fa-network-wired ${isLightStrip ? 'text-white' : 'text-blue-200'} text-[10px]`}></i>
-            <span className={`text-[10px] font-bold ${isLightStrip ? 'text-white' : 'text-white'} uppercase tracking-wider`}>
+            <i className={`fa-solid fa-network-wired ${isLightStrip ? 'text-white' : 'text-blue-200'} text-[11px]`}></i>
+            <span className={`text-[11px] font-bold ${isLightStrip ? 'text-white' : 'text-white'} uppercase tracking-wider`}>
               aggregated
             </span>
-            <span className={`text-[10px] ${isLightStrip ? 'text-white' : 'text-blue-200'}`}>
+            <span className={`text-[11px] ${isLightStrip ? 'text-white' : 'text-blue-200'}`}>
               ({metrics.per_host?.length || 0})
             </span>
           </button>
@@ -260,7 +260,7 @@ const SystemStatusStrip: React.FC<SystemStatusStripProps> = ({ metrics }) => {
                 {/* Indent spacer to align with aggregate row content */}
                 <div className="flex items-center gap-2 min-w-[120px]">
                   <div className={`w-1 h-4 ${dividerClass} rounded-full`}></div>
-                  <i className={`fa-solid fa-server ${iconClass} text-[10px]`}></i>
+                  <i className={`fa-solid fa-server ${iconClass} text-[11px]`}></i>
                   <span className={`text-[11px] font-medium ${textClass} truncate`}>
                     {host.name}
                   </span>
@@ -274,7 +274,7 @@ const SystemStatusStrip: React.FC<SystemStatusStripProps> = ({ metrics }) => {
                   }`}
                   title={`View containers on ${host.name}`}
                 >
-                  <i className={`fa-solid fa-cube ${iconClass} text-[10px]`}></i>
+                  <i className={`fa-solid fa-cube ${iconClass} text-[11px]`}></i>
                   <span className={`text-[11px] ${textClass}`}>
                     <span className={`font-bold ${strongTextClass}`}>{host.containers_running}</span>
                     <span className={`${mutedTextClass} ml-0.5`}>containers</span>
@@ -290,7 +290,7 @@ const SystemStatusStrip: React.FC<SystemStatusStripProps> = ({ metrics }) => {
                     }`}
                     title={`View VMs on ${host.name}`}
                   >
-                    <i className={`fa-solid fa-desktop ${iconClass} text-[10px]`}></i>
+                    <i className={`fa-solid fa-desktop ${iconClass} text-[11px]`}></i>
                     <span className={`text-[11px] ${textClass}`}>
                       <span className={`font-bold ${strongTextClass}`}>{host.vms_running}</span>
                       <span className={`${mutedTextClass} ml-0.5`}>VMs</span>
@@ -302,34 +302,34 @@ const SystemStatusStrip: React.FC<SystemStatusStripProps> = ({ metrics }) => {
 
                 {/* CPU */}
                 <div className="flex items-center gap-1.5">
-                  <i className={`fa-solid fa-microchip ${iconClass} text-[10px]`}></i>
-                  <span className={`text-[10px] ${labelTextClass} w-6`}>CPU</span>
+                  <i className={`fa-solid fa-microchip ${iconClass} text-[11px]`}></i>
+                  <span className={`text-[11px] ${labelTextClass} w-6`}>CPU</span>
                   <div className={`w-16 h-1.5 ${subProgressTrackClass} rounded-full overflow-hidden`}>
                     <div
                       className={`h-full ${getCpuColor(host.cpu_percent)} transition-all duration-500`}
                       style={{ width: `${Math.min(host.cpu_percent, 100)}%` }}
                     ></div>
                   </div>
-                  <span className={`text-[10px] font-medium ${textClass} w-8 text-right`}>
+                  <span className={`text-[11px] font-medium ${textClass} w-8 text-right`}>
                     {host.cpu_percent.toFixed(0)}%
                   </span>
                 </div>
 
                 {/* Memory */}
                 <div className="flex items-center gap-1.5">
-                  <i className={`fa-solid fa-memory ${iconClass} text-[10px]`}></i>
-                  <span className={`text-[10px] ${labelTextClass} w-6`}>MEM</span>
+                  <i className={`fa-solid fa-memory ${iconClass} text-[11px]`}></i>
+                  <span className={`text-[11px] ${labelTextClass} w-6`}>MEM</span>
                   <div className={`w-16 h-1.5 ${subProgressTrackClass} rounded-full overflow-hidden`}>
                     <div
                       className={`h-full ${getMemoryColor(hostMemoryUsage.percent)} transition-all duration-500`}
                       style={{ width: `${Math.min(hostMemoryUsage.percent, 100)}%` }}
                     ></div>
                   </div>
-                  <span className={`text-[10px] font-medium ${textClass} w-8 text-right`}>
+                  <span className={`text-[11px] font-medium ${textClass} w-8 text-right`}>
                     {hostMemoryUsage.percent.toFixed(0)}%
                   </span>
                   {hostMemoryUsage.hasTotals && (
-                    <span className={`text-[9px] ${mutedTextClass}`}>
+                    <span className={`text-[11px] ${mutedTextClass}`}>
                       {formatMemorySize(hostMemoryUsage.usedGb)}/{formatMemorySize(hostMemoryUsage.totalGb)}
                     </span>
                   )}
@@ -337,19 +337,19 @@ const SystemStatusStrip: React.FC<SystemStatusStripProps> = ({ metrics }) => {
 
                 {/* Storage */}
                 <div className="flex items-center gap-1.5">
-                  <i className={`fa-solid fa-hard-drive ${iconClass} text-[10px]`}></i>
-                  <span className={`text-[10px] ${labelTextClass} w-6`}>DISK</span>
+                  <i className={`fa-solid fa-hard-drive ${iconClass} text-[11px]`}></i>
+                  <span className={`text-[11px] ${labelTextClass} w-6`}>DISK</span>
                   <div className={`w-16 h-1.5 ${subProgressTrackClass} rounded-full overflow-hidden`}>
                     <div
                       className={`h-full ${getStorageColor(host.storage_percent)} transition-all duration-500`}
                       style={{ width: `${Math.min(host.storage_percent, 100)}%` }}
                     ></div>
                   </div>
-                  <span className={`text-[10px] font-medium ${textClass} w-8 text-right`}>
+                  <span className={`text-[11px] font-medium ${textClass} w-8 text-right`}>
                     {host.storage_percent.toFixed(0)}%
                   </span>
                   {host.storage_total_gb > 0 && (
-                    <span className={`text-[9px] ${mutedTextClass}`}>
+                    <span className={`text-[11px] ${mutedTextClass}`}>
                       {formatMemorySize(host.storage_used_gb)}/{formatMemorySize(host.storage_total_gb)}
                     </span>
                   )}
@@ -361,8 +361,8 @@ const SystemStatusStrip: React.FC<SystemStatusStripProps> = ({ metrics }) => {
                 {/* Uptime */}
                 {host.started_at && (
                   <div className="flex items-center gap-1.5">
-                    <i className={`fa-solid fa-clock ${iconClass} text-[10px]`}></i>
-                    <span className={`text-[10px] ${labelTextClass} font-mono`}>
+                    <i className={`fa-solid fa-clock ${iconClass} text-[11px]`}></i>
+                    <span className={`text-[11px] ${labelTextClass} font-mono`}>
                       {formatUptimeFromBoot(host.started_at)}
                     </span>
                   </div>

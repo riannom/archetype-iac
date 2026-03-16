@@ -167,7 +167,7 @@ export default function SupportBundlesPage() {
           <ArchetypeIcon size={40} className="text-sage-600 dark:text-sage-400" />
           <div>
             <h1 className="text-xl font-black text-stone-900 dark:text-white tracking-tight">SUPPORT BUNDLES</h1>
-            <p className="text-[10px] text-sage-600 dark:text-sage-500 font-bold uppercase tracking-widest">Offline Troubleshooting Export</p>
+            <p className="text-[11px] text-sage-600 dark:text-sage-500 font-bold uppercase tracking-widest">Offline Troubleshooting Export</p>
           </div>
         </div>
         <div className="flex items-center gap-3">
@@ -177,7 +177,7 @@ export default function SupportBundlesPage() {
             title="Back to workspace"
           >
             <i className="fa-solid fa-arrow-left text-xs"></i>
-            <span className="text-[10px] font-bold uppercase">Back</span>
+            <span className="text-[11px] font-bold uppercase">Back</span>
           </button>
           <AdminMenuButton />
         </div>

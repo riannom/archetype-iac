@@ -79,7 +79,7 @@ const ConfigField: React.FC<ConfigFieldProps> = ({
         <span className="text-xs text-stone-600 dark:text-stone-400">{label}</span>
         {labelHelp && (
           <span
-            className="text-[10px] text-stone-400 cursor-help"
+            className="text-[11px] text-stone-400 cursor-help"
             title={labelHelp}
             aria-label={`${label} help`}
           >
@@ -95,7 +95,7 @@ const ConfigField: React.FC<ConfigFieldProps> = ({
           <span className="text-xs font-mono text-stone-700 dark:text-stone-300">
             {displayValue}
           </span>
-          {unit && <span className="text-[10px] text-stone-400">{unit}</span>}
+          {unit && <span className="text-[11px] text-stone-400">{unit}</span>}
         </div>
       ) : (
         <div className="flex items-center gap-2">
@@ -105,7 +105,7 @@ const ConfigField: React.FC<ConfigFieldProps> = ({
             onChange={(e) => onChange?.(type === 'number' ? Number(e.target.value) : e.target.value)}
             className="w-24 px-2 py-1 text-xs font-mono text-right text-stone-900 dark:text-stone-100 bg-stone-50 dark:bg-stone-900 border border-stone-200 dark:border-stone-700 rounded focus:outline-none focus:ring-1 focus:ring-sage-500"
           />
-          {unit && <span className="text-[10px] text-stone-400">{unit}</span>}
+          {unit && <span className="text-[11px] text-stone-400">{unit}</span>}
         </div>
       )}
     </div>
@@ -427,13 +427,13 @@ const DeviceConfigPanel: React.FC<DeviceConfigPanelProps> = ({
                 className="text-xs text-sage-600 dark:text-sage-400 hover:underline flex items-center gap-1"
               >
                 View Docs
-                <i className="fa-solid fa-external-link text-[10px]"></i>
+                <i className="fa-solid fa-external-link text-[11px]"></i>
               </a>
             </div>
           )}
           {typeof effective.notes === 'string' && effective.notes && (
             <div className="pt-2">
-              <span className="text-[10px] text-stone-500 uppercase tracking-wider font-bold">Notes</span>
+              <span className="text-[11px] text-stone-500 uppercase tracking-wider font-bold">Notes</span>
               <p className="mt-1 text-xs text-stone-600 dark:text-stone-400 italic">
                 {effective.notes}
               </p>
@@ -441,19 +441,19 @@ const DeviceConfigPanel: React.FC<DeviceConfigPanelProps> = ({
           )}
           <div className="flex flex-wrap gap-2 pt-3">
             {device.licenseRequired && (
-              <span className="px-2 py-1 text-[10px] font-bold uppercase bg-amber-100 dark:bg-amber-900/30 text-amber-600 dark:text-amber-400 rounded">
+              <span className="px-2 py-1 text-[11px] font-bold uppercase bg-amber-100 dark:bg-amber-900/30 text-amber-600 dark:text-amber-400 rounded">
                 License Required
               </span>
             )}
             {device.requiresImage && (
-              <span className="px-2 py-1 text-[10px] font-bold uppercase bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 rounded">
+              <span className="px-2 py-1 text-[11px] font-bold uppercase bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 rounded">
                 Image Required
               </span>
             )}
             {device.tags?.map((tag) => (
               <span
                 key={tag}
-                className="px-2 py-1 text-[10px] font-medium bg-stone-100 dark:bg-stone-800 text-stone-500 rounded"
+                className="px-2 py-1 text-[11px] font-medium bg-stone-100 dark:bg-stone-800 text-stone-500 rounded"
               >
                 {tag}
               </span>
@@ -501,7 +501,7 @@ const DeviceConfigPanel: React.FC<DeviceConfigPanelProps> = ({
                         </span>
                       )}
                     </div>
-                    <div className="flex items-center gap-2 mt-0.5 text-[10px] text-stone-400">
+                    <div className="flex items-center gap-2 mt-0.5 text-[11px] text-stone-400">
                       <span className="uppercase font-bold">{img.kind}</span>
                       {img.version && (
                         <>

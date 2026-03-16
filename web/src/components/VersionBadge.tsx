@@ -50,7 +50,7 @@ export const VersionBadge: React.FC<VersionBadgeProps> = ({ className = '' }) =>
         onClick={() => versionModal.open()}
         className={`
           flex items-center gap-1.5 px-2 py-1
-          text-[10px] font-medium
+          text-[11px] font-medium
           text-stone-500 dark:text-stone-300
           hover:text-stone-700 dark:hover:text-stone-100
           bg-stone-100 dark:bg-black/60

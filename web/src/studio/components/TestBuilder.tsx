@@ -92,7 +92,7 @@ const TestBuilder: React.FC<TestBuilderProps> = ({ specs, onUpdateSpecs, nodes, 
             disabled={disabled}
             className="flex items-center gap-1 px-2 py-1 rounded text-xs font-medium bg-stone-100 dark:bg-stone-800 text-stone-600 dark:text-stone-300 hover:bg-sage-100 dark:hover:bg-sage-900/40 hover:text-sage-700 dark:hover:text-sage-300 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
           >
-            <i className={`fa-solid ${t.icon} text-[10px]`} />
+            <i className={`fa-solid ${t.icon} text-[11px]`} />
             <span>+{t.label}</span>
           </button>
         ))}
@@ -151,7 +151,7 @@ const SpecCard: React.FC<SpecCardProps> = ({
       {/* Card header */}
       <div className="flex items-center justify-between px-3 py-1.5 bg-stone-100 dark:bg-stone-800">
         <div className="flex items-center gap-1.5 min-w-0">
-          <i className={`fa-solid ${typeInfo.icon} text-[10px] text-sage-500`} />
+          <i className={`fa-solid ${typeInfo.icon} text-[11px] text-sage-500`} />
           <span className="text-xs font-medium text-stone-600 dark:text-stone-300 truncate">{title}</span>
         </div>
         <div className="flex items-center gap-0.5 flex-shrink-0">
@@ -161,7 +161,7 @@ const SpecCard: React.FC<SpecCardProps> = ({
             className="p-1 text-stone-400 hover:text-stone-600 dark:hover:text-stone-200 disabled:opacity-30 disabled:cursor-not-allowed"
             title="Move up"
           >
-            <i className="fa-solid fa-chevron-up text-[10px]" />
+            <i className="fa-solid fa-chevron-up text-[11px]" />
           </button>
           <button
             onClick={() => onMove(1)}
@@ -169,7 +169,7 @@ const SpecCard: React.FC<SpecCardProps> = ({
             className="p-1 text-stone-400 hover:text-stone-600 dark:hover:text-stone-200 disabled:opacity-30 disabled:cursor-not-allowed"
             title="Move down"
           >
-            <i className="fa-solid fa-chevron-down text-[10px]" />
+            <i className="fa-solid fa-chevron-down text-[11px]" />
           </button>
           <button
             onClick={onRemove}
@@ -177,7 +177,7 @@ const SpecCard: React.FC<SpecCardProps> = ({
             className="p-1 text-stone-400 hover:text-red-500 disabled:opacity-30 disabled:cursor-not-allowed"
             title="Remove test"
           >
-            <i className="fa-solid fa-times text-[10px]" />
+            <i className="fa-solid fa-times text-[11px]" />
           </button>
         </div>
       </div>

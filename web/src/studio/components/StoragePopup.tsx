@@ -66,7 +66,7 @@ const StoragePopup: React.FC<StoragePopupProps> = ({ isOpen, onClose, perHost, t
                       style={{ width: `${Math.min(host.storage_percent, 100)}%` }}
                     />
                   </div>
-                  <div className="mt-0.5 text-right text-[10px] text-stone-400">
+                  <div className="mt-0.5 text-right text-[11px] text-stone-400">
                     {host.storage_percent.toFixed(1)}%
                   </div>
                 </div>

@@ -124,7 +124,7 @@ const ExternalNetworkConfig: React.FC<ExternalNetworkConfigProps> = ({
       <div className="p-4 border-b border-stone-200 dark:border-stone-700 flex justify-between items-center bg-gradient-to-r from-blue-50 to-purple-50 dark:from-blue-950/30 dark:to-purple-950/30">
         <div>
           <h2 className="text-xs font-black uppercase tracking-widest text-blue-700 dark:text-blue-300">External Network</h2>
-          <div className="text-[9px] font-bold text-purple-600 dark:text-purple-400 tracking-tighter uppercase">
+          <div className="text-[11px] font-bold text-purple-600 dark:text-purple-400 tracking-tighter uppercase">
             {selectedInterface ? selectedInterface.name : 'Unconfigured'}
           </div>
         </div>
@@ -140,7 +140,7 @@ const ExternalNetworkConfig: React.FC<ExternalNetworkConfigProps> = ({
       <div className="flex-1 overflow-y-auto p-5 space-y-6 custom-scrollbar">
         {/* Name */}
         <div className="space-y-2">
-          <label className="text-[10px] font-bold text-stone-500 uppercase tracking-widest">Display Name</label>
+          <label className="text-[11px] font-bold text-stone-500 uppercase tracking-widest">Display Name</label>
           <input
             type="text"
             value={node.name}
@@ -155,7 +155,7 @@ const ExternalNetworkConfig: React.FC<ExternalNetworkConfigProps> = ({
           <div className="p-3 bg-yellow-50 dark:bg-yellow-950/30 border border-yellow-200 dark:border-yellow-800 rounded-lg">
             <div className="flex items-start gap-2">
               <i className="fa-solid fa-exclamation-triangle text-yellow-500 mt-0.5"></i>
-              <div className="text-[9px] text-yellow-700 dark:text-yellow-400 leading-relaxed">
+              <div className="text-[11px] text-yellow-700 dark:text-yellow-400 leading-relaxed">
                 <span className="font-bold">Legacy Configuration</span><br />
                 This external network uses the old configuration format.
                 Select a managed interface below to upgrade it.
@@ -171,23 +171,23 @@ const ExternalNetworkConfig: React.FC<ExternalNetworkConfigProps> = ({
 
         {/* Managed Interface Selection */}
         <div className="space-y-2">
-          <label className="text-[10px] font-bold text-stone-500 uppercase tracking-widest">Infrastructure Interface</label>
+          <label className="text-[11px] font-bold text-stone-500 uppercase tracking-widest">Infrastructure Interface</label>
 
           {loading ? (
             <div className="p-3 bg-stone-100 dark:bg-stone-800 rounded-lg text-center">
               <i className="fa-solid fa-spinner fa-spin text-stone-400 mr-2"></i>
-              <span className="text-[10px] text-stone-500">Loading interfaces...</span>
+              <span className="text-[11px] text-stone-500">Loading interfaces...</span>
             </div>
           ) : error ? (
             <div className="p-3 bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-800 rounded-lg text-center">
               <i className="fa-solid fa-exclamation-triangle text-red-500 mr-2"></i>
-              <span className="text-[10px] text-red-600 dark:text-red-400">{error}</span>
+              <span className="text-[11px] text-red-600 dark:text-red-400">{error}</span>
             </div>
           ) : interfaces.length === 0 ? (
             <div className="p-3 bg-stone-50 dark:bg-stone-800 border border-stone-200 dark:border-stone-700 rounded-lg">
               <div className="flex items-start gap-2">
                 <i className="fa-solid fa-info-circle text-stone-400 mt-0.5"></i>
-                <div className="text-[9px] text-stone-500 dark:text-stone-400 leading-relaxed">
+                <div className="text-[11px] text-stone-500 dark:text-stone-400 leading-relaxed">
                   No external interfaces configured. Create one in
                   <span className="font-bold"> Infrastructure</span> first.
                 </div>
@@ -213,7 +213,7 @@ const ExternalNetworkConfig: React.FC<ExternalNetworkConfigProps> = ({
               ))}
             </select>
           )}
-          <p className="text-[9px] text-stone-400 dark:text-stone-500">
+          <p className="text-[11px] text-stone-400 dark:text-stone-500">
             Managed interfaces are created in the Infrastructure page
           </p>
         </div>
@@ -221,9 +221,9 @@ const ExternalNetworkConfig: React.FC<ExternalNetworkConfigProps> = ({
         {/* Selected Interface Details */}
         {selectedInterface && (
           <div className="space-y-3 p-4 bg-blue-50/50 dark:bg-blue-950/20 border border-blue-200 dark:border-blue-800/50 rounded-xl">
-            <div className="text-[10px] font-bold text-blue-700 dark:text-blue-300 uppercase tracking-widest">Interface Details</div>
+            <div className="text-[11px] font-bold text-blue-700 dark:text-blue-300 uppercase tracking-widest">Interface Details</div>
 
-            <div className="grid grid-cols-2 gap-2 text-[10px]">
+            <div className="grid grid-cols-2 gap-2 text-[11px]">
               <div>
                 <span className="text-stone-400">Name</span>
                 <div className="font-mono font-bold text-stone-700 dark:text-stone-200">{selectedInterface.name}</div>
@@ -258,14 +258,14 @@ const ExternalNetworkConfig: React.FC<ExternalNetworkConfigProps> = ({
             </div>
 
             {selectedInterface.ip_address && (
-              <div className="text-[10px]">
+              <div className="text-[11px]">
                 <span className="text-stone-400">IP Address</span>
                 <div className="font-mono font-bold text-stone-700 dark:text-stone-200">{selectedInterface.ip_address}</div>
               </div>
             )}
 
             {selectedInterface.sync_error && (
-              <div className="p-2 bg-red-50 dark:bg-red-950/30 rounded text-[9px] text-red-600 dark:text-red-400">
+              <div className="p-2 bg-red-50 dark:bg-red-950/30 rounded text-[11px] text-red-600 dark:text-red-400">
                 {selectedInterface.sync_error}
               </div>
             )}
@@ -276,7 +276,7 @@ const ExternalNetworkConfig: React.FC<ExternalNetworkConfigProps> = ({
         <div className="p-3 bg-stone-50 dark:bg-stone-950/50 border border-stone-200 dark:border-stone-800 rounded-lg">
           <div className="flex items-start gap-2">
             <i className="fa-solid fa-info-circle text-stone-400 mt-0.5"></i>
-            <div className="text-[9px] text-stone-500 dark:text-stone-400 leading-relaxed">
+            <div className="text-[11px] text-stone-500 dark:text-stone-400 leading-relaxed">
               External networks connect lab devices to physical networks via infrastructure-managed interfaces.
               Multiple devices can share the same external network for L2 broadcast domain connectivity.
               Cross-host connections are handled automatically via VXLAN tunnels.

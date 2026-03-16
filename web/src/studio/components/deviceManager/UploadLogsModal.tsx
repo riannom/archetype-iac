@@ -134,7 +134,7 @@ const UploadLogsModal: React.FC<UploadLogsModalProps> = ({
                   >
                     <td className="px-3 py-2 text-stone-500 dark:text-stone-400 whitespace-nowrap font-mono text-xs">
                       <div>{formatImageLogTime(entry.timestamp)}</div>
-                      <div className="text-[10px] text-stone-400 dark:text-stone-500">{formatImageLogDate(entry.timestamp)}</div>
+                      <div className="text-[11px] text-stone-400 dark:text-stone-500">{formatImageLogDate(entry.timestamp)}</div>
                     </td>
                     <td className="px-3 py-2">
                       <span className={`inline-block px-2 py-0.5 rounded text-xs font-medium uppercase ${IMAGE_LOG_LEVEL_COLORS[entry.level]}`}>
@@ -142,7 +142,7 @@ const UploadLogsModal: React.FC<UploadLogsModalProps> = ({
                       </span>
                     </td>
                     <td className="px-3 py-2">
-                      <span className={`inline-block px-2 py-0.5 rounded text-[10px] font-semibold uppercase ${IMAGE_LOG_CATEGORY_COLORS[entry.category] || 'text-stone-700 dark:text-stone-300 bg-stone-200 dark:bg-stone-700'}`}>
+                      <span className={`inline-block px-2 py-0.5 rounded text-[11px] font-semibold uppercase ${IMAGE_LOG_CATEGORY_COLORS[entry.category] || 'text-stone-700 dark:text-stone-300 bg-stone-200 dark:bg-stone-700'}`}>
                         {entry.category}
                       </span>
                     </td>
@@ -152,12 +152,12 @@ const UploadLogsModal: React.FC<UploadLogsModalProps> = ({
                     <td className="px-3 py-2 text-stone-700 dark:text-stone-200 font-mono text-xs">
                       <div>{entry.message}</div>
                       {entry.filename && (
-                        <div className="text-[10px] text-stone-500 dark:text-stone-400 mt-1">
+                        <div className="text-[11px] text-stone-500 dark:text-stone-400 mt-1">
                           file: {entry.filename}
                         </div>
                       )}
                       {entry.details && (
-                        <pre className="mt-1 p-2 bg-stone-100 dark:bg-stone-900 rounded text-[10px] text-stone-600 dark:text-stone-300 whitespace-pre-wrap break-words max-h-20 overflow-auto custom-scrollbar">
+                        <pre className="mt-1 p-2 bg-stone-100 dark:bg-stone-900 rounded text-[11px] text-stone-600 dark:text-stone-300 whitespace-pre-wrap break-words max-h-20 overflow-auto custom-scrollbar">
                           {entry.details}
                         </pre>
                       )}
@@ -165,7 +165,7 @@ const UploadLogsModal: React.FC<UploadLogsModalProps> = ({
                     <td className="px-3 py-2">
                       <button
                         onClick={() => copyUploadLogEntry(entry)}
-                        className="px-2 py-1 rounded text-[10px] font-bold glass-control text-stone-700 dark:text-stone-300 transition-colors whitespace-nowrap"
+                        className="px-2 py-1 rounded text-[11px] font-bold glass-control text-stone-700 dark:text-stone-300 transition-colors whitespace-nowrap"
                       >
                         <i className={`fa-solid ${copiedUploadLogId === entry.id ? 'fa-check' : 'fa-copy'} mr-1`} />
                         {copiedUploadLogId === entry.id ? 'Copied' : 'Copy'}

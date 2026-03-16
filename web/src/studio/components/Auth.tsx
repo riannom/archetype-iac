@@ -240,7 +240,7 @@ const Auth: React.FC<AuthProps> = ({ onLogin, error, loading = false }) => {
         </div>
 
         <p
-          className={`text-center mt-10 text-[10px] font-medium uppercase tracking-[0.2em] transition-opacity ${
+          className={`text-center mt-10 text-[11px] font-medium uppercase tracking-[0.2em] transition-opacity ${
             isDarkMode ? 'text-stone-400 opacity-50 hover:opacity-100' : 'text-stone-500 opacity-70 hover:opacity-100'
           }`}
         >

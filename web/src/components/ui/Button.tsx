@@ -13,10 +13,10 @@ export interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElemen
 }
 
 const variantStyles: Record<ButtonVariant, string> = {
-  primary: 'bg-sage-600 hover:bg-sage-700 text-white border-sage-600 hover:border-sage-700 dark:bg-sage-600 dark:hover:bg-sage-500',
-  secondary: 'glass-control text-stone-700 dark:text-stone-300',
+  primary: 'bg-sage-600 hover:bg-sage-700 text-white border-sage-600 hover:border-sage-700 dark:bg-sage-600 dark:hover:bg-sage-500 shadow-sm hover:shadow-md',
+  secondary: 'glass-control text-stone-700 dark:text-stone-300 hover:shadow-sm',
   ghost: 'bg-transparent hover:bg-stone-100 dark:hover:bg-stone-800 text-stone-600 dark:text-stone-400 hover:text-stone-900 dark:hover:text-stone-200 border-transparent',
-  danger: 'bg-red-600 hover:bg-red-700 text-white border-red-600 hover:border-red-700',
+  danger: 'bg-red-600 hover:bg-red-700 text-white border-red-600 hover:border-red-700 shadow-sm hover:shadow-md',
 };
 
 const sizeStyles: Record<ButtonSize, string> = {
@@ -52,10 +52,10 @@ export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
         ref={ref}
         disabled={isDisabled}
         className={`
-          inline-flex items-center font-semibold rounded-lg border transition-all
+          inline-flex items-center font-semibold rounded-lg border transition-all duration-150
           ${variantStyles[variant]}
           ${sizeStyles[size]}
-          ${isDisabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}
+          ${isDisabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer active:scale-[0.97]'}
           ${className}
         `.trim().replace(/\s+/g, ' ')}
         {...props}

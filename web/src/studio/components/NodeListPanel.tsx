@@ -105,7 +105,7 @@ const NodeListPanel: React.FC<NodeListPanelProps> = ({
       {/* Search */}
       <div className="p-3 border-b border-stone-200 dark:border-stone-800">
         <div className="relative">
-          <i className="fa-solid fa-search absolute left-2.5 top-1/2 -translate-y-1/2 text-[10px] text-stone-400" />
+          <i className="fa-solid fa-search absolute left-2.5 top-1/2 -translate-y-1/2 text-[11px] text-stone-400" />
           <input
             type="text"
             value={search}
@@ -139,7 +139,7 @@ const NodeListPanel: React.FC<NodeListPanelProps> = ({
               <>
                 <i className="fa-solid fa-diagram-project text-2xl text-stone-300 dark:text-stone-600 mb-2" />
                 <p className="text-xs text-stone-500 dark:text-stone-400">No devices in topology</p>
-                <p className="text-[10px] text-stone-400 dark:text-stone-500 mt-1">Use the Library tab to add devices</p>
+                <p className="text-[11px] text-stone-400 dark:text-stone-500 mt-1">Use the Library tab to add devices</p>
               </>
             ) : (
               <>
@@ -147,7 +147,7 @@ const NodeListPanel: React.FC<NodeListPanelProps> = ({
                 <p className="text-xs text-stone-500 dark:text-stone-400">No nodes match filter</p>
                 <button
                   onClick={() => { setSearch(''); setActiveFilters(new Set()); }}
-                  className="mt-2 text-[10px] font-bold text-sage-600 hover:text-sage-500"
+                  className="mt-2 text-[11px] font-bold text-sage-600 hover:text-sage-500"
                 >
                   Clear filters
                 </button>
@@ -174,7 +174,7 @@ const NodeListPanel: React.FC<NodeListPanelProps> = ({
                   <div className={`w-2 h-2 rounded-full flex-shrink-0 ${getStatusDotClass(status)}`} />
 
                   {/* Type icon */}
-                  <i className={`fa-solid ${isVm(node) ? 'fa-hard-drive' : 'fa-cube'} text-[10px] text-stone-400 dark:text-stone-500 w-3 text-center`} />
+                  <i className={`fa-solid ${isVm(node) ? 'fa-hard-drive' : 'fa-cube'} text-[11px] text-stone-400 dark:text-stone-500 w-3 text-center`} />
 
                   {/* Name */}
                   <span className="flex-1 text-[11px] font-medium text-stone-700 dark:text-stone-200 truncate">
@@ -188,7 +188,7 @@ const NodeListPanel: React.FC<NodeListPanelProps> = ({
                       className="opacity-0 group-hover:opacity-100 p-1 rounded hover:bg-stone-200 dark:hover:bg-stone-700 transition-all"
                       title="Open console"
                     >
-                      <i className="fa-solid fa-terminal text-[10px] text-stone-500 dark:text-stone-400" />
+                      <i className="fa-solid fa-terminal text-[11px] text-stone-500 dark:text-stone-400" />
                     </button>
                   )}
                 </button>

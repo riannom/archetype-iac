@@ -33,7 +33,7 @@ const ToggleOption: React.FC<ToggleOptionProps> = ({
             <span className="w-1.5 h-1.5 rounded-full bg-blue-500" title="Custom override"></span>
           )}
         </div>
-        <p className="text-[10px] text-stone-500 dark:text-stone-400 mt-0.5">{description}</p>
+        <p className="text-[11px] text-stone-500 dark:text-stone-400 mt-0.5">{description}</p>
       </div>
       <button
         onClick={() => onChange(!value)}

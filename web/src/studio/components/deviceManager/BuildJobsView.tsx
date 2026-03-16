@@ -87,12 +87,12 @@ const BuildJobsView: React.FC<BuildJobsViewProps> = ({
                   <h3 className="text-[11px] font-bold text-stone-700 dark:text-stone-300 uppercase tracking-wide">
                     Current Jobs
                   </h3>
-                  <p className="text-[10px] text-stone-500 dark:text-stone-400 mt-0.5">
+                  <p className="text-[11px] text-stone-500 dark:text-stone-400 mt-0.5">
                     {hasActiveIolBuilds ? 'Live updates active' : 'No active builds'}
                   </p>
                 </div>
                 <div className="flex items-center gap-3">
-                  <label className="flex items-center gap-1 text-[10px] text-stone-500 dark:text-stone-400">
+                  <label className="flex items-center gap-1 text-[11px] text-stone-500 dark:text-stone-400">
                     <input
                       type="checkbox"
                       checked={autoRefreshIolBuilds}
@@ -104,7 +104,7 @@ const BuildJobsView: React.FC<BuildJobsViewProps> = ({
                   <button
                     onClick={refreshIolBuildStatuses}
                     disabled={refreshingIolBuilds}
-                    className="text-[10px] font-bold text-sage-600 hover:text-sage-500 disabled:text-stone-400 transition-colors"
+                    className="text-[11px] font-bold text-sage-600 hover:text-sage-500 disabled:text-stone-400 transition-colors"
                   >
                     <i className={`fa-solid fa-rotate mr-1 ${refreshingIolBuilds ? 'fa-spin' : ''}`} />
                     Refresh
@@ -149,27 +149,27 @@ const BuildJobsView: React.FC<BuildJobsViewProps> = ({
                             <div className="text-xs font-semibold text-stone-800 dark:text-stone-200 truncate">
                               {row.image.filename || row.image.reference}
                             </div>
-                            <div className={`text-[10px] font-bold uppercase ${statusTone}`}>
+                            <div className={`text-[11px] font-bold uppercase ${statusTone}`}>
                               {row.status === 'building' && <i className="fa-solid fa-spinner fa-spin mr-1" />}
                               {statusLabel}
                             </div>
                             {row.dockerReference && (
-                              <div className="text-[10px] text-stone-500 dark:text-stone-400 mt-0.5 truncate">
+                              <div className="text-[11px] text-stone-500 dark:text-stone-400 mt-0.5 truncate">
                                 Docker: {row.dockerReference}
                               </div>
                             )}
                             {row.buildJobId && (
-                              <div className="text-[10px] text-stone-400 dark:text-stone-500 truncate">
+                              <div className="text-[11px] text-stone-400 dark:text-stone-500 truncate">
                                 Job: {row.buildJobId}
                               </div>
                             )}
                             {row.status === 'ignored' && (
-                              <div className="text-[10px] text-stone-400 dark:text-stone-500 mt-0.5 truncate">
+                              <div className="text-[11px] text-stone-400 dark:text-stone-500 mt-0.5 truncate">
                                 Ignored by {row.buildIgnoredBy || 'user'} at {formatBuildTimestamp(row.buildIgnoredAt)}
                               </div>
                             )}
                             {row.buildError && (
-                              <div className="text-[10px] text-red-500 mt-1 whitespace-pre-wrap break-words">
+                              <div className="text-[11px] text-red-500 mt-1 whitespace-pre-wrap break-words">
                                 {row.buildError}
                               </div>
                             )}
@@ -177,28 +177,28 @@ const BuildJobsView: React.FC<BuildJobsViewProps> = ({
                           <div className="flex flex-wrap items-center justify-end gap-1.5 shrink-0 max-w-[320px]">
                             <button
                               onClick={() => openIolDiagnostics(row.image.id)}
-                              className="px-2 py-1 rounded text-[10px] font-bold glass-control text-stone-700 dark:text-stone-300 transition-colors"
+                              className="px-2 py-1 rounded text-[11px] font-bold glass-control text-stone-700 dark:text-stone-300 transition-colors"
                             >
                               Details
                             </button>
                             <button
                               onClick={() => retryIolBuild(row.image.id, false)}
                               disabled={isRetrying || isIgnoring || row.status === 'queued' || row.status === 'building'}
-                              className="px-2 py-1 rounded text-[10px] font-bold bg-sage-600 hover:bg-sage-500 disabled:bg-stone-300 dark:disabled:bg-stone-700 text-white transition-colors"
+                              className="px-2 py-1 rounded text-[11px] font-bold bg-sage-600 hover:bg-sage-500 disabled:bg-stone-300 dark:disabled:bg-stone-700 text-white transition-colors"
                             >
                               {isRetrying ? 'Retrying...' : 'Retry'}
                             </button>
                             <button
                               onClick={() => retryIolBuild(row.image.id, true)}
                               disabled={isRetrying || isIgnoring || row.status === 'queued' || row.status === 'building'}
-                              className="px-2 py-1 rounded text-[10px] font-bold glass-control text-stone-700 dark:text-stone-300 disabled:text-stone-400 transition-colors"
+                              className="px-2 py-1 rounded text-[11px] font-bold glass-control text-stone-700 dark:text-stone-300 disabled:text-stone-400 transition-colors"
                             >
                               Force
                             </button>
                             <button
                               onClick={() => ignoreIolBuildFailure(row.image.id)}
                               disabled={isRetrying || isIgnoring || row.status !== 'failed'}
-                              className="px-2 py-1 rounded text-[10px] font-bold glass-control text-stone-700 dark:text-stone-300 disabled:text-stone-400 transition-colors"
+                              className="px-2 py-1 rounded text-[11px] font-bold glass-control text-stone-700 dark:text-stone-300 disabled:text-stone-400 transition-colors"
                             >
                               {isIgnoring ? 'Ignoring...' : 'Ignore'}
                             </button>
@@ -217,7 +217,7 @@ const BuildJobsView: React.FC<BuildJobsViewProps> = ({
                   <h3 className="text-[11px] font-bold text-stone-700 dark:text-stone-300 uppercase tracking-wide">
                     Build History
                   </h3>
-                  <span className="text-[10px] text-stone-500 dark:text-stone-400">
+                  <span className="text-[11px] text-stone-500 dark:text-stone-400">
                     {historicalIolBuildRows.length} completed
                   </span>
                 </div>
@@ -232,21 +232,21 @@ const BuildJobsView: React.FC<BuildJobsViewProps> = ({
                           <div className="text-xs font-semibold text-stone-800 dark:text-stone-200 truncate">
                             {row.image.filename || row.image.reference}
                           </div>
-                          <div className="text-[10px] font-bold uppercase text-emerald-600 dark:text-emerald-400">
+                          <div className="text-[11px] font-bold uppercase text-emerald-600 dark:text-emerald-400">
                             Ready
                           </div>
                           {row.dockerReference && (
-                            <div className="text-[10px] text-stone-500 dark:text-stone-400 mt-0.5 truncate">
+                            <div className="text-[11px] text-stone-500 dark:text-stone-400 mt-0.5 truncate">
                               Docker: {row.dockerReference}
                             </div>
                           )}
                           {row.buildJobId && (
-                            <div className="text-[10px] text-stone-400 dark:text-stone-500 truncate">
+                            <div className="text-[11px] text-stone-400 dark:text-stone-500 truncate">
                               Job: {row.buildJobId}
                             </div>
                           )}
                         </div>
-                        <span className="text-[10px] text-stone-400 dark:text-stone-500 whitespace-nowrap">
+                        <span className="text-[11px] text-stone-400 dark:text-stone-500 whitespace-nowrap">
                           Completed
                         </span>
                       </div>

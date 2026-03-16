@@ -28,7 +28,7 @@ function ViewTabBar({ view, onViewChange, showInfraTab }: ViewTabBarProps): Reac
         <button
           key={tab.id}
           onClick={() => onViewChange(tab.id)}
-          className={`h-full px-4 text-[10px] font-black uppercase border-b-2 transition-all ${
+          className={`h-full px-4 text-[11px] font-black uppercase border-b-2 transition-all ${
             view === tab.id
               ? 'text-sage-700 dark:text-sage-500 border-sage-700 dark:border-sage-500'
               : 'text-stone-700 dark:text-stone-300 border-transparent hover:text-stone-900 dark:hover:text-stone-100'

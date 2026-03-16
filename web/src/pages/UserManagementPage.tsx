@@ -163,7 +163,7 @@ const UserManagementPage: React.FC = () => {
             <ArchetypeIcon size={40} className="text-sage-600 dark:text-sage-400" />
             <div>
               <h1 className="text-xl font-black text-stone-900 dark:text-white tracking-tight">ARCHETYPE</h1>
-              <p className="text-[10px] text-sage-600 dark:text-sage-500 font-bold uppercase tracking-widest">User Management</p>
+              <p className="text-[11px] text-sage-600 dark:text-sage-500 font-bold uppercase tracking-widest">User Management</p>
             </div>
           </div>
 
@@ -173,7 +173,7 @@ const UserManagementPage: React.FC = () => {
               className="flex items-center gap-2 px-3 py-2 glass-control text-stone-600 dark:text-stone-300 rounded-lg transition-all"
             >
               <i className="fa-solid fa-arrow-left text-xs"></i>
-              <span className="text-[10px] font-bold uppercase">Back</span>
+              <span className="text-[11px] font-bold uppercase">Back</span>
             </button>
 
             <AdminMenuButton />
@@ -276,7 +276,7 @@ const UserManagementPage: React.FC = () => {
                                   <div>
                                     <span className="font-medium text-stone-900 dark:text-white">{u.username}</span>
                                     {isSelf && (
-                                      <span className="ml-2 text-[10px] px-1.5 py-0.5 bg-sage-100 dark:bg-sage-900/30 text-sage-600 dark:text-sage-400 border border-sage-200 dark:border-sage-700 rounded font-medium">
+                                      <span className="ml-2 text-[11px] px-1.5 py-0.5 bg-sage-100 dark:bg-sage-900/30 text-sage-600 dark:text-sage-400 border border-sage-200 dark:border-sage-700 rounded font-medium">
                                         You
                                       </span>
                                     )}
@@ -356,7 +356,7 @@ const UserManagementPage: React.FC = () => {
 
         {/* Footer */}
         <footer className="h-10 border-t border-stone-200 dark:border-stone-800 bg-white/30 dark:bg-stone-900/30 flex items-center justify-center px-10 shrink-0">
-          <span className="text-[10px] text-stone-400 dark:text-stone-600 font-medium">
+          <span className="text-[11px] text-stone-400 dark:text-stone-600 font-medium">
             Archetype User Management
           </span>
         </footer>

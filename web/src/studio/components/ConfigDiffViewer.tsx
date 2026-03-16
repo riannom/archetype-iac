@@ -121,7 +121,7 @@ const ConfigDiffViewer: React.FC<ConfigDiffViewerProps> = ({
       </div>
 
       {/* Version labels */}
-      <div className="grid grid-cols-2 text-[10px] font-medium border-b border-stone-800">
+      <div className="grid grid-cols-2 text-[11px] font-medium border-b border-stone-800">
         <div className="px-4 py-2 bg-red-500/10 text-red-400 border-r border-stone-800">
           <i className="fa-solid fa-clock mr-1" />
           {formatTimestamp(snapshotA.created_at)}
@@ -202,7 +202,7 @@ const ConfigDiffViewer: React.FC<ConfigDiffViewerProps> = ({
             <div className="text-center">
               <i className="fa-solid fa-equals text-3xl text-stone-700 mb-3" />
               <p className="text-sm text-stone-500">Configurations are identical</p>
-              <p className="text-[10px] text-stone-600 mt-1">
+              <p className="text-[11px] text-stone-600 mt-1">
                 Hash: {snapshotA.content_hash.slice(0, 12)}...
               </p>
             </div>

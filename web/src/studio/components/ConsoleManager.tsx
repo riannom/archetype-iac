@@ -634,7 +634,7 @@ const ConsoleManager: React.FC<ConsoleManagerProps> = ({
                             onSetActiveTab(win.id, nodeId);
                           }
                         }}
-                        className={`h-full px-4 flex items-center gap-2 text-[10px] font-bold border-r border-stone-700/50 transition-all cursor-pointer shrink-0 relative
+                        className={`h-full px-4 flex items-center gap-2 text-[11px] font-bold border-r border-stone-700/50 transition-all cursor-pointer shrink-0 relative
                           ${isActive ? 'bg-stone-900 text-sage-400' : 'text-stone-500 hover:bg-stone-700/50 hover:text-stone-300'}
                           ${isTabBeingDragged ? 'console-tab-dragging' : ''}
                           ${isTabBeingReordered ? 'console-tab-reordering' : ''}
@@ -672,7 +672,7 @@ const ConsoleManager: React.FC<ConsoleManagerProps> = ({
                     onClick={() => onDockWindow(win.id)}
                     title="Dock to bottom panel"
                   >
-                    <i className="fa-solid fa-window-restore text-[9px]"></i>
+                    <i className="fa-solid fa-window-restore text-[11px]"></i>
                   </button>
                 )}
                 {!isMinimized && (
@@ -686,7 +686,7 @@ const ConsoleManager: React.FC<ConsoleManagerProps> = ({
                     }}
                     title="Open in new window"
                   >
-                    <i className="fa-solid fa-up-right-from-square text-[9px]"></i>
+                    <i className="fa-solid fa-up-right-from-square text-[11px]"></i>
                   </button>
                 )}
                 {onToggleMinimize && (
@@ -695,7 +695,7 @@ const ConsoleManager: React.FC<ConsoleManagerProps> = ({
                     onMouseDown={(e) => e.stopPropagation()}
                     onClick={() => onToggleMinimize(win.id)}
                   >
-                    <i className={`fa-solid ${isMinimized ? 'fa-window-maximize' : 'fa-window-minimize'} text-[9px]`}></i>
+                    <i className={`fa-solid ${isMinimized ? 'fa-window-maximize' : 'fa-window-minimize'} text-[11px]`}></i>
                   </button>
                 )}
                 <button

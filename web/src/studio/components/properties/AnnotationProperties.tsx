@@ -70,7 +70,7 @@ const AnnotationProperties: React.FC<AnnotationPropertiesProps> = ({
             <label className="text-[11px] font-bold text-stone-500 uppercase tracking-tighter">Dimensions</label>
             <div className="grid grid-cols-2 gap-2">
               <div className="space-y-1">
-                <label className="text-[9px] font-bold text-stone-400 uppercase">{ann.type === 'circle' ? 'Diameter' : 'Width'}</label>
+                <label className="text-[11px] font-bold text-stone-400 uppercase">{ann.type === 'circle' ? 'Diameter' : 'Width'}</label>
                 <input
                   type="number"
                   value={ann.width || (ann.type === 'rect' ? 100 : 80)}
@@ -81,7 +81,7 @@ const AnnotationProperties: React.FC<AnnotationPropertiesProps> = ({
               </div>
               {ann.type === 'rect' && (
                 <div className="space-y-1">
-                  <label className="text-[9px] font-bold text-stone-400 uppercase">Height</label>
+                  <label className="text-[11px] font-bold text-stone-400 uppercase">Height</label>
                   <input
                     type="number"
                     value={ann.height || 60}
@@ -101,19 +101,19 @@ const AnnotationProperties: React.FC<AnnotationPropertiesProps> = ({
             <label className="text-[11px] font-bold text-stone-500 uppercase tracking-tighter">Endpoints</label>
             <div className="grid grid-cols-2 gap-2">
               <div className="space-y-1">
-                <label className="text-[9px] font-bold text-stone-400 uppercase">Start X</label>
+                <label className="text-[11px] font-bold text-stone-400 uppercase">Start X</label>
                 <input type="number" value={Math.round(ann.x)} onChange={(e) => onUpdateAnnotation(ann.id, { x: parseFloat(e.target.value) || 0 })} className="w-full bg-stone-100 dark:bg-stone-800 border border-stone-300 dark:border-stone-600 rounded px-3 py-2 text-sm text-stone-900 dark:text-stone-100 focus:outline-none focus:border-sage-500" />
               </div>
               <div className="space-y-1">
-                <label className="text-[9px] font-bold text-stone-400 uppercase">Start Y</label>
+                <label className="text-[11px] font-bold text-stone-400 uppercase">Start Y</label>
                 <input type="number" value={Math.round(ann.y)} onChange={(e) => onUpdateAnnotation(ann.id, { y: parseFloat(e.target.value) || 0 })} className="w-full bg-stone-100 dark:bg-stone-800 border border-stone-300 dark:border-stone-600 rounded px-3 py-2 text-sm text-stone-900 dark:text-stone-100 focus:outline-none focus:border-sage-500" />
               </div>
               <div className="space-y-1">
-                <label className="text-[9px] font-bold text-stone-400 uppercase">End X</label>
+                <label className="text-[11px] font-bold text-stone-400 uppercase">End X</label>
                 <input type="number" value={Math.round(ann.targetX ?? ann.x + 100)} onChange={(e) => onUpdateAnnotation(ann.id, { targetX: parseFloat(e.target.value) || 0 })} className="w-full bg-stone-100 dark:bg-stone-800 border border-stone-300 dark:border-stone-600 rounded px-3 py-2 text-sm text-stone-900 dark:text-stone-100 focus:outline-none focus:border-sage-500" />
               </div>
               <div className="space-y-1">
-                <label className="text-[9px] font-bold text-stone-400 uppercase">End Y</label>
+                <label className="text-[11px] font-bold text-stone-400 uppercase">End Y</label>
                 <input type="number" value={Math.round(ann.targetY ?? ann.y + 100)} onChange={(e) => onUpdateAnnotation(ann.id, { targetY: parseFloat(e.target.value) || 0 })} className="w-full bg-stone-100 dark:bg-stone-800 border border-stone-300 dark:border-stone-600 rounded px-3 py-2 text-sm text-stone-900 dark:text-stone-100 focus:outline-none focus:border-sage-500" />
               </div>
             </div>
@@ -126,28 +126,28 @@ const AnnotationProperties: React.FC<AnnotationPropertiesProps> = ({
           <div className="grid grid-cols-4 gap-1">
             <button
               onClick={handleBringToFront}
-              className="flex items-center justify-center gap-1 py-2 glass-control text-stone-700 dark:text-stone-300 text-[9px] font-bold rounded transition-colors border border-stone-200 dark:border-stone-700"
+              className="flex items-center justify-center gap-1 py-2 glass-control text-stone-700 dark:text-stone-300 text-[11px] font-bold rounded transition-colors border border-stone-200 dark:border-stone-700"
               title="Bring to Front"
             >
               <i className="fa-solid fa-angles-up"></i>
             </button>
             <button
               onClick={handleBringForward}
-              className="flex items-center justify-center gap-1 py-2 glass-control text-stone-700 dark:text-stone-300 text-[9px] font-bold rounded transition-colors border border-stone-200 dark:border-stone-700"
+              className="flex items-center justify-center gap-1 py-2 glass-control text-stone-700 dark:text-stone-300 text-[11px] font-bold rounded transition-colors border border-stone-200 dark:border-stone-700"
               title="Bring Forward"
             >
               <i className="fa-solid fa-angle-up"></i>
             </button>
             <button
               onClick={handleSendBackward}
-              className="flex items-center justify-center gap-1 py-2 glass-control text-stone-700 dark:text-stone-300 text-[9px] font-bold rounded transition-colors border border-stone-200 dark:border-stone-700"
+              className="flex items-center justify-center gap-1 py-2 glass-control text-stone-700 dark:text-stone-300 text-[11px] font-bold rounded transition-colors border border-stone-200 dark:border-stone-700"
               title="Send Backward"
             >
               <i className="fa-solid fa-angle-down"></i>
             </button>
             <button
               onClick={handleSendToBack}
-              className="flex items-center justify-center gap-1 py-2 glass-control text-stone-700 dark:text-stone-300 text-[9px] font-bold rounded transition-colors border border-stone-200 dark:border-stone-700"
+              className="flex items-center justify-center gap-1 py-2 glass-control text-stone-700 dark:text-stone-300 text-[11px] font-bold rounded transition-colors border border-stone-200 dark:border-stone-700"
               title="Send to Back"
             >
               <i className="fa-solid fa-angles-down"></i>

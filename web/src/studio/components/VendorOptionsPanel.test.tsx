@@ -505,7 +505,7 @@ describe("VendorOptionsPanel", () => {
       );
 
       const description = screen.getByText("Configure testOption setting");
-      expect(description).toHaveClass("text-[10px]");
+      expect(description).toHaveClass("text-[11px]");
     });
   });
 
