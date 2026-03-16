@@ -49,7 +49,7 @@ export const Modal: React.FC<ModalProps> = ({
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-[120] flex items-center justify-center animate-in fade-in duration-150">
+    <div className="fixed inset-0 z-[120] flex items-center justify-center animate-in fade-in duration-150" role="dialog" aria-modal="true" aria-labelledby="modal-title">
       {/* Backdrop */}
       <div
         className="absolute inset-0 bg-black/50 backdrop-blur-sm"
@@ -69,7 +69,7 @@ export const Modal: React.FC<ModalProps> = ({
         {(title || showCloseButton) && (
           <div className="flex items-center justify-between px-6 py-4 border-b border-stone-200 dark:border-stone-700">
             {title && (
-              <h2 className="text-lg font-semibold text-stone-900 dark:text-stone-100">
+              <h2 id="modal-title" className="text-lg font-semibold text-stone-900 dark:text-stone-100">
                 {title}
               </h2>
             )}

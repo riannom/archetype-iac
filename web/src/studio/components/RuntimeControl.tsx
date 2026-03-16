@@ -4,6 +4,7 @@ import { DeviceModel, Node, isDeviceNode } from '../types';
 import { getAgentColor } from '../../utils/agentColors';
 import { NodeRuntimeStatus, NodeStateEntry } from '../../types/nodeState';
 import { useNotifications } from '../../contexts/NotificationContext';
+import { ConfirmDialog } from '../../components/ui/ConfirmDialog';
 
 /** @deprecated Use NodeRuntimeStatus from types/nodeState instead */
 export type RuntimeStatus = NodeRuntimeStatus;
@@ -32,6 +33,8 @@ const RuntimeControl: React.FC<RuntimeControlProps> = ({ labId, nodes, runtimeSt
   const [isExtracting, setIsExtracting] = useState(false);
   const [pendingOps, setPendingOps] = useState<Set<PendingOp>>(new Set());
   const lastBulkActionRef = useRef<number>(0);
+  const [showExtractConfirm, setShowExtractConfirm] = useState(false);
+  const [showStopAllConfirm, setShowStopAllConfirm] = useState(false);
 
   // Helper to check if an operation is pending
   // Checks both local bulk ops and per-node ops passed from parent
@@ -115,12 +118,7 @@ const RuntimeControl: React.FC<RuntimeControlProps> = ({ labId, nodes, runtimeSt
     }
   }, [labId, nodes, runtimeStates, studioRequest, onSetRuntimeStatus, onRefreshStates, isOperationPending, onFlushTopologySave]);
 
-  const handleExtractConfigs = useCallback(async () => {
-    const confirmed = window.confirm(
-      "Before extracting, make sure you've run 'copy running start' on each device to save your running config to startup config.\n\nExtract configs from all running nodes?"
-    );
-    if (!confirmed) return;
-
+  const doExtractConfigs = useCallback(async () => {
     setIsExtracting(true);
     try {
       await studioRequest(`/labs/${labId}/extract-configs`, { method: 'POST' });
@@ -137,14 +135,13 @@ const RuntimeControl: React.FC<RuntimeControlProps> = ({ labId, nodes, runtimeSt
     }
   }, [addNotification, labId, studioRequest]);
 
-  const handleStopAll = useCallback(async () => {
-    const confirmed = window.confirm(
-      "Stopping all nodes will first extract configs from running cEOS devices. This may take a moment.\n\nContinue with Stop All?"
-    );
-    if (!confirmed) return;
+  const handleExtractConfigs = useCallback(() => {
+    setShowExtractConfirm(true);
+  }, []);
 
-    await handleBulkAction('stopped');
-  }, [handleBulkAction]);
+  const handleStopAll = useCallback(() => {
+    setShowStopAllConfirm(true);
+  }, []);
 
   return (
     <div className="flex-1 bg-transparent flex flex-col overflow-hidden animate-in fade-in duration-300">
@@ -339,6 +336,24 @@ const RuntimeControl: React.FC<RuntimeControlProps> = ({ labId, nodes, runtimeSt
           </table>
         </div>
       </div>
+      <ConfirmDialog
+        isOpen={showExtractConfirm}
+        onConfirm={() => { setShowExtractConfirm(false); doExtractConfigs(); }}
+        onCancel={() => setShowExtractConfirm(false)}
+        title="Extract configs?"
+        message={"Before extracting, make sure you've run 'copy running start' on each device to save your running config to startup config.\n\nExtract configs from all running nodes?"}
+        confirmLabel="Extract"
+        variant="warning"
+      />
+      <ConfirmDialog
+        isOpen={showStopAllConfirm}
+        onConfirm={() => { setShowStopAllConfirm(false); handleBulkAction('stopped'); }}
+        onCancel={() => setShowStopAllConfirm(false)}
+        title="Stop all nodes?"
+        message="Stopping all nodes will first extract configs from running cEOS devices. This may take a moment."
+        confirmLabel="Stop All"
+        variant="warning"
+      />
     </div>
   );
 };

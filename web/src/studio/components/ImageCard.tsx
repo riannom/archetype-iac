@@ -4,6 +4,7 @@ import { useDragHandlers, useDragContext } from '../contexts/DragContext';
 import { formatSize, formatDate } from '../../utils/format';
 import { apiRequest } from '../../api';
 import { useNotifications } from '../../contexts/NotificationContext';
+import { ConfirmDialog } from '../../components/ui/ConfirmDialog';
 
 interface ImageCardProps {
   image: ImageLibraryEntry;
@@ -44,6 +45,7 @@ const ImageCard: React.FC<ImageCardProps> = ({
   });
 
   const [syncing, setSyncing] = useState(false);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
 
   const isDragging = dragState.draggedImageId === image.id;
 
@@ -267,9 +269,7 @@ const ImageCard: React.FC<ImageCardProps> = ({
                 <button
                   onClick={(e) => {
                     e.stopPropagation();
-                    if (window.confirm('Delete this image from the library? This cannot be undone.')) {
-                      onDelete();
-                    }
+                    setShowDeleteConfirm(true);
                   }}
                   className="p-1 rounded text-stone-400 hover:text-red-500 hover:bg-red-100/50 dark:hover:bg-red-800/50"
                   title="Delete image"
@@ -282,6 +282,17 @@ const ImageCard: React.FC<ImageCardProps> = ({
           )}
         </div>
       </div>
+      {onDelete && (
+        <ConfirmDialog
+          isOpen={showDeleteConfirm}
+          onConfirm={() => { onDelete(); setShowDeleteConfirm(false); }}
+          onCancel={() => setShowDeleteConfirm(false)}
+          title="Delete image?"
+          message="Delete this image from the library? This cannot be undone."
+          confirmLabel="Delete"
+          variant="danger"
+        />
+      )}
     </div>
   );
 };

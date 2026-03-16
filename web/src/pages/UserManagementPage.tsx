@@ -198,7 +198,7 @@ const UserManagementPage: React.FC = () => {
         </header>
 
         {/* Content */}
-        <div className="flex-1 overflow-y-auto p-10">
+        <div className="flex-1 overflow-y-auto custom-scrollbar p-10">
           <div className="max-w-6xl mx-auto space-y-6">
             {/* Page title + Create button */}
             <div className="flex items-center justify-between">
@@ -234,13 +234,15 @@ const UserManagementPage: React.FC = () => {
             {/* Loading state */}
             {loading ? (
               <div className="flex items-center justify-center py-20">
-                <i className="fa-solid fa-spinner fa-spin text-stone-400 text-xl"></i>
-                <span className="ml-3 text-stone-500 dark:text-stone-400">Loading users...</span>
+                <div className="flex flex-col items-center gap-3">
+                  <i className="fa-solid fa-spinner fa-spin text-sage-500 text-xl" aria-hidden="true"></i>
+                  <span className="text-sm text-stone-500 dark:text-stone-400">Loading users...</span>
+                </div>
               </div>
             ) : (
               /* Users Table */
               <div className="glass-surface rounded-xl overflow-hidden border">
-                <div className="overflow-x-auto">
+                <div className="overflow-x-auto table-responsive">
                   <table className="w-full text-sm">
                     <thead>
                       <tr className="border-b border-stone-200 dark:border-stone-700">

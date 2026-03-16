@@ -356,24 +356,29 @@ describe("ImageCard", () => {
       render(<ImageCard image={defaultImage} onDelete={mockOnDelete} />);
 
       await user.click(screen.getByTitle("Delete image"));
-      expect(mockConfirm).toHaveBeenCalled();
+      // ConfirmDialog should appear
+      expect(screen.getByText(/cannot be undone/i)).toBeInTheDocument();
     });
 
     it("calls onDelete when confirmation is accepted", async () => {
       const user = userEvent.setup();
-      mockConfirm.mockReturnValue(true);
       render(<ImageCard image={defaultImage} onDelete={mockOnDelete} />);
 
       await user.click(screen.getByTitle("Delete image"));
+      // Click confirm button in the dialog (the Button component, not the icon button)
+      const buttons = screen.getAllByRole("button", { name: /delete/i });
+      const confirmBtn = buttons.find(b => b.textContent === 'Delete');
+      await user.click(confirmBtn!);
       expect(mockOnDelete).toHaveBeenCalled();
     });
 
     it("does not call onDelete when confirmation is cancelled", async () => {
       const user = userEvent.setup();
-      mockConfirm.mockReturnValue(false);
       render(<ImageCard image={defaultImage} onDelete={mockOnDelete} />);
 
       await user.click(screen.getByTitle("Delete image"));
+      // Click cancel button in the dialog
+      await user.click(screen.getByRole("button", { name: /cancel/i }));
       expect(mockOnDelete).not.toHaveBeenCalled();
     });
   });
@@ -544,7 +549,8 @@ describe("ImageCard", () => {
       );
 
       await user.click(screen.getByTitle("Delete image"));
-      expect(mockConfirm).toHaveBeenCalled();
+      // ConfirmDialog should appear (delete button opened the dialog)
+      expect(screen.getByText(/cannot be undone/i)).toBeInTheDocument();
     });
 
     it("stops propagation on sync click", async () => {

@@ -671,6 +671,7 @@ const ConsoleManager: React.FC<ConsoleManagerProps> = ({
                     onMouseDown={(e) => e.stopPropagation()}
                     onClick={() => onDockWindow(win.id)}
                     title="Dock to bottom panel"
+                    aria-label="Dock to bottom panel"
                   >
                     <i className="fa-solid fa-window-restore text-[11px]"></i>
                   </button>
@@ -685,6 +686,7 @@ const ConsoleManager: React.FC<ConsoleManagerProps> = ({
                       window.open(url, `archetype-console-${activeNode.id}`, 'width=960,height=640');
                     }}
                     title="Open in new window"
+                    aria-label="Open in new window"
                   >
                     <i className="fa-solid fa-up-right-from-square text-[11px]"></i>
                   </button>
@@ -694,6 +696,7 @@ const ConsoleManager: React.FC<ConsoleManagerProps> = ({
                     className="w-6 h-6 flex items-center justify-center text-stone-500 hover:text-stone-300 hover:bg-stone-700 rounded transition-all"
                     onMouseDown={(e) => e.stopPropagation()}
                     onClick={() => onToggleMinimize(win.id)}
+                    aria-label={isMinimized ? 'Maximize window' : 'Minimize window'}
                   >
                     <i className={`fa-solid ${isMinimized ? 'fa-window-maximize' : 'fa-window-minimize'} text-[11px]`}></i>
                   </button>
@@ -702,6 +705,7 @@ const ConsoleManager: React.FC<ConsoleManagerProps> = ({
                   onClick={() => onCloseWindow(win.id)}
                   onMouseDown={(e) => e.stopPropagation()}
                   className="w-6 h-6 flex items-center justify-center text-stone-500 hover:text-red-400 hover:bg-red-400/10 rounded transition-all"
+                  aria-label="Close window"
                 >
                   <i className="fa-solid fa-xmark"></i>
                 </button>
@@ -710,7 +714,7 @@ const ConsoleManager: React.FC<ConsoleManagerProps> = ({
 
             {!isMinimized && (
               <>
-                <div className="flex-1 bg-[#0b0f16] relative">
+                <div className="flex-1 bg-stone-950 relative">
                   {win.deviceIds.length === 0 && (
                     <div className="absolute inset-0 flex flex-col items-center justify-center text-stone-700">
                       <i className="fa-solid fa-terminal text-4xl mb-4 opacity-10"></i>
