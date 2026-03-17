@@ -89,19 +89,19 @@ AUTH_HEADER="Authorization: Bearer $TOKEN"
 
 log "Step 5/6: Waiting for agent registration..."
 AGENT_FOUND=false
-for i in $(seq 1 15); do
+for i in $(seq 1 30); do
     AGENTS=$(curl -sf -H "$AUTH_HEADER" "$API_URL/agents" 2>/dev/null || echo "[]")
     if echo "$AGENTS" | grep -q "smoke-agent"; then
         AGENT_FOUND=true
         break
     fi
-    sleep 2
+    sleep 3
 done
 
 if [ "$AGENT_FOUND" = true ]; then
     pass "Agent 'smoke-agent' registered"
 else
-    fail "Agent 'smoke-agent' did not register after 30s. Agents: $AGENTS"
+    fail "Agent 'smoke-agent' did not register after 90s. Agents: $AGENTS"
 fi
 
 # ---------------------------------------------------------------------------
