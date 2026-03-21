@@ -16,7 +16,14 @@ log() { printf '\033[1;34m[SMOKE]\033[0m %s\n' "$1"; }
 pass() { printf '\033[1;32m[PASS]\033[0m  %s\n' "$1"; }
 fail() { printf '\033[1;31m[FAIL]\033[0m  %s\n' "$1"; exit 1; }
 
+dump_logs() {
+    log "Dumping container logs for debugging..."
+    docker compose -p "$PROJECT_NAME" -f "$COMPOSE_FILE" logs --no-color 2>/dev/null \
+        > /tmp/smoke-compose-logs.txt || true
+}
+
 cleanup() {
+    dump_logs
     log "Cleaning up..."
     docker compose -p "$PROJECT_NAME" -f "$COMPOSE_FILE" down -v --remove-orphans 2>/dev/null || true
 }
@@ -101,6 +108,14 @@ done
 if [ "$AGENT_FOUND" = true ]; then
     pass "Agent 'smoke-agent' registered"
 else
+    log "=== DIAGNOSTIC: Agent container logs ==="
+    docker compose -p "$PROJECT_NAME" -f "$COMPOSE_FILE" logs agent --no-color --tail=50 2>/dev/null || true
+    log "=== DIAGNOSTIC: API container logs ==="
+    docker compose -p "$PROJECT_NAME" -f "$COMPOSE_FILE" logs api --no-color --tail=30 2>/dev/null || true
+    log "=== DIAGNOSTIC: Agent container status ==="
+    docker compose -p "$PROJECT_NAME" -f "$COMPOSE_FILE" ps agent 2>/dev/null || true
+    log "=== DIAGNOSTIC: Raw /agents response ==="
+    curl -v -H "$AUTH_HEADER" "$API_URL/agents" 2>&1 || true
     fail "Agent 'smoke-agent' did not register after 90s. Agents: $AGENTS"
 fi
 

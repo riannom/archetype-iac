@@ -25,13 +25,6 @@ jobs:
       - name: Run single-host smoke test
         run: bash tests/smoke/smoke_test.sh
 
-      - name: Dump compose logs on failure
-        if: failure()
-        run: |
-          for proj in $(docker compose ls -q 2>/dev/null | grep archetype-smoke || true); do
-            docker compose -p "$proj" logs --no-color > "/tmp/smoke-compose-logs.txt" 2>&1 || true
-          done
-
       - name: Upload compose logs on failure
         if: failure()
         uses: actions/upload-artifact@v4
@@ -39,6 +32,7 @@ jobs:
           name: smoke-single-host-compose-logs
           path: /tmp/smoke-compose-logs.txt
           retention-days: 7
+          if-no-files-found: warn
 
   multi-host:
     name: Multi-Host Smoke Test
@@ -52,13 +46,6 @@ jobs:
       - name: Run multi-host smoke test
         run: bash tests/smoke/multihost_test.sh
 
-      - name: Dump compose logs on failure
-        if: failure()
-        run: |
-          for proj in $(docker compose ls -q 2>/dev/null | grep archetype-multihost || true); do
-            docker compose -p "$proj" logs --no-color > "/tmp/multihost-compose-logs.txt" 2>&1 || true
-          done
-
       - name: Upload compose logs on failure
         if: failure()
         uses: actions/upload-artifact@v4
@@ -66,3 +53,4 @@ jobs:
           name: smoke-multi-host-compose-logs
           path: /tmp/multihost-compose-logs.txt
           retention-days: 7
+          if-no-files-found: warn

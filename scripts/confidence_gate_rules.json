@@ -211,7 +211,8 @@
         ".github/**",
         "Makefile",
         "scripts/**",
-        "tests/scripts/**"
+        "tests/scripts/**",
+        "tests/smoke/**"
       ],
       "checks": [
         "audit"
