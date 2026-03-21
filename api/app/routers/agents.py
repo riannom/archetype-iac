@@ -236,7 +236,7 @@ class AgentCapabilities(BaseModel):
     providers: list[str] = Field(default_factory=list)
     max_concurrent_jobs: int = 4
     features: list[str] = Field(default_factory=list)
-    virtualization: dict = Field(default_factory=dict)
+    virtualization: dict | None = Field(default_factory=dict)
 
 
 class AgentInfo(BaseModel):
