@@ -19,7 +19,14 @@ log() { printf '\033[1;34m[MULTI]\033[0m %s\n' "$1"; }
 pass() { printf '\033[1;32m[PASS]\033[0m  %s\n' "$1"; }
 fail() { printf '\033[1;31m[FAIL]\033[0m  %s\n' "$1"; exit 1; }
 
+dump_logs() {
+    log "Dumping container logs for debugging..."
+    docker compose -p "$PROJECT_NAME" -f "$COMPOSE_FILE" logs --no-color 2>/dev/null \
+        > /tmp/multihost-compose-logs.txt || true
+}
+
 cleanup() {
+    dump_logs
     log "Cleaning up..."
     docker compose -p "$PROJECT_NAME" -f "$COMPOSE_FILE" down -v --remove-orphans 2>/dev/null || true
 }

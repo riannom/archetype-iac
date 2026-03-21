@@ -106,7 +106,8 @@ async def register_with_controller() -> bool:
                 logger.warning(f"Registration rejected: {result.message}")
                 return False
         else:
-            logger.error(f"Registration failed: HTTP {response.status_code}")
+            body = response.text[:500] if response.text else "(empty)"
+            logger.error(f"Registration failed: HTTP {response.status_code}: {body}")
             return False
     except httpx.ConnectError:
         logger.warning(f"Cannot connect to controller at {settings.controller_url}")
