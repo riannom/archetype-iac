@@ -158,12 +158,15 @@ async def test_console_websocket_docker_none_read_and_write_timeout(monkeypatch)
     loop = LoopStub()
 
     async def _fake_wait_for(awaitable, timeout):
+        # Production has two wait_for sites: the input-queue read (write_task)
+        # and the data-available wait (read_task). Time both out so neither
+        # task hangs; flipping is_running on the input path lets read_task's
+        # next iteration exit via its `while console.is_running` guard.
         if timeout == settings.console_input_timeout:
-            if hasattr(awaitable, "close"):
-                awaitable.close()
             docker_console.is_running = False
-            raise asyncio.TimeoutError()
-        return await awaitable
+        if hasattr(awaitable, "close"):
+            awaitable.close()
+        raise asyncio.TimeoutError()
 
     monkeypatch.setattr(console_mod, "_get_container_boot_logs", AsyncMock(return_value=None))
     monkeypatch.setattr(console_mod, "DockerConsole", lambda *_a, **_k: docker_console)
