@@ -36,9 +36,19 @@
 ## Post-Batch-4 Baseline (2026-04-25)
 - Frontend: **lines 92.82%, branches 83.00%, functions 79.23%, statements 92.82%**
 
-### Batch 5 — AnnotationProperties + scenarioTypes (in progress)
-- [ ] `web/src/studio/components/properties/AnnotationProperties.tsx` (162 lines, 95.1/22.2/64.7) — all 4 annotation types + z-order buttons
-- [ ] `web/src/studio/components/scenario/scenarioTypes.ts` (93 lines, 95.7/100/55.5) — createDefaultStep all 7 cases + generateStepId
+### Batch 5 — AnnotationProperties + scenarioTypes (DONE — merged in #128)
+- [x] `web/src/studio/components/properties/AnnotationProperties.tsx` → 100%
+- [x] `web/src/studio/components/scenario/scenarioTypes.ts` → 100%
+- [x] PR #128 merged (`5240282d`); +2 files / +28 tests; full suite 209/3807
+
+## Post-Batch-5 Baseline (2026-04-25)
+- Frontend: **lines 92.85%, branches 83.18%, functions 80.42%, statements 92.85%**
+
+### Batch 6 — small UI files (in progress)
+- [ ] `web/src/components/ui/ToastContainer.tsx` (36 lines, 100/100/60 → 100): disabled prefs, missing prefs, position class, unknown-position fallback
+- [ ] `web/src/components/ui/EmptyState.tsx` (60 lines, 100/100/80 → 100): compact=true, action.icon
+- [ ] `web/src/studio/components/ViewTabBar.tsx` (45 lines, 97.8/100/83.3 → 100): no prior test; showInfraTab toggle, active class, click handlers
+- [ ] `web/src/studio/components/properties/LinkProperties.tsx` (66 lines, 100/100/75 → 100): no prior test; source/target select updates, missing-node tolerance
 - [ ] Commit, push, open PR, merge, clean up worktree
 
 # Observability Follow-ups
