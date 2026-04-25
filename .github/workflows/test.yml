@@ -441,7 +441,7 @@ jobs:
         run: |
           cd api
           pip install -r requirements.txt
-          pip install pytest-cov pytest-timeout
+          pip install pytest-cov pytest-timeout pytest-xdist
 
       - name: Run API tests with coverage
         env:
@@ -450,7 +450,7 @@ jobs:
           WORKSPACE: /tmp/archetype-test
         run: |
           cd api
-          PYTHONPATH="${PYTHONPATH}:$(pwd)/.." pytest tests/ -q --tb=short --timeout=60 --cov=app --cov-report=term-missing --cov-report=xml:../reports/api-coverage.xml --cov-fail-under=55
+          PYTHONPATH="${PYTHONPATH}:$(pwd)/.." pytest tests/ -q --tb=short --timeout=60 -n auto --cov=app --cov-report=term-missing --cov-report=xml:../reports/api-coverage.xml --cov-fail-under=55
 
       - name: Upload API coverage
         if: always()
@@ -479,12 +479,12 @@ jobs:
         run: |
           cd agent
           pip install -r requirements.txt
-          pip install pytest-cov pytest-timeout
+          pip install pytest-cov pytest-timeout pytest-xdist
 
       - name: Run Agent tests with coverage
         run: |
           cd agent
-          pytest tests/ -q --tb=short --timeout=60 --cov=agent --cov-report=term-missing --cov-report=xml:../reports/agent-coverage.xml --cov-fail-under=50
+          pytest tests/ -q --tb=short --timeout=60 -n auto --cov=agent --cov-report=term-missing --cov-report=xml:../reports/agent-coverage.xml --cov-fail-under=50
 
       - name: Upload Agent coverage
         if: always()
