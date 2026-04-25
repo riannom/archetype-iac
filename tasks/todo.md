@@ -6,13 +6,18 @@
 
 ## Batches
 
-### Batch 1 — scenario stepFields (tests written, CI pending)
-- [x] `web/src/studio/components/scenario/stepFields/NodeStepFields.tsx` → 100% lines/branches/fn
-- [x] `web/src/studio/components/scenario/stepFields/LinkStepFields.tsx` → 100%
-- [x] `web/src/studio/components/scenario/stepFields/VerifyStepFields.tsx` → 100%
-- [x] `web/src/studio/components/scenario/stepFields/ExecStepFields.tsx` → 100%
-- [x] `web/src/studio/components/scenario/stepFields/WaitStepFields.tsx` → 100%
+### Batch 1 — scenario stepFields (DONE — merged in #124)
+- [x] All 5 stepFields files → 100% lines/branches/fn
 - [x] +5 test files / +29 tests; full suite 202/3719 passing; `tsc --noEmit` clean
+- [x] PR #124 merged (`dc588913`); also fixed flaky agent test `test_console_websocket_docker_none_read_and_write_timeout`
+
+## Post-Batch-1 Baseline (2026-04-25)
+- Frontend: **lines 92.59%, branches 82.69%, functions 78.91%, statements 92.59%** (functions +0.67% from batch 1)
+
+### Batch 2 — small utils + hooks (in progress)
+- [ ] `web/src/components/ui/index.ts` (barrel, 0%/0%/0% → 100% via smoke test)
+- [ ] `web/src/utils/resourceUsage.ts` (35 lines, br 20% → 100%)
+- [ ] `web/src/studio/hooks/useStudioModals.ts` (70 lines, br 40% → 100%)
 - [ ] Commit, push, open PR, merge, clean up worktree
 
 # Observability Follow-ups
