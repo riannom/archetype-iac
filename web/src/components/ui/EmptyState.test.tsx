@@ -62,4 +62,20 @@ describe('EmptyState', () => {
     );
     expect(container.querySelector('i.fa-folder')).toBeInTheDocument();
   });
+
+  it('uses compact spacing when compact=true', () => {
+    const { container } = render(<EmptyState title="Test" compact />);
+    expect(container.firstChild).toHaveClass('py-8');
+    expect(container.firstChild).not.toHaveClass('py-16');
+  });
+
+  it('renders the action icon when action.icon is provided', () => {
+    const { container } = render(
+      <EmptyState
+        title="Test"
+        action={{ label: 'Create', onClick: () => {}, icon: 'fa-solid fa-plus' }}
+      />,
+    );
+    expect(container.querySelector('button i.fa-plus')).toBeInTheDocument();
+  });
 });
