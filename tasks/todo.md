@@ -28,10 +28,17 @@
 ## Post-Batch-3 Baseline (2026-04-25)
 - Frontend: **lines 92.76%, branches 82.88%, functions 79.06%, statements 92.76%**
 
-### Batch 4 — context provider gap tests (in progress)
-- [ ] `web/src/contexts/UserContext.tsx` — fill gaps: non-401 error, error state, storage listener, hook outside provider, clearUser clears error (was 90.6%/66.7%/85.7%)
-- [ ] `web/src/contexts/ImageLibraryContext.tsx` — fill gaps: refreshImageLibrary, refreshStaleAgentSummary success+error, storage listener, hook outside provider (was 85.7%/66.7%/75%)
-- [ ] Commit, push, open PR, merge, clean up worktree
+### Batch 4 — context provider gap tests (DONE — merged in #127)
+- [x] `web/src/contexts/UserContext.tsx` → 100%
+- [x] `web/src/contexts/ImageLibraryContext.tsx` → 100%
+- [x] PR #127 merged (`6166485a`); +15 tests; full suite 207/3779
+
+## Post-Batch-4 Baseline (2026-04-25)
+- Frontend: **lines 92.82%, branches 83.00%, functions 79.23%, statements 92.82%**
+
+### Batch 5 — AnnotationProperties + scenarioTypes (in progress)
+- [ ] `web/src/studio/components/properties/AnnotationProperties.tsx` (162 lines, 95.1/22.2/64.7) — all 4 annotation types + z-order buttons
+- [ ] `web/src/studio/components/scenario/scenarioTypes.ts` (93 lines, 95.7/100/55.5) — createDefaultStep all 7 cases + generateStepId
 - [ ] Commit, push, open PR, merge, clean up worktree
 
 # Observability Follow-ups
