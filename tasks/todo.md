@@ -14,10 +14,15 @@
 ## Post-Batch-1 Baseline (2026-04-25)
 - Frontend: **lines 92.59%, branches 82.69%, functions 78.91%, statements 92.59%** (functions +0.67% from batch 1)
 
-### Batch 2 — small utils + hooks (in progress)
-- [ ] `web/src/components/ui/index.ts` (barrel, 0%/0%/0% → 100% via smoke test)
-- [ ] `web/src/utils/resourceUsage.ts` (35 lines, br 20% → 100%)
-- [ ] `web/src/studio/hooks/useStudioModals.ts` (70 lines, br 40% → 100%)
+### Batch 2 — small utils + hooks (DONE — merged in #125)
+- [x] `web/src/components/ui/index.ts` → 100%
+- [x] `web/src/utils/resourceUsage.ts` → 100%
+- [x] `web/src/studio/hooks/useStudioModals.ts` → 100%
+- [x] PR #125 merged (`7ec5136e`); +3 files / +20 tests; full suite 205/3739
+
+### Batch 3 — studio hooks (in progress)
+- [ ] `web/src/studio/hooks/useStudioAuth.ts` (77 lines, lines 55.8% → 100%)
+- [ ] `web/src/studio/hooks/useCanvasInteraction.ts` (64 lines, fn 50%, lines 81.2% → 100%)
 - [ ] Commit, push, open PR, merge, clean up worktree
 
 # Observability Follow-ups
