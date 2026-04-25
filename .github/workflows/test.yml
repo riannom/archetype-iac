@@ -10,7 +10,90 @@ permissions:
   contents: read
   pull-requests: write
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
+  changes:
+    name: Detect changed paths
+    runs-on: ubuntu-latest
+    outputs:
+      api: ${{ steps.filter.outputs.api }}
+      agent: ${{ steps.filter.outputs.agent }}
+      web: ${{ steps.filter.outputs.web }}
+      scripts: ${{ steps.filter.outputs.scripts }}
+      observability: ${{ steps.filter.outputs.observability }}
+      runtime: ${{ steps.filter.outputs.runtime }}
+      infra: ${{ steps.filter.outputs.infra }}
+      docs_only: ${{ steps.docs.outputs.docs_only }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # paths-filter needs history for base diff
+      - uses: dorny/paths-filter@de90cc6fb38fc0963ad72b210f1f284cd68cea36  # dorny/paths-filter v3.0.2
+        id: filter
+        with:
+          filters: |
+            api:
+              - 'api/**'
+              - 'api/requirements*.txt'
+              - 'Dockerfile.api'
+            agent:
+              - 'agent/**'
+              - 'agent/requirements.txt'
+              - 'Dockerfile.agent'
+            web:
+              - 'web/**'
+              - 'web/package-lock.json'
+              - 'Dockerfile.web'
+            scripts:
+              - 'scripts/**'
+              - 'tests/scripts/**'
+              - 'Makefile'
+              - 'install*.sh'
+              - 'install-controller.sh'
+            observability:
+              - 'grafana/**'
+              - 'prometheus*.yml'
+              - 'promtail-config.yml'
+              - 'scripts/observability_*'
+              - 'scripts/support_bundle*'
+            runtime:
+              - 'docker-compose*.yml'
+              - 'Dockerfile.*'
+            infra:
+              - '.github/workflows/**'
+              - 'scripts/confidence_gate*'
+              - 'pyproject.toml'
+              - 'pytest.ini'
+              - 'VERSION'
+      - id: docs
+        name: Detect docs-only PR
+        env:
+          EVENT_BEFORE: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          if [ "${GITHUB_EVENT_NAME}" = "pull_request" ]; then
+            base="origin/${GITHUB_BASE_REF}"
+          else
+            base="${EVENT_BEFORE:-}"
+            if [ -z "$base" ] || [ "$base" = "0000000000000000000000000000000000000000" ]; then
+              base="HEAD~1"
+            fi
+          fi
+          files=$(git diff --name-only "$base" HEAD)
+          if [ -z "$files" ]; then
+            echo "docs_only=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          non_doc=$(printf '%s\n' "$files" | grep -vE '(\.md$|^assets/|^reports/|^screenshots/|^tasks/)' || true)
+          if [ -z "$non_doc" ]; then
+            echo "docs_only=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "docs_only=false" >> "$GITHUB_OUTPUT"
+          fi
+
   confidence-gate:
     name: Confidence Gate
     runs-on: ubuntu-latest
@@ -659,3 +742,56 @@ jobs:
       - uses: gitleaks/gitleaks-action@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  ci-required:
+    name: CI Required
+    needs:
+      - changes
+      - confidence-gate
+      - confidence-gate-optional
+      - api-tests
+      - agent-tests
+      - catalog-regression-tests
+      - observability-guardrails
+      - frontend-tests
+      - lint
+      - script-tests
+      - secrets-scan
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Reduce job results
+        env:
+          RESULTS: |
+            changes=${{ needs.changes.result }}
+            confidence-gate=${{ needs.confidence-gate.result }}
+            confidence-gate-optional=${{ needs.confidence-gate-optional.result }}
+            api-tests=${{ needs.api-tests.result }}
+            agent-tests=${{ needs.agent-tests.result }}
+            catalog-regression-tests=${{ needs.catalog-regression-tests.result }}
+            observability-guardrails=${{ needs.observability-guardrails.result }}
+            frontend-tests=${{ needs.frontend-tests.result }}
+            lint=${{ needs.lint.result }}
+            script-tests=${{ needs.script-tests.result }}
+            secrets-scan=${{ needs.secrets-scan.result }}
+        run: |
+          set -euo pipefail
+          echo "## CI Required summary" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Job | Result |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|-----|--------|" >> "$GITHUB_STEP_SUMMARY"
+          failed=0
+          while IFS= read -r line; do
+            [ -z "$line" ] && continue
+            name="${line%%=*}"
+            result="${line#*=}"
+            echo "| ${name} | ${result} |" >> "$GITHUB_STEP_SUMMARY"
+            case "$result" in
+              success|skipped) ;;
+              *) failed=1; echo "::error::Required job '${name}' result: ${result}" ;;
+            esac
+          done <<< "$RESULTS"
+          if [ "$failed" -ne 0 ]; then
+            exit 1
+          fi
+          echo "All required jobs passed or were skipped."
