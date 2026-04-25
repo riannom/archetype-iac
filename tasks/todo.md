@@ -1,3 +1,20 @@
+# Test Coverage Push (target: 100%)
+
+## Baseline (2026-04-24)
+- Frontend (vitest, 197 files / 3690 tests): **lines 92.46%, branches 82.64%, functions 78.24%, statements 92.46%**
+- API/agent: pytest needs `python3.14` or `archetype-iac-api-1` container running; deferred until tooling is up.
+
+## Batches
+
+### Batch 1 — scenario stepFields (tests written, CI pending)
+- [x] `web/src/studio/components/scenario/stepFields/NodeStepFields.tsx` → 100% lines/branches/fn
+- [x] `web/src/studio/components/scenario/stepFields/LinkStepFields.tsx` → 100%
+- [x] `web/src/studio/components/scenario/stepFields/VerifyStepFields.tsx` → 100%
+- [x] `web/src/studio/components/scenario/stepFields/ExecStepFields.tsx` → 100%
+- [x] `web/src/studio/components/scenario/stepFields/WaitStepFields.tsx` → 100%
+- [x] +5 test files / +29 tests; full suite 202/3719 passing; `tsc --noEmit` clean
+- [ ] Commit, push, open PR, merge, clean up worktree
+
 # Observability Follow-ups
 
 - [ ] Trigger `.github/workflows/observability-maintenance.yml` via `workflow_dispatch` with `mode=all` on branch `observability-maintenance-ci` once GitHub CLI auth is fixed.
