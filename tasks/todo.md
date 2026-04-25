@@ -20,9 +20,18 @@
 - [x] `web/src/studio/hooks/useStudioModals.ts` → 100%
 - [x] PR #125 merged (`7ec5136e`); +3 files / +20 tests; full suite 205/3739
 
-### Batch 3 — studio hooks (in progress)
-- [ ] `web/src/studio/hooks/useStudioAuth.ts` (77 lines, lines 55.8% → 100%)
-- [ ] `web/src/studio/hooks/useCanvasInteraction.ts` (64 lines, fn 50%, lines 81.2% → 100%)
+### Batch 3 — studio hooks (DONE — merged in #126)
+- [x] `web/src/studio/hooks/useStudioAuth.ts` → 100%/94.44%/100%/100% (one branch is implicit `} finally {` cleanup)
+- [x] `web/src/studio/hooks/useCanvasInteraction.ts` → 100%
+- [x] PR #126 merged (`1463f1b1`); +2 files / +25 tests; full suite 207/3764
+
+## Post-Batch-3 Baseline (2026-04-25)
+- Frontend: **lines 92.76%, branches 82.88%, functions 79.06%, statements 92.76%**
+
+### Batch 4 — context provider gap tests (in progress)
+- [ ] `web/src/contexts/UserContext.tsx` — fill gaps: non-401 error, error state, storage listener, hook outside provider, clearUser clears error (was 90.6%/66.7%/85.7%)
+- [ ] `web/src/contexts/ImageLibraryContext.tsx` — fill gaps: refreshImageLibrary, refreshStaleAgentSummary success+error, storage listener, hook outside provider (was 85.7%/66.7%/75%)
+- [ ] Commit, push, open PR, merge, clean up worktree
 - [ ] Commit, push, open PR, merge, clean up worktree
 
 # Observability Follow-ups
