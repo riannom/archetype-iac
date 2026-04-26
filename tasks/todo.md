@@ -44,11 +44,20 @@
 ## Post-Batch-5 Baseline (2026-04-25)
 - Frontend: **lines 92.85%, branches 83.18%, functions 80.42%, statements 92.85%**
 
-### Batch 6 — small UI files (in progress)
-- [ ] `web/src/components/ui/ToastContainer.tsx` (36 lines, 100/100/60 → 100): disabled prefs, missing prefs, position class, unknown-position fallback
-- [ ] `web/src/components/ui/EmptyState.tsx` (60 lines, 100/100/80 → 100): compact=true, action.icon
-- [ ] `web/src/studio/components/ViewTabBar.tsx` (45 lines, 97.8/100/83.3 → 100): no prior test; showInfraTab toggle, active class, click handlers
-- [ ] `web/src/studio/components/properties/LinkProperties.tsx` (66 lines, 100/100/75 → 100): no prior test; source/target select updates, missing-node tolerance
+### Batch 6 — small UI files (DONE — merged in #131)
+- [x] `web/src/components/ui/ToastContainer.tsx` → 100%
+- [x] `web/src/components/ui/EmptyState.tsx` → 100%
+- [x] `web/src/studio/components/ViewTabBar.tsx` → 100%
+- [x] `web/src/studio/components/properties/LinkProperties.tsx` → 100%
+- [x] PR #131 merged (`6d471862`); +2 files / +15 tests
+
+## Post-Batch-6 Baseline (2026-04-25)
+- Frontend: **lines 92.85%, branches 83.28%, functions 80.42%, statements 92.85%**
+
+### Batch 7 — dropdowns + theme background mapper (in progress)
+- [ ] `web/src/studio/components/properties/AgentDropdown.tsx` (80 lines, 95/80/79.2 → 100): no prior test; open/close, selection, click-outside, disabled
+- [ ] `web/src/studio/components/properties/ValueDropdown.tsx` (61 lines, 100/75/93.8 → 100): no prior test; same surface
+- [ ] `web/src/theme/backgroundPairs.ts` (51 lines, 98/100/70.6 → 100): mode-incompatible fallbacks for both string and {light,dark} suggestions
 - [ ] Commit, push, open PR, merge, clean up worktree
 
 # Observability Follow-ups
