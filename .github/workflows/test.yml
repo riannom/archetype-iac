@@ -441,7 +441,7 @@ jobs:
         run: |
           cd api
           pip install -r requirements.txt
-          pip install pytest-cov pytest-timeout
+          pip install pytest-cov pytest-timeout pytest-xdist
 
       - name: Run API tests with coverage
         env:
@@ -479,7 +479,7 @@ jobs:
         run: |
           cd agent
           pip install -r requirements.txt
-          pip install pytest-cov pytest-timeout
+          pip install pytest-cov pytest-timeout pytest-xdist
 
       - name: Run Agent tests with coverage
         run: |
@@ -759,7 +759,6 @@ jobs:
     needs:
       - changes
       - confidence-gate
-      - confidence-gate-optional
       - api-tests
       - agent-tests
       - catalog-regression-tests
@@ -776,7 +775,6 @@ jobs:
           RESULTS: |
             changes=${{ needs.changes.result }}
             confidence-gate=${{ needs.confidence-gate.result }}
-            confidence-gate-optional=${{ needs.confidence-gate-optional.result }}
             api-tests=${{ needs.api-tests.result }}
             agent-tests=${{ needs.agent-tests.result }}
             catalog-regression-tests=${{ needs.catalog-regression-tests.result }}
