@@ -54,10 +54,20 @@
 ## Post-Batch-6 Baseline (2026-04-25)
 - Frontend: **lines 92.85%, branches 83.28%, functions 80.42%, statements 92.85%**
 
-### Batch 7 — dropdowns + theme background mapper (in progress)
-- [ ] `web/src/studio/components/properties/AgentDropdown.tsx` (80 lines, 95/80/79.2 → 100): no prior test; open/close, selection, click-outside, disabled
-- [ ] `web/src/studio/components/properties/ValueDropdown.tsx` (61 lines, 100/75/93.8 → 100): no prior test; same surface
-- [ ] `web/src/theme/backgroundPairs.ts` (51 lines, 98/100/70.6 → 100): mode-incompatible fallbacks for both string and {light,dark} suggestions
+### Batch 7 — dropdowns + theme background mapper (DONE — merged in #134)
+- [x] `web/src/studio/components/properties/AgentDropdown.tsx` → 100%
+- [x] `web/src/studio/components/properties/ValueDropdown.tsx` → 100%
+- [x] `web/src/theme/backgroundPairs.ts` → 100%
+- [x] PR #134 merged (`09ce71fd`); +2 files / +21 tests
+
+## Post-Batch-7 Baseline (2026-04-25)
+- Frontend: **lines 92.87%, branches 83.45%, functions 80.59%, statements 92.87%**
+
+### Batch 8 — quick-win branch coverage (in progress)
+- [ ] `web/src/components/VersionBadge.tsx` (83 lines, br 92.8% → 100): undefined `__APP_VERSION__` + fetch failure leaves `updateInfo` unset
+- [ ] `web/src/studio/components/scenario/CreateScenarioModal.tsx` (61 lines, br 90.9% → 100): invalid filename triggers regex error path
+- [ ] `web/src/studio/components/canvas/useCanvasDragDrop.ts` (50 lines, no prior test): dragover predicate (allowed/blocked types), drop handler (device/external/parse-error/no-container)
+- [ ] `web/src/studio/components/useLogFilters.ts` (68 lines, no prior test): default state, queryParams composition, hasActiveFilters, clearFilters
 - [ ] Commit, push, open PR, merge, clean up worktree
 
 # Observability Follow-ups

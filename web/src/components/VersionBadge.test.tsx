@@ -43,6 +43,20 @@ describe('VersionBadge', () => {
     });
   });
 
+  it('leaves updateInfo unset when fetch fails and __APP_VERSION__ is undefined', async () => {
+    globalThis.__APP_VERSION__ = undefined;
+    checkForUpdates.mockRejectedValue(new Error('boom'));
+
+    const { container } = render(<VersionBadge />);
+    // Wait a tick for the rejected promise to settle
+    await waitFor(() => {
+      expect(checkForUpdates).toHaveBeenCalled();
+    });
+    // No version text should be rendered (no v* button), no update indicator
+    expect(container.querySelector('button')).toBeNull();
+    expect(screen.queryByText(/^v\d/)).toBeNull();
+  });
+
   it('opens the version modal on click', async () => {
     checkForUpdates.mockResolvedValue({
       current_version: '1.0.0',
