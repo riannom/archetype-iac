@@ -62,6 +62,21 @@ describe('CreateScenarioModal', () => {
     expect(screen.getByText('Filename is required')).toBeInTheDocument();
   });
 
+  it('shows the regex error for filenames with disallowed characters', async () => {
+    const onCreate = vi.fn();
+    const user = userEvent.setup();
+    render(<CreateScenarioModal isOpen={true} onClose={vi.fn()} onCreate={onCreate} />);
+
+    // Leading hyphen is rejected by the [A-Za-z0-9_] start anchor
+    await user.type(screen.getByPlaceholderText('failover_test.yml'), '-bad name!');
+    await user.click(screen.getByText('Create'));
+
+    expect(
+      screen.getByText('Only letters, numbers, hyphens, underscores, and dots allowed'),
+    ).toBeInTheDocument();
+    expect(onCreate).not.toHaveBeenCalled();
+  });
+
   it('calls onClose when Cancel clicked', async () => {
     const onClose = vi.fn();
     const user = userEvent.setup();
