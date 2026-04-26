@@ -18,6 +18,15 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+# Per-xdist-worker isolation: override shared DATABASE_URL/WORKSPACE before
+# app modules read them. Without this, multiple workers contend for one
+# sqlite file (-> lock waits / hangs) and one workspace dir.
+import os as _os  # noqa: E402
+
+_xdist_worker = _os.environ.get("PYTEST_XDIST_WORKER", "master")
+_os.environ["DATABASE_URL"] = f"sqlite:///test_{_xdist_worker}.db"
+_os.environ["WORKSPACE"] = f"/tmp/archetype-test-{_xdist_worker}"
+
 from app import db, models
 from app.auth import create_access_token, hash_password
 from app.config import settings
