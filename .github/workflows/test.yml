@@ -465,6 +465,14 @@ jobs:
           pip install -r requirements.txt
           pip install pytest-cov pytest-timeout pytest-xdist pytest-split
 
+      - name: Restore pytest-split test durations
+        uses: actions/cache/restore@v4
+        with:
+          path: api/.test_durations
+          key: api-test-durations-${{ github.run_id }}
+          restore-keys: |
+            api-test-durations-
+
       - name: Run API tests (shard ${{ matrix.shard }}/4) with coverage
         env:
           DATABASE_URL: sqlite:///test.db
@@ -476,7 +484,16 @@ jobs:
           cd api
           PYTHONPATH="${PYTHONPATH}:$(pwd)/.." pytest tests/ -q --tb=short --timeout=60 \
             --splits=4 --group="$SHARD" \
+            --store-durations \
             --cov=app --cov-report=
+
+      - name: Upload pytest-split durations shard
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: api-test-durations-shard-${{ matrix.shard }}
+          path: api/.test_durations
+          if-no-files-found: warn
 
       - name: Upload coverage shard
         if: always()
@@ -533,6 +550,67 @@ jobs:
           name: api-coverage
           path: reports/api-coverage.xml
           if-no-files-found: warn
+
+      - name: Download pytest-split duration shards
+        if: always()
+        uses: actions/download-artifact@v4
+        with:
+          path: api/duration-shards
+          pattern: api-test-durations-shard-*
+          merge-multiple: false
+
+      - name: Merge pytest-split durations
+        if: always()
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          shards_root = Path("api/duration-shards")
+          merged: dict[str, float] = {}
+          shard_count = 0
+          if shards_root.is_dir():
+              for shard_dir in sorted(shards_root.iterdir()):
+                  if not shard_dir.is_dir():
+                      continue
+                  durations_file = shard_dir / ".test_durations"
+                  if not durations_file.is_file():
+                      print(f"::warning::No .test_durations in {shard_dir}")
+                      continue
+                  try:
+                      data = json.loads(durations_file.read_text())
+                  except json.JSONDecodeError as exc:
+                      print(f"::warning::Failed to parse {durations_file}: {exc}")
+                      continue
+                  if not isinstance(data, dict):
+                      print(f"::warning::Unexpected format in {durations_file}: {type(data).__name__}")
+                      continue
+                  shard_count += 1
+                  for test_id, duration in data.items():
+                      # Union merge — each test only ran on one shard, so no real
+                      # collisions are expected. If they occur, prefer the slower
+                      # observation since pytest-split balances on max load.
+                      if test_id in merged:
+                          merged[test_id] = max(merged[test_id], float(duration))
+                      else:
+                          merged[test_id] = float(duration)
+
+          out_path = Path("api/.test_durations")
+          if not merged:
+              print("::warning::No durations collected from any shard; writing empty file")
+              out_path.write_text("{}\n")
+          else:
+              out_path.write_text(json.dumps(merged, indent=2, sort_keys=True) + "\n")
+          print(f"Merged {len(merged)} test durations from {shard_count} shard(s) -> {out_path}")
+          PY
+
+      - name: Save merged pytest-split durations cache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: api/.test_durations
+          key: api-test-durations-${{ github.run_id }}
 
   agent-tests:
     name: Agent Tests
@@ -728,10 +806,19 @@ jobs:
             ${{ runner.os }}-vitest-${{ hashFiles('web/package-lock.json') }}-
             ${{ runner.os }}-vitest-
 
+      - name: Cache web/node_modules
+        uses: actions/cache@v4
+        id: web-node-modules-cache
+        with:
+          path: web/node_modules
+          key: ${{ runner.os }}-node-modules-${{ hashFiles('web/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-node-modules-
+
       - name: Install dependencies
         run: |
           cd web
-          npm ci
+          npm ci --prefer-offline --no-audit --no-fund
 
       - name: Run tests
         run: |
