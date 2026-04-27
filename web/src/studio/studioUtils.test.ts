@@ -228,6 +228,48 @@ describe('buildGraphNodes', () => {
     }
   });
 
+  it('falls back node.device to node.id when device is missing', () => {
+    const graph: TopologyGraph = {
+      nodes: [{ id: 'ceos', name: 'R1' }], // device omitted; modelMap lookup uses id
+      links: [],
+    };
+    const result = buildGraphNodes(graph, testModels);
+    if (result[0].nodeType === 'device') {
+      // 'ceos' resolves through the model map even though `device` was omitted
+      expect(result[0].model).toBe('ceos');
+      expect(result[0].type).toBe(DeviceType.SWITCH);
+    }
+  });
+
+  it('falls back external node name to id when name is empty', () => {
+    const graph: TopologyGraph = {
+      nodes: [{ id: 'ext-fallback', name: '', node_type: 'external' } as any],
+      links: [],
+    };
+    const result = buildGraphNodes(graph, testModels);
+    expect(result[0].name).toBe('ext-fallback');
+    expect(result[0].nodeType).toBe('external');
+  });
+
+  it('handles external network nodes with omitted connection_type', () => {
+    const graph: TopologyGraph = {
+      nodes: [
+        {
+          id: 'ext1',
+          name: 'External1',
+          node_type: 'external',
+          // connection_type intentionally missing → connectionType should be undefined
+        } as any,
+      ],
+      links: [],
+    };
+    const result = buildGraphNodes(graph, testModels);
+    expect(result).toHaveLength(1);
+    if (result[0].nodeType === 'external') {
+      expect(result[0].connectionType).toBeUndefined();
+    }
+  });
+
   it('preserves hardware spec overrides on device nodes', () => {
     const graph: TopologyGraph = {
       nodes: [
