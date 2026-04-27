@@ -90,9 +90,17 @@
 ## Post-Batch-10 Baseline (2026-04-26)
 - Frontend: **lines 92.91%, branches 83.86%, functions 80.59%, statements 92.91%**
 
-### Batch 11 — Modal subcomponents + ConfigActions cancel (in progress)
-- [ ] `web/src/components/ui/Modal.tsx` (fn 66.7% → 100): ModalHeader and ModalFooter exports had no tests; also covers the no-header omission branch
-- [ ] `web/src/studio/components/ConfigsView/ConfigActions.tsx` (fn 75% → 100): cancel button in delete confirmation, hidden Delete Orphaned when count=0, singular "snapshot" copy
+### Batch 11 — Modal subcomponents + ConfigActions cancel (DONE — merged in #140)
+- [x] `web/src/components/ui/Modal.tsx` → 100%
+- [x] `web/src/studio/components/ConfigsView/ConfigActions.tsx` → 100%
+- [x] PR #140 merged (`e2d9f4b0`); +8 tests
+
+## Post-Batch-11 Baseline (2026-04-26)
+- Frontend: **lines 92.91%, branches 83.88%, functions 80.76%, statements 92.91%**
+
+### Batch 12 — TaskLogEntryModal + useNicGroups gap fills (in progress)
+- [ ] `web/src/studio/components/TaskLogEntryModal.tsx` (br 80% → 87.5): clipboard.writeText reject path, 2s reset timer, unmount cleanup, rapid double-click clears prior timer (the remaining `fallbackCopy` catch at L48-49 requires contrived DOM mocking and is left at 87.5% br)
+- [ ] `web/src/pages/infrastructure/useNicGroups.ts` (br 62.5% → 100): addNicGroupMember error notification, no-op early returns, null-role coercion, whitespace-description omission, empty-hosts host-id fallback, non-Error rejection coerces detail to undefined
 - [ ] Commit, push, open PR, merge, clean up worktree
 
 # Observability Follow-ups

@@ -1,5 +1,6 @@
+import React from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 import TaskLogEntryModal from "./TaskLogEntryModal";
@@ -152,5 +153,119 @@ describe("TaskLogEntryModal", () => {
     await waitFor(() => {
       expect(screen.getByRole("button", { name: "Copy failed" })).toBeInTheDocument();
     });
+  });
+
+  it("falls back to execCommand when clipboard.writeText rejects", async () => {
+    const user = userEvent.setup();
+    const writeText = vi.fn().mockRejectedValue(new Error("denied"));
+    const execCommand = vi.fn(() => true);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+    Object.defineProperty(document, "execCommand", {
+      configurable: true,
+      value: execCommand,
+    });
+
+    render(
+      <TaskLogEntryModal isOpen onClose={vi.fn()} entry={makeEntry()} />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Copy" }));
+
+    expect(writeText).toHaveBeenCalled();
+    await waitFor(() => {
+      expect(execCommand).toHaveBeenCalledWith("copy");
+      expect(screen.getByRole("button", { name: "Copied!" })).toBeInTheDocument();
+    });
+  });
+
+  it("returns to idle copy label after the 2s timer fires", async () => {
+    const user = userEvent.setup();
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+    const setTimeoutSpy = vi.spyOn(window, "setTimeout");
+
+    render(
+      <TaskLogEntryModal isOpen onClose={vi.fn()} entry={makeEntry()} />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Copy" }));
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Copied!" })).toBeInTheDocument();
+    });
+
+    // Reach into the 2s callback and run it directly to avoid mixing
+    // fake timers with the user-event/waitFor tooling.
+    const twoSecondCall = setTimeoutSpy.mock.calls.find(
+      (c) => c[1] === 2000,
+    );
+    expect(twoSecondCall).toBeDefined();
+    act(() => {
+      (twoSecondCall![0] as () => void)();
+    });
+
+    expect(screen.getByRole("button", { name: "Copy" })).toBeInTheDocument();
+    setTimeoutSpy.mockRestore();
+  });
+
+  it("clears any prior reset timer when copy is invoked again", async () => {
+    const user = userEvent.setup();
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+    const clearTimeoutSpy = vi.spyOn(window, "clearTimeout");
+
+    render(
+      <TaskLogEntryModal isOpen onClose={vi.fn()} entry={makeEntry()} />,
+    );
+
+    // First copy schedules a reset timer
+    await user.click(screen.getByRole("button", { name: "Copy" }));
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Copied!" })).toBeInTheDocument();
+    });
+
+    const beforeSecond = clearTimeoutSpy.mock.calls.length;
+
+    // Second copy must clear the existing timer before scheduling a new one
+    await user.click(screen.getByRole("button", { name: "Copied!" }));
+    await waitFor(() => {
+      expect(clearTimeoutSpy.mock.calls.length).toBeGreaterThan(beforeSecond);
+    });
+
+    clearTimeoutSpy.mockRestore();
+  });
+
+  it("clears the pending reset timer on unmount", async () => {
+    const user = userEvent.setup();
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+    const clearTimeoutSpy = vi.spyOn(window, "clearTimeout");
+
+    const { unmount } = render(
+      <TaskLogEntryModal isOpen onClose={vi.fn()} entry={makeEntry()} />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Copy" }));
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Copied!" })).toBeInTheDocument();
+    });
+
+    // A success timer is now pending; unmounting should clear it via the
+    // useEffect cleanup branch.
+    unmount();
+    expect(clearTimeoutSpy).toHaveBeenCalled();
+
+    clearTimeoutSpy.mockRestore();
   });
 });
