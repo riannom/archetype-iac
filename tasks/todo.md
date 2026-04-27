@@ -82,9 +82,17 @@
 ## Post-Batch-9 Baseline (2026-04-26)
 - Frontend: **lines 92.87%, branches 83.64%, functions 80.59%, statements 92.87%**
 
-### Batch 10 — format + Tooltip (in progress)
-- [ ] `web/src/utils/format.ts` (br 87.9% → 100): full coverage of formatSize, formatStorageSize, formatDate (incl. invalid + +00:00Z fix), formatTimestamp (s/m/h/>day), formatUptime (incl. zero-pad), formatUptimeFromBoot (null + valid), formatMemorySize (MB/GB/TB)
-- [ ] `web/src/components/ui/Tooltip.tsx` (br 60.7% → 100): all 4 placements, focus/blur, content empty no-op, function-ref + object-ref forwarding, child handler chaining, null-trigger after unmount
+### Batch 10 — format + Tooltip (DONE — merged in #138)
+- [x] `web/src/utils/format.ts` → 100%
+- [x] `web/src/components/ui/Tooltip.tsx` → 100%
+- [x] PR #138 merged (`b3fc6046`); +29 tests (extensions only)
+
+## Post-Batch-10 Baseline (2026-04-26)
+- Frontend: **lines 92.91%, branches 83.86%, functions 80.59%, statements 92.91%**
+
+### Batch 11 — Modal subcomponents + ConfigActions cancel (in progress)
+- [ ] `web/src/components/ui/Modal.tsx` (fn 66.7% → 100): ModalHeader and ModalFooter exports had no tests; also covers the no-header omission branch
+- [ ] `web/src/studio/components/ConfigsView/ConfigActions.tsx` (fn 75% → 100): cancel button in delete confirmation, hidden Delete Orphaned when count=0, singular "snapshot" copy
 - [ ] Commit, push, open PR, merge, clean up worktree
 
 # Observability Follow-ups

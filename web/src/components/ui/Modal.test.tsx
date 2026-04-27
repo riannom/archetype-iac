@@ -1,7 +1,8 @@
+import React from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { Modal } from "./Modal";
+import { Modal, ModalHeader, ModalFooter } from "./Modal";
 
 describe("Modal", () => {
   const defaultProps = {
@@ -130,5 +131,49 @@ describe("Modal", () => {
       rerender(<Modal {...defaultProps} isOpen={false} />);
       expect(document.body.style.overflow).toBe("");
     });
+  });
+
+  describe("header omission", () => {
+    it("omits the header when title and showCloseButton are both false/undefined", () => {
+      const { container } = render(
+        <Modal isOpen onClose={vi.fn()} showCloseButton={false}>
+          body
+        </Modal>,
+      );
+      // No header div with the border-b class should exist
+      expect(container.querySelector("div.border-b")).toBeNull();
+    });
+  });
+});
+
+describe("ModalHeader", () => {
+  it("renders children", () => {
+    render(<ModalHeader>header content</ModalHeader>);
+    expect(screen.getByText("header content")).toBeInTheDocument();
+  });
+
+  it("applies a custom className alongside the defaults", () => {
+    const { container } = render(
+      <ModalHeader className="extra">x</ModalHeader>,
+    );
+    expect(container.firstChild).toHaveClass("extra");
+    expect(container.firstChild).toHaveClass("flex");
+    expect(container.firstChild).toHaveClass("items-center");
+  });
+});
+
+describe("ModalFooter", () => {
+  it("renders children", () => {
+    render(<ModalFooter>footer content</ModalFooter>);
+    expect(screen.getByText("footer content")).toBeInTheDocument();
+  });
+
+  it("applies a custom className alongside the defaults", () => {
+    const { container } = render(
+      <ModalFooter className="extra">x</ModalFooter>,
+    );
+    expect(container.firstChild).toHaveClass("extra");
+    expect(container.firstChild).toHaveClass("justify-end");
+    expect(container.firstChild).toHaveClass("border-t");
   });
 });

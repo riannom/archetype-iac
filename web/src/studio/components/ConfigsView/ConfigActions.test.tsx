@@ -44,4 +44,56 @@ describe('ConfigActions', () => {
 
     expect(screen.getByText('Extracting...')).toBeInTheDocument();
   });
+
+  it('cancels delete confirmation without invoking onDeleteAllOrphaned', () => {
+    const onDeleteAllOrphaned = vi.fn();
+    render(
+      <ConfigActions
+        extracting={false}
+        orphanedCount={3}
+        onExtract={() => {}}
+        onDownloadAll={() => {}}
+        onDeleteAllOrphaned={onDeleteAllOrphaned}
+      />,
+    );
+
+    fireEvent.click(screen.getByText('Delete Orphaned'));
+    expect(screen.getByText('Delete Orphaned Configs')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByText('Cancel'));
+    expect(onDeleteAllOrphaned).not.toHaveBeenCalled();
+    expect(screen.queryByText('Delete Orphaned Configs')).not.toBeInTheDocument();
+  });
+
+  it('hides the Delete Orphaned button when orphanedCount is 0', () => {
+    render(
+      <ConfigActions
+        extracting={false}
+        orphanedCount={0}
+        onExtract={() => {}}
+        onDownloadAll={() => {}}
+        onDeleteAllOrphaned={() => {}}
+      />,
+    );
+
+    expect(screen.queryByText('Delete Orphaned')).not.toBeInTheDocument();
+  });
+
+  it('uses singular "snapshot" copy when orphanedCount is exactly 1', () => {
+    render(
+      <ConfigActions
+        extracting={false}
+        orphanedCount={1}
+        onExtract={() => {}}
+        onDownloadAll={() => {}}
+        onDeleteAllOrphaned={() => {}}
+      />,
+    );
+
+    fireEvent.click(screen.getByText('Delete Orphaned'));
+    // Singular form (no trailing 's')
+    expect(
+      screen.getByText(/Delete all 1 orphaned config snapshot\?/),
+    ).toBeInTheDocument();
+  });
 });
