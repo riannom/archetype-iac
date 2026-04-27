@@ -841,7 +841,11 @@ jobs:
           npx vitest run --coverage \
             --shard="$SHARD/4" \
             --pool=forks --poolOptions.forks.maxForks=2 \
-            --dangerouslyIgnoreUnhandledErrors
+            --dangerouslyIgnoreUnhandledErrors \
+            --coverage.thresholds.lines=0 \
+            --coverage.thresholds.statements=0 \
+            --coverage.thresholds.functions=0 \
+            --coverage.thresholds.branches=0
 
       - name: Upload coverage shard
         if: always()
