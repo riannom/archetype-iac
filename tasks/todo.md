@@ -152,3 +152,54 @@
 | `agent/tests/test_network_local_unit.py` | Remove 2 obsolete management tests |
 | `agent/tests/test_network_migrations.py` | Remove mgmt recreation test, clean imports |
 | `agent/tests/test_docker_provider_ops_corner_cases.py` | Remove mgmt deploy/destroy test, clean imports |
+
+---
+
+# CI Efficiency — Batch 2 (gating jobs)
+
+**Created**: 2026-04-26
+**Status**: in progress
+**Plan**: `tasks/ci-efficiency-plan.md` (Batch 2 section)
+
+## Why this batch matters
+
+- Batch 1 (PR #129) wired up the `Detect changed paths` job + `CI Required` aggregator. **No jobs are gated yet** — its outputs are consumed by nothing.
+- Batch 2 adds `if:` conditions so jobs skip when their area didn't change.
+- Net effect after this lands: docs-only PRs go from ~28 min (longest pole = API Tests) to ~30 sec (only `Detect changed paths` + `CI Required` + `Secret Scan` run).
+
+## Required GitHub admin steps (Batch 1a)
+
+**MUST be done by admin BEFORE this PR merges**, otherwise PRs get stuck on per-job required pins waiting for jobs that now skip.
+
+- Settings → Branches → main → edit protection rule
+- Required status checks **add**: `CI Required`
+- Required status checks **remove**: `API Tests`, `Agent Tests`, `Frontend Tests`, `Lint`, `Confidence Gate`, `Confidence Gate (Optional)`, `Catalog Regression Tests`, `Observability Guardrails`, `Script Tests`
+- Keep: `Secret Scan` (parallel safety; small enough to keep)
+
+## Job → condition mapping
+
+| Job | Condition |
+|---|---|
+| `confidence-gate` | not docs-only (`api ‖ agent ‖ web ‖ scripts ‖ observability ‖ infra`) |
+| `confidence-gate-optional` | same |
+| `api-tests` | `api ‖ infra` |
+| `agent-tests` | `agent ‖ infra` |
+| `catalog-regression-tests` | `api ‖ infra` |
+| `observability-guardrails` | `observability ‖ api ‖ runtime ‖ infra` (api included because the stack imports api code) |
+| `frontend-tests` | `web ‖ infra` |
+| `lint` | always (cheap, broad) |
+| `script-tests` | `scripts ‖ infra` |
+| `secrets-scan` | always |
+| `ci-required` | always (already aggregator) |
+
+## Acceptance
+
+- [ ] Manual test PR with only `*.md` edits → only `Detect changed paths`, `Lint`, `Script Tests`, `Secret Scan`, `CI Required` run; everything else skipped; `CI Required` reports success.
+- [ ] Manual test PR with only `web/src/...` edits → only frontend-related jobs (+ always-on) run.
+- [ ] Manual test PR editing `.github/workflows/test.yml` → all jobs run (because `infra` fan-out forces all).
+- [ ] No PRs blocked on required status checks for skipped jobs (relies on Batch 1a).
+
+## Sequencing risk
+
+- Race against the test-builder agent (~30-min PR cadence). If their PR merges during our CI run, we rebase and retry. Up to ~2 retries acceptable; beyond that we use admin merge.
+- If admin (Batch 1a) is NOT done before this merges, PRs get stuck. Rollback: revert this PR.
