@@ -203,3 +203,42 @@
 
 - Race against the test-builder agent (~30-min PR cadence). If their PR merges during our CI run, we rebase and retry. Up to ~2 retries acceptable; beyond that we use admin merge.
 - If admin (Batch 1a) is NOT done before this merges, PRs get stuck. Rollback: revert this PR.
+
+---
+
+# CI Efficiency — Batch 7 (API tests sharding)
+
+**Created**: 2026-04-27
+**Status**: in progress
+**Plan**: `tasks/ci-efficiency-plan.md` (Batch 7 — addition)
+
+## Why this batch
+
+API Tests is now the longest CI pole at ~28 min serial. Frontend (~10 min), Agent (~7 min), and everything else fit under it. Sharding API tests across 4 parallel runners drops the longest pole to ~7-8 min, cutting overall PR wall-clock by ~70%.
+
+## Approach
+
+- `pytest-split` (third-party) splits tests into N groups by file. Used in many large Python projects.
+- Each shard runs `pytest --splits=4 --group=N` on its own runner with its own `.coverage.shardN` file.
+- New `api-coverage-merge` job downloads all 4 shard artifacts, runs `coverage combine`, enforces `--fail-under=55`, and uploads the merged XML.
+- Why not pytest-xdist (`-n auto`)? Tried in Batch 5 — runner shutdown signal at ~5 min on every retry, likely OOM from 4 parallel app loads on one runner. Sharding across runners avoids the per-runner memory pressure entirely.
+
+## Caveats
+
+- `pytest-split` defaults to uniform splits when no `.test_durations` file exists. First run will be balanced by file count, not duration. Future PR can persist the durations file as an artifact for better balance.
+- `ci-required` aggregator now waits on `api-coverage-merge` (which waits on all shards) — same overall semantics, just one more hop.
+- The `API Tests` job becomes 4 GitHub checks: `API Tests (shard 1/4)` ... `API Tests (shard 4/4)`. Branch protection only requires `CI Required`, so this is fine.
+
+## Acceptance
+
+- [ ] All 4 shards pass on the first CI run.
+- [ ] `api-coverage-merge` produces a single `api-coverage` artifact with the same content shape as before.
+- [ ] Wall-clock for API testing (slowest shard + merge) drops from ~28 min to ≤10 min.
+- [ ] `coverage report --fail-under=55` still enforced.
+
+## Follow-ups (NOT in this batch)
+
+- Cache `web/node_modules` with content-hash key.
+- Move coverage off PR runs entirely (do nightly on main).
+- Same sharding pattern on frontend (Batch 4 in plan).
+- Persist test-duration file for balanced splits.
