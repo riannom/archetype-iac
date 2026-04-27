@@ -836,6 +836,9 @@ jobs:
         env:
           NODE_OPTIONS: --max-old-space-size=6144
           SHARD: ${{ matrix.shard }}
+          # Disable ANSI color so the sentinel regex matches plain text.
+          NO_COLOR: "1"
+          FORCE_COLOR: "0"
         run: |
           set -euo pipefail
           cd web
@@ -852,11 +855,14 @@ jobs:
             --coverage.thresholds.functions=0 \
             --coverage.thresholds.branches=0 \
             2>&1 | tee /tmp/vitest-shard.log
-          if grep -q "Test Files\s*no tests" /tmp/vitest-shard.log; then
+          # Strip any residual ANSI codes before sentinel checks (defensive: NO_COLOR
+          # should prevent them, but vitest can leak codes through plugins).
+          sed -E 's/\x1b\[[0-9;]*[mGKHF]//g' /tmp/vitest-shard.log > /tmp/vitest-shard-clean.log
+          if grep -qE "Test Files.*no tests" /tmp/vitest-shard-clean.log; then
             echo "::error::Shard $SHARD/4 reported 'no tests' — refusing false-positive green"
             exit 1
           fi
-          if ! grep -qE "Tests\s+[0-9]+ (passed|skipped)" /tmp/vitest-shard.log; then
+          if ! grep -qE "Tests.*[0-9]+ (passed|skipped)" /tmp/vitest-shard-clean.log; then
             echo "::error::Shard $SHARD/4 produced no recognizable test count line"
             exit 1
           fi
