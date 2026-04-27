@@ -494,6 +494,10 @@ jobs:
           name: api-test-durations-shard-${{ matrix.shard }}
           path: api/.test_durations
           if-no-files-found: warn
+          # .test_durations is a dotfile; include-hidden-files defaults to false,
+          # which silently dropped the file in Batch 8 and caused pytest-split to
+          # fall back to uniform splits on every run.
+          include-hidden-files: true
 
       - name: Upload coverage shard
         if: always()
@@ -502,6 +506,9 @@ jobs:
           name: api-coverage-shard-${{ matrix.shard }}
           path: api/.coverage.shard${{ matrix.shard }}
           if-no-files-found: warn
+          # .coverage.shardN is a dotfile; same silent-drop bug as above
+          # caused api-coverage-merge to combine 0 shards in Batch 7.
+          include-hidden-files: true
 
   api-coverage-merge:
     name: API Coverage Merge
