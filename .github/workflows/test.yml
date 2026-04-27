@@ -96,6 +96,14 @@ jobs:
 
   confidence-gate:
     name: Confidence Gate
+    needs: changes
+    if: |
+      needs.changes.outputs.api == 'true' ||
+      needs.changes.outputs.agent == 'true' ||
+      needs.changes.outputs.web == 'true' ||
+      needs.changes.outputs.scripts == 'true' ||
+      needs.changes.outputs.observability == 'true' ||
+      needs.changes.outputs.infra == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 45
 
@@ -314,6 +322,14 @@ jobs:
 
   confidence-gate-optional:
     name: Confidence Gate (Optional)
+    needs: changes
+    if: |
+      needs.changes.outputs.api == 'true' ||
+      needs.changes.outputs.agent == 'true' ||
+      needs.changes.outputs.web == 'true' ||
+      needs.changes.outputs.scripts == 'true' ||
+      needs.changes.outputs.observability == 'true' ||
+      needs.changes.outputs.infra == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     continue-on-error: true
@@ -424,6 +440,8 @@ jobs:
 
   api-tests:
     name: API Tests
+    needs: changes
+    if: needs.changes.outputs.api == 'true' || needs.changes.outputs.infra == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 45
 
@@ -462,6 +480,8 @@ jobs:
 
   agent-tests:
     name: Agent Tests
+    needs: changes
+    if: needs.changes.outputs.agent == 'true' || needs.changes.outputs.infra == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 90
 
@@ -496,6 +516,8 @@ jobs:
 
   catalog-regression-tests:
     name: Catalog Regression Tests
+    needs: changes
+    if: needs.changes.outputs.api == 'true' || needs.changes.outputs.infra == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
@@ -519,6 +541,12 @@ jobs:
 
   observability-guardrails:
     name: Observability Guardrails
+    needs: changes
+    if: |
+      needs.changes.outputs.observability == 'true' ||
+      needs.changes.outputs.api == 'true' ||
+      needs.changes.outputs.runtime == 'true' ||
+      needs.changes.outputs.infra == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 35
 
@@ -619,6 +647,8 @@ jobs:
 
   frontend-tests:
     name: Frontend Tests
+    needs: changes
+    if: needs.changes.outputs.web == 'true' || needs.changes.outputs.infra == 'true'
     runs-on: ubuntu-latest
 
     steps:
@@ -728,6 +758,8 @@ jobs:
 
   script-tests:
     name: Script Tests
+    needs: changes
+    if: needs.changes.outputs.scripts == 'true' || needs.changes.outputs.infra == 'true'
     runs-on: ubuntu-latest
 
     steps:
