@@ -1,4 +1,4 @@
-.PHONY: audit audit-ovs cleanup-legacy-runtime-artifacts test-agent test-api test-api-container test-api-catalog-regression test-web-container test-web-container-down observability-canary observability-db-report observability-canary-nonprod observability-maintenance-nonprod observability-cron-install iso-metadata-parity confidence-gate confidence-gate-run confidence-gate-json backfill-device-image-catalog backfill-manifest-compatible-devices catalog-manifest-drift-check catalog-maintenance install-gitleaks install-hooks scan-secrets
+.PHONY: audit audit-ovs ci-metrics cleanup-legacy-runtime-artifacts test-agent test-api test-api-container test-api-catalog-regression test-web-container test-web-container-down observability-canary observability-db-report observability-canary-nonprod observability-maintenance-nonprod observability-cron-install iso-metadata-parity confidence-gate confidence-gate-run confidence-gate-json backfill-device-image-catalog backfill-manifest-compatible-devices catalog-manifest-drift-check catalog-maintenance install-gitleaks install-hooks scan-secrets
 
 API_TEST ?= tests
 WEB_TEST ?=
@@ -23,6 +23,9 @@ audit:
 
 audit-ovs:
 	python3 scripts/cleanup_audit.py --include-ovs
+
+ci-metrics:
+	python3 scripts/ci_metrics.py
 
 cleanup-legacy-runtime-artifacts:
 	python3 scripts/cleanup_legacy_runtime_artifacts.py
