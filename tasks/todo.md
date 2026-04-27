@@ -73,10 +73,18 @@
 ## Post-Batch-8 Baseline (2026-04-26)
 - Frontend: **lines 92.87%, branches 83.51%, functions 80.59%, statements 92.87%**
 
-### Batch 9 — branch fills for InfraView, studio utils, admin menu (in progress)
-- [ ] `web/src/studio/components/InfraView/GraphLink.tsx` (br 73.3% → 100): isHighlighted variant, dimmed-only, undefined onSelect on hit area + badge, brighter/dimmer VNI badge fill
-- [ ] `web/src/studio/studioUtils.ts` (br 93.9% → 100): node.device omitted falls back to id, external node connection_type omitted, external node name fallback to id
-- [ ] `web/src/components/AdminMenuButton.tsx` (br 88% → 100): user=null hits the `?? null` fallback in canViewInfrastructure/canManageUsers/canManageImages
+### Batch 9 — branch fills for InfraView, studio utils, admin menu (DONE — merged in #136)
+- [x] `web/src/studio/components/InfraView/GraphLink.tsx` → 100%
+- [x] `web/src/studio/studioUtils.ts` → 100%
+- [x] `web/src/components/AdminMenuButton.tsx` → 100%
+- [x] PR #136 merged (`88e490ae`); +11 tests (extensions only)
+
+## Post-Batch-9 Baseline (2026-04-26)
+- Frontend: **lines 92.87%, branches 83.64%, functions 80.59%, statements 92.87%**
+
+### Batch 10 — format + Tooltip (in progress)
+- [ ] `web/src/utils/format.ts` (br 87.9% → 100): full coverage of formatSize, formatStorageSize, formatDate (incl. invalid + +00:00Z fix), formatTimestamp (s/m/h/>day), formatUptime (incl. zero-pad), formatUptimeFromBoot (null + valid), formatMemorySize (MB/GB/TB)
+- [ ] `web/src/components/ui/Tooltip.tsx` (br 60.7% → 100): all 4 placements, focus/blur, content empty no-op, function-ref + object-ref forwarding, child handler chaining, null-trigger after unmount
 - [ ] Commit, push, open PR, merge, clean up worktree
 
 # Observability Follow-ups
