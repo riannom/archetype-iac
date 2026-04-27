@@ -250,3 +250,94 @@ API Tests is now the longest CI pole at ~28 min serial. Frontend (~10 min), Agen
 - Move coverage off PR runs entirely (do nightly on main).
 - Same sharding pattern on frontend (Batch 4 in plan).
 - Persist test-duration file for balanced splits.
+
+---
+
+# CI Efficiency — Batch 8 (durations cache + node_modules cache)
+
+**Created**: 2026-04-25
+**Status**: in progress
+**Plan**: `tasks/ci-efficiency-plan.md` (Batch 8 — addition)
+
+## Why this batch
+
+Two independent, low-risk wins layered on top of Batch 7:
+
+1. **Persist `pytest-split` `.test_durations` across CI runs** so shards balance by
+   measured duration instead of file count. Batch 7 left this on the table — slowest
+   API shard is still ~16 min because some shards happen to land all the slow integration
+   files. With duration-balanced splits, slowest shard should drop to ~10 min (estimated).
+2. **Cache `web/node_modules`** keyed on `web/package-lock.json` hash. Saves ~30-60s
+   per `frontend-tests` run on cache hit. `npm ci --prefer-offline --no-audit --no-fund`
+   stays correct on miss and is fast on hit.
+
+## Approach
+
+### Part 1 — `.test_durations` round-trip
+
+- Each `api-tests` matrix shard:
+  - **Restores** `api/.test_durations` from cache before pytest using
+    `actions/cache/restore@v4` with `key: api-test-durations-${{ github.run_id }}`,
+    `restore-keys: api-test-durations-` (falls back to most recent prior run).
+  - Runs pytest with `--store-durations` so this shard's tests overwrite their
+    own entries in `.test_durations`.
+  - **Uploads** `api/.test_durations` as artifact `api-test-durations-shard-${{ matrix.shard }}`.
+- `api-coverage-merge` job, after coverage handling:
+  - Downloads all 4 `api-test-durations-shard-*` artifacts (one subdir per shard).
+  - Merges them into a single `api/.test_durations` via inline Python. Union semantics
+    by test_id; if a key shows up in two shards (shouldn't happen), keep the slower
+    observation since pytest-split balances on max load.
+  - Saves the merged file under `api-test-durations-${{ github.run_id }}` via
+    `actions/cache/save@v4` so the next CI run's `restore-keys: api-test-durations-`
+    hits the most recent merged file.
+- Why split `restore`/`save`: combined `actions/cache@v4` only saves at job end and
+  saves per-shard, which would race 4 ways and produce a fragmented cache. We want
+  the merge job (which sees all 4 shards) to be the single writer.
+
+### Part 2 — `web/node_modules` cache
+
+- New step in `frontend-tests` BEFORE `Install dependencies`:
+  ```yaml
+  - name: Cache web/node_modules
+    uses: actions/cache@v4
+    id: web-node-modules-cache
+    with:
+      path: web/node_modules
+      key: ${{ runner.os }}-node-modules-${{ hashFiles('web/package-lock.json') }}
+      restore-keys: |
+        ${{ runner.os }}-node-modules-
+  ```
+- `Install dependencies` switched to `npm ci --prefer-offline --no-audit --no-fund`.
+  Keeps `npm ci`'s lockfile verification (so cache restore inconsistencies are caught)
+  but is ~3s on cache hit and still correct on miss. Chose this over conditional skip
+  to avoid subtle drift between cached `node_modules` and lockfile.
+- Doesn't disturb the existing `Cache vitest incremental` step (added in Batch 3) —
+  they're complementary (vitest cache covers `.vite` and `.vitest-cache` only).
+
+## Caveats
+
+- **First run after this lands** still uses uniform splits (no prior `.test_durations`
+  to restore from). Second run onward gets duration-balanced splits.
+- **PR-only runs without main caches**: GitHub Actions cache is scoped to the branch +
+  base branch hierarchy. PR runs can read main's caches (default branch fallback), so
+  this works on the very first PR run too — provided main has had at least one CI run
+  since this lands.
+- The `actions/cache/save@v4` step runs `if: always()` in the merge job. If shards all
+  failed, we still write whatever we got — better than losing the cache entirely.
+
+## Acceptance
+
+- [ ] Workflow YAML still parses (`python3 -c "import yaml; yaml.safe_load(...)"`).
+- [ ] First post-merge CI run on main produces an `api-test-durations-<run_id>` cache entry.
+- [ ] Second post-merge CI run picks it up (visible in `Restore pytest-split test
+      durations` step output: `Cache restored from key: api-test-durations-...`).
+- [ ] Slowest API shard wall-clock drops from ~16 min toward ~10 min within 2-3 PRs
+      (durations stabilize as more tests get observed).
+- [ ] `frontend-tests` shows a `Cache web/node_modules` hit on the second run after merge.
+- [ ] `npm ci --prefer-offline --no-audit --no-fund` install step shrinks from ~45s to ~3-8s on cache hit.
+
+## Out of scope (future batches)
+
+- Frontend test sharding (Batch 4 in plan).
+- Move coverage off PR runs to nightly (Batch 5 in plan).
+- Cache hits for forks/external PRs (forks can't read the upstream cache).
