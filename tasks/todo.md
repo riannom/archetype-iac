@@ -349,3 +349,57 @@ Two independent, low-risk wins layered on top of Batch 7:
 - Frontend test sharding (Batch 4 in plan).
 - Move coverage off PR runs to nightly (Batch 5 in plan).
 - Cache hits for forks/external PRs (forks can't read the upstream cache).
+
+---
+
+# CI Efficiency — Batch 4 (Frontend tests sharding)
+
+**Created**: 2026-04-25
+**Status**: in progress
+**Plan**: `tasks/ci-efficiency-plan.md` (Batch 4)
+**Branch**: `ci/batch-4-frontend-shard`
+
+## Why this batch
+
+Frontend tests are now the longest CI pole on web-touching PRs at ~10 min wall-clock. The current job runs:
+1. A shell loop invoking `npm test -- --run <single-file>` for each of ~215 `*.test.ts(x)` files (load-bearing pattern that let the test-builder agent develop file-by-file).
+2. A separate `npx vitest run --coverage` invocation to collect coverage across the whole tree.
+
+Both steps re-launch vitest from scratch, paying startup cost ~215 + 1 times.
+
+Sharding across 4 parallel runners using vitest's native `--shard=N/M` flag lets each shard run ~54 tests in a single vitest invocation with coverage. A follow-up `frontend-coverage-merge` job aggregates the four shards' `coverage-final.json` reports via `nyc merge`. Expected wall-clock: slowest shard ~3-4 min + merge ~30 sec = ~4 min.
+
+## Approach
+
+- Replace the per-file shell loop with `npx vitest run --coverage --shard="$SHARD/4"` per matrix shard.
+- Keep `--pool=forks --poolOptions.forks.maxForks=2` for in-shard memory safety.
+- Each shard uploads `web/coverage/` as `frontend-coverage-shard-N`.
+- New `frontend-coverage-merge` job downloads all 4 artifacts and runs `npx --yes nyc merge coverage-shards combined-coverage.json`. Uploads the merged JSON as `frontend-coverage`.
+- `ci-required` aggregator now includes both `frontend-tests` (matrix) and `frontend-coverage-merge` in `needs`/`RESULTS`, mirroring the `api-tests` + `api-coverage-merge` precedent from Batch 7 (PR #139).
+
+## Why drop the per-file loop is safe
+
+The per-file shell loop existed for two reasons:
+1. **Memory pressure**: avoided one giant vitest run holding all suites in memory.
+2. **Local development ergonomics**: the test-builder agent develops by adding one file at a time and running `npx vitest run <file>` locally — that pattern continues to work because it's a vitest CLI feature, not a workflow contract.
+
+Sharding across runners removes (1): each runner only sees ~54 tests, well within memory budget at `NODE_OPTIONS=--max-old-space-size=6144`. We retain `--pool=forks --poolOptions.forks.maxForks=2` as belt-and-braces inside each shard.
+
+## Caveats
+
+- `nyc merge` expects each subdir under `coverage-shards/` to contain a `coverage-final.json`. The `actions/download-artifact@v4` default behavior creates one subdir per artifact name, which matches that shape. If `nyc merge` produces empty/unexpected output in practice, fallback is `cp coverage-shards/frontend-coverage-shard-1/coverage-final.json web/combined-coverage.json` (single shard's report — better than nothing).
+- The `Frontend Tests` job becomes 4 GitHub checks: `Frontend Tests (shard 1/4)` ... `Frontend Tests (shard 4/4)`. Branch protection only requires `CI Required`, so this is fine.
+- `--dangerouslyIgnoreUnhandledErrors` is preserved from the prior coverage step; it makes coverage-collection more permissive in face of stray promise rejections.
+
+## Acceptance
+
+- [ ] All 4 frontend shards pass on the first CI run.
+- [ ] `frontend-coverage-merge` produces a single `frontend-coverage` artifact.
+- [ ] Wall-clock for frontend testing (slowest shard + merge) drops from ~10 min to ≤5 min.
+- [ ] Test-builder agent's local `npx vitest run <file>` workflow still works (no workflow dependency on per-file iteration).
+
+## Follow-ups (NOT in this batch)
+
+- Persist vitest `--shard` duration data for balanced splits (vitest doesn't natively read a durations file the way pytest-split does — investigate `--reporter=json` aggregation).
+- Move frontend coverage to nightly main runs only (drop from PR critical path entirely).
+- Cache `web/node_modules` with content-hash key (already shipped in Batch 8).

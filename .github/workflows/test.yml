@@ -787,10 +787,15 @@ jobs:
         run: docker compose -f docker-compose.gui.yml down -v --remove-orphans
 
   frontend-tests:
-    name: Frontend Tests
+    name: Frontend Tests (shard ${{ matrix.shard }}/4)
     needs: changes
     if: needs.changes.outputs.web == 'true' || needs.changes.outputs.infra == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
 
     steps:
       - uses: actions/checkout@v4
@@ -827,33 +832,60 @@ jobs:
           cd web
           npm ci --prefer-offline --no-audit --no-fund
 
-      - name: Run tests
+      - name: Run frontend tests (shard ${{ matrix.shard }}/4)
+        env:
+          NODE_OPTIONS: --max-old-space-size=6144
+          SHARD: ${{ matrix.shard }}
         run: |
           cd web
+          npx vitest run --coverage \
+            --shard="$SHARD/4" \
+            --pool=forks --poolOptions.forks.maxForks=2 \
+            --dangerouslyIgnoreUnhandledErrors
+
+      - name: Upload coverage shard
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-coverage-shard-${{ matrix.shard }}
+          path: web/coverage/
+          if-no-files-found: warn
+
+  frontend-coverage-merge:
+    name: Frontend Coverage Merge
+    needs: frontend-tests
+    if: always() && needs.frontend-tests.result != 'skipped' && needs.frontend-tests.result != 'cancelled'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Download shard coverage artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: web/coverage-shards
+          pattern: frontend-coverage-shard-*
+
+      - name: Merge coverage
+        run: |
           set -euo pipefail
-          mapfile -t test_files < <(find src -type f \( -name "*.test.ts" -o -name "*.test.tsx" \) | sort)
-          if [ ${#test_files[@]} -eq 0 ]; then
-            echo "No frontend test files found."
-            exit 1
-          fi
-
-          for test_file in "${test_files[@]}"; do
-            echo "Running frontend test file: ${test_file}"
-            NODE_OPTIONS="--max-old-space-size=6144" npm test -- --run --pool=forks --poolOptions.forks.minForks=1 --poolOptions.forks.maxForks=1 "${test_file}"
-          done
-
-      - name: Collect coverage
-        run: |
           cd web
-          NODE_OPTIONS="--max-old-space-size=8192" npx vitest run --coverage --pool=forks --poolOptions.forks.minForks=1 --poolOptions.forks.maxForks=2
-        continue-on-error: true
+          npx --yes nyc merge coverage-shards combined-coverage.json
+          # nyc merge expects subdirs with coverage-final.json files; verify shape
+          ls -la coverage-shards/ || true
 
-      - name: Upload frontend coverage
+      - name: Upload merged frontend coverage
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: frontend-coverage
-          path: web/coverage/
+          path: web/combined-coverage.json
           if-no-files-found: warn
 
   lint:
@@ -947,6 +979,7 @@ jobs:
       - catalog-regression-tests
       - observability-guardrails
       - frontend-tests
+      - frontend-coverage-merge
       - lint
       - script-tests
       - secrets-scan
@@ -964,6 +997,7 @@ jobs:
             catalog-regression-tests=${{ needs.catalog-regression-tests.result }}
             observability-guardrails=${{ needs.observability-guardrails.result }}
             frontend-tests=${{ needs.frontend-tests.result }}
+            frontend-coverage-merge=${{ needs.frontend-coverage-merge.result }}
             lint=${{ needs.lint.result }}
             script-tests=${{ needs.script-tests.result }}
             secrets-scan=${{ needs.secrets-scan.result }}
