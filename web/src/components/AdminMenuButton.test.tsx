@@ -90,6 +90,16 @@ describe("AdminMenuButton", () => {
     expect(screen.queryByText("Nodes")).not.toBeInTheDocument();
   });
 
+  it("treats a missing user as no permissions (?? null fallback)", () => {
+    // Force the useUser mock to return null user; the ?? null fallback
+    // in canViewInfrastructure(user ?? null) is the previously-uncovered branch.
+    (mocks as any).user = null;
+    mocks.canViewInfrastructure = false;
+
+    render(<AdminMenuButton />);
+    expect(screen.queryByTitle("Admin menu")).not.toBeInTheDocument();
+  });
+
   it("closes when clicking outside the dropdown", async () => {
     const user = userEvent.setup();
     render(<AdminMenuButton />);

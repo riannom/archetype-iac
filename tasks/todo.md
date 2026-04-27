@@ -63,11 +63,20 @@
 ## Post-Batch-7 Baseline (2026-04-25)
 - Frontend: **lines 92.87%, branches 83.45%, functions 80.59%, statements 92.87%**
 
-### Batch 8 — quick-win branch coverage (in progress)
-- [ ] `web/src/components/VersionBadge.tsx` (83 lines, br 92.8% → 100): undefined `__APP_VERSION__` + fetch failure leaves `updateInfo` unset
-- [ ] `web/src/studio/components/scenario/CreateScenarioModal.tsx` (61 lines, br 90.9% → 100): invalid filename triggers regex error path
-- [ ] `web/src/studio/components/canvas/useCanvasDragDrop.ts` (50 lines, no prior test): dragover predicate (allowed/blocked types), drop handler (device/external/parse-error/no-container)
-- [ ] `web/src/studio/components/useLogFilters.ts` (68 lines, no prior test): default state, queryParams composition, hasActiveFilters, clearFilters
+### Batch 8 — quick-win branch coverage (DONE — merged in #135)
+- [x] `web/src/components/VersionBadge.tsx` → 100%
+- [x] `web/src/studio/components/scenario/CreateScenarioModal.tsx` → 100%
+- [x] `web/src/studio/components/canvas/useCanvasDragDrop.ts` → 100%
+- [x] `web/src/studio/components/useLogFilters.ts` → 100%
+- [x] PR #135 merged (`da4c55a5`); +2 files / +17 tests
+
+## Post-Batch-8 Baseline (2026-04-26)
+- Frontend: **lines 92.87%, branches 83.51%, functions 80.59%, statements 92.87%**
+
+### Batch 9 — branch fills for InfraView, studio utils, admin menu (in progress)
+- [ ] `web/src/studio/components/InfraView/GraphLink.tsx` (br 73.3% → 100): isHighlighted variant, dimmed-only, undefined onSelect on hit area + badge, brighter/dimmer VNI badge fill
+- [ ] `web/src/studio/studioUtils.ts` (br 93.9% → 100): node.device omitted falls back to id, external node connection_type omitted, external node name fallback to id
+- [ ] `web/src/components/AdminMenuButton.tsx` (br 88% → 100): user=null hits the `?? null` fallback in canViewInfrastructure/canManageUsers/canManageImages
 - [ ] Commit, push, open PR, merge, clean up worktree
 
 # Observability Follow-ups

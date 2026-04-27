@@ -84,4 +84,65 @@ describe("GraphLink", () => {
     expect(visibleLine).toHaveAttribute("stroke-width", "2");
     expect(selectionGlow).toBeInTheDocument();
   });
+
+  it("uses 0.7 opacity when highlighted but not dimmed or selected", () => {
+    const { container } = renderGraphLink({
+      isHighlighted: true,
+      isDimmed: false,
+      isSelected: false,
+    });
+
+    const rootGroup = container.querySelector("g");
+    expect(rootGroup).toHaveAttribute("opacity", "0.7");
+  });
+
+  it("uses 0.12 opacity when dimmed and not selected", () => {
+    const { container } = renderGraphLink({
+      isDimmed: true,
+      isSelected: false,
+      isHighlighted: false,
+    });
+
+    const rootGroup = container.querySelector("g");
+    expect(rootGroup).toHaveAttribute("opacity", "0.12");
+  });
+
+  it("renders with default cursor on hit area when onSelect is not provided", () => {
+    const { container } = renderGraphLink({ onSelect: undefined });
+    const hitArea = container.querySelector('line[stroke="transparent"]') as SVGLineElement;
+    expect(hitArea.style.cursor).toBe("default");
+  });
+
+  it("clicking the hit area without onSelect does not throw", () => {
+    const { container } = renderGraphLink({ onSelect: undefined });
+    const hitArea = container.querySelector('line[stroke="transparent"]') as SVGLineElement;
+    expect(() => fireEvent.click(hitArea)).not.toThrow();
+  });
+
+  it("badge wrapper uses default cursor when onSelect is not provided", () => {
+    const { container } = renderGraphLink({
+      onSelect: undefined,
+      linkState: makeLinkState({ vni: 42 }),
+    });
+    const badgeWrapper = container.querySelectorAll("g")[1] as SVGGElement;
+    expect(badgeWrapper.style.cursor).toBe("default");
+  });
+
+  it("uses the brighter VNI badge fill when selected", () => {
+    const { container } = renderGraphLink({
+      isSelected: true,
+      linkState: makeLinkState({ vni: 99 }),
+    });
+    const rect = container.querySelector("rect") as SVGRectElement;
+    expect(rect.getAttribute("fill")).toBe("rgba(99, 102, 241, 1)");
+  });
+
+  it("uses the dimmer VNI badge fill when not selected", () => {
+    const { container } = renderGraphLink({
+      isSelected: false,
+      linkState: makeLinkState({ vni: 7 }),
+    });
+    const rect = container.querySelector("rect") as SVGRectElement;
+    expect(rect.getAttribute("fill")).toBe("rgba(99, 102, 241, 0.85)");
+  });
 });
