@@ -837,15 +837,29 @@ jobs:
           NODE_OPTIONS: --max-old-space-size=6144
           SHARD: ${{ matrix.shard }}
         run: |
+          set -euo pipefail
           cd web
+          # Both min and max must be set together (vitest defaults conflict otherwise).
+          # Capture output to verify a non-zero test count actually ran — without
+          # this sentinel, an unhandled-error during setup can produce a green CI
+          # signal with "Test Files no tests".
           npx vitest run --coverage \
             --shard="$SHARD/4" \
-            --pool=forks --poolOptions.forks.maxForks=2 \
+            --pool=forks --poolOptions.forks.minForks=1 --poolOptions.forks.maxForks=2 \
             --dangerouslyIgnoreUnhandledErrors \
             --coverage.thresholds.lines=0 \
             --coverage.thresholds.statements=0 \
             --coverage.thresholds.functions=0 \
-            --coverage.thresholds.branches=0
+            --coverage.thresholds.branches=0 \
+            2>&1 | tee /tmp/vitest-shard.log
+          if grep -q "Test Files\s*no tests" /tmp/vitest-shard.log; then
+            echo "::error::Shard $SHARD/4 reported 'no tests' — refusing false-positive green"
+            exit 1
+          fi
+          if ! grep -qE "Tests\s+[0-9]+ (passed|skipped)" /tmp/vitest-shard.log; then
+            echo "::error::Shard $SHARD/4 produced no recognizable test count line"
+            exit 1
+          fi
 
       - name: Upload coverage shard
         if: always()
