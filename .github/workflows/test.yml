@@ -439,11 +439,15 @@ jobs:
           if-no-files-found: warn
 
   api-tests:
-    name: API Tests
+    name: API Tests (shard ${{ matrix.shard }}/4)
     needs: changes
     if: needs.changes.outputs.api == 'true' || needs.changes.outputs.infra == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
 
     steps:
       - uses: actions/checkout@v4
@@ -459,18 +463,70 @@ jobs:
         run: |
           cd api
           pip install -r requirements.txt
-          pip install pytest-cov pytest-timeout pytest-xdist
+          pip install pytest-cov pytest-timeout pytest-xdist pytest-split
 
-      - name: Run API tests with coverage
+      - name: Run API tests (shard ${{ matrix.shard }}/4) with coverage
         env:
           DATABASE_URL: sqlite:///test.db
           REDIS_URL: redis://localhost:6379/0
           WORKSPACE: /tmp/archetype-test
+          COVERAGE_FILE: .coverage.shard${{ matrix.shard }}
+          SHARD: ${{ matrix.shard }}
         run: |
           cd api
-          PYTHONPATH="${PYTHONPATH}:$(pwd)/.." pytest tests/ -q --tb=short --timeout=60 --cov=app --cov-report=term-missing --cov-report=xml:../reports/api-coverage.xml --cov-fail-under=55
+          PYTHONPATH="${PYTHONPATH}:$(pwd)/.." pytest tests/ -q --tb=short --timeout=60 \
+            --splits=4 --group="$SHARD" \
+            --cov=app --cov-report=
 
-      - name: Upload API coverage
+      - name: Upload coverage shard
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: api-coverage-shard-${{ matrix.shard }}
+          path: api/.coverage.shard${{ matrix.shard }}
+          if-no-files-found: warn
+
+  api-coverage-merge:
+    name: API Coverage Merge
+    needs: api-tests
+    if: always() && needs.api-tests.result != 'skipped' && needs.api-tests.result != 'cancelled'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+
+      - name: Install coverage
+        run: pip install 'coverage[toml]==7.13.5'
+
+      - name: Download shard coverage artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: api/coverage-shards
+          pattern: api-coverage-shard-*
+          merge-multiple: true
+
+      - name: Combine coverage and report
+        run: |
+          set -euo pipefail
+          cd api
+          if ls coverage-shards/.coverage.shard* >/dev/null 2>&1; then
+            cp coverage-shards/.coverage.shard* .
+          else
+            echo "::warning::No coverage shards downloaded; skipping coverage merge"
+            exit 0
+          fi
+          coverage combine --keep
+          coverage report --fail-under=55
+          mkdir -p ../reports
+          coverage xml -o ../reports/api-coverage.xml
+
+      - name: Upload merged API coverage
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -792,6 +848,7 @@ jobs:
       - changes
       - confidence-gate
       - api-tests
+      - api-coverage-merge
       - agent-tests
       - catalog-regression-tests
       - observability-guardrails
@@ -808,6 +865,7 @@ jobs:
             changes=${{ needs.changes.result }}
             confidence-gate=${{ needs.confidence-gate.result }}
             api-tests=${{ needs.api-tests.result }}
+            api-coverage-merge=${{ needs.api-coverage-merge.result }}
             agent-tests=${{ needs.agent-tests.result }}
             catalog-regression-tests=${{ needs.catalog-regression-tests.result }}
             observability-guardrails=${{ needs.observability-guardrails.result }}
