@@ -201,6 +201,38 @@ cross-cutting   |   6  | 17:45  | 22:10
 
 > Implement Batch 16. In `.github/workflows/test.yml`, add `-n 2` to each API shard's pytest invocation. Verify `api/tests/conftest.py` still has the `PYTEST_XDIST_WORKER`-keyed DATABASE_URL/WORKSPACE override (added in Batch 5). Open the PR with title `ci: re-enable xdist within API shards`. Watch first run carefully; if any shard hits "runner has received a shutdown signal," DO NOT push fixes — open a comment with the log link, revert the change, and stop. Branch `ci/batch-16-shard-xdist`. Don't push.
 
+### Batch 16 attempt 2 — outcome (2026-05-06, PR #147)
+
+**Result**: Reverted. Same runner-shutdown signal as Batch 5. Sharding + per-worker DB/WORKSPACE isolation did not change the failure mode.
+
+**Evidence** (run `25459203783`, shard 1, job `74696844193`):
+```
+20:27:41   pytest invoked
+20:35:14   ##[error]The runner has received a shutdown signal.
+20:35:14   ##[error]Process completed with exit code 143.
+```
+**7m32s of pytest with zero stdout** between invocation and SIGTERM. With `-q --tb=short` pytest is silent until the summary, so the lack of output tells us nothing about which test was running. 2 of 4 shards (1 and 4) hit SIGTERM at 7:51 and 7:13 respectively; shards 2 and 3 were still pending when the revert push (`8b68ea6d`) overwrote the run.
+
+**What this rules out**:
+- Not a deterministic test failure (no `FAIL`/traceback in any shard)
+- Not a `set -u` / shell issue (preceding fix in `f69e8a7f` cleared that, then xdist still failed)
+- Not the new `--durations=20` / tee pipeline (those changes survived after `-n 2` was reverted)
+
+**What it doesn't rule out**:
+- OOM: `-n 2` × FastAPI/SQLAlchemy app load = roughly 2× memory of vanilla pytest. ubuntu-latest runners have ~7GB; a leaky test loading large fixtures could plausibly tip over.
+- Runner-pool flakiness: GitHub-hosted runners do occasionally get terminated mid-job from outside (capacity decommission, host eviction). 2/4 hits in one run is unusually clustered for that.
+- xdist scheduler overhead: the default `loadscope` scheduler may interact badly with our test layout.
+
+**To investigate next time** (do NOT roll into a coverage/efficiency PR — give it its own branch and budget):
+
+1. **Confirm OOM vs other causes**. Add a parallel CI step that reads `/proc/meminfo` every 10s into an artifact, and run with `-n 2` once. If MemAvailable drops below ~500MB before SIGTERM, OOM is confirmed.
+2. **Try `--dist=worksteal`** (added in pytest-xdist 3.2). Better load balancing, smaller per-worker memory footprint than `loadscope`.
+3. **Try `-n 1`**. Rules out concurrency entirely; just measures xdist process-spawn overhead. If `-n 1` works and `-n 2` doesn't, that's strong evidence of memory/CPU contention rather than xdist itself.
+4. **Bisect the suite**. Run xdist over a 25% slice (e.g., `pytest tests/test_*.py -k "not link and not state"`) to see whether the failure is associated with a specific test family. If it is, the offending test set probably isn't xdist-safe (e.g., shared module-level state, file locks).
+5. **Last resort: drop xdist permanently for this codebase.** A 4-min-or-so theoretical win isn't worth flaky CI. Make the call by tracking suite wall-clock with `scripts/ci_metrics.py` over 2 weeks and see whether the slowest API shard drifts up enough to justify another attempt.
+
+**Status**: Closed for now. Owner: open as a fresh PR if/when someone wants to budget the investigation time.
+
 ---
 
 ## Tier 4 — quality-of-life
