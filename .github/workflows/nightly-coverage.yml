@@ -54,10 +54,12 @@ jobs:
         run: |
           set -euo pipefail
           cd api
-          # PYTHONPATH defaults to empty (set -u would otherwise abort here)
+          # PYTHONPATH defaults to empty (set -u would otherwise abort here).
+          # No -n 2 xdist here — same runner-shutdown-signal failure as the
+          # PR-path shards (see test.yml). Coverage instrumentation also
+          # adds load that makes xdist more likely to trip the runner.
           PYTHONPATH="${PYTHONPATH:-}:$(pwd)/.." pytest tests/ -q --tb=short --timeout=60 \
             --splits=4 --group="$SHARD" \
-            -n 2 \
             --cov=app --cov-report=
 
       - name: Upload coverage shard
