@@ -149,3 +149,27 @@ After 11 rounds of coverage work (~12,300+ total tests), the project has broad c
 3. **No production changes** — pure test additions
 4. **Verification**: Run each tier's test suite after adding tests to confirm no regressions
 5. **Priority on private functions**: This round explicitly targets the internal helper functions that prior rounds skipped (convergence engines, dedup logic, enforcement conditionals)
+
+---
+
+## 2026-05-06 status update
+
+A test-architecture audit on 2026-05-06 initially flagged six "high-risk untested domains" (monitor loops, reconciliation privates, streaming paths, agent OVS, frontend pages, agent_client submodules). Cross-checking against the codebase showed Round 12 has already absorbed most of that work:
+
+- `state_enforcement_monitor` — covered (test_tasks_state_enforcement_round12.py:357–406)
+- `link_reconciliation_monitor` — covered (test_tasks_link_reconciliation_extended.py:1439–1700)
+- `disk_cleanup_monitor` — covered (test_tasks_disk_cleanup.py:681–815, test_tasks_disk_cleanup_round12.py:78–196)
+- `agent/network/local.py` — covered (test_network_local_unit.py, test_network_local_round12.py, +2 more)
+- `agent_client/selection.py` — covered indirectly via package re-exports (test_agent_client*.py patches `app.agent_client.selection.*`)
+- Frontend pages (AdminSettingsPage, InterfaceManagerPage, UserManagementPage, InfrastructurePage, StudioConsolePage, NodesPage) — all have test files
+- `web/src/api.ts` and `web/src/config.ts` — both have dedicated test files
+
+Genuine remaining gaps from `python3 scripts/coverage_map.py` (2026-05-06):
+
+- **API**: 24 files, but most are model/schema declarations covered indirectly (Pydantic / SQLAlchemy validation) and mixin files (`node_lifecycle_deploy.py`, `node_lifecycle_stop.py`) covered through `test_node_lifecycle.py`. No high-risk targets remain.
+- **Agent**: only 2 files — `agent/labels.py` (16 lines of constants, no logic) and `agent/network/plugin_vlan.py` (918 lines, real surface).
+- **Web**: 18 files — mostly `index.ts` re-exports (zero value); real targets are `useModalState.ts`, `UserCreateModal.tsx`, `UserEditModal.tsx`, `UserPasswordModal.tsx`, `LogEntryDetail.tsx`, `Sidebar.tsx`, `SidebarFilters.tsx`, `useCanvasTouchGestures.ts`, `useCanvasAnimation.ts`.
+
+Kickoff in PR `ci/efficiency-batches-10-12-13-15-16`: added `web/src/hooks/useModalState.test.ts` (6 tests).
+
+The originally-projected 350-test, ~31-file Phase 1–4 sweep is significantly smaller than scoped — closer to ~50 tests across ~9 files. Recommend reframing this plan as **Round 12 Phase 1 (final)**: pick up `agent/network/plugin_vlan.py` (the only meaningful agent gap) and the ~8 real frontend gaps, then close the round.

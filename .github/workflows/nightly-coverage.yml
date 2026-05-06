@@ -1,0 +1,263 @@
+name: Nightly Coverage
+
+# Coverage instrumentation costs ~20–30% of test wall-clock. Batch 12 dropped
+# coverage from PR runs; this workflow restores the trend by running the same
+# test matrices nightly with coverage enabled. Threshold enforcement at merge
+# (Batch 10) lives in the frontend-coverage-merge job below.
+
+on:
+  schedule:
+    # 06:00 UTC daily — well after typical late-night merges, before US business hours
+    - cron: "0 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nightly-coverage-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  api-tests:
+    name: API Tests with Coverage (shard ${{ matrix.shard }}/4)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+          cache: "pip"
+          cache-dependency-path: api/requirements.txt
+
+      - name: Install dependencies
+        run: |
+          cd api
+          pip install -r requirements.txt
+          pip install pytest-cov pytest-timeout pytest-xdist pytest-split
+
+      - name: Run API tests with coverage
+        env:
+          DATABASE_URL: sqlite:///test.db
+          REDIS_URL: redis://localhost:6379/0
+          WORKSPACE: /tmp/archetype-test
+          COVERAGE_FILE: .coverage.shard${{ matrix.shard }}
+          SHARD: ${{ matrix.shard }}
+        run: |
+          set -euo pipefail
+          cd api
+          # PYTHONPATH defaults to empty (set -u would otherwise abort here).
+          # No -n 2 xdist here — same runner-shutdown-signal failure as the
+          # PR-path shards (see test.yml). Coverage instrumentation also
+          # adds load that makes xdist more likely to trip the runner.
+          PYTHONPATH="${PYTHONPATH:-}:$(pwd)/.." pytest tests/ -q --tb=short --timeout=60 \
+            --splits=4 --group="$SHARD" \
+            --cov=app --cov-report=
+
+      - name: Upload coverage shard
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: api-coverage-shard-${{ matrix.shard }}
+          path: api/.coverage.shard${{ matrix.shard }}
+          if-no-files-found: warn
+          include-hidden-files: true
+
+  api-coverage-merge:
+    name: API Coverage Merge
+    needs: api-tests
+    if: always() && needs.api-tests.result != 'skipped' && needs.api-tests.result != 'cancelled'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      - name: Install coverage
+        run: pip install 'coverage[toml]==7.13.5'
+
+      - name: Download shard coverage artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: api/coverage-shards
+          pattern: api-coverage-shard-*
+          merge-multiple: true
+
+      - name: Combine coverage and report
+        run: |
+          set -euo pipefail
+          cd api
+          if ls coverage-shards/.coverage.shard* >/dev/null 2>&1; then
+            cp coverage-shards/.coverage.shard* .
+          else
+            echo "::warning::No coverage shards downloaded; skipping coverage merge"
+            exit 0
+          fi
+          coverage combine --keep
+          coverage report --fail-under=55
+          mkdir -p ../reports
+          coverage xml -o ../reports/api-coverage.xml
+
+      - name: Upload merged API coverage
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: api-coverage
+          path: reports/api-coverage.xml
+          if-no-files-found: warn
+          retention-days: 90
+
+  agent-tests:
+    name: Agent Tests with Coverage
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+          cache: "pip"
+          cache-dependency-path: agent/requirements.txt
+
+      - name: Install dependencies
+        run: |
+          cd agent
+          pip install -r requirements.txt
+          pip install pytest-cov pytest-timeout pytest-xdist
+
+      - name: Run Agent tests with coverage
+        run: |
+          cd agent
+          pytest tests/ -q --tb=short --timeout=60 \
+            --cov=agent --cov-report=term-missing \
+            --cov-report=xml:../reports/agent-coverage.xml \
+            --cov-fail-under=50
+
+      - name: Upload Agent coverage
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-coverage
+          path: reports/agent-coverage.xml
+          if-no-files-found: warn
+          retention-days: 90
+
+  frontend-tests:
+    name: Frontend Tests with Coverage (shard ${{ matrix.shard }}/4)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install dependencies
+        run: |
+          cd web
+          npm ci --prefer-offline --no-audit --no-fund
+
+      - name: Run frontend tests with coverage
+        env:
+          NODE_OPTIONS: --max-old-space-size=6144
+          SHARD: ${{ matrix.shard }}
+          NO_COLOR: "1"
+          FORCE_COLOR: "0"
+        run: |
+          set -euo pipefail
+          cd web
+          # Per-shard thresholds disabled; merge job re-checks against the
+          # full coverage set (Batch 10).
+          npx vitest run --coverage \
+            --shard="$SHARD/4" \
+            --pool=forks --poolOptions.forks.minForks=1 --poolOptions.forks.maxForks=2 \
+            --dangerouslyIgnoreUnhandledErrors \
+            --coverage.thresholds.lines=0 \
+            --coverage.thresholds.statements=0 \
+            --coverage.thresholds.functions=0 \
+            --coverage.thresholds.branches=0
+
+      - name: Upload coverage shard
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-coverage-shard-${{ matrix.shard }}
+          path: web/coverage/
+          if-no-files-found: warn
+
+  frontend-coverage-merge:
+    name: Frontend Coverage Merge
+    needs: frontend-tests
+    if: always() && needs.frontend-tests.result != 'skipped' && needs.frontend-tests.result != 'cancelled'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Download shard coverage artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: web/coverage-shards
+          pattern: frontend-coverage-shard-*
+
+      - name: Merge coverage
+        run: |
+          set -euo pipefail
+          cd web
+          npx --yes nyc merge coverage-shards combined-coverage.json
+          ls -la coverage-shards/ || true
+
+      - name: Check merged coverage thresholds
+        # Batch 10: per-shard thresholds were disabled in test.yml so per-shard
+        # slices don't fail. The merged data must still satisfy the project-wide
+        # bar from web/vitest.config.ts (lines/statements 50, functions/branches 40).
+        run: |
+          set -euo pipefail
+          cd web
+          mkdir -p .nyc_output
+          cp combined-coverage.json .nyc_output/coverage-final.json
+          npx --yes nyc check-coverage \
+            --lines 50 \
+            --statements 50 \
+            --functions 40 \
+            --branches 40
+
+      - name: Upload merged frontend coverage
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-coverage
+          path: web/combined-coverage.json
+          if-no-files-found: warn
+          retention-days: 90
