@@ -54,7 +54,8 @@ jobs:
         run: |
           set -euo pipefail
           cd api
-          PYTHONPATH="${PYTHONPATH}:$(pwd)/.." pytest tests/ -q --tb=short --timeout=60 \
+          # PYTHONPATH defaults to empty (set -u would otherwise abort here)
+          PYTHONPATH="${PYTHONPATH:-}:$(pwd)/.." pytest tests/ -q --tb=short --timeout=60 \
             --splits=4 --group="$SHARD" \
             -n 2 \
             --cov=app --cov-report=

@@ -142,7 +142,8 @@ jobs:
           # per-shard artifact (Batch 13) without relying on log scraping.
           # -n 2 (Batch 16): one xdist worker per logical CPU on a 2-core
           # runner. Per-worker DB/WORKSPACE isolation lives in conftest.py.
-          PYTHONPATH="${PYTHONPATH}:$(pwd)/.." pytest tests/ -q --tb=short --timeout=60 \
+          # PYTHONPATH defaults to empty (set -u would otherwise abort here)
+          PYTHONPATH="${PYTHONPATH:-}:$(pwd)/.." pytest tests/ -q --tb=short --timeout=60 \
             --splits=4 --group="$SHARD" \
             --store-durations \
             -n 2 \
