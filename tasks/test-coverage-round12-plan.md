@@ -173,3 +173,22 @@ Genuine remaining gaps from `python3 scripts/coverage_map.py` (2026-05-06):
 Kickoff in PR `ci/efficiency-batches-10-12-13-15-16`: added `web/src/hooks/useModalState.test.ts` (6 tests).
 
 The originally-projected 350-test, ~31-file Phase 1–4 sweep is significantly smaller than scoped — closer to ~50 tests across ~9 files. Recommend reframing this plan as **Round 12 Phase 1 (final)**: pick up `agent/network/plugin_vlan.py` (the only meaningful agent gap) and the ~8 real frontend gaps, then close the round.
+
+### Phase 1 progress (PR `ci/round12-frontend-coverage-followup`, 2026-05-06)
+
+Added test files (62 tests, all passing):
+
+| File | Tests | LOC |
+|------|-------|-----|
+| `web/src/pages/UserCreateModal.test.tsx` | 11 | covers /users POST, password strength, optional email, error paths |
+| `web/src/pages/UserEditModal.test.tsx` | 9 | covers /users PATCH, email-blank handling, prop reseeding via useEffect |
+| `web/src/pages/UserPasswordModal.test.tsx` | 9 | covers /users/{id}/password PUT, strength tiers, required-field guard |
+| `web/src/components/backgrounds/animations/useCanvasAnimation.test.tsx` | 8 | rAF lifecycle, resize listener, null-context fallback, onCleanup |
+| `web/src/studio/components/canvas/useCanvasTouchGestures.test.tsx` | 9 | single-finger pan, pinch zoom math, touchend handoff |
+| `web/src/studio/components/LogEntryDetail.test.tsx` | 16 | level color fallback, sync:/node: action formatting, copy/filter handlers |
+
+Remaining truly-uncovered frontend files: `Sidebar.tsx` (634 LOC, large) and `SidebarFilters.tsx` (274 LOC). Defer to a follow-up PR — these aren't quick wins.
+
+Remaining truly-uncovered agent file: `agent/network/plugin_vlan.py` (918 LOC). Different test ecosystem (pytest + agent fixtures), separate PR.
+
+Recommend marking Round 12 Phase 1 closed once the Sidebar/SidebarFilters PR lands; the original ~350-test target was based on a stale audit and isn't useful guidance.
