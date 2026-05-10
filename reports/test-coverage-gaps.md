@@ -4,16 +4,10 @@ This report maps tests to directly imported source files and lists uncovered fil
 
 ## api
 
-Source files: 173. Covered: 139. Uncovered: 34.
+Source files: 168. Covered: 144. Uncovered: 24.
 
 Uncovered files:
-- `api/app/agent_client/http.py`
-- `api/app/agent_client/links.py`
-- `api/app/agent_client/maintenance.py`
-- `api/app/agent_client/node_ops.py`
-- `api/app/agent_client/overlay.py`
 - `api/app/agent_client/selection.py`
-- `api/app/image_store/paths.py`
 - `api/app/models/auth.py`
 - `api/app/models/base.py`
 - `api/app/models/catalog.py`
@@ -23,50 +17,49 @@ Uncovered files:
 - `api/app/models/state.py`
 - `api/app/models/topology.py`
 - `api/app/models/webhook.py`
-- `api/app/routers/images/_shared.py`
 - `api/app/routers/images/library.py`
-- `api/app/routers/images/sync.py`
-- `api/app/routers/images/upload_docker.py`
 - `api/app/routers/images/upload_vm.py`
 - `api/app/routers/infrastructure_interfaces.py`
 - `api/app/routers/infrastructure_nic_groups.py`
 - `api/app/routers/labs/_shared.py`
 - `api/app/routers/labs/crud.py`
-- `api/app/routers/labs/link_states.py`
-- `api/app/routers/labs/operations.py`
 - `api/app/routers/labs/topology.py`
 - `api/app/schemas/agents.py`
 - `api/app/schemas/system.py`
 - `api/app/schemas/users.py`
 - `api/app/schemas/webhooks.py`
+- `api/app/tasks/node_lifecycle_deploy.py`
 - `api/app/tasks/node_lifecycle_stop.py`
-- `api/app/tasks/stuck_agents.py`
+- `api/app/utils/db.py`
 
 ## agent
 
-Source files: 98. Covered: 95. Uncovered: 3.
+Source files: 98. Covered: 96. Uncovered: 2.
 
 Uncovered files:
-- `agent/network/plugin_handlers.py`
-- `agent/network/plugin_state.py`
+- `agent/labels.py`
 - `agent/network/plugin_vlan.py`
 
 ## web
 
-Source files: 235. Covered: 221. Uncovered: 14.
+Source files: 274. Covered: 256. Uncovered: 18.
 
 Uncovered files:
-- `web/src/components/isoImport/ISOImportProgress.tsx`
+- `web/src/components/backgrounds/animations/useCanvasAnimation.ts`
 - `web/src/components/isoImport/index.ts`
-- `web/src/pages/infrastructure/DeregisterModal.tsx`
-- `web/src/pages/infrastructure/HostsTab.tsx`
+- `web/src/hooks/useModalState.ts`
+- `web/src/pages/UserCreateModal.tsx`
+- `web/src/pages/UserEditModal.tsx`
+- `web/src/pages/UserPasswordModal.tsx`
 - `web/src/pages/infrastructure/index.ts`
-- `web/src/studio/components/canvas/CanvasControls.tsx`
+- `web/src/studio/components/LogEntryDetail.tsx`
+- `web/src/studio/components/Sidebar.tsx`
+- `web/src/studio/components/SidebarFilters.tsx`
 - `web/src/studio/components/canvas/index.ts`
-- `web/src/studio/components/deviceManager/ImageLibraryView.tsx`
-- `web/src/studio/components/deviceManager/UploadLogsModal.tsx`
-- `web/src/studio/components/deviceManager/deviceManagerUtils.ts`
+- `web/src/studio/components/canvas/useCanvasTouchGestures.ts`
 - `web/src/studio/components/deviceManager/index.ts`
-- `web/src/studio/components/deviceManager/useImageFilters.ts`
-- `web/src/studio/components/deviceManager/useImageManagementLog.ts`
-- `web/src/studio/hooks/useLabDataLoading.ts`
+- `web/src/studio/components/properties/DeviceNodeProperties.tsx`
+- `web/src/studio/constants.tsx`
+- `web/src/studio/hooks/useLabLifecycle.ts`
+- `web/src/studio/hooks/useTopologyHandlers.ts`
+- `web/src/types/js-yaml.d.ts`

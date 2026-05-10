@@ -1,5 +1,86 @@
 # Repository Guidelines
 
+## Workflow Orchestration
+
+### 1. Plan Mode Default
+- Enter plan mode for ANY non-trivial task (3+ steps or architectural decisions).
+- If something goes sideways, STOP and re-plan immediately — don't keep pushing.
+- Use plan mode for verification steps, not just building.
+- Write detailed specs upfront to reduce ambiguity.
+
+### 2. Subagent Strategy
+- Use subagents liberally to keep main context window clean.
+- Offload research, exploration, and parallel analysis to subagents.
+- For complex problems, throw more compute at it via subagents.
+- One task per subagent for focused execution.
+
+### 3. Self-Improvement Loop
+- After ANY correction from the user: update `tasks/lessons.md` with the pattern.
+- Write rules for yourself that prevent the same mistake.
+- Ruthlessly iterate on these lessons until mistake rate drops.
+- Review lessons at session start for relevant project.
+
+### 4. Completion Standard
+- Never mark a task complete without proving it works.
+- Use the smallest verification that convincingly covers the change: tests, type checks, logs, screenshots, or behavior diffs against main.
+- If verification exposes a problem, stop, re-plan, fix the root cause, and verify again.
+- Ask yourself: "Would a staff engineer approve this?"
+
+### 5. Simplification And Elegance Gate
+- Before presenting work as finished, re-read the diff and look for unnecessary complexity, duplication, oversized functions, brittle conditionals, and missed reuse of existing helpers.
+- Simplify the code when it improves correctness, clarity, maintainability, or testability without broadening scope.
+- For non-trivial changes, pause and ask: "Is there a more elegant way to design this if the requirement had existed from the start?"
+- If a fix feels hacky, replace it with the cleaner design before calling it done.
+- Skip elaborate redesign for simple, obvious fixes.
+
+### 6. Autonomous Bug Fixing
+- When given a bug report: just fix it. Don't ask for hand-holding.
+- Point at logs, errors, failing tests — then resolve them.
+- Zero context switching required from the user.
+- Go fix failing CI tests without being told how.
+
+## Task Management
+
+1. **Plan First**: Write plan to `tasks/todo.md` with checkable items.
+2. **Verify Plan**: Check in before starting implementation.
+3. **Track Progress**: Mark items complete as you go.
+4. **Explain Changes**: High-level summary at each step.
+5. **Document Results**: Add review section to `tasks/todo.md`.
+6. **Capture Lessons**: Update `tasks/lessons.md` after corrections.
+
+## Core Principles
+
+- **Simplicity First**: Make every change as simple as possible. Impact minimal code.
+- **No Laziness**: Find root causes. No temporary fixes. Senior developer standards.
+- **Minimal Impact**: Changes should only touch what's necessary. Avoid introducing bugs.
+- **Destructive Commands Require One-Off Permission**: Never request, persist, or rely on broad approval prefixes for destructive cleanup commands such as `rm -rf`. Use an exact one-off approval for each destructive command, or avoid the cleanup by writing generated artifacts to ignored temp paths.
+
+## Grade-Oriented Coding Defaults
+
+- Keep new and edited functions below `CCN <= 15`; split branching render logic, parsing, validation, and async workflows into named helpers before they grow.
+- Treat production files over `400` lines as a design warning and over `500` lines as a refactor trigger unless the file is generated or deliberately classified.
+- For complex UI, default to small view components plus a controller hook/helper layer; keep data shaping, state transitions, and rendering decisions separate.
+- Add behavioral tests with the code, including null/empty/error/boundary cases; preserve coverage with meaningful tests, not synthetic defensive branches.
+- Use existing schema validation, error handling, logging, timeout, and retry utilities at system boundaries instead of ad hoc logic.
+- Before final review, run focused tests and touched-file lizard checks when the change affects non-trivial logic.
+
+## Final Review And Response
+
+Before presenting results to the user:
+
+1. **Quality review** — Re-read all changed code and docs for correctness, reuse opportunities, simplification opportunities, performance or efficiency issues, and unintended scope creep. Fix anything it flags.
+2. **Edge case audit** — Explicitly verify:
+   - Null/undefined inputs and empty arrays/objects.
+   - Off-by-one errors in loops and slicing.
+   - Missing error handling at system boundaries (API calls, DB queries, user input).
+   - Race conditions in async code.
+   - Boundary values (0, negative numbers, MAX_SAFE_INTEGER, empty strings).
+3. **Verification review** — Confirm the task has adequate tests or checks, and state what was run.
+4. **Self-review** — Re-read the diff and confirm the changes match the user's intent with no unintended side effects.
+5. **Final response** — Summarize what changed and what was verified first. After that summary, provide next steps for the user; "None required" is a valid answer when no follow-up action is needed.
+
+Use depth proportional to the request. For non-trivial work, make assumptions explicit, evaluate tradeoffs and failure modes, and flag second-order consequences. For simple work, stay concise without skipping verification.
+
 ## Project Structure & Module Organization
 - Current repository contents are minimal; no source tree is present yet.
 - When adding code, prefer a clear split such as `src/` for application code, `tests/` for automated tests, and `assets/` for static files.
@@ -67,3 +148,4 @@
 - Build with extensibility in mind: prefer adapter/strategy patterns over hard-coded providers or vendors.
 - Keep provider-specific logic in dedicated modules and expose a stable interface to the rest of the app.
 - Avoid tight coupling between UI and backend implementations; use API contracts and feature flags instead.
+
