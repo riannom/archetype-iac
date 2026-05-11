@@ -49,7 +49,10 @@ async def test_with_retry_success_after_failures():
         {"status": "ok"},  # Success on 3rd attempt
     ])
 
-    result = await with_retry(mock_func, "arg1", max_retries=3)
+    # Skip the exponential-backoff sleep between retries (1s, 2s) — we're
+    # testing the retry path, not the backoff timer.
+    with patch("app.agent_client.http.asyncio.sleep", new=AsyncMock()):
+        result = await with_retry(mock_func, "arg1", max_retries=3)
 
     assert result == {"status": "ok"}
     assert mock_func.call_count == 3
@@ -60,8 +63,9 @@ async def test_with_retry_exhausted():
     """Test that retry wrapper raises after max retries."""
     mock_func = AsyncMock(side_effect=httpx.ConnectError("Connection refused"))
 
-    with pytest.raises(AgentUnavailableError) as exc_info:
-        await with_retry(mock_func, "arg1", max_retries=2)
+    with patch("app.agent_client.http.asyncio.sleep", new=AsyncMock()):
+        with pytest.raises(AgentUnavailableError) as exc_info:
+            await with_retry(mock_func, "arg1", max_retries=2)
 
     assert "unreachable after 3 attempts" in str(exc_info.value)
     assert mock_func.call_count == 3
@@ -95,7 +99,8 @@ async def test_with_retry_http_429_retries():
         {"status": "ok"},
     ])
 
-    result = await with_retry(mock_func, "arg1", max_retries=1)
+    with patch("app.agent_client.http.asyncio.sleep", new=AsyncMock()):
+        result = await with_retry(mock_func, "arg1", max_retries=1)
 
     assert result == {"status": "ok"}
     assert mock_func.call_count == 2

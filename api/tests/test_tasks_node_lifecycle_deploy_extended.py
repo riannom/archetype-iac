@@ -184,6 +184,9 @@ class TestDeploySingleNode:
             patch("app.tasks.node_lifecycle_deploy.lab_workspace", return_value=MagicMock()),
             patch("app.tasks.node_lifecycle_deploy.get_device_service") as mock_ds,
             patch("app.tasks.node_lifecycle_deploy.agent_client") as mock_ac,
+            # Skip the RUNTIME_IDENTITY_STABILIZATION_POLL real sleep —
+            # status is faked, no need to wait for real timers.
+            patch("app.tasks.node_lifecycle_deploy.asyncio.sleep", new_callable=AsyncMock),
         ):
             mock_ds.return_value.resolve_hardware_specs.return_value = {}
             mock_ac.create_node_on_agent = AsyncMock(return_value={"success": True})

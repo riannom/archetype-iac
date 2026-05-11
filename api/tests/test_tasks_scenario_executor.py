@@ -129,10 +129,15 @@ class TestStepWait:
     @pytest.mark.asyncio
     async def test_uses_step_seconds(self, scenario_lab: models.Lab, test_db: Session):
         """Wait step should report the configured wait duration."""
+        from app.tasks import scenario_executor
         from app.tasks.scenario_executor import _step_wait
 
         step = {"type": "wait", "seconds": 7}
-        result = await _step_wait(step, scenario_lab, test_db)
+        # Don't actually sleep 7 seconds in CI — just verify the step records
+        # the configured duration in its output. The duration value is what
+        # this test asserts; the real sleep call is incidental.
+        with patch.object(scenario_executor.asyncio, "sleep", new=AsyncMock()):
+            result = await _step_wait(step, scenario_lab, test_db)
 
         assert result["status"] == "passed"
         assert "7" in result["output"]
@@ -140,10 +145,12 @@ class TestStepWait:
     @pytest.mark.asyncio
     async def test_defaults_to_five_seconds(self, scenario_lab: models.Lab, test_db: Session):
         """Wait step without seconds should default to 5."""
+        from app.tasks import scenario_executor
         from app.tasks.scenario_executor import _step_wait
 
         step = {"type": "wait"}
-        result = await _step_wait(step, scenario_lab, test_db)
+        with patch.object(scenario_executor.asyncio, "sleep", new=AsyncMock()):
+            result = await _step_wait(step, scenario_lab, test_db)
 
         assert result["status"] == "passed"
         assert "5" in result["output"]

@@ -143,8 +143,10 @@ jobs:
           # Batch 16 (-n 2 xdist) reverted: same "runner has received a
           # shutdown signal" SIGTERM that descoped xdist originally still
           # fires even with sharding + per-worker DB/WORKSPACE isolation.
-          # PYTHONPATH defaults to empty (set -u would otherwise abort here)
+          # PYTHONPATH defaults to empty (set -u would otherwise abort here).
+          # -p no:cacheprovider: .pytest_cache is unused across CI runs.
           PYTHONPATH="${PYTHONPATH:-}:$(pwd)/.." pytest tests/ -q --tb=short --timeout=60 \
+            -p no:cacheprovider \
             --splits=4 --group="$SHARD" \
             --store-durations \
             --durations=20 --durations-min=1.0 \
@@ -154,11 +156,15 @@ jobs:
         if: always()
         run: |
           set -euo pipefail
-          if grep -q "slowest durations" /tmp/pytest-shard.log 2>/dev/null; then
-            sed -n '/slowest durations/,/^=\+\s*$/p' /tmp/pytest-shard.log \
+          # pytest's header is "slowest N durations" (with the count), not
+          # "slowest durations" — match the number to anchor correctly.
+          # Take from header to EOF; pytest's "=== passed in Ns ===" tail
+          # is short and harmless context.
+          if grep -qE "slowest [0-9]+ durations" /tmp/pytest-shard.log 2>/dev/null; then
+            sed -n '/slowest [0-9]\+ durations/,$ p' /tmp/pytest-shard.log \
               > /tmp/api-test-durations-summary.txt
           else
-            echo "no 'slowest durations' block found in pytest output" \
+            echo "no 'slowest N durations' block found in pytest output" \
               > /tmp/api-test-durations-summary.txt
           fi
 

@@ -521,13 +521,18 @@ class TestCategorizationMatchesTransitionalStates:
         mock_settings.resource_validation_enabled = False
         mock_settings.image_sync_pre_deploy_check = False
 
+        # Mock asyncio.sleep in all lifecycle modules that may run readiness
+        # poll / stabilization / backoff loops. Otherwise this test waits
+        # for the real timers (~17s observed).
         with patch("app.tasks.jobs.get_session", mock_get_session(test_db)), \
              patch("app.tasks.node_lifecycle.agent_client", mock_ac), \
              patch("app.tasks.node_lifecycle_agents.agent_client", mock_ac), \
              patch("app.tasks.node_lifecycle_deploy.agent_client", mock_ac), \
              patch("app.tasks.node_lifecycle_stop.agent_client", mock_ac), \
              patch("app.tasks.node_lifecycle.settings", mock_settings), \
-             patch("app.tasks.node_lifecycle_agents.settings", mock_settings):
+             patch("app.tasks.node_lifecycle_agents.settings", mock_settings), \
+             patch("app.tasks.node_lifecycle.asyncio.sleep", new=AsyncMock()), \
+             patch("app.tasks.node_lifecycle_deploy.asyncio.sleep", new=AsyncMock()):
             await run_node_reconcile(job.id, lab.id, ["node-1"])
 
         # Verify node was categorized for start action via one of the backends.
