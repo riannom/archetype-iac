@@ -164,25 +164,29 @@ def test_client(test_db: Session, test_engine, monkeypatch, tmp_path):
     import app.routers.jobs as _jobs_mod
     monkeypatch.setattr(_jobs_mod, "get_session", override_get_session)
 
-    # Create async test DB for v1 async endpoints (separate from sync test_db
-    # because async endpoints use `await session.execute()` which requires a
-    # real AsyncSession — a sync Session would raise TypeError).
+    # Lazy async test DB for v1 async endpoints. The prior implementation
+    # unconditionally created+disposed a fresh sqlite+aiosqlite engine plus
+    # schema for every test using this fixture (~50-100ms × ~1500 tests
+    # = ~75s/shard). Audit on 2026-05-11 confirmed no current test routes
+    # through db.get_async_db — only /v1/db-check uses it, and no test
+    # calls that endpoint. Defer creation until first use so existing
+    # tests pay nothing and a future async-endpoint test still works.
     import asyncio
+    _async_state: dict = {"engine": None, "factory": None}
 
-    _async_test_engine = create_async_engine("sqlite+aiosqlite:///:memory:")
-
-    async def _init_async_tables():
-        async with _async_test_engine.begin() as conn:
-            await conn.run_sync(models.Base.metadata.create_all)
-
-    asyncio.run(_init_async_tables())
-
-    _async_session_factory = async_sessionmaker(
-        bind=_async_test_engine, class_=AsyncSession, expire_on_commit=False
-    )
+    async def _ensure_async_engine():
+        if _async_state["engine"] is None:
+            engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+            async with engine.begin() as conn:
+                await conn.run_sync(models.Base.metadata.create_all)
+            _async_state["engine"] = engine
+            _async_state["factory"] = async_sessionmaker(
+                bind=engine, class_=AsyncSession, expire_on_commit=False
+            )
 
     async def override_get_async_db():
-        async with _async_session_factory() as session:
+        await _ensure_async_engine()
+        async with _async_state["factory"]() as session:
             try:
                 yield session
             finally:
@@ -198,7 +202,8 @@ def test_client(test_db: Session, test_engine, monkeypatch, tmp_path):
             yield client
     finally:
         app.dependency_overrides.clear()
-        asyncio.run(_async_test_engine.dispose())
+        if _async_state["engine"] is not None:
+            asyncio.run(_async_state["engine"].dispose())
         # Restore settings
         for key, val in _originals.items():
             object.__setattr__(settings, key, val)
