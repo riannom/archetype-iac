@@ -669,10 +669,12 @@ class TestCircuitBreakerIntegration:
 
         event = CleanupEvent(event_type=CleanupEventType.LAB_DELETED, lab_id="lab-1")
 
-        # Each _process_message call that fails records 1 failure (after both attempts fail).
-        # CircuitBreaker max_failures defaults to 3, so 3 failing calls should trip it.
-        for _ in range(3):
-            await handler._process_message(event.to_json())
+        # Mock the 1s retry-backoff sleep — 3 failed calls × 1s = 3s otherwise.
+        with patch("app.tasks.cleanup_handler.asyncio.sleep", new=AsyncMock()):
+            # Each _process_message call that fails records 1 failure (after both attempts fail).
+            # CircuitBreaker max_failures defaults to 3, so 3 failing calls should trip it.
+            for _ in range(3):
+                await handler._process_message(event.to_json())
 
         handler_type = CleanupEventType.LAB_DELETED.value
         assert handler.circuit_breaker.is_open(handler_type)
@@ -692,14 +694,15 @@ class TestCircuitBreakerIntegration:
 
         event = CleanupEvent(event_type=CleanupEventType.LAB_DELETED, lab_id="lab-1")
 
-        # Trip the circuit breaker (3 failures, each with 2 attempts = 6 handler calls)
-        for _ in range(3):
+        with patch("app.tasks.cleanup_handler.asyncio.sleep", new=AsyncMock()):
+            # Trip the circuit breaker (3 failures, each with 2 attempts = 6 handler calls)
+            for _ in range(3):
+                await handler._process_message(event.to_json())
+
+            calls_before = call_count
+
+            # Next event should be skipped entirely — handler not called
             await handler._process_message(event.to_json())
-
-        calls_before = call_count
-
-        # Next event should be skipped entirely — handler not called
-        await handler._process_message(event.to_json())
 
         assert call_count == calls_before
 
@@ -717,18 +720,19 @@ class TestCircuitBreakerIntegration:
 
         event = CleanupEvent(event_type=CleanupEventType.LAB_DELETED, lab_id="lab-1")
 
-        # Trip the breaker
-        for _ in range(3):
+        with patch("app.tasks.cleanup_handler.asyncio.sleep", new=AsyncMock()):
+            # Trip the breaker
+            for _ in range(3):
+                await handler._process_message(event.to_json())
+
+            handler_type = CleanupEventType.LAB_DELETED.value
+
+            # Cooldown is 0.0, so breaker should be half-open immediately
+            assert not handler.circuit_breaker.is_open(handler_type)
+
+            # Now swap to a succeeding handler
+            handler._handle_lab_deleted = AsyncMock()
             await handler._process_message(event.to_json())
-
-        handler_type = CleanupEventType.LAB_DELETED.value
-
-        # Cooldown is 0.0, so breaker should be half-open immediately
-        assert not handler.circuit_breaker.is_open(handler_type)
-
-        # Now swap to a succeeding handler
-        handler._handle_lab_deleted = AsyncMock()
-        await handler._process_message(event.to_json())
 
         # Success should reset the breaker — failures cleared
         assert handler.circuit_breaker._failures.get(handler_type, 0) == 0

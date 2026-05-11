@@ -1466,7 +1466,9 @@ class TestExecuteOrchestration:
              patch("app.tasks.node_lifecycle_deploy._cleanup_orphan_containers", new_callable=AsyncMock), \
              patch("app.tasks.jobs._create_cross_host_links_if_ready", new_callable=AsyncMock), \
              patch("app.tasks.node_lifecycle.settings", mock_settings), \
-             patch("app.tasks.node_lifecycle_agents.settings", mock_settings):
+             patch("app.tasks.node_lifecycle_agents.settings", mock_settings), \
+             patch("app.tasks.node_lifecycle.asyncio.sleep", new=AsyncMock()), \
+             patch("app.tasks.node_lifecycle_deploy.asyncio.sleep", new=AsyncMock()):
 
             result = await manager.execute()
 
@@ -1574,7 +1576,9 @@ class TestExecuteOrchestration:
              patch("app.tasks.node_lifecycle_deploy._cleanup_orphan_containers", new_callable=AsyncMock), \
              patch("app.tasks.jobs._create_cross_host_links_if_ready", new_callable=AsyncMock), \
              patch("app.tasks.node_lifecycle.settings", mock_settings), \
-             patch("app.tasks.node_lifecycle_agents.settings", mock_settings):
+             patch("app.tasks.node_lifecycle_agents.settings", mock_settings), \
+             patch("app.tasks.node_lifecycle.asyncio.sleep", new=AsyncMock()), \
+             patch("app.tasks.node_lifecycle_deploy.asyncio.sleep", new=AsyncMock()):
 
             result = await manager.execute()
 

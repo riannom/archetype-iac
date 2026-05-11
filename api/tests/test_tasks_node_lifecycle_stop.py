@@ -638,7 +638,7 @@ class TestAutoExtractBeforeStop:
         mock_ac.extract_configs_on_agent.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_extraction_timeout_does_not_block_stop(self, test_db, test_user):
+    async def test_extraction_timeout_does_not_block_stop(self, test_db, test_user, monkeypatch):
         """Extraction timeout is logged but does not prevent stop."""
         host = make_host(test_db)
         lab = make_lab(test_db, test_user, agent_id=host.id)
@@ -649,20 +649,22 @@ class TestAutoExtractBeforeStop:
         manager.node_states = [ns]
         manager.placements_map = {}
 
+        # Shorten extraction timeout from the production default (30s) so the
+        # test runs in <1s instead of waiting for the real timer to fire.
+        # Source reads this from settings.auto_extract_on_stop_timeout_seconds
+        # via `extraction_timeout = max(0.1, float(getattr(...)))`.
+        from app.config import settings as app_settings
+        monkeypatch.setattr(app_settings, "auto_extract_on_stop_timeout_seconds", 0.1, raising=False)
+
         async def slow_extract(*args, **kwargs):
-            await asyncio.sleep(60)  # Will be cancelled by timeout
+            await asyncio.sleep(60)  # cancelled by extraction_timeout above
 
         with patch("app.tasks.node_lifecycle_stop.agent_client") as mock_ac:
             mock_ac.is_agent_online = MagicMock(return_value=True)
             mock_ac.extract_configs_on_agent = slow_extract
 
-            # Patch EXTRACTION_TIMEOUT to a very short value
-            with patch.object(
-                type(manager), "_auto_extract_before_stop",
-                wraps=manager._auto_extract_before_stop,
-            ):
-                # The method itself catches TimeoutError and returns
-                await manager._auto_extract_before_stop([ns])
+            # The method itself catches TimeoutError and returns
+            await manager._auto_extract_before_stop([ns])
 
         # Should have logged timeout message
         assert any("timed out" in p.lower() for p in manager.log_parts)
